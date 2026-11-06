@@ -1,6 +1,8 @@
 // English SOM CNL v1. Syntax follows som-rs/contracts/compiler-v1/grammar.ebnf.
 // This grammar leaves prompt semantics, planning and code generation to SOM.
-document = { SOI ~ blank* ~ header ~ (plain | queried | related | composed | workflow) ~ end_request ~ EOI }
+// Accept a final blank line at EOF. Leave the error position unchanged for trailing content.
+document = { SOI ~ blank* ~ header ~ (plain | queried | related | composed | workflow) ~ end_request ~
+    (!(indent ~ ANY) ~ gap)? ~ EOI }
 plain = { v1 ~ package ~ single_resource ~ migration ~ legacy_routes ~ checks }
 queried = { v2_to_v4 ~ package ~ single_resource ~ query ~ migration ~ legacy_routes ~ checks }
 related = { v5 ~ package ~ parent_resource ~ child_resource ~ relation ~ migration ~ capabilities ~

@@ -42,13 +42,31 @@ fn returns_source_ranges_for_named_clauses_and_quoted_data() {
 }
 
 #[test]
+fn accepts_an_unterminated_final_line_of_spaces_or_tabs() {
+    for base in [ITEMS.to_owned(), ITEMS.replace('\n', "\r\n")] {
+        let baseline = cnl::parse(&base).unwrap();
+        for padding in [" ", "\t", " \t "] {
+            let source = format!("{base}{padding}");
+            let document = cnl::parse(&source).unwrap();
+            cnl::check_syntax(&source).unwrap();
+            assert_eq!(document.text, source);
+            assert_eq!(document.bytes, 0..source.len());
+            assert_eq!(document.children, baseline.children);
+        }
+    }
+}
+
+#[test]
 fn rejects_malformed_input_at_the_correct_line() {
     let missing_period = ITEMS.replace("Use package items.", "Use package items");
     let error = cnl::parse(&missing_period).unwrap_err();
     assert_eq!(error.line_col, pest::error::LineColLocation::Pos((3, 1)));
     let invalid_string = ITEMS.replace(r#""/items""#, r#""/items\uD800""#);
     assert!(cnl::parse(&invalid_string).is_err());
-    assert!(cnl::parse(&format!("{ITEMS}Use package extra.")).is_err());
+    let extra_content = format!("{ITEMS}\t Use package extra.");
+    let error = cnl::parse(&extra_content).unwrap_err();
+    assert_eq!(error.line_col, pest::error::LineColLocation::Pos((23, 1)));
+    assert!(cnl::parse(&format!("{ITEMS} \r")).is_err());
 }
 
 fn find<'tree, 'source>(node: &'tree Node<'source>, rule: Rule) -> &'tree Node<'source> {

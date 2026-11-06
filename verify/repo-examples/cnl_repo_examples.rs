@@ -6,9 +6,10 @@ use som::{
 };
 
 const DEFER_CNL: &str = include_str!("cnl-dsl/defer-queue-task.cnl");
+const FLASKR_CNL: &str = include_str!("cnl-dsl/flaskr-post.cnl");
 
 #[test]
-fn defer_task_cnl_and_typed_prompt_produce_the_same_dsl() {
+fn repository_examples_select_the_expected_dsl_steps() {
     let typed: Value =
         serde_json::from_str(include_str!("cnl-dsl/defer-queue-task.prompt.json")).unwrap();
     faberline_nlp_cnl::check_syntax(DEFER_CNL).unwrap();
@@ -45,6 +46,21 @@ fn defer_task_cnl_and_typed_prompt_produce_the_same_dsl() {
     assert_eq!(task["id"], "flow.postgresql.child.create");
     assert_eq!(task["args"]["parent_id"], json!({"input": "queue_id"}));
     assert_eq!(task["undo"], "flow.postgresql.undo.delete_created");
+
+    faberline_nlp_cnl::check_syntax(FLASKR_CNL).unwrap();
+    let prompt = cnl::parse(FLASKR_CNL).unwrap().prompt;
+    assert_eq!(prompt["relation"]["foreign_key"], "author_id");
+    let dsl = plan(&prompt, &assets).unwrap();
+    let read = &dsl["flow"]["steps"][1];
+    assert_eq!(read["id"], "flow.postgresql.child.get");
+    assert_eq!(
+        read["args"],
+        json!({"parent_id": {"input": "author_id"}, "child_id": {"input": "post_id"}})
+    );
+    assert_eq!(
+        dsl["flow"]["result"]["post"],
+        json!({"step": "fetched", "field": ""})
+    );
 }
 
 #[test]
@@ -65,5 +81,35 @@ fn som_rejects_a_string_queue_id_after_nlp_accepts_its_syntax() {
     assert_eq!(
         &source[diagnostic.span.byte_start..diagnostic.span.byte_end],
         "input queue_id"
+    );
+}
+
+#[test]
+fn som_rejects_a_post_lookup_that_reads_its_own_result() {
+    let source = FLASKR_CNL.replacen(
+        "Set argument child_id to input post_id.",
+        "Set argument child_id to step fetched field \"id\".",
+        1,
+    );
+    faberline_nlp_cnl::check_syntax(&source).unwrap();
+    let error = cnl::parse(&source).expect_err("the post read cannot supply its own argument");
+    assert_eq!(error.code, "INVALID_REF");
+    let diagnostic = &error.diagnostics[0];
+    assert_eq!(
+        diagnostic.prompt_pointer.as_deref(),
+        Some("/flow/steps/1/args/child_id")
+    );
+    assert_eq!(
+        &source[diagnostic.span.byte_start..diagnostic.span.byte_end],
+        "fetched"
+    );
+}
+
+#[test]
+fn final_blank_line_preserves_the_typed_prompt() {
+    let padded = format!("{DEFER_CNL} \t");
+    assert_eq!(
+        cnl::parse(&padded).unwrap().prompt,
+        cnl::parse(DEFER_CNL).unwrap().prompt
     );
 }

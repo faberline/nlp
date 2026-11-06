@@ -51,6 +51,16 @@ fn write_compiler_parity_report() {
                     ),
                     true,
                 ));
+            } else if name == "flaskr-post" {
+                cases.push((
+                    "repo/flaskr-self-reference".into(),
+                    source.replacen(
+                        "Set argument child_id to input post_id.",
+                        "Set argument child_id to step fetched field \"id\".",
+                        1,
+                    ),
+                    true,
+                ));
             }
             cases.push((format!("repo/{name}"), source, false));
         }

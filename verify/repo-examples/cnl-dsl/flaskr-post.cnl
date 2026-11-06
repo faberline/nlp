@@ -1,0 +1,57 @@
+Use SOM CNL version 1.
+Use prompt version 7.
+Use package flaskr_blog.
+Bind contract related-flow.v1 with SHA-256 "716ae3f08c8ca79b50f757884b9140acc842d2213157c51ea4b9fd3b17d92091".
+Begin parent resource.
+Use resource name Author.
+Use table blog_users.
+Use path "/authors".
+Field username is required str and is unique.
+Begin query.
+Use no exact filter.
+Use no date filter.
+Limit query results to 20.
+End query.
+End parent resource.
+Begin child resource.
+Use resource name Post.
+Use table blog_posts.
+Use path "/posts".
+Field title is required str and is not unique.
+Field body is required str and is not unique.
+Begin query.
+Use no exact filter.
+Use no date filter.
+Limit query results to 20.
+End query.
+End child resource.
+Relate child to parent with foreign key author_id and restrict deletion.
+Use migration revision blog0000.
+Use no previous migration revision.
+Begin capabilities.
+Use database postgresql.
+Use authentication jwt.
+Use object storage none.
+Use workflow json_export.
+Use no workflow value field.
+Use no workflow group field.
+End capabilities.
+Begin routes.
+Allow get on child.
+End routes.
+Begin flow get_post.
+Input author_id has type integer.
+Input post_id has type integer.
+Begin steps.
+Begin step auth with operation authorize.
+On failure, use no undo.
+End step auth.
+Begin step fetched with operation child.get.
+Set argument parent_id to input author_id.
+Set argument child_id to input post_id.
+On failure, use no undo.
+End step fetched.
+End steps.
+Return post from step fetched field "".
+End flow get_post.
+End request.

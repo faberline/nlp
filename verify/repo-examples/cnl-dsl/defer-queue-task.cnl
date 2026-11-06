@@ -1,0 +1,62 @@
+Use SOM CNL version 1.
+Use prompt version 7.
+Use package defer_queue_task.
+Bind contract related-flow.v1 with SHA-256 "716ae3f08c8ca79b50f757884b9140acc842d2213157c51ea4b9fd3b17d92091".
+Begin parent resource.
+Use resource name Queue.
+Use table queues.
+Use path "/queues".
+Field name is required str and is unique.
+Begin query.
+Use no exact filter.
+Use no date filter.
+Limit query results to 100.
+End query.
+End parent resource.
+Begin child resource.
+Use resource name Task.
+Use table tasks.
+Use path "/tasks".
+Field task_id is required str and is unique.
+Field target is required str and is not unique.
+Field priority is required int and is not unique.
+Begin query.
+Use no exact filter.
+Use no date filter.
+Limit query results to 100.
+End query.
+End child resource.
+Relate child to parent with foreign key queue_id and restrict deletion.
+Use migration revision defer_example.
+Use no previous migration revision.
+Begin capabilities.
+Use database postgresql.
+Use authentication jwt.
+Use object storage none.
+Use workflow json_export.
+Use no workflow value field.
+Use no workflow group field.
+End capabilities.
+Begin routes.
+Allow create on parent.
+Allow create on child.
+Allow get on child.
+End routes.
+Begin flow register_task.
+Input queue_id has type integer.
+Input task has type child_input.
+Begin steps.
+Begin step auth with operation authorize.
+On failure, use no undo.
+End step auth.
+Begin transaction write.
+Begin step registered with operation child.create.
+Set argument parent_id to input queue_id.
+Set argument data to input task.
+On failure, undo with delete_created.
+End step registered.
+End transaction write.
+End steps.
+Return task_id from step registered field "task_id".
+End flow register_task.
+End request.

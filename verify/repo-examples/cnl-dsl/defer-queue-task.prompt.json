@@ -1,0 +1,68 @@
+{
+  "version": "som.prompt.v7",
+  "package": "defer_queue_task",
+  "contract": {
+    "id": "related-flow.v1",
+    "sha256": "716ae3f08c8ca79b50f757884b9140acc842d2213157c51ea4b9fd3b17d92091"
+  },
+  "resources": {
+    "parent": {
+      "name": "Queue",
+      "table": "queues",
+      "path": "/queues",
+      "fields": [
+        {"name": "name", "type": "str", "required": true, "unique": true}
+      ],
+      "query": {"filter_field": null, "date_field": null, "max_limit": 100}
+    },
+    "child": {
+      "name": "Task",
+      "table": "tasks",
+      "path": "/tasks",
+      "fields": [
+        {"name": "task_id", "type": "str", "required": true, "unique": true},
+        {"name": "target", "type": "str", "required": true, "unique": false},
+        {"name": "priority", "type": "int", "required": true, "unique": false}
+      ],
+      "query": {"filter_field": null, "date_field": null, "max_limit": 100}
+    }
+  },
+  "relation": {"foreign_key": "queue_id", "on_delete": "restrict"},
+  "migration": {"revision": "defer_example", "down_revision": null},
+  "capabilities": {
+    "database": "postgresql",
+    "auth": "jwt",
+    "storage": "none",
+    "workflow": "json_export",
+    "value_field": null,
+    "group_field": null
+  },
+  "operations": [
+    {"scope": "parent", "action": "create"},
+    {"scope": "child", "action": "create"},
+    {"scope": "child", "action": "get"}
+  ],
+  "flow": {
+    "name": "register_task",
+    "inputs": [
+      {"name": "queue_id", "type": "integer"},
+      {"name": "task", "type": "child_input"}
+    ],
+    "steps": [
+      {"name": "auth", "op": "authorize", "args": {}, "undo": null},
+      {
+        "name": "write",
+        "op": "transaction",
+        "steps": [
+          {
+            "name": "registered",
+            "op": "child.create",
+            "args": {"parent_id": {"input": "queue_id"}, "data": {"input": "task"}},
+            "undo": "delete_created"
+          }
+        ]
+      }
+    ],
+    "result": {"task_id": {"step": "registered", "field": "task_id"}}
+  }
+}

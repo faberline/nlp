@@ -16,13 +16,43 @@ fn write_compiler_parity_report() {
     };
 
     let mut cases = Vec::new();
-    for path in fs::read_dir(examples).unwrap().map(|entry| entry.unwrap().path()) {
+    for path in fs::read_dir(examples)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+    {
         if path.extension().is_some_and(|ext| ext == "cnl") {
             cases.push((
                 format!("examples/{}", path.file_name().unwrap().to_str().unwrap()),
                 fs::read_to_string(path).unwrap(),
                 false,
             ));
+        }
+    }
+    let repo_examples = PathBuf::from(env::var_os("SOM_PARITY_REPO_EXAMPLES").unwrap());
+    for path in fs::read_dir(repo_examples)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+    {
+        if path.extension().is_some_and(|ext| ext == "cnl") {
+            let name = path.file_stem().unwrap().to_str().unwrap();
+            let source = fs::read_to_string(&path).unwrap();
+            if name == "defer-queue-task" {
+                cases.push((
+                    "repo/defer-trailing-padding".into(),
+                    format!("{source} \t"),
+                    false,
+                ));
+                cases.push((
+                    "repo/defer-string-queue-id".into(),
+                    source.replacen(
+                        "Input queue_id has type integer.",
+                        "Input queue_id has type string.",
+                        1,
+                    ),
+                    true,
+                ));
+            }
+            cases.push((format!("repo/{name}"), source, false));
         }
     }
     let positives = fixtures("cnl-positive-fixtures.json");

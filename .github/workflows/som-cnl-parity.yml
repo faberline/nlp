@@ -5,6 +5,32 @@ on:
 permissions:
   contents: read
 jobs:
+  cnl-dsl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: faberline/som
+          ref: 05c63d08275d59ea7110cd8f2b30786070b91968
+          path: som
+          persist-credentials: false
+      - name: Prepare exact source trees
+        run: bash verify/prepare-som.sh
+      - name: Run the original SOM core suite and repository examples
+        run: |
+          set -uo pipefail
+          rustup toolchain install 1.96.1 --profile minimal || exit 1
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/som-cargo-target"
+          result=0
+          for tree in "$RUNNER_TEMP/som-baseline" "$GITHUB_WORKSPACE/som"; do
+            echo "Source tree: $tree"
+            cargo +1.96.1 test --locked --manifest-path "$tree/som-rs/Cargo.toml" || result=1
+          done
+          exit "$result"
   compare:
     runs-on: macos-26
     timeout-minutes: 55
@@ -21,18 +47,11 @@ jobs:
       - name: Prepare exact source trees
         run: |
           set -euo pipefail
-          git -C som worktree add --detach "$RUNNER_TEMP/som-baseline" HEAD
-          git -C som apply --check "$GITHUB_WORKSPACE/verify/som.patch"
-          git -C som apply "$GITHUB_WORKSPACE/verify/som.patch"
-          mkdir -p som/som-rs/vendor
-          cp -R cnl som/som-rs/vendor/faberline-nlp-cnl
-          cp verify/vendor-readme.md som/som-rs/vendor/faberline-nlp-cnl/README.md
+          bash verify/prepare-som.sh
           for tree in "$RUNNER_TEMP/som-baseline" "$GITHUB_WORKSPACE/som"; do
             mkdir -p "$tree/som-rs/som-targets/tests"
             cp verify/cnl_parity.rs "$tree/som-rs/som-targets/tests/cnl_parity.rs"
           done
-          git -C som diff --check
-          shasum -a 256 verify/som.patch cnl/Cargo.toml cnl/src/lib.rs cnl/src/som_cnl.pest
       - name: Install the frozen public macOS tools
         working-directory: som
         run: |
@@ -51,15 +70,13 @@ jobs:
           mkdir "$RUNNER_TEMP/prettier"
           tar -xzf "$RUNNER_TEMP/prettier.tgz" -C "$RUNNER_TEMP/prettier" --strip-components 1
           printf 'SOM_PARITY_RUFF=%s\nSOM_TS_PRETTIER=%s\n' "$RUNNER_TEMP/ruff-aarch64-apple-darwin/ruff" "$RUNNER_TEMP/prettier" >> "$GITHUB_ENV"
-      - name: Run the original Rust suites on both source trees
+      - name: Run the original target suites on both source trees
         run: |
           set -uo pipefail
           export CARGO_TARGET_DIR="$RUNNER_TEMP/som-cargo-target"
-          export SOM_PARITY_ASSETS="$RUNNER_TEMP/assets-not-used-for-unit-tests"
           result=0
           for tree in "$RUNNER_TEMP/som-baseline" "$GITHUB_WORKSPACE/som"; do
             echo "Source tree: $tree"
-            cargo test --locked --manifest-path "$tree/som-rs/Cargo.toml" || result=1
             cargo test --locked --manifest-path "$tree/som-rs/som-targets/Cargo.toml" --lib --bins || result=1
           done
           exit "$result"
@@ -68,6 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           export CARGO_TARGET_DIR="$RUNNER_TEMP/som-cargo-target"
+          export SOM_PARITY_REPO_EXAMPLES="$GITHUB_WORKSPACE/verify/repo-examples/cnl-dsl"
           for side in baseline candidate; do
             tree="$GITHUB_WORKSPACE/som"
             if [[ "$side" == baseline ]]; then tree="$RUNNER_TEMP/som-baseline"; fi

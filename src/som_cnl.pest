@@ -1,0 +1,197 @@
+// English SOM CNL v1. Syntax follows som-rs/contracts/compiler-v1/grammar.ebnf.
+// This grammar leaves prompt semantics, planning and code generation to SOM.
+document = { SOI ~ blank* ~ header ~ (plain | queried | related | composed | workflow) ~ end_request ~ EOI }
+plain = { v1 ~ package ~ single_resource ~ migration ~ legacy_routes ~ checks }
+queried = { v2_to_v4 ~ package ~ single_resource ~ query ~ migration ~ legacy_routes ~ checks }
+related = { v5 ~ package ~ parent_resource ~ child_resource ~ relation ~ migration ~ capabilities ~
+    related_routes ~ checks }
+composed = { v6 ~ package ~ contract ~ parent_resource ~ child_resource ~ relation ~ migration ~
+    capability_block ~ selected_routes }
+workflow = { v7 ~ package ~ contract ~ parent_resource ~ child_resource ~ relation ~ migration ~
+    capability_block ~ selected_routes ~ flow }
+
+header = { indent ~ "Use" ~ gap ~ "SOM" ~ gap ~ "CNL" ~ gap ~ "version" ~ gap ~ "1" ~ stop }
+v1 = { prompt_version ~ "1" ~ stop }
+v2_to_v4 = { prompt_version ~ ("2" | "3" | "4") ~ stop }
+v5 = { prompt_version ~ "5" ~ stop }
+v6 = { prompt_version ~ "6" ~ stop }
+v7 = { prompt_version ~ "7" ~ stop }
+prompt_version = _{ indent ~ "Use" ~ gap ~ "prompt" ~ gap ~ "version" ~ gap }
+package = { indent ~ "Use" ~ gap ~ "package" ~ gap ~ identifier ~ stop }
+contract = { indent ~ "Bind" ~ gap ~ "contract" ~ gap ~ contract_id ~ gap ~ "with" ~ gap ~ "SHA-256" ~ gap ~
+    string ~ stop }
+contract_id = { "related-business.v1" | "related-flow.v1" }
+
+single_resource = { begin ~ "resource" ~ stop ~ resource_body ~ end ~ "resource" ~ stop }
+parent_resource = { begin ~ "parent" ~ gap ~ "resource" ~ stop ~ resource_body ~ query ~ end ~ "parent" ~ gap ~
+    "resource" ~ stop }
+child_resource = { begin ~ "child" ~ gap ~ "resource" ~ stop ~ resource_body ~ query ~ end ~ "child" ~ gap ~
+    "resource" ~ stop }
+resource_body = _{ resource_name ~ table ~ path ~ field+ }
+resource_name = { indent ~ "Use" ~ gap ~ "resource" ~ gap ~ "name" ~ gap ~ identifier ~ stop }
+table = { indent ~ "Use" ~ gap ~ "table" ~ gap ~ identifier ~ stop }
+path = { indent ~ "Use" ~ gap ~ "path" ~ gap ~ string ~ stop }
+field = { indent ~ "Field" ~ gap ~ identifier ~ gap ~ "is" ~ gap ~ required ~ gap ~ field_type ~ gap ~ "and" ~
+    gap ~ "is" ~ gap ~ uniqueness ~ default_value? ~ stop }
+required = { "required" | "optional" }
+uniqueness = { "unique" | ("not" ~ gap ~ "unique") }
+default_value = { gap ~ "with" ~ gap ~ "default" ~ gap ~ scalar }
+field_type = { "str" | "int" | "float" | "bool" | "date" }
+
+query = { begin ~ "query" ~ stop ~ exact_filter ~ date_filter? ~ query_limit ~ end ~ "query" ~ stop }
+exact_filter = { indent ~ (("Filter" ~ gap ~ "exactly" ~ gap ~ "on" ~ gap ~ "field" ~ gap ~
+    identifier) | ("Use" ~ gap ~ "no" ~ gap ~ "exact" ~ gap ~ "filter")) ~ stop }
+date_filter = { indent ~ (("Filter" ~ gap ~ "before" ~ gap ~ "date" ~ gap ~ "on" ~ gap ~ "field" ~ gap ~
+    identifier) | ("Use" ~ gap ~ "no" ~ gap ~ "date" ~ gap ~ "filter")) ~ stop }
+query_limit = { indent ~ "Limit" ~ gap ~ "query" ~ gap ~ "results" ~ gap ~ "to" ~ gap ~ uint ~ stop }
+relation = { indent ~ "Relate" ~ gap ~ "child" ~ gap ~ "to" ~ gap ~ "parent" ~ gap ~ "with" ~ gap ~ "foreign" ~
+    gap ~ "key" ~ gap ~ identifier ~ gap ~ "and" ~ gap ~ "restrict" ~ gap ~ "deletion" ~ stop }
+migration = { revision ~ previous_revision }
+revision = { indent ~ "Use" ~ gap ~ "migration" ~ gap ~ "revision" ~ gap ~ identifier ~ stop }
+previous_revision = { indent ~ "Use" ~ gap ~ (("previous" ~ gap ~ "migration" ~ gap ~ "revision" ~ gap ~
+    identifier) | ("no" ~ gap ~ "previous" ~ gap ~ "migration" ~ gap ~ "revision")) ~ stop }
+
+capabilities = _{ no_capabilities | capability_block }
+no_capabilities = { indent ~ "Use" ~ gap ~ "no" ~ gap ~ "capabilities" ~ stop }
+capability_block = { begin ~ "capabilities" ~ stop ~ database ~ authentication ~ storage ~ workflow_kind ~
+    workflow_value ~ workflow_group ~ end ~ "capabilities" ~ stop }
+database = { indent ~ "Use" ~ gap ~ "database" ~ gap ~ ("postgresql" | "mongodb") ~ stop }
+authentication = { indent ~ "Use" ~ gap ~ "authentication" ~ gap ~ ("jwt" | "firebase" | "google_oauth") ~
+    stop }
+storage = { indent ~ "Use" ~ gap ~ "object" ~ gap ~ "storage" ~ gap ~ ("none" | "s3" | "gcs") ~ stop }
+workflow_kind = { indent ~ "Use" ~ gap ~ "workflow" ~ gap ~
+    ("json_export" | "gzip_export" | "csv" | "decimal_summary" | "statistics") ~ stop }
+workflow_value = { indent ~ "Use" ~ gap ~ (("no" ~ gap ~ "workflow" ~ gap ~ "value" ~ gap ~
+    "field") | ("workflow" ~ gap ~ "value" ~ gap ~ "field" ~ gap ~ identifier)) ~ stop }
+workflow_group = { indent ~ "Use" ~ gap ~ (("no" ~ gap ~ "workflow" ~ gap ~ "group" ~ gap ~
+    "field") | ("workflow" ~ gap ~ "group" ~ gap ~ "field" ~ gap ~ identifier)) ~ stop }
+
+legacy_routes = { begin ~ "routes" ~ stop ~ (indent ~ legacy_route ~ stop)+ ~ end ~ "routes" ~ stop }
+related_routes = { begin ~ "routes" ~ stop ~ related_route+ ~ end ~ "routes" ~ stop }
+selected_routes = { begin ~ "routes" ~ stop ~ selected_route+ ~ end ~ "routes" ~ stop }
+related_route = { indent ~ "For" ~ gap ~ ((scope ~ ":" ~ gap ~ scoped_route) | ("batch:" ~ gap ~
+    batch_route)) ~ stop }
+selected_route = { indent ~ "Allow" ~ gap ~ (("batch" ~ gap ~ "creation") | (action_name ~ gap ~ "on" ~ gap ~
+    scope)) ~ stop }
+action_name = { "create" | "get" | "list" | "patch" | "delete" }
+scope = { "parent" | "child" }
+checks = { begin ~ "checks" ~ stop ~ indent ~ check_sentence ~ stop ~ end ~ "checks" ~ stop }
+
+flow = { begin ~ "flow" ~ gap ~ PUSH(identifier) ~ stop ~ (no_inputs | input+) ~ begin ~ "steps" ~ stop ~
+    node* ~ end ~ "steps" ~ stop ~ (no_results | result+) ~ end ~ "flow" ~ gap ~ POP ~ stop }
+no_inputs = { indent ~ "Use" ~ gap ~ "no" ~ gap ~ "inputs" ~ stop }
+input = { indent ~ "Input" ~ gap ~ identifier ~ gap ~ "has" ~ gap ~ "type" ~ gap ~ input_type ~ stop }
+node = _{ action | transaction | branch }
+inner_node = _{ action | inner_transaction | inner_branch }
+deepest_node = _{ action | deepest_transaction | deepest_branch }
+// Bound container depth to two branches plus one transaction on a path.
+transaction = { transaction_open ~ inner_node* ~ transaction_end }
+inner_transaction = { transaction_open ~ deepest_node* ~ transaction_end }
+deepest_transaction = { transaction_open ~ action* ~ transaction_end }
+transaction_open = { begin ~ "transaction" ~ gap ~ PUSH(identifier) ~ stop }
+transaction_end = { end ~ "transaction" ~ gap ~ POP ~ stop }
+branch = { branch_open ~ then_open ~ inner_node* ~ then_end ~ else_open ~ inner_node* ~ else_end ~ branch_end }
+inner_branch = { branch_open ~ then_open ~ deepest_node* ~ then_end ~ else_open ~ deepest_node* ~ else_end ~
+    branch_end }
+deepest_branch = { branch_open ~ then_open ~ action* ~ then_end ~ else_open ~ action* ~ else_end ~ branch_end }
+branch_open = { begin ~ "branch" ~ gap ~ PUSH(identifier) ~ gap ~ "when" ~ gap ~ predicate ~ stop }
+branch_end = { (no_exports | export+) ~ end ~ "branch" ~ gap ~ POP ~ stop }
+then_open = _{ begin ~ "then" ~ stop }
+then_end = _{ end ~ "then" ~ stop }
+else_open = _{ begin ~ "else" ~ stop }
+else_end = _{ end ~ "else" ~ stop }
+action = { begin ~ "step" ~ gap ~ PUSH(identifier) ~ gap ~ "with" ~ gap ~ "operation" ~ gap ~ operation ~
+    stop ~ argument* ~ undo ~ end ~ "step" ~ gap ~ POP ~ stop }
+argument = { indent ~ "Set" ~ gap ~ "argument" ~ gap ~ identifier ~ gap ~ "to" ~ gap ~ value ~ stop }
+undo = { indent ~ "On" ~ gap ~ "failure," ~ gap ~ (("use" ~ gap ~ "no" ~ gap ~ "undo") | ("undo" ~ gap ~
+    "with" ~ gap ~ ("delete_created" | "restore_patch"))) ~ stop }
+no_exports = { indent ~ "Export" ~ gap ~ "no" ~ gap ~ "values" ~ stop }
+export = { indent ~ "Export" ~ gap ~ identifier ~ gap ~ "from" ~ gap ~ "then" ~ gap ~ value ~ gap ~ "and" ~
+    gap ~ "from" ~ gap ~ "else" ~ gap ~ value ~ stop }
+no_results = { indent ~ "Return" ~ gap ~ "no" ~ gap ~ "values" ~ stop }
+result = { indent ~ "Return" ~ gap ~ identifier ~ gap ~ "from" ~ gap ~ value ~ stop }
+predicate = { value ~ gap ~ "is" ~ gap ~ ("null" | (comparison ~ gap ~ value)) }
+comparison = { ("equal" ~ gap ~ "to") | ("not" ~ gap ~ "equal" ~ gap ~ "to") | ("less" ~ gap ~
+    "than") | ("at" ~ gap ~ ("most" | "least")) | ("greater" ~ gap ~ "than") }
+value = { ("input" ~ gap ~ identifier) | ("step" ~ gap ~ identifier ~ gap ~ "field" ~ gap ~
+    string) | ("literal" ~ gap ~ scalar_type ~ gap ~ scalar) }
+scalar_type = { "string" | "integer" | "float" | "boolean" | "date" | "bytes" }
+input_type = { "string" | "integer" | "float" | "boolean" | "date" | "parent_input" | "child_input" | "parent_patch" | "child_patch" | "children_input" }
+operation = { "authorize" | "parent.create" | "parent.get" | "parent.list" | "parent.patch"
+            | "child.create" | "child.get" | "child.list" | "child.patch" | "batch.create"
+            | "workflow.run" | "workflow.import" | "object.put" | "object.get" }
+
+end_request = { end ~ "request" ~ stop }
+begin = _{ indent ~ "Begin" ~ gap }
+end = _{ indent ~ "End" ~ gap }
+indent = _{ (" " | "\t")* }
+gap = _{ (" " | "\t")+ }
+newline = _{ "\r\n" | "\n" }
+blank = _{ indent ~ newline }
+stop = _{ indent ~ "." ~ indent ~ (newline ~ blank* | &EOI) }
+
+identifier = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+uint = @{ ASCII_DIGIT+ }
+scalar = { string | number | "true" | "false" | "null" }
+number = @{ "-"? ~ ("0" | ('1'..'9' ~ ASCII_DIGIT*)) ~ ("." ~ ASCII_DIGIT+)? ~ (("e" | "E") ~ ("+" | "-")? ~
+    ASCII_DIGIT+)? }
+string = @{ "\"" ~ (escape | string_character)* ~ "\"" }
+string_character = _{ !("\"" | "\\" | '\u{0000}'..'\u{001f}') ~ ANY }
+escape = _{ "\\" ~ ("\"" | "\\" | "/" | "b" | "f" | "n" | "r" | "t" | unicode_escape) }
+unicode_escape = _{ "u" ~ ((high_surrogate ~ "\\u" ~ low_surrogate) | scalar_escape) }
+high_surrogate = _{ (^"d" ~ ('8'..'9' | 'a'..'b' | 'A'..'B')) ~ ASCII_HEX_DIGIT{2} }
+low_surrogate = _{ (^"d" ~ ('c'..'f' | 'C'..'F')) ~ ASCII_HEX_DIGIT{2} }
+scalar_escape = _{ !(high_surrogate | low_surrogate) ~ ASCII_HEX_DIGIT{4} }
+
+// Fixed route and check sentences from the SOM field map.
+legacy_route = {
+    ("Create" ~ gap ~ "a" ~ gap ~ "row." ~ gap ~ "Return" ~ gap ~ "409" ~ gap ~ "for" ~ gap ~ "a" ~ gap ~
+    "unique" ~ gap ~ "value" ~ gap ~ "conflict")
+  | ("Get" ~ gap ~ "a" ~ gap ~ "row" ~ gap ~ "by" ~ gap ~ "id." ~ gap ~ "Return" ~ gap ~ "404" ~ gap ~ "if" ~
+    gap ~ "it" ~ gap ~ "does" ~ gap ~ "not" ~ gap ~ "exist")
+  | ("List" ~ gap ~ "rows" ~ gap ~ "in" ~ gap ~ "id" ~ gap ~ "order")
+  | ("Update" ~ gap ~ "supplied" ~ gap ~ "fields." ~ gap ~ "Return" ~ gap ~ "404" ~ gap ~ "if" ~ gap ~ "the" ~
+    gap ~ "row" ~ gap ~ "does" ~ gap ~ "not" ~ gap ~ "exist")
+  | ("Delete" ~ gap ~ "a" ~ gap ~ "row." ~ gap ~ "Return" ~ gap ~ "404" ~ gap ~ "if" ~ gap ~ "it" ~ gap ~
+    "does" ~ gap ~ "not" ~ gap ~ "exist")
+  | ("List" ~ gap ~ "rows" ~ gap ~ "with" ~ gap ~ "an" ~ gap ~ "optional" ~ gap ~ "exact" ~ gap ~ "string" ~
+    gap ~ "filter," ~ gap ~ "limit," ~ gap ~ "and" ~ gap ~ "offset" ~ gap ~ "in" ~ gap ~ "id" ~ gap ~ "order")
+  | ("List" ~ gap ~ "rows" ~ gap ~ "with" ~ gap ~ "an" ~ gap ~ "optional" ~ gap ~ "exact" ~ gap ~ "boolean" ~
+    gap ~ "filter," ~ gap ~ "limit," ~ gap ~ "and" ~ gap ~ "offset" ~ gap ~ "in" ~ gap ~ "id" ~ gap ~ "order")
+  | ("List" ~ gap ~ "rows" ~ gap ~ "with" ~ gap ~ "optional" ~ gap ~ "exact" ~ gap ~ "boolean" ~ gap ~ "and" ~
+    gap ~ "exclusive" ~ gap ~ "date-before" ~ gap ~ "filters," ~ gap ~ "limit," ~ gap ~ "and" ~ gap ~
+    "offset" ~ gap ~ "in" ~ gap ~ "id" ~ gap ~ "order")
+}
+scoped_route = {
+    ("Create" ~ gap ~ "a" ~ gap ~ "row." ~ gap ~ "Return" ~ gap ~ "409" ~ gap ~ "for" ~ gap ~ "a" ~ gap ~
+    "unique" ~ gap ~ "value" ~ gap ~ "conflict")
+  | ("Get" ~ gap ~ "a" ~ gap ~ "row" ~ gap ~ "by" ~ gap ~ "id." ~ gap ~ "Return" ~ gap ~ "404" ~ gap ~ "if" ~
+    gap ~ "it" ~ gap ~ "does" ~ gap ~ "not" ~ gap ~ "exist")
+  | ("List" ~ gap ~ "scoped" ~ gap ~ "rows" ~ gap ~ "with" ~ gap ~ "the" ~ gap ~ "configured" ~ gap ~
+    "filters" ~ gap ~ "and" ~ gap ~ "pagination" ~ gap ~ "in" ~ gap ~ "id" ~ gap ~ "order")
+  | ("Update" ~ gap ~ "supplied" ~ gap ~ "fields." ~ gap ~ "Return" ~ gap ~ "404" ~ gap ~ "if" ~ gap ~ "the" ~
+    gap ~ "row" ~ gap ~ "does" ~ gap ~ "not" ~ gap ~ "exist")
+  | ("Delete" ~ gap ~ "a" ~ gap ~ "row." ~ gap ~ "Reject" ~ gap ~ "a" ~ gap ~ "parent" ~ gap ~ "with" ~ gap ~
+    "children" ~ gap ~ "with" ~ gap ~ "409")
+}
+batch_route = {
+    ("Create" ~ gap ~ "a" ~ gap ~ "parent" ~ gap ~ "and" ~ gap ~ "1" ~ gap ~ "to" ~ gap ~ "20" ~ gap ~
+    "children" ~ gap ~ "in" ~ gap ~ "one" ~ gap ~ "transaction." ~ gap ~ "Roll" ~ gap ~ "back" ~ gap ~ "all" ~
+    gap ~ "writes" ~ gap ~ "on" ~ gap ~ "failure")
+}
+check_sentence = {
+    ("Check" ~ gap ~ "CRUD," ~ gap ~ "missing" ~ gap ~ "id," ~ gap ~ "and" ~ gap ~ "unique" ~ gap ~
+    "conflict" ~ gap ~ "when" ~ gap ~ "supported")
+  | ("Check" ~ gap ~ "CRUD," ~ gap ~ "exact" ~ gap ~ "filtering," ~ gap ~ "page" ~ gap ~ "bounds," ~ gap ~
+    "missing" ~ gap ~ "id," ~ gap ~ "and" ~ gap ~ "unique" ~ gap ~ "conflict" ~ gap ~ "when" ~ gap ~
+    "supported")
+  | ("Check" ~ gap ~ "standalone" ~ gap ~ "CRUD," ~ gap ~ "boolean" ~ gap ~ "filtering," ~ gap ~ "page" ~ gap ~
+    "bounds," ~ gap ~ "defaults," ~ gap ~ "timestamps," ~ gap ~ "missing" ~ gap ~ "id," ~ gap ~ "and" ~ gap ~
+    "migration")
+  | ("Check" ~ gap ~ "standalone" ~ gap ~ "CRUD," ~ gap ~ "boolean" ~ gap ~ "and" ~ gap ~ "date-before" ~ gap ~
+    "filtering," ~ gap ~ "page" ~ gap ~ "bounds," ~ gap ~ "defaults," ~ gap ~ "timestamps," ~ gap ~ "missing" ~
+    gap ~ "id," ~ gap ~ "and" ~ gap ~ "migration")
+  | ("Check" ~ gap ~ "related" ~ gap ~ "CRUD," ~ gap ~ "filters," ~ gap ~ "defaults," ~ gap ~ "timestamps," ~
+    gap ~ "isolation," ~ gap ~ "atomic" ~ gap ~ "batch," ~ gap ~ "delete" ~ gap ~ "restriction," ~ gap ~
+    "and" ~ gap ~ "migration")
+}

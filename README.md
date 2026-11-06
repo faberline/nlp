@@ -8,6 +8,34 @@ Call `timeline::build` with the texts and their candidate events. The function s
 
 AlterVerse Lab is the first consumer. It handles book import, chapter checkpoints, and storyboard exports. It runs the full novel comparison with its local corpus.
 
+## English CNL
+
+Use `cnl::parse` to read English SOM CNL v1. The grammar covers prompt versions 1 through 7. Pass the whole request as a string.
+
+```rust
+let source = std::fs::read_to_string("request.cnl")?;
+let document = faberline_nlp::cnl::parse(&source)?;
+assert_eq!(document.text, source.as_str());
+```
+
+The result is a tree of grammar rules. Each node gives its text and a byte range in the original input. A syntax error gives a line and column.
+
+Use the [SOM examples](https://github.com/faberline/som/tree/05c63d08275d59ea7110cd8f2b30786070b91968/som-rs/contracts/compiler-v1/examples) for sample requests. SOM still checks the business rules. It builds the DSL and generates the code.
+
+## Model token limits
+
+Enable the `model-tokenizer` Cargo feature to count model tokens or limit the length of model input. A model token is a unit of text in the model's encoding. Reuse the tokenizer across calls.
+
+```rust
+use faberline_nlp::tokenizer::TiktokenTokenizer;
+
+let tokenizer = TiktokenTokenizer::cl100k_base().expect("load the cl100k_base encoding");
+let input = tokenizer.truncate("hello world", 1);
+assert_eq!(tokenizer.count(&input), 1);
+```
+
+This module adapts the Mamba AgentKit tokenizer. See [LICENSE-MAMBA](LICENSE-MAMBA).
+
 ```sh
-cargo test --locked
+cargo test --locked --all-features
 ```

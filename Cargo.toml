@@ -2,10 +2,16 @@
 name = "faberline-nlp"
 version = "0.1.0"
 edition = "2024"
-description = "Source-linked event extraction and narrative ordering for Chinese text"
+description = "Source-linked Chinese narrative analysis and English CNL parsing"
 repository = "https://github.com/faberline/nlp"
 publish = false
 
+[features]
+model-tokenizer = ["dep:tiktoken-rs"]
+
 [dependencies]
 anyhow = "1"
+pest = "2.9"
+pest_derive = "2.9"
 serde = { version = "1", features = ["derive"] }
+tiktoken-rs = { version = "0.9", optional = true }

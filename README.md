@@ -20,6 +20,8 @@ assert_eq!(document.text, source.as_str());
 
 The result is a tree of grammar rules. Each node gives its text and a byte range in the original input. A syntax error gives a line and column.
 
+Use `faberline-nlp-cnl` from the `cnl/` directory if you only need the English parser. Call `check_syntax` to check the grammar without building a tree.
+
 Use the [SOM examples](https://github.com/faberline/som/tree/05c63d08275d59ea7110cd8f2b30786070b91968/som-rs/contracts/compiler-v1/examples) for sample requests. SOM still checks the business rules. It builds the DSL and generates the code.
 
 ## Model token limits
@@ -37,5 +39,5 @@ assert_eq!(tokenizer.count(&input), 1);
 This module adapts the Mamba AgentKit tokenizer. See [LICENSE-MAMBA](LICENSE-MAMBA).
 
 ```sh
-cargo test --locked --all-features
+cargo test --locked --workspace --all-features
 ```

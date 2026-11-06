@@ -79,10 +79,18 @@ name = "faberline-nlp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "faberline-nlp-cnl",
  "pest",
- "pest_derive",
  "serde",
  "tiktoken-rs",
+]
+
+[[package]]
+name = "faberline-nlp-cnl"
+version = "0.1.0"
+dependencies = [
+ "pest",
+ "pest_derive",
 ]
 
 [[package]]

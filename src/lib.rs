@@ -5,13 +5,13 @@
 //! include the start and exclude the end.
 
 mod analyze;
-pub mod cnl;
 mod language;
 pub mod timeline;
 #[cfg(feature = "model-tokenizer")]
 pub mod tokenizer;
 
 pub use analyze::analyze;
+pub use faberline_nlp_cnl as cnl;
 use serde::{Deserialize, Serialize};
 
 /// Names, aliases, vocabulary and source-format markers for a single work.

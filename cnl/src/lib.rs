@@ -29,6 +29,13 @@ pub fn parse(source: &str) -> Result<Node<'_>, Box<ParseError>> {
     Ok(node(document))
 }
 
+/// Check the same grammar without building the public syntax tree.
+pub fn check_syntax(source: &str) -> Result<(), Box<ParseError>> {
+    EnglishCnl::parse(Rule::document, source)
+        .map(|_| ())
+        .map_err(Box::new)
+}
+
 fn node(pair: Pair<'_, Rule>) -> Node<'_> {
     let span = pair.as_span();
     Node {

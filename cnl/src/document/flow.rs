@@ -34,6 +34,81 @@ pub struct Predicate {
     pub right: Option<ValueSyntax>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FlowNameKind {
+    Input,
+    Step,
+    Transaction,
+    Branch,
+    Export,
+}
+
+impl FlowNameKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Input => "Input",
+            Self::Step => "Step",
+            Self::Transaction => "Transaction",
+            Self::Branch => "Branch",
+            Self::Export => "Export",
+        }
+    }
+}
+
+/// Structured facts for errors specific to the flow grammar.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FlowIssue {
+    DuplicateName {
+        current: FlowNameKind,
+        prior: FlowNameKind,
+        name: String,
+    },
+    MissingBlockEnd {
+        expected: String,
+    },
+    MismatchedBlockDelimiter {
+        expected: String,
+        observed: String,
+    },
+    UnsupportedInputType {
+        actual: String,
+    },
+    MissingInputDeclaration,
+    UnknownNodeKind {
+        actual: String,
+    },
+    UnknownOperation {
+        actual: String,
+    },
+    DuplicateArgument {
+        name: String,
+    },
+    UnknownUndoMode {
+        actual: String,
+    },
+    MissingUndoDeclaration,
+    MissingBranchExport,
+    DuplicateResultName {
+        name: String,
+    },
+    MissingResultDeclaration,
+    ResultFieldNotString {
+        actual: String,
+    },
+    UnknownScalarLiteralType {
+        actual: String,
+    },
+    UnknownRuntimeReference {
+        actual: String,
+    },
+    UnknownAtComparison {
+        actual: String,
+    },
+    UnknownComparison {
+        actual: String,
+    },
+}
+
 #[derive(Clone, Copy)]
 enum ListPath {
     Steps,
@@ -132,7 +207,7 @@ enum Task {
 
 #[derive(Default)]
 struct FlowState {
-    names: HashMap<String, &'static str>,
+    names: HashMap<String, FlowNameKind>,
     paths: Paths,
     tasks: Vec<Task>,
 }
@@ -141,10 +216,11 @@ impl FlowState {
     fn declare(
         &mut self,
         name: &Token,
-        label: &'static str,
+        current: FlowNameKind,
         pointer: impl FnOnce(&Paths) -> String,
     ) -> Result<(), Box<SyntaxIssue>> {
-        if let Some(prior) = self.names.get(&name.text) {
+        if let Some(&prior) = self.names.get(&name.text) {
+            let label = current.label();
             return Err(error(
                 "CNL_DUPLICATE",
                 name.span.clone(),
@@ -152,13 +228,19 @@ impl FlowState {
                 format!(
                     "{label} name {} conflicts with the earlier {} name {}.",
                     name.text,
-                    prior.to_ascii_lowercase(),
+                    prior.label().to_ascii_lowercase(),
                     name.text
                 ),
                 "Use unique names across inputs and nodes.",
+                AnchorKind::Token,
+                SyntaxRule::Flow(FlowIssue::DuplicateName {
+                    current,
+                    prior,
+                    name: name.text.clone(),
+                }),
             ));
         }
-        self.names.insert(name.text.clone(), label);
+        self.names.insert(name.text.clone(), current);
         Ok(())
     }
 
@@ -172,6 +254,16 @@ impl FlowState {
 }
 
 impl Scanner {
+    fn flow_anchor(&self) -> (SourceSpan, AnchorKind) {
+        match self.peek() {
+            Some(line) if line.normal.starts_with("End ") => {
+                (line.span.clone(), AnchorKind::Closing)
+            }
+            Some(line) => (line.span.clone(), AnchorKind::Statement),
+            None => (self.eof.clone(), AnchorKind::Eof),
+        }
+    }
+
     pub(super) fn flow(&mut self) -> Result<(), Box<SyntaxIssue>> {
         let mut state = FlowState::default();
         let mut opener = self.take()?;
@@ -198,21 +290,30 @@ impl Scanner {
                         continue;
                     }
                     let line = self.peek().ok_or_else(|| {
+                        let expected = closer.sentence();
                         error(
                             "CNL_MISSING",
                             self.eof.clone(),
                             Some(&state.paths.list(path)),
                             "Missing block end.",
-                            closer.sentence(),
+                            expected.clone(),
+                            AnchorKind::Eof,
+                            SyntaxRule::Flow(FlowIssue::MissingBlockEnd { expected }),
                         )
                     })?;
                     if line.normal.starts_with("End ") {
+                        let expected = closer.sentence();
                         return Err(error(
                             "CNL_BLOCK_MISMATCH",
                             line.span.clone(),
                             Some(&state.paths.list(path)),
                             "Mismatched block delimiter.",
-                            closer.sentence(),
+                            expected.clone(),
+                            AnchorKind::Closing,
+                            SyntaxRule::Flow(FlowIssue::MismatchedBlockDelimiter {
+                                expected,
+                                observed: line.normal.clone(),
+                            }),
                         ));
                     }
                     state.tasks.push(Task::List {
@@ -268,7 +369,9 @@ impl Scanner {
             let mut cursor = self.take()?;
             cursor.word("Input")?;
             let name = cursor.ident()?;
-            state.declare(&name, "Input", |_| format!("/flow/inputs/{count}/name"))?;
+            state.declare(&name, FlowNameKind::Input, |_| {
+                format!("/flow/inputs/{count}/name")
+            })?;
             cursor.words(&["has", "type"])?;
             let ty = cursor.token()?;
             cursor.end()?;
@@ -292,19 +395,23 @@ impl Scanner {
                     None,
                     "Unsupported input type token.",
                     "Use a type listed by the CNL input grammar.",
+                    AnchorKind::Token,
+                    SyntaxRule::Flow(FlowIssue::UnsupportedInputType { actual: ty.text }),
                 ));
             }
             self.clause(&cursor.line, Clause::Input { name, ty });
             count += 1;
         }
         if count == 0 {
+            let (span, anchor) = self.flow_anchor();
             return Err(error(
                 "CNL_MISSING",
-                self.peek()
-                    .map_or_else(|| self.eof.clone(), |line| line.span.clone()),
+                span,
                 Some("/flow/inputs"),
                 "Input declaration is missing.",
                 "Declare inputs or Use no inputs.",
+                anchor,
+                SyntaxRule::Flow(FlowIssue::MissingInputDeclaration),
             ));
         }
         Ok(())
@@ -316,9 +423,9 @@ impl Scanner {
         let kind = cursor.token()?;
         let name = cursor.ident()?;
         let label = match kind.text.as_str() {
-            "step" => "Step",
-            "transaction" => "Transaction",
-            "branch" => "Branch",
+            "step" => FlowNameKind::Step,
+            "transaction" => FlowNameKind::Transaction,
+            "branch" => FlowNameKind::Branch,
             _ => {
                 return Err(error(
                     "CNL_SYNTAX",
@@ -326,6 +433,8 @@ impl Scanner {
                     None,
                     "Unknown node kind.",
                     "Begin step, transaction, or branch.",
+                    AnchorKind::Token,
+                    SyntaxRule::Flow(FlowIssue::UnknownNodeKind { actual: kind.text }),
                 ));
             }
         };
@@ -410,6 +519,10 @@ impl Scanner {
                 None,
                 "Operation token is not in the CNL operation vocabulary.",
                 "Use one operation listed by the grammar.",
+                AnchorKind::Token,
+                SyntaxRule::Flow(FlowIssue::UnknownOperation {
+                    actual: operation.text,
+                }),
             ));
         }
         let closer = format!("End step {}.", name.text);
@@ -424,6 +537,7 @@ impl Scanner {
                     &paths.node(node, &format!("/args/{}", name.text)),
                     &cursor.line,
                     "argument",
+                    FlowIssue::DuplicateArgument { name: name.text },
                 ));
             }
             cursor.word("to")?;
@@ -460,6 +574,8 @@ impl Scanner {
                     None,
                     "Unknown undo mode.",
                     "Use delete_created, restore_patch, or no undo.",
+                    AnchorKind::Token,
+                    SyntaxRule::Flow(FlowIssue::UnknownUndoMode { actual: mode.text }),
                 ));
             }
             let value_span = mode.span.clone();
@@ -471,13 +587,15 @@ impl Scanner {
                 },
             );
         } else {
+            let (span, anchor) = self.flow_anchor();
             return Err(error(
                 "CNL_MISSING",
-                self.peek()
-                    .map_or_else(|| self.eof.clone(), |line| line.span.clone()),
+                span,
                 Some(&paths.node(node, "/undo")),
                 "Missing undo declaration.",
                 "Declare the exact undo or use no undo.",
+                anchor,
+                SyntaxRule::Flow(FlowIssue::MissingUndoDeclaration),
             ));
         }
         Ok(())
@@ -498,7 +616,7 @@ impl Scanner {
             let mut cursor = self.take()?;
             cursor.word("Export")?;
             let name = cursor.ident()?;
-            state.declare(&name, "Export", |paths| {
+            state.declare(&name, FlowNameKind::Export, |paths| {
                 paths.node(node, &format!("/exports/{}", name.text))
             })?;
             cursor.words(&["from", "then"])?;
@@ -510,13 +628,15 @@ impl Scanner {
             found = true;
         }
         if !found {
+            let (span, anchor) = self.flow_anchor();
             return Err(error(
                 "CNL_MISSING",
-                self.peek()
-                    .map_or_else(|| self.eof.clone(), |line| line.span.clone()),
+                span,
                 Some(&state.paths.node(node, "/exports")),
                 "Branch export declaration is missing.",
                 "Export no values. or Export IDENT from then VALUE and from else VALUE.",
+                anchor,
+                SyntaxRule::Flow(FlowIssue::MissingBranchExport),
             ));
         }
         Ok(())
@@ -538,6 +658,7 @@ impl Scanner {
                     &format!("/flow/result/{}", name.text),
                     &cursor.line,
                     "result name",
+                    FlowIssue::DuplicateResultName { name: name.text },
                 ));
             }
             cursor.word("from")?;
@@ -546,26 +667,30 @@ impl Scanner {
             self.clause(&cursor.line, Clause::Result { name, value });
         }
         if names.is_empty() {
+            let (span, anchor) = self.flow_anchor();
             return Err(error(
                 "CNL_MISSING",
-                self.peek()
-                    .map_or_else(|| self.eof.clone(), |line| line.span.clone()),
+                span,
                 Some("/flow/result"),
                 "Result declaration is missing.",
                 "Return no values. or Return IDENT from VALUE.",
+                anchor,
+                SyntaxRule::Flow(FlowIssue::MissingResultDeclaration),
             ));
         }
         Ok(())
     }
 }
 
-fn duplicate(pointer: &str, line: &Line, what: &str) -> Box<SyntaxIssue> {
+fn duplicate(pointer: &str, line: &Line, what: &str, rule: FlowIssue) -> Box<SyntaxIssue> {
     error(
         "CNL_DUPLICATE",
         line.span.clone(),
         Some(pointer),
         format!("Duplicate {what}."),
         format!("Declare {what} exactly once."),
+        AnchorKind::Statement,
+        SyntaxRule::Flow(rule),
     )
 }
 
@@ -584,6 +709,8 @@ fn flow_value(cursor: &mut Cursor) -> Result<ValueSyntax, Box<SyntaxIssue>> {
                     None,
                     "Result field must be a JSON string.",
                     "step IDENT field JSON_STRING",
+                    AnchorKind::Token,
+                    SyntaxRule::Flow(FlowIssue::ResultFieldNotString { actual: field.text }),
                 ));
             }
             ValueKind::Step { name, field }
@@ -599,6 +726,8 @@ fn flow_value(cursor: &mut Cursor) -> Result<ValueSyntax, Box<SyntaxIssue>> {
                     None,
                     "Unknown scalar literal type.",
                     "Use string, integer, float, boolean, date, or bytes.",
+                    AnchorKind::Token,
+                    SyntaxRule::Flow(FlowIssue::UnknownScalarLiteralType { actual: ty.text }),
                 ));
             }
             let (_, value) = cursor.json()?;
@@ -611,6 +740,8 @@ fn flow_value(cursor: &mut Cursor) -> Result<ValueSyntax, Box<SyntaxIssue>> {
                 None,
                 "Unknown runtime reference form.",
                 "Use input NAME, step NAME field JSON_STRING, or literal TYPE JSON_SCALAR.",
+                AnchorKind::Token,
+                SyntaxRule::Flow(FlowIssue::UnknownRuntimeReference { actual: first.text }),
             ));
         }
     };
@@ -657,6 +788,8 @@ fn predicate(cursor: &mut Cursor) -> Result<Predicate, Box<SyntaxIssue>> {
                         None,
                         "Unknown comparison.",
                         "Use at most or at least.",
+                        AnchorKind::Token,
+                        SyntaxRule::Flow(FlowIssue::UnknownAtComparison { actual: bound.text }),
                     ));
                 }
             }
@@ -668,6 +801,8 @@ fn predicate(cursor: &mut Cursor) -> Result<Predicate, Box<SyntaxIssue>> {
                 None,
                 "Unknown comparison.",
                 "Use a fixed comparison or is null.",
+                AnchorKind::Token,
+                SyntaxRule::Flow(FlowIssue::UnknownComparison { actual: token.text }),
             ));
         }
     };

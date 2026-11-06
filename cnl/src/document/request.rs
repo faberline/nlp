@@ -15,6 +15,14 @@ impl Scanner {
                 None,
                 "Unsupported CNL language version in header.",
                 "Use SOM CNL version 1.",
+                if header.tokens.is_empty() {
+                    AnchorKind::Statement
+                } else {
+                    AnchorKind::Token
+                },
+                SyntaxRule::Request(RequestIssue::InvalidHeader {
+                    actual: header.normal,
+                }),
             ));
         }
         self.clause(&header, Clause::Header);
@@ -30,6 +38,8 @@ impl Scanner {
                 Some("/version"),
                 "Prompt version is outside the supported set 1 through 7.",
                 "Use prompt version 1 through 7.",
+                AnchorKind::Token,
+                SyntaxRule::Request(RequestIssue::UnsupportedVersion { actual: token.text }),
             );
             issue.phase = Phase::Dispatch;
             return Err(issue);
@@ -41,6 +51,11 @@ impl Scanner {
                 Some("/version"),
                 "Prompt version token is not a fixed grammar choice.",
                 "Use prompt version 1 through 7.",
+                AnchorKind::Token,
+                SyntaxRule::Request(RequestIssue::NoncanonicalVersion {
+                    actual: token.text,
+                    number,
+                }),
             );
             issue.phase = Phase::Dispatch;
             return Err(issue);
@@ -101,6 +116,10 @@ impl Scanner {
                 None,
                 "Unexpected content after End request.",
                 "Supply one request only.",
+                AnchorKind::Statement,
+                SyntaxRule::Request(RequestIssue::TrailingContent {
+                    actual: line.normal.clone(),
+                }),
             ));
         }
         Ok(())
@@ -193,6 +212,12 @@ impl Scanner {
                     None,
                     format!("Unknown {key} capability token."),
                     allowed.join(", "),
+                    AnchorKind::Token,
+                    SyntaxRule::Request(RequestIssue::UnknownCapability {
+                        kind,
+                        actual: token.text,
+                        expected: allowed.iter().map(|word| (*word).into()).collect(),
+                    }),
                 ));
             }
             self.locate(&pointer, &token);
@@ -252,6 +277,8 @@ impl Scanner {
                         None,
                         "Unknown related route scope.",
                         "For parent, child, or batch: the fixed sentence.",
+                        AnchorKind::Token,
+                        SyntaxRule::Request(RequestIssue::UnknownRouteScope { actual: scope.text }),
                     ));
                 }
                 let sentence = clause.line.tokens[clause.at..]
@@ -284,6 +311,11 @@ impl Scanner {
                         None,
                         "Unknown selected operation.",
                         "Allow ACTION on parent|child. or Allow batch creation.",
+                        AnchorKind::Statement,
+                        SyntaxRule::Request(RequestIssue::UnknownSelectedOperation {
+                            action: action.text,
+                            scope: scope.text,
+                        }),
                     ));
                 }
                 RouteSyntax::Selected {
@@ -308,6 +340,8 @@ impl Scanner {
                 &end,
                 "The routes block has no operation.",
                 "Declare the required fixed route sentences.",
+                AnchorKind::Closing,
+                SyntaxRule::Request(RequestIssue::MissingRoute),
             ));
         }
         self.close(&end, BlockKind::Routes);

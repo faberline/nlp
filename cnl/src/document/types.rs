@@ -1,4 +1,4 @@
-use super::{Predicate, ValueSyntax};
+use super::{Predicate, SyntaxFact, ValueSyntax};
 
 /// Positions in the original, decoded UTF-8 document. Ends are exclusive.
 /// Lines and columns start at one. Columns count Unicode scalar values.
@@ -57,6 +57,9 @@ pub struct SyntaxIssue {
     pub phase: Phase,
     pub kind: IssueKind,
     pub span: SourceSpan,
+    pub fact: SyntaxFact,
+    /// Compatibility detail from the first version of the syntax report.
+    /// Consumers with their own diagnostic format can use `fact` instead.
     pub pointer: Option<String>,
     pub cause: String,
     pub allowed_form: String,

@@ -13,6 +13,10 @@ pub use document::*;
 pub const SOURCE_FILES: &[(&str, &[u8])] = &[
     ("Cargo.toml", include_bytes!("../Cargo.toml")),
     ("src/document.rs", include_bytes!("document.rs")),
+    (
+        "src/document/diagnostics.rs",
+        include_bytes!("document/diagnostics.rs"),
+    ),
     ("src/document/flow.rs", include_bytes!("document/flow.rs")),
     (
         "src/document/request.rs",
@@ -22,6 +26,7 @@ pub const SOURCE_FILES: &[(&str, &[u8])] = &[
         "src/document/resources.rs",
         include_bytes!("document/resources.rs"),
     ),
+    ("src/document/scope.rs", include_bytes!("document/scope.rs")),
     ("src/document/types.rs", include_bytes!("document/types.rs")),
     ("src/lib.rs", include_bytes!("lib.rs")),
     ("src/som_cnl.pest", include_bytes!("som_cnl.pest")),

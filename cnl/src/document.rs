@@ -4,16 +4,21 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
+mod diagnostics;
 mod flow;
 mod request;
 mod resources;
+mod scope;
 mod types;
 
-pub use flow::{Comparison, Predicate, ValueKind, ValueSyntax};
+pub use diagnostics::{AnchorKind, BaseIssue, RequestIssue, SyntaxFact, SyntaxRule};
+pub use flow::{Comparison, FlowIssue, FlowNameKind, Predicate, ValueKind, ValueSyntax};
+pub use resources::{QuerySelector, ResourceIssue};
+pub use scope::{ScopePart, SyntaxSlot};
 pub use types::*;
 
 /// Version of the event and diagnostic interface.
-pub const SYNTAX_API_VERSION: u32 = 1;
+pub const SYNTAX_API_VERSION: u32 = 2;
 
 /// Check the entire input lexically before scanning the selected grammar.
 /// Stop at the first structural issue and retain the preceding events.
@@ -36,13 +41,16 @@ pub fn parse_document(source: &str) -> SyntaxReport {
         events: Vec::new(),
         parents: Vec::new(),
     };
-    let issue = match lex(source, &mut scanner.lines) {
+    let mut issue = match lex(source, &mut scanner.lines) {
         Ok(()) => scanner.document().err().map(|issue| *issue),
         Err(mut issue) => {
             issue.phase = Phase::Lexical;
             Some(*issue)
         }
     };
+    if let Some(issue) = &mut issue {
+        issue.fact.block = scanner.parents.last().copied();
+    }
     SyntaxReport {
         api_version: SYNTAX_API_VERSION,
         lines: scanner.lines,
@@ -58,6 +66,8 @@ fn error(
     pointer: Option<&str>,
     cause: impl Into<String>,
     allowed_form: impl Into<String>,
+    anchor: AnchorKind,
+    rule: SyntaxRule,
 ) -> Box<SyntaxIssue> {
     let kind = match code {
         "CNL_SYNTAX" => IssueKind::Syntax,
@@ -67,10 +77,22 @@ fn error(
         "UNSUPPORTED_VERSION" => IssueKind::UnsupportedVersion,
         _ => unreachable!("unrecognized syntax issue {code}"),
     };
+    let scope = scope::issue_scope(pointer);
+    debug_assert_eq!(
+        scope.is_some(),
+        pointer.is_some(),
+        "unknown diagnostic scope"
+    );
     Box::new(SyntaxIssue {
         phase: Phase::Structural,
         kind,
         span,
+        fact: SyntaxFact {
+            rule,
+            scope,
+            anchor,
+            block: None,
+        },
         pointer: pointer.map(str::to_owned),
         cause: cause.into(),
         allowed_form: allowed_form.into(),
@@ -156,12 +178,15 @@ fn lex(source: &str, lines: &mut Vec<Line>) -> Result<(), Box<SyntaxIssue>> {
                 None
             }
         }) {
+            let actual = text[p..].chars().next().unwrap();
             return Err(error(
                 "CNL_SYNTAX",
-                sp(p, p + text[p..].chars().next().unwrap().len_utf8()),
+                sp(p, p + actual.len_utf8()),
                 None,
                 "Bare CR and BOM are not allowed.",
                 "Use LF or CRLF and no BOM.",
+                AnchorKind::Token,
+                SyntaxRule::Base(BaseIssue::BareCrOrBom { actual }),
             ));
         }
         let trim = text.trim_matches([' ', '\t']);
@@ -176,6 +201,10 @@ fn lex(source: &str, lines: &mut Vec<Line>) -> Result<(), Box<SyntaxIssue>> {
                     None,
                     "A sentence needs its final period.",
                     "End the complete sentence with a period.",
+                    AnchorKind::Statement,
+                    SyntaxRule::Base(BaseIssue::MissingPeriod {
+                        actual: trim.into(),
+                    }),
                 ));
             }
             let body_end = end - 1;
@@ -212,6 +241,10 @@ fn lex(source: &str, lines: &mut Vec<Line>) -> Result<(), Box<SyntaxIssue>> {
                             None,
                             "Invalid JSON string literal.",
                             "Use a quoted JSON string with valid escapes.",
+                            AnchorKind::Token,
+                            SyntaxRule::Base(BaseIssue::InvalidJsonString {
+                                actual: text[begin..p].into(),
+                            }),
                         ));
                     }
                     if p < body_end && !matches!(text.as_bytes()[p], b' ' | b'\t') {
@@ -221,6 +254,10 @@ fn lex(source: &str, lines: &mut Vec<Line>) -> Result<(), Box<SyntaxIssue>> {
                             None,
                             "A JSON string needs a token boundary.",
                             "Separate grammar tokens with spaces or tabs.",
+                            AnchorKind::Token,
+                            SyntaxRule::Base(BaseIssue::JsonStringBoundary {
+                                actual: text[p..].chars().next().unwrap(),
+                            }),
                         ));
                     }
                 } else {
@@ -262,6 +299,8 @@ impl Cursor {
                 None,
                 "Incomplete sentence.",
                 "Use the complete fixed sentence form.",
+                AnchorKind::Statement,
+                SyntaxRule::Base(BaseIssue::IncompleteSentence),
             )
         })?;
         self.at += 1;
@@ -276,6 +315,11 @@ impl Cursor {
                 None,
                 format!("Expected {w}."),
                 format!("Use the keyword {w}."),
+                AnchorKind::Token,
+                SyntaxRule::Base(BaseIssue::ExpectedKeyword {
+                    expected: w.into(),
+                    actual: t.text,
+                }),
             ));
         }
         Ok(())
@@ -294,6 +338,10 @@ impl Cursor {
                 None,
                 "Unexpected trailing token.",
                 "Use only the fixed sentence form.",
+                AnchorKind::Token,
+                SyntaxRule::Base(BaseIssue::TrailingToken {
+                    actual: self.line.tokens[self.at].text.clone(),
+                }),
             ))
         } else {
             Ok(())
@@ -308,6 +356,8 @@ impl Cursor {
                 None,
                 "Invalid identifier token.",
                 "Use an ASCII Python identifier.",
+                AnchorKind::Token,
+                SyntaxRule::Base(BaseIssue::InvalidIdentifier { actual: t.text }),
             ));
         }
         Ok(t)
@@ -321,6 +371,10 @@ impl Cursor {
                 None,
                 "Invalid JSON scalar.",
                 "Use one JSON scalar literal.",
+                AnchorKind::Token,
+                SyntaxRule::Base(BaseIssue::InvalidJsonScalar {
+                    actual: t.text.clone(),
+                }),
             )
         })?;
         if v.is_object() || v.is_array() {
@@ -330,6 +384,8 @@ impl Cursor {
                 None,
                 "Objects and arrays are not scalar literals.",
                 "Use a JSON scalar or declared typed input.",
+                AnchorKind::Token,
+                SyntaxRule::Base(BaseIssue::NonScalarJson { actual: t.text }),
             ));
         }
         Ok((v, t))
@@ -357,6 +413,8 @@ impl Scanner {
                 None,
                 "Unexpected end of input.",
                 "Supply the required closing sentence.",
+                AnchorKind::Eof,
+                SyntaxRule::Base(BaseIssue::UnexpectedEof),
             )
         })?;
         self.at += 1;
@@ -437,17 +495,19 @@ impl Scanner {
         } else {
             "End request."
         };
-        let span = self.lines[self.at..]
-            .iter()
-            .find(|l| l.normal == end)
-            .map(|l| l.span.clone())
-            .unwrap_or_else(|| self.eof.clone());
+        let close = self.lines[self.at..].iter().find(|l| l.normal == end);
+        let (span, anchor) = close.map_or_else(
+            || (self.eof.clone(), AnchorKind::Eof),
+            |line| (line.span.clone(), AnchorKind::Closing),
+        );
         error(
             "CNL_MISSING",
             span,
             Some(p),
             "Required scalar clause is missing.",
             form,
+            anchor,
+            SyntaxRule::Base(BaseIssue::MissingScalar { form: form.into() }),
         )
     }
     fn expected(&mut self, s: &str) -> Result<Line, Box<SyntaxIssue>> {
@@ -461,14 +521,25 @@ impl Scanner {
                 .peek()
                 .map(|l| l.span.clone())
                 .unwrap_or_else(|| self.eof.clone());
-            let code = if self.peek().is_none() {
-                "CNL_MISSING"
+            let (code, anchor) = if self.peek().is_none() {
+                ("CNL_MISSING", AnchorKind::Eof)
             } else if self.normal().starts_with("End ") {
-                "CNL_BLOCK_MISMATCH"
+                ("CNL_BLOCK_MISMATCH", AnchorKind::Closing)
             } else {
-                "CNL_SYNTAX"
+                ("CNL_SYNTAX", AnchorKind::Statement)
             };
-            Err(error(code, span, None, format!("Expected {s}"), s))
+            Err(error(
+                code,
+                span,
+                None,
+                format!("Expected {s}"),
+                s,
+                anchor,
+                SyntaxRule::Base(BaseIssue::ExpectedSentence {
+                    expected: s.into(),
+                    actual: self.peek().map(|line| line.normal.clone()),
+                }),
+            ))
         }
     }
     fn locate(&mut self, p: &str, t: &Token) {
@@ -518,6 +589,10 @@ impl Scanner {
                     None,
                     "Expected JSON string.",
                     "Use a quoted JSON string.",
+                    AnchorKind::Token,
+                    SyntaxRule::Base(BaseIssue::ExpectedJsonString {
+                        actual: t.text.clone(),
+                    }),
                 )
             })?;
         } else if !identifier(&t.text) {
@@ -527,6 +602,8 @@ impl Scanner {
                 None,
                 "Invalid identifier token.",
                 "Use an ASCII Python identifier.",
+                AnchorKind::Token,
+                SyntaxRule::Base(BaseIssue::InvalidIdentifier { actual: t.text }),
             ));
         }
         self.locate(p, &t);
@@ -540,9 +617,27 @@ impl Scanner {
             Some(p),
             format!("Duplicate {what}."),
             format!("Declare {what} exactly once."),
+            AnchorKind::Statement,
+            SyntaxRule::Base(BaseIssue::Duplicate { item: what.into() }),
         )
     }
-    fn missing(&self, p: &str, l: &Line, cause: &str, allowed: &str) -> Box<SyntaxIssue> {
-        error("CNL_MISSING", l.span.clone(), Some(p), cause, allowed)
+    fn missing(
+        &self,
+        p: &str,
+        l: &Line,
+        cause: &str,
+        allowed: &str,
+        anchor: AnchorKind,
+        rule: SyntaxRule,
+    ) -> Box<SyntaxIssue> {
+        error(
+            "CNL_MISSING",
+            l.span.clone(),
+            Some(p),
+            cause,
+            allowed,
+            anchor,
+            rule,
+        )
     }
 }

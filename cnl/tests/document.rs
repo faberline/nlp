@@ -1,8 +1,8 @@
 use std::{fs, path::Path};
 
 use faberline_nlp_cnl::{
-    Block, BlockKind, Clause, EventKind, IssueKind, Phase, SOURCE_FILES, SYNTAX_API_VERSION,
-    ValueKind, parse_document,
+    AnchorKind, BaseIssue, Block, BlockKind, Clause, EventKind, IssueKind, Phase, SOURCE_FILES,
+    SYNTAX_API_VERSION, ScopePart, SyntaxRule, SyntaxSlot, ValueKind, parse_document,
 };
 
 const WORKFLOW: &str = r#"Use SOM CNL version 1.
@@ -141,6 +141,11 @@ fn checks_all_lines_before_dispatching_the_version() {
     let dispatch = parse_document(&unknown).issue.unwrap();
     assert_eq!(dispatch.phase, Phase::Dispatch);
     assert_eq!(dispatch.kind, IssueKind::UnsupportedVersion);
+    assert_eq!(dispatch.fact.anchor, AnchorKind::Token);
+    assert_eq!(
+        dispatch.fact.scope,
+        Some(vec![ScopePart::Slot(SyntaxSlot::Version)])
+    );
     let source = unknown.replace("End request.", "End request");
     let report = parse_document(&source);
     let issue = report.issue.unwrap();
@@ -151,6 +156,23 @@ fn checks_all_lines_before_dispatching_the_version() {
     );
     assert!(report.events.is_empty());
     assert_eq!(report.eof.byte_start, source.len());
+}
+
+#[test]
+fn reports_rule_arguments_and_block_context_for_a_bad_clause() {
+    let source = WORKFLOW.replace("entry_id to literal", "entry_id from literal");
+    let report = parse_document(&source);
+    let issue = report.issue.unwrap();
+    assert_eq!(issue.fact.anchor, AnchorKind::Token);
+    assert_eq!(
+        issue.fact.rule,
+        SyntaxRule::Base(BaseIssue::ExpectedKeyword {
+            expected: "to".into(),
+            actual: "from".into(),
+        })
+    );
+    let event = &report.events[issue.fact.block.unwrap()];
+    assert!(matches!(event.kind, EventKind::Begin(Block::Step { .. })));
 }
 
 #[test]

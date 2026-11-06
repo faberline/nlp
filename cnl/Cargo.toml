@@ -1,0 +1,10 @@
+[package]
+name = "faberline-nlp-cnl"
+version = "0.1.0"
+edition = "2024"
+description = "Syntax parser for English SOM CNL"
+publish = false
+
+[dependencies]
+pest = "2.9"
+pest_derive = "2.9"

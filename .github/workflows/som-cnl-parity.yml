@@ -86,7 +86,9 @@ jobs:
           print("Target results:", sorted(counts.items()))
           print("Compared records:", len(after), "Differences:", len(diffs), "Assembly errors:", len(failures))
           for key in diffs[:20]:
-              print("Difference:", key, before.get(key), after.get(key))
+              old, new = before.get(key, {}), after.get(key, {})
+              changed = [field for field in sorted(old.keys() | new.keys()) if old.get(field) != new.get(field)]
+              print("Difference:", key, changed)
           for key, error in failures[:20]:
               print("Assembly error:", key, error)
           if diffs or failures:

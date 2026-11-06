@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 use som::{
-    compiler::{Compiler, canonical_hash, digest, package_assets},
+    compiler::{Compiler, package_assets},
+    flow::canonical,
     strict_json,
 };
 use std::{collections::BTreeMap, env, fs, path::PathBuf};
@@ -84,23 +85,29 @@ fn write_compiler_parity_report() {
                 assert!(bundle["dsl"].is_object(), "{case}/{target} has no DSL");
                 let assemble = json!({"bundle": bundle}).to_string();
                 let document = strict_json::parse(&assemble).unwrap();
-                let (status, response) = som_targets::assemble(&compiler, &document);
+                let (status, response) = if target == "python" {
+                    match compiler.assemble_bundle(bundle) {
+                        Ok(files) => (200, json!({"files": files})),
+                        Err(error) => (
+                            som_targets::status(error.code),
+                            json!({"code": error.code, "detail": error.detail}),
+                        ),
+                    }
+                } else {
+                    som_targets::assemble(&compiler, &document)
+                };
                 if status == 200 {
                     let files = response["files"].as_object().unwrap();
                     assert!(!files.is_empty(), "{case}/{target} produced no files");
-                    let bytes: BTreeMap<_, _> = files
-                        .iter()
-                        .map(|(path, text)| (path, digest(text.as_str().unwrap().as_bytes())))
-                        .collect();
                     json!({
-                        "prompt": canonical_hash(&bundle["prompt"]),
-                        "dsl": canonical_hash(&bundle["dsl"]),
-                        "files": bytes,
+                        "prompt": canonical(&bundle["prompt"]),
+                        "dsl": canonical(&bundle["dsl"]),
+                        "files": files,
                     })
                 } else {
                     json!({
-                        "prompt": canonical_hash(&bundle["prompt"]),
-                        "dsl": canonical_hash(&bundle["dsl"]),
+                        "prompt": canonical(&bundle["prompt"]),
+                        "dsl": canonical(&bundle["dsl"]),
                         "assemble_error": [status, response],
                     })
                 }

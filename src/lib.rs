@@ -1,4 +1,4 @@
-//! Rule-based chapter and timeline analysis for Chinese narrative text.
+//! Rule-based Chinese narrative analysis and English CNL parsing.
 //!
 //! Supply a work's vocabulary through [`Lexicon`]. Evidence offsets count Unicode
 //! scalar values from the beginning of the exact, unmodified input text. Ranges
@@ -9,6 +9,7 @@ mod language;
 pub mod timeline;
 
 pub use analyze::analyze;
+pub use faberline_nlp_cnl as cnl;
 use serde::{Deserialize, Serialize};
 
 /// Names, aliases, vocabulary and source-format markers for a single work.

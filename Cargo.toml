@@ -2,10 +2,14 @@
 name = "faberline-nlp"
 version = "0.1.0"
 edition = "2024"
-description = "Source-linked event extraction and narrative ordering for Chinese text"
+description = "Source-linked Chinese narrative analysis and English CNL parsing"
 repository = "https://github.com/faberline/nlp"
 publish = false
 
 [dependencies]
 anyhow = "1"
+faberline-nlp-cnl = { path = "cnl" }
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+pest = "2.9"

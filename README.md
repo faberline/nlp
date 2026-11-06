@@ -11,3 +11,17 @@ AlterVerse Lab is the first consumer. It handles book import, chapter checkpoint
 ```sh
 cargo test --locked
 ```
+
+## English CNL
+
+Use `cnl::parse` to read English SOM CNL v1. The grammar covers prompt versions 1 through 7. Pass the whole request as a string.
+
+```rust
+let source = std::fs::read_to_string("request.cnl")?;
+let document = faberline_nlp::cnl::parse(&source)?;
+assert_eq!(document.text, source.as_str());
+```
+
+The result is a tree of grammar rules. Each node gives its text and a byte range in the original input. A syntax error gives a line and column.
+
+Use the [SOM examples](https://github.com/faberline/som/tree/05c63d08275d59ea7110cd8f2b30786070b91968/som-rs/contracts/compiler-v1/examples) for sample requests. SOM still checks the business rules. It builds the DSL and generates the code.

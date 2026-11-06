@@ -9,6 +9,7 @@ mod flow;
 mod request;
 mod resources;
 mod scope;
+pub mod service;
 mod types;
 
 pub use diagnostics::{AnchorKind, BaseIssue, RequestIssue, SyntaxFact, SyntaxRule};
@@ -23,18 +24,9 @@ pub const SYNTAX_API_VERSION: u32 = 2;
 /// Check the entire input lexically before scanning the selected grammar.
 /// Stop at the first structural issue and retain the preceding events.
 pub fn parse_document(source: &str) -> SyntaxReport {
-    let line = source.bytes().filter(|&byte| byte == b'\n').count() + 1;
-    let column = source.rsplit('\n').next().unwrap_or("").chars().count() + 1;
     let mut scanner = Scanner {
         lines: Vec::new(),
-        eof: SourceSpan {
-            line,
-            column,
-            end_line: line,
-            end_column: column,
-            byte_start: source.len(),
-            byte_end: source.len(),
-        },
+        eof: end_of_source(source),
         at: 0,
         version: 0,
         map: BTreeMap::new(),
@@ -57,6 +49,19 @@ pub fn parse_document(source: &str) -> SyntaxReport {
         eof: scanner.eof,
         events: scanner.events,
         issue,
+    }
+}
+
+fn end_of_source(source: &str) -> SourceSpan {
+    let line = source.bytes().filter(|&byte| byte == b'\n').count() + 1;
+    let column = source.rsplit('\n').next().unwrap_or("").chars().count() + 1;
+    SourceSpan {
+        line,
+        column,
+        end_line: line,
+        end_column: column,
+        byte_start: source.len(),
+        byte_end: source.len(),
     }
 }
 

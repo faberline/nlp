@@ -60,6 +60,7 @@ jobs:
           python3 som-rs/scripts/react_output_acceptance/provision_macos.py --out "$RUNNER_TEMP/som-cnl-tools"
           printf '%s\n' '/opt/homebrew/Cellar/rust/1.96.1/bin' >> "$GITHUB_PATH"
       - name: Verify and unpack the public formatter archives
+        id: formatters
         run: |
           set -euo pipefail
           curl -fLsS https://github.com/astral-sh/ruff/releases/download/0.16.6/ruff-aarch64-apple-darwin.tar.gz -o "$RUNNER_TEMP/ruff.tar.gz"
@@ -81,7 +82,7 @@ jobs:
           done
           exit "$result"
       - name: Compare the same CNL inputs byte for byte
-        if: success() || failure()
+        if: "${{ !cancelled() && steps.formatters.outcome == 'success' }}"
         run: |
           set -euo pipefail
           export CARGO_TARGET_DIR="$RUNNER_TEMP/som-cargo-target"
@@ -96,19 +97,43 @@ jobs:
           import collections, json, pathlib, sys
           before, after = [json.loads(pathlib.Path(arg).read_bytes()) for arg in sys.argv[1:]]
           diffs = [key for key in sorted(before.keys() | after.keys()) if before.get(key) != after.get(key)]
-          failures = [(key, value["assemble_error"]) for key, value in after.items() if "assemble_error" in value]
-          counts = collections.Counter(
-              (key.split("/", 1)[0], "files" if "files" in value else "refused" if "compile_error" in value else "assemble_error")
-              for key, value in after.items()
-          )
+          failures = [
+              (side, key, reason)
+              for side, records in (("baseline", before), ("candidate", after))
+              for key, record in records.items()
+              for reason in ("assemble_error", "expectation_mismatch")
+              if reason in record
+          ]
+          counts = collections.Counter()
+          for key, record in after.items():
+              stage = key.split("/", 1)[0]
+              outcome = next(field for field in ("files", "compile_error", "assemble_error", "parse_error", "prompt")
+                             if field in record)
+              counts[stage, outcome] += 1
+          missing_targets = [
+              target for target in ("python", "rust", "typescript", "react")
+              if counts[target, "files"] == 0
+          ]
           print("Target results:", sorted(counts.items()))
-          print("Compared records:", len(after), "Differences:", len(diffs), "Assembly errors:", len(failures))
+          print("Compared records:", len(after), "Differences:", len(diffs), "Failures:", len(failures))
           for key in diffs[:20]:
               old, new = before.get(key, {}), after.get(key, {})
               changed = [field for field in sorted(old.keys() | new.keys()) if old.get(field) != new.get(field)]
               print("Difference:", key, changed)
-          for key, error in failures[:20]:
-              print("Assembly error:", key, error)
-          if diffs or failures:
+          for side, key, reason in failures[:20]:
+              print("Failure:", side, key, reason)
+          if missing_targets:
+              print("Targets with no generated files:", missing_targets)
+          if diffs or failures or missing_targets:
               sys.exit(1)
           PY
+      - name: Save the parity reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: som-cnl-parity-reports
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/baseline.json
+            ${{ runner.temp }}/candidate.json

@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 use som::{
+    cnl,
     compiler::{Compiler, package_assets},
     flow::canonical,
     strict_json,
@@ -116,11 +117,24 @@ fn write_compiler_parity_report() {
     let mut reports = BTreeMap::new();
 
     for (case, source, negative) in cases {
+        let parsed = cnl::parse(&source);
+        let unexpected = parsed.is_ok() == negative;
+        let mut syntax = match parsed {
+            Ok(parsed) => json!({
+                "prompt": canonical(&parsed.prompt),
+                "source_map": parsed.source_map,
+            }),
+            Err(error) => json!({"parse_error": [error.http_status(), error.response()]}),
+        };
+        if unexpected {
+            syntax["expectation_mismatch"] = json!(true);
+        }
+        assert!(reports.insert(format!("cnl/{case}"), syntax).is_none());
+
         for target in ["python", "rust", "typescript", "react"] {
             let input = json!({"format": "som.cnl.v1", "source": source, "target": target});
             let (status, response) = som_targets::compile(&compiler, &input.to_string());
-            let record = if status == 200 {
-                assert!(!negative, "{case}/{target} unexpectedly compiled");
+            let mut record = if status == 200 {
                 let bundle = &response["bundle"];
                 assert!(bundle["dsl"].is_object(), "{case}/{target} has no DSL");
                 let assemble = json!({"bundle": bundle}).to_string();
@@ -154,6 +168,12 @@ fn write_compiler_parity_report() {
             } else {
                 json!({"compile_error": [status, response]})
             };
+            let repository_positive = case.starts_with("repo/") && !negative;
+            if (negative && status == 200)
+                || (repository_positive && target == "python" && status != 200)
+            {
+                record["expectation_mismatch"] = json!(true);
+            }
             assert!(reports.insert(format!("{target}/{case}"), record).is_none());
         }
     }

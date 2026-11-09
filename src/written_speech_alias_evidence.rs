@@ -156,7 +156,7 @@ pub fn map_written_speech<'a>(
     for act in acts {
         let cue = locate(act.cue)?;
         let payload = locate(act.payload)?;
-        let written_speaker = act.speaker_surface.map(&locate).transpose()?;
+        let written_speaker = act.speaker_surface.map(locate).transpose()?;
         let caller_labels = if let Some(surface) = written_speaker {
             let literal = source
                 .get(surface.byte_start..surface.byte_end)

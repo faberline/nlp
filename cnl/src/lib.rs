@@ -5,6 +5,42 @@ use std::ops::Range;
 use pest::{Parser as _, iterators::Pair};
 use pest_derive::Parser;
 
+mod document;
+pub use document::*;
+pub use service::{SERVICE_SYNTAX_API_VERSION, parse_service_document};
+
+/// Sources used by this crate, for consumers that bind builds to source bytes.
+/// Paths are relative to this crate's manifest directory and sorted.
+pub const SOURCE_FILES: &[(&str, &[u8])] = &[
+    ("Cargo.toml", include_bytes!("../Cargo.toml")),
+    ("src/document.rs", include_bytes!("document.rs")),
+    (
+        "src/document/diagnostics.rs",
+        include_bytes!("document/diagnostics.rs"),
+    ),
+    ("src/document/flow.rs", include_bytes!("document/flow.rs")),
+    (
+        "src/document/request.rs",
+        include_bytes!("document/request.rs"),
+    ),
+    (
+        "src/document/resources.rs",
+        include_bytes!("document/resources.rs"),
+    ),
+    ("src/document/scope.rs", include_bytes!("document/scope.rs")),
+    (
+        "src/document/service.rs",
+        include_bytes!("document/service.rs"),
+    ),
+    (
+        "src/document/service/types.rs",
+        include_bytes!("document/service/types.rs"),
+    ),
+    ("src/document/types.rs", include_bytes!("document/types.rs")),
+    ("src/lib.rs", include_bytes!("lib.rs")),
+    ("src/som_cnl.pest", include_bytes!("som_cnl.pest")),
+];
+
 #[derive(Parser)]
 #[grammar = "som_cnl.pest"]
 struct EnglishCnl;

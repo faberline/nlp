@@ -3,8 +3,15 @@ name = "faberline-nlp-cnl"
 version = "0.1.0"
 edition = "2024"
 description = "Syntax parser for English SOM CNL"
+license = "MIT"
 publish = false
 
 [dependencies]
 pest = "2.9"
 pest_derive = "2.9"
+serde_json = "1"
+
+[lints.clippy]
+# 4207cf7 returns the 128-byte ServiceSyntaxIssue by value. som pins that rev and
+# cnl/src must stay byte-identical, so the lint is allowed here instead.
+result_large_err = "allow"

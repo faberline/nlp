@@ -1,4 +1,4 @@
-//! Syntax only for the separate, flat SOM service CNL v1 grammar.
+//! Syntax only for the separate SOM service CNL grammar, versions 1 and 2.
 
 mod types;
 
@@ -69,6 +69,12 @@ fn scan(
             slot,
         }
         .parse()?;
+        let is_v2 =
+            matches!(&event.kind, ServiceEventKind::Header { version } if version.text == "2");
+        if is_v2 {
+            events.push(event);
+            return scan_v2(lines, eof, events);
+        }
         if let ServiceEventKind::InputBinding { name, .. } = &event.kind
             && let Some(ServiceEventKind::InputBinding { name: first, .. }) =
                 events.last().map(|previous| &previous.kind)
@@ -91,6 +97,156 @@ fn scan(
     Ok(())
 }
 
+/// Version 2: the prelude is followed by one or more operations, each with
+/// its own inputs and an optional request body. The header is already pushed.
+fn scan_v2(
+    mut lines: std::vec::IntoIter<Line>,
+    eof: &SourceSpan,
+    events: &mut Vec<ServiceEvent>,
+) -> Result<(), ServiceSyntaxIssue> {
+    use ServiceSlot::*;
+    let issue = |kind, span, slot, rule| ServiceSyntaxIssue {
+        phase: Phase::Structural,
+        kind,
+        span,
+        slot: Some(slot),
+        rule,
+    };
+    let parse = |line: Line, slot| {
+        Statement {
+            cursor: Cursor { line, at: 0 },
+            phase: Phase::Structural,
+            slot,
+        }
+        .parse()
+    };
+
+    let mut consumed = vec![Header];
+    for slot in [Package, Target, ServiceBinding] {
+        let Some(line) = lines.next() else {
+            return Err(issue(
+                IssueKind::Missing,
+                eof.clone(),
+                slot,
+                ServiceSyntaxRule::MissingStatement,
+            ));
+        };
+        let observed = statement_slot(&line);
+        if observed != Some(slot) {
+            return Err(unexpected(line, observed, slot, &consumed));
+        }
+        events.push(parse(line, slot)?);
+        consumed.push(slot);
+    }
+
+    let mut aliases: Vec<String> = Vec::new();
+    let mut inputs: Vec<String> = Vec::new();
+    let mut body = false;
+    for line in lines {
+        let have_op = !aliases.is_empty();
+        let span = line.span.clone();
+        match statement_slot(&line) {
+            Some(OperationBinding) => {
+                let event = parse(line, OperationBinding)?;
+                let ServiceEventKind::OperationBinding { alias, .. } = &event.kind else {
+                    unreachable!("an operation slot parses to an operation binding");
+                };
+                if aliases.contains(&alias.text) {
+                    return Err(issue(
+                        IssueKind::Duplicate,
+                        alias.span.clone(),
+                        OperationBinding,
+                        ServiceSyntaxRule::DuplicateOperation,
+                    ));
+                }
+                aliases.push(alias.text.clone());
+                inputs.clear();
+                body = false;
+                events.push(event);
+            }
+            Some(Input(_)) => {
+                if !have_op {
+                    return Err(issue(
+                        IssueKind::Syntax,
+                        span,
+                        Input(0),
+                        ServiceSyntaxRule::InputBeforeOperation,
+                    ));
+                }
+                let slot = Input(inputs.len());
+                if body {
+                    return Err(issue(
+                        IssueKind::Syntax,
+                        span,
+                        slot,
+                        ServiceSyntaxRule::UnexpectedStatement,
+                    ));
+                }
+                let event = parse(line, slot)?;
+                let ServiceEventKind::InputBinding { name, .. } = &event.kind else {
+                    unreachable!("an input slot parses to an input binding");
+                };
+                if inputs.contains(&name.text) {
+                    return Err(issue(
+                        IssueKind::Duplicate,
+                        name.span.clone(),
+                        slot,
+                        ServiceSyntaxRule::DuplicateInput,
+                    ));
+                }
+                inputs.push(name.text.clone());
+                events.push(event);
+            }
+            Some(Body) => {
+                if !have_op {
+                    return Err(issue(
+                        IssueKind::Syntax,
+                        span,
+                        Body,
+                        ServiceSyntaxRule::BodyBeforeOperation,
+                    ));
+                }
+                if body {
+                    return Err(issue(
+                        IssueKind::Duplicate,
+                        span,
+                        Body,
+                        ServiceSyntaxRule::DuplicateBody,
+                    ));
+                }
+                events.push(parse(line, Body)?);
+                body = true;
+            }
+            Some(slot) => {
+                return Err(issue(
+                    IssueKind::Duplicate,
+                    span,
+                    slot,
+                    ServiceSyntaxRule::DuplicateStatement,
+                ));
+            }
+            None => {
+                let slot = if have_op { End } else { OperationBinding };
+                return Err(issue(
+                    IssueKind::Syntax,
+                    span,
+                    slot,
+                    ServiceSyntaxRule::UnexpectedStatement,
+                ));
+            }
+        }
+    }
+    if aliases.is_empty() {
+        return Err(issue(
+            IssueKind::Missing,
+            eof.clone(),
+            OperationBinding,
+            ServiceSyntaxRule::MissingStatement,
+        ));
+    }
+    Ok(())
+}
+
 fn statement_slot(line: &Line) -> Option<ServiceSlot> {
     use ServiceSlot::*;
     let mut words = line.tokens.iter().map(|token| token.text.as_str());
@@ -100,6 +256,7 @@ fn statement_slot(line: &Line) -> Option<ServiceSlot> {
         (Some("Target"), _) => Some(Target),
         (Some("Bind"), Some("service")) => Some(ServiceBinding),
         (Some("Bind"), Some("operation")) => Some(OperationBinding),
+        (Some("Send"), Some("body")) => Some(Body),
         (Some("Accept"), _) => Some(Input(0)),
         _ => None,
     }
@@ -190,6 +347,15 @@ impl Statement {
                     operation: self.raw_word()?,
                 }
             }
+            ServiceSlot::Body => {
+                self.words(&["Send", "body"])?;
+                let name = self.raw_word()?;
+                self.words(&["as"])?;
+                BodyBinding {
+                    name,
+                    ty: self.raw_word()?,
+                }
+            }
             ServiceSlot::Input(_) => {
                 self.words(&["Accept"])?;
                 let name = self.raw_word()?;
@@ -207,6 +373,7 @@ impl Statement {
         self.cursor.end().map_err(|issue| self.base(*issue))?;
         if let Header { version } = &kind
             && version.text != "1"
+            && version.text != "2"
         {
             return Err(self.issue(
                 IssueKind::UnsupportedVersion,

@@ -132,7 +132,7 @@ fn keeps_crlf_utf8_and_eof_positions_in_the_original_source() {
 
 #[test]
 fn checks_lexical_errors_before_version_dispatch_and_structure() {
-    let bad_version = TASK_STATUS.replace("version 1", "version 2");
+    let bad_version = TASK_STATUS.replace("version 1", "version 3");
     let bad_structure = "Bind operation read_task_status from task_status.";
     for source in [
         bad_version.replace(CONTRACT, r#""\q""#),
@@ -166,7 +166,7 @@ fn checks_lexical_errors_before_version_dispatch_and_structure() {
     assert_eq!(issue.kind, IssueKind::UnsupportedVersion);
     assert_eq!(issue.slot, Some(ServiceSlot::Header));
     assert_eq!(issue.rule, ServiceSyntaxRule::UnsupportedVersion);
-    assert_eq!(source_text(&bad_version, &issue.span), "2");
+    assert_eq!(source_text(&bad_version, &issue.span), "3");
 
     let source = TASK_STATUS.replace(
         "Bind operation read_task_status to task_status.",
@@ -303,4 +303,185 @@ fn old_parser_does_not_admit_service_documents() {
     assert_eq!(report.api_version, 2);
     assert!(report.issue.is_some());
     assert!(check_syntax(TASK_STATUS).is_err());
+}
+
+const THREE_OPERATIONS: &str = r#"Service prompt version 2.
+Package defer_client.
+Target rust-service-client.v1.
+Bind service defer using contract "defer.http@5f7adac1fe1333b33e3ec69a92b5ca4a634a97d0".
+Bind operation get_task to task_status.
+Accept queue as string for queue.
+Accept task_id as string for task_id.
+Bind operation create_task to task_create.
+Send body request as TaskRequest.
+Bind operation cancel_task to task_cancel.
+Accept task_id as string for task_id.
+"#;
+
+const V2_PRELUDE: &str = r#"Service prompt version 2.
+Package defer_client.
+Target rust-service-client.v1.
+Bind service defer using contract "defer.http@5f7adac1fe1333b33e3ec69a92b5ca4a634a97d0".
+"#;
+
+#[test]
+fn v2_binds_several_operations_with_inputs_and_a_body() {
+    let report = parse_service_document(THREE_OPERATIONS);
+    assert_eq!(report.issue, None);
+    assert_eq!(report.api_version, 1);
+    assert_eq!(report.events.len(), 11);
+
+    let texts = |kind: &ServiceEventKind| -> Vec<String> {
+        match kind {
+            ServiceEventKind::Header { version } => vec!["header".into(), version.text.clone()],
+            ServiceEventKind::Package { name } => vec!["package".into(), name.text.clone()],
+            ServiceEventKind::Target { profile } => vec!["target".into(), profile.text.clone()],
+            ServiceEventKind::ServiceBinding { service, .. } => {
+                vec!["service".into(), service.text.clone()]
+            }
+            ServiceEventKind::OperationBinding { alias, operation } => {
+                vec![
+                    "operation".into(),
+                    alias.text.clone(),
+                    operation.text.clone(),
+                ]
+            }
+            ServiceEventKind::InputBinding {
+                name,
+                ty,
+                parameter,
+            } => vec![
+                "input".into(),
+                name.text.clone(),
+                ty.text.clone(),
+                parameter.text.clone(),
+            ],
+            ServiceEventKind::BodyBinding { name, ty } => {
+                vec!["body".into(), name.text.clone(), ty.text.clone()]
+            }
+        }
+    };
+    let actual: Vec<Vec<String>> = report.events.iter().map(|e| texts(&e.kind)).collect();
+    let expected: Vec<Vec<&str>> = vec![
+        vec!["header", "2"],
+        vec!["package", "defer_client"],
+        vec!["target", "rust-service-client.v1"],
+        vec!["service", "defer"],
+        vec!["operation", "get_task", "task_status"],
+        vec!["input", "queue", "string", "queue"],
+        vec!["input", "task_id", "string", "task_id"],
+        vec!["operation", "create_task", "task_create"],
+        vec!["body", "request", "TaskRequest"],
+        vec!["operation", "cancel_task", "task_cancel"],
+        vec!["input", "task_id", "string", "task_id"],
+    ];
+    assert_eq!(actual, expected);
+
+    let event = &report.events[8];
+    assert_eq!(
+        source_text(THREE_OPERATIONS, &event.span),
+        "Send body request as TaskRequest."
+    );
+    assert_eq!(event.span.line, 9);
+    let ServiceEventKind::BodyBinding { name, ty } = &event.kind else {
+        panic!("expected a body binding");
+    };
+    assert_eq!(name.span.line, 9);
+    assert_eq!(source_text(THREE_OPERATIONS, &name.span), name.text);
+    assert_eq!(source_text(THREE_OPERATIONS, &ty.span), ty.text);
+}
+
+#[test]
+fn v2_allows_an_operation_without_inputs_or_body() {
+    let source = format!("{V2_PRELUDE}Bind operation ping to task_ping.\n");
+    let report = parse_service_document(&source);
+    assert_eq!(report.issue, None);
+    assert_eq!(report.events.len(), 5);
+}
+
+#[test]
+fn v2_reports_an_input_before_any_operation() {
+    let source = THREE_OPERATIONS.replace("Bind operation get_task to task_status.\n", "");
+    let report = parse_service_document(&source);
+    let issue = report.issue.unwrap();
+    assert_eq!(issue.phase, Phase::Structural);
+    assert_eq!(issue.kind, IssueKind::Syntax);
+    assert_eq!(issue.slot, Some(ServiceSlot::Input(0)));
+    assert_eq!(issue.rule, ServiceSyntaxRule::InputBeforeOperation);
+    assert_eq!(
+        source_text(&source, &issue.span),
+        "Accept queue as string for queue."
+    );
+    assert_eq!(report.events.len(), 4);
+}
+
+#[test]
+fn v2_reports_a_body_before_any_operation() {
+    let source = format!("{V2_PRELUDE}Send body request as TaskRequest.\n");
+    let issue = parse_service_document(&source).issue.unwrap();
+    assert_eq!(issue.slot, Some(ServiceSlot::Body));
+    assert_eq!(issue.rule, ServiceSyntaxRule::BodyBeforeOperation);
+}
+
+#[test]
+fn v2_reports_a_second_body_for_one_operation() {
+    let body = "Send body request as TaskRequest.\n";
+    let source = THREE_OPERATIONS.replace(body, &format!("{body}{body}"));
+    let report = parse_service_document(&source);
+    let issue = report.issue.unwrap();
+    assert_eq!(issue.kind, IssueKind::Duplicate);
+    assert_eq!(issue.slot, Some(ServiceSlot::Body));
+    assert_eq!(issue.rule, ServiceSyntaxRule::DuplicateBody);
+    assert_eq!(issue.span.line, 10);
+    assert_eq!(report.events.len(), 9);
+}
+
+#[test]
+fn v2_reports_a_duplicate_operation_alias() {
+    let source = THREE_OPERATIONS.replace(
+        "Bind operation cancel_task to task_cancel.",
+        "Bind operation get_task to task_cancel.",
+    );
+    let issue = parse_service_document(&source).issue.unwrap();
+    assert_eq!(issue.kind, IssueKind::Duplicate);
+    assert_eq!(issue.slot, Some(ServiceSlot::OperationBinding));
+    assert_eq!(issue.rule, ServiceSyntaxRule::DuplicateOperation);
+    assert_eq!(source_text(&source, &issue.span), "get_task");
+    assert_eq!(issue.span.line, 10);
+}
+
+#[test]
+fn v2_reports_input_after_body_duplicate_input_and_missing_operation() {
+    let source = format!(
+        "{V2_PRELUDE}Bind operation x to y.\nSend body b as T.\nAccept q as string for q.\n"
+    );
+    let issue = parse_service_document(&source).issue.unwrap();
+    assert_eq!(issue.rule, ServiceSyntaxRule::UnexpectedStatement);
+    assert_eq!(issue.slot, Some(ServiceSlot::Input(0)));
+
+    let source = format!(
+        "{V2_PRELUDE}Bind operation x to y.\nAccept q as string for q.\nAccept q as string for r.\n"
+    );
+    let issue = parse_service_document(&source).issue.unwrap();
+    assert_eq!(issue.kind, IssueKind::Duplicate);
+    assert_eq!(issue.rule, ServiceSyntaxRule::DuplicateInput);
+    assert_eq!(issue.slot, Some(ServiceSlot::Input(1)));
+
+    let report = parse_service_document(V2_PRELUDE);
+    let issue = report.issue.unwrap();
+    assert_eq!(issue.kind, IssueKind::Missing);
+    assert_eq!(issue.rule, ServiceSyntaxRule::MissingStatement);
+    assert_eq!(issue.slot, Some(ServiceSlot::OperationBinding));
+    assert_eq!(issue.span, report.eof);
+}
+
+#[test]
+fn unsupported_versions_stay_unsupported() {
+    for version in ["3", "0"] {
+        let source = TASK_STATUS.replace("version 1", &format!("version {version}"));
+        let issue = parse_service_document(&source).issue.unwrap();
+        assert_eq!(issue.phase, Phase::Dispatch);
+        assert_eq!(issue.kind, IssueKind::UnsupportedVersion);
+        assert_eq!(issue.rule, ServiceSyntaxRule::UnsupportedVersion);
+    }
 }

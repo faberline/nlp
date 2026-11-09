@@ -41,6 +41,10 @@ pub enum ServiceEventKind {
         ty: Token,
         parameter: Token,
     },
+    BodyBinding {
+        name: Token,
+        ty: Token,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -59,7 +63,8 @@ pub enum ServiceSlot {
     Target,
     ServiceBinding,
     OperationBinding,
-    /// The zero-based position of an input declaration.
+    Body,
+    /// The zero-based position of an input declaration (within its operation in v2).
     Input(usize),
     End,
 }
@@ -74,4 +79,8 @@ pub enum ServiceSyntaxRule {
     ExtraInput,
     UnexpectedStatement,
     ExpectedWord,
+    DuplicateOperation,
+    InputBeforeOperation,
+    BodyBeforeOperation,
+    DuplicateBody,
 }

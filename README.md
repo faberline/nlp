@@ -6,7 +6,23 @@ Call `analyze` with the source text, its title, and a `Lexicon`. The caller supp
 
 Call `timeline::build` with the texts and their candidate events. The function sorts the input by document number. Document numbers must be unique. The result includes the original event order, proposed story order, and the source spans for each relation.
 
-AlterVerse Lab is the first consumer. It handles book import, chapter checkpoints, and storyboard exports. It runs the full novel comparison with its local corpus.
+These observations are candidates. They do not prove a person's identity, an
+event, or the intended story order. The caller owns the work-specific vocabulary
+and must verify source positions against the original input.
+
+Some ambiguous speech cases now leave the speaker, actor, or object unknown.
+Callers must not rely on earlier heuristic labels being present in every case.
+
+## Experimental source stream
+
+`nlp_source_stream` emits chapter-by-chapter JSON Lines with source hashes and
+positions. Optional flags add cross-chapter candidates and source-scoped quote
+and transfer observations. The program uses a caller-supplied vocabulary or an
+empty vocabulary. It currently uses the Chinese (Taiwan) tokenizer.
+
+The stream is experimental. Input directories must be trusted and must not
+change during a run. See the [source stream contract](docs/source-stream.md)
+for the format, validation steps, and known scope and resource limits.
 
 ## English CNL
 

@@ -131,7 +131,7 @@ fn scan_v2(
                 ServiceSyntaxRule::MissingStatement,
             ));
         };
-        let observed = statement_slot(&line);
+        let observed = statement_slot_v2(&line);
         if observed != Some(slot) {
             return Err(unexpected(line, observed, slot, &consumed));
         }
@@ -145,7 +145,7 @@ fn scan_v2(
     for line in lines {
         let have_op = !aliases.is_empty();
         let span = line.span.clone();
-        match statement_slot(&line) {
+        match statement_slot_v2(&line) {
             Some(OperationBinding) => {
                 let event = parse(line, OperationBinding)?;
                 let ServiceEventKind::OperationBinding { alias, .. } = &event.kind else {
@@ -247,6 +247,15 @@ fn scan_v2(
     Ok(())
 }
 
+/// Version 2 adds the body statement; version 1 keeps `statement_slot` as is.
+fn statement_slot_v2(line: &Line) -> Option<ServiceSlot> {
+    let mut words = line.tokens.iter().map(|token| token.text.as_str());
+    match (words.next(), words.next()) {
+        (Some("Send"), Some("body")) => Some(ServiceSlot::Body),
+        _ => statement_slot(line),
+    }
+}
+
 fn statement_slot(line: &Line) -> Option<ServiceSlot> {
     use ServiceSlot::*;
     let mut words = line.tokens.iter().map(|token| token.text.as_str());
@@ -256,7 +265,6 @@ fn statement_slot(line: &Line) -> Option<ServiceSlot> {
         (Some("Target"), _) => Some(Target),
         (Some("Bind"), Some("service")) => Some(ServiceBinding),
         (Some("Bind"), Some("operation")) => Some(OperationBinding),
-        (Some("Send"), Some("body")) => Some(Body),
         (Some("Accept"), _) => Some(Input(0)),
         _ => None,
     }

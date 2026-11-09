@@ -485,3 +485,20 @@ fn unsupported_versions_stay_unsupported() {
         assert_eq!(issue.rule, ServiceSyntaxRule::UnsupportedVersion);
     }
 }
+
+#[test]
+fn v1_treats_a_send_body_line_like_any_unknown_statement() {
+    let body = "Send body request as TaskRequest.";
+    let source = TASK_STATUS.replace("Package defer_status_client.", body);
+    let issue = parse_service_document(&source).issue.unwrap();
+    assert_eq!(issue.phase, Phase::Structural);
+    assert_eq!(issue.slot, Some(ServiceSlot::Package));
+    assert_eq!(
+        issue.rule,
+        ServiceSyntaxRule::Base(BaseIssue::ExpectedKeyword {
+            expected: "Package".into(),
+            actual: "Send".into(),
+        })
+    );
+    assert_eq!(source_text(&source, &issue.span), "Send");
+}

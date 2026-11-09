@@ -38,7 +38,9 @@ The result is a tree of grammar rules. Each node gives its text and a byte range
 
 Use `faberline-nlp-cnl` from the `cnl/` directory if you only need the English parser. Call `check_syntax` to check the grammar without building a tree.
 
-Use the [SOM examples](https://github.com/faberline/som/tree/05c63d08275d59ea7110cd8f2b30786070b91968/som-rs/contracts/compiler-v1/examples) for sample requests. SOM still checks the business rules. It builds the DSL and generates the code.
+`faberline-nlp-cnl` owns the SOM CNL grammar (`cnl/src/som_cnl.pest`), the syntax tree and the syntax error locations. It is the only place where CNL syntax changes. nlp holds no business rules, DSL or code generation. Those belong to [som](https://github.com/faberline/som). If som needs a syntax change, open an nlp issue first. After it merges, som moves its pinned revision.
+
+Use the [SOM examples](https://github.com/faberline/som/tree/05c63d08275d59ea7110cd8f2b30786070b91968/som-rs/contracts/compiler-v1/examples) for sample requests.
 
 ## Model token limits
 

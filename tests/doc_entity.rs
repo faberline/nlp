@@ -1,0 +1,640 @@
+//! Layer 3 of `nlp.doc.v1`: entities. See `docs/doc-v1.md`.
+
+use faberline_nlp::Span;
+use faberline_nlp::doc::{Document, EntityKind, Options, analyze_document};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+type Row = (EntityKind, String, Option<String>, Option<String>);
+
+fn slice(text: &str, s: Span) -> String {
+    text.chars()
+        .skip(s.start_char)
+        .take(s.end_char - s.start_char)
+        .collect()
+}
+
+fn analyze(text: &str) -> Document {
+    analyze_document(text, &Options::default())
+}
+
+fn analyze_names(text: &str, names: &[&str]) -> Document {
+    let options = Options {
+        names: names.iter().map(|n| n.to_string()).collect(),
+    };
+    analyze_document(text, &options)
+}
+
+/// (kind, span text, value, unit) of every entity.
+fn ents(text: &str) -> Vec<Row> {
+    rows(text, &analyze(text))
+}
+
+fn rows(text: &str, doc: &Document) -> Vec<Row> {
+    doc.entities
+        .iter()
+        .map(|e| (e.kind, slice(text, e.span), e.value.clone(), e.unit.clone()))
+        .collect()
+}
+
+/// Span text of every ambiguous unknown from layer 3.
+fn ent_unknown(text: &str) -> Vec<String> {
+    analyze(text)
+        .unknown
+        .iter()
+        .filter(|u| u.layer == "entities")
+        .map(|u| slice(text, u.span))
+        .collect()
+}
+
+fn row(kind: EntityKind, span: &str, value: Option<&str>) -> Row {
+    (kind, span.to_owned(), value.map(str::to_owned), None)
+}
+
+fn qty(span: &str, value: &str, unit: &str) -> Row {
+    (
+        EntityKind::Quantity,
+        span.to_owned(),
+        Some(value.to_owned()),
+        Some(unit.to_owned()),
+    )
+}
+
+fn d(span: &str, value: &str) -> Row {
+    row(EntityKind::Date, span, Some(value))
+}
+
+fn n(span: &str, value: &str) -> Row {
+    row(EntityKind::Number, span, Some(value))
+}
+
+fn t(span: &str, value: &str) -> Row {
+    row(EntityKind::Time, span, Some(value))
+}
+
+fn r(span: &str) -> Row {
+    row(EntityKind::RelativeDate, span, None)
+}
+
+/// Every text used by the unit tests, for the invariant checks.
+const TEXTS: &[&str] = &[
+    "The meeting is on Nov 10, 2026.",
+    "She left on 10 November 2026.",
+    "It was May 2026.",
+    "We may go.",
+    "Due 2026-11-10.",
+    "We go on 5 May.",
+    "Sept. 3rd was fine.",
+    "會議在2026年11月10日舉行。",
+    "民國115年3月5日出生。",
+    "二〇二六年十一月十日",
+    "十一月十日開會。",
+    "明天再說。",
+    "他工作了3年。",
+    "It cost 1,000 dollars or 3.5 more.",
+    "他買了3萬個蘋果。",
+    "共三百二十一人。",
+    "統一第三。",
+    "We saw twenty-one cats and one hundred dogs.",
+    "One should go.",
+    "Chapter 1st edition",
+    "這袋米重5公斤，要價NT$300，折扣50%。",
+    "We ran 3 km in 20 minutes.",
+    "Add 5m of rope.",
+    "Add 5 m of rope.",
+    "We meet at 3:30 pm.",
+    "會議下午3點半開始。",
+    "Meet at 15:30.",
+    "Call me at 3:30.",
+    "晚上12點見。",
+    "see you at noon",
+    "see u at 5pm",
+    "at midnight",
+    "Due 3/4.",
+    "Due 13/4/2026.",
+    "Due 3/4/2026.",
+    "Due 4/13/2026.",
+    "Code 2026-13-45.",
+    "Mail a.b@example.com or see https://example.com now",
+    "王小明 told Alice Lee hello.",
+    "Alice Leeds left.",
+    "明天下午3點見！",
+    "我們 5 點 見 😋",
+    "lol see u tmrw 5pm",
+    "Use `x = 5` for 2 cats.",
+    "See [1] and https://example.com/3 for 2 cats.",
+    "# Plan 2026\n\nWe go on 5 May.",
+    "こんにちは、3個です。",
+];
+
+#[test]
+fn en_dates() {
+    assert_eq!(
+        ents("The meeting is on Nov 10, 2026."),
+        vec![d("Nov 10, 2026", "2026-11-10")]
+    );
+    assert_eq!(
+        ents("She left on 10 November 2026."),
+        vec![d("10 November 2026", "2026-11-10")]
+    );
+    assert_eq!(ents("It was May 2026."), vec![d("May 2026", "2026-05")]);
+    assert_eq!(ents("We may go."), vec![]);
+    assert_eq!(ents("Due 2026-11-10."), vec![d("2026-11-10", "2026-11-10")]);
+    assert_eq!(ents("We go on 5 May."), vec![d("5 May", "--05-05")]);
+    assert_eq!(ents("Sept. 3rd was fine."), vec![d("Sept. 3rd", "--09-03")]);
+}
+
+#[test]
+fn zh_dates() {
+    assert_eq!(
+        ents("會議在2026年11月10日舉行。"),
+        vec![d("2026年11月10日", "2026-11-10")]
+    );
+    assert_eq!(
+        ents("民國115年3月5日出生。"),
+        vec![d("民國115年3月5日", "2026-03-05")]
+    );
+    assert_eq!(
+        ents("二〇二六年十一月十日"),
+        vec![d("二〇二六年十一月十日", "2026-11-10")]
+    );
+    assert_eq!(ents("十一月十日開會。"), vec![d("十一月十日", "--11-10")]);
+    assert_eq!(ents("明天再說。"), vec![r("明天")]);
+    assert_eq!(ents("他工作了3年。"), vec![n("3", "3")]);
+}
+
+#[test]
+fn numbers() {
+    assert_eq!(
+        ents("It cost 1,000 dollars or 3.5 more."),
+        vec![qty("1,000 dollars", "1000", "dollars"), n("3.5", "3.5"),]
+    );
+    assert_eq!(ents("他買了3萬個蘋果。"), vec![n("3萬", "30000")]);
+    assert_eq!(ents("共三百二十一人。"), vec![n("三百二十一", "321")]);
+    assert_eq!(ents("統一第三。"), vec![]);
+    assert_eq!(
+        ents("We saw twenty-one cats and one hundred dogs."),
+        vec![n("twenty-one", "21"), n("one hundred", "100")]
+    );
+    assert_eq!(ents("One should go."), vec![]);
+    assert_eq!(ent_unknown("One should go."), vec!["One"]);
+    assert_eq!(ents("Chapter 1st edition"), vec![]);
+}
+
+#[test]
+fn quantities() {
+    assert_eq!(
+        ents("這袋米重5公斤，要價NT$300，折扣50%。"),
+        vec![
+            qty("5公斤", "5", "公斤"),
+            qty("NT$300", "300", "nt$"),
+            qty("50%", "50", "%"),
+        ]
+    );
+    assert_eq!(
+        ents("We ran 3 km in 20 minutes."),
+        vec![qty("3 km", "3", "km"), qty("20 minutes", "20", "minutes")]
+    );
+    assert_eq!(ents("Add 5m of rope."), vec![qty("5m", "5", "m")]);
+    assert_eq!(ents("Add 5 m of rope."), vec![n("5", "5")]);
+}
+
+#[test]
+fn times() {
+    assert_eq!(ents("We meet at 3:30 pm."), vec![t("3:30 pm", "15:30")]);
+    assert_eq!(ents("會議下午3點半開始。"), vec![t("下午3點半", "15:30")]);
+    assert_eq!(ents("Meet at 15:30."), vec![t("15:30", "15:30")]);
+    assert_eq!(ents("Call me at 3:30."), vec![]);
+    assert_eq!(ent_unknown("Call me at 3:30."), vec!["3:30"]);
+    assert_eq!(ents("晚上12點見。"), vec![]);
+    assert_eq!(ent_unknown("晚上12點見。"), vec!["晚上12點"]);
+    assert_eq!(ents("see you at noon"), vec![t("noon", "12:00")]);
+    assert_eq!(ents("see u at 5pm"), vec![t("5pm", "17:00")]);
+    assert_eq!(ents("at midnight"), vec![]);
+    assert_eq!(ent_unknown("at midnight"), vec!["midnight"]);
+}
+
+#[test]
+fn zh_number_words() {
+    // A multiplier with nothing before it reads as 1.
+    assert_eq!(ents("十個"), vec![n("十", "10")]);
+    assert_eq!(ents("十五個"), vec![n("十五", "15")]);
+    assert_eq!(ents("百個"), vec![n("百", "100")]);
+    assert_eq!(ents("十萬個"), vec![n("十萬", "100000")]);
+    assert_eq!(ents("一百萬個"), vec![n("一百萬", "1000000")]);
+    assert_eq!(ents("三萬五千個"), vec![n("三萬五千", "35000")]);
+    // A run that starts with 萬 or 億, or has an empty group before 萬 or 億, is not a number.
+    assert_eq!(ents("萬個"), vec![]);
+    assert_eq!(ents("億萬個"), vec![]);
+    assert_eq!(ents("三億萬個"), vec![]);
+    assert_eq!(ents("一億萬個"), vec![]);
+    // Tens and units stay one number.
+    assert_eq!(ents("五十二個"), vec![n("五十二", "52")]);
+    assert_eq!(ents("一百零五個"), vec![n("一百零五", "105")]);
+    assert_eq!(ents("一百二十個"), vec![n("一百二十", "120")]);
+    // Two plain digits read digit by digit.
+    assert_eq!(ents("二三個"), vec![n("二三", "23")]);
+    // A second group that would merge into a wrong number is rejected, not merged.
+    assert_eq!(ents("十二十個"), vec![]);
+    assert_eq!(ents("三十四十個"), vec![]);
+    assert_eq!(ents("五百六百個"), vec![]);
+    assert_eq!(ents("二三十個"), vec![]);
+    assert_eq!(ents("三十個"), vec![n("三十", "30")]);
+}
+
+#[test]
+fn zh_big_group_order() {
+    // 萬 and 億 groups must decrease, so a repeated or rising group is not a number.
+    assert_eq!(ents("三萬四萬個"), vec![]);
+    assert_eq!(ents("五千萬六千萬個"), vec![]);
+    assert_eq!(ents("一萬二億個"), vec![]);
+    assert_eq!(ents("三萬億個"), vec![]);
+    // Valid decreasing groups still work.
+    assert_eq!(ents("三億五千萬個"), vec![n("三億五千萬", "350000000")]);
+    assert_eq!(ents("一億零五萬個"), vec![n("一億零五萬", "100050000")]);
+    assert_eq!(ents("三萬五千個"), vec![n("三萬五千", "35000")]);
+    assert_eq!(ents("十萬個"), vec![n("十萬", "100000")]);
+    assert_eq!(ents("一百萬個"), vec![n("一百萬", "1000000")]);
+    // 〇 counts as zero after a multiplier, like 零.
+    assert_eq!(ents("一百〇五個"), vec![n("一百〇五", "105")]);
+}
+
+#[test]
+fn zh_clock_and_date_start() {
+    // A time or date never starts inside a numeral run or right after 第.
+    assert_eq!(ents("指數上漲一百二十點。"), vec![]);
+    assert_eq!(ent_unknown("指數上漲一百二十點。"), Vec::<String>::new());
+    assert_eq!(ents("他得了三十五點。"), vec![]);
+    assert_eq!(ent_unknown("他得了三十五點。"), Vec::<String>::new());
+    assert_eq!(ents("第三點"), vec![]);
+    assert_eq!(ent_unknown("第三點"), Vec::<String>::new());
+    assert_eq!(ents("三十點"), vec![]);
+    assert_eq!(ent_unknown("三十點"), Vec::<String>::new());
+    assert_eq!(ents("三十一月五日"), vec![]);
+    assert_eq!(ent_unknown("三十一月五日"), Vec::<String>::new());
+    // Valid starts keep working.
+    assert_eq!(ent_unknown("三點見。"), vec!["三點"]);
+    assert_eq!(ents("下午三點見。"), vec![t("下午三點", "15:00")]);
+    assert_eq!(ent_unknown("十點半見。"), vec!["十點半"]);
+    assert_eq!(ents("下午十點半見。"), vec![t("下午十點半", "22:30")]);
+    assert_eq!(ents("二十三點十分見。"), vec![t("二十三點十分", "23:10")]);
+    assert_eq!(ents("十一月五日開會。"), vec![d("十一月五日", "--11-05")]);
+    assert_eq!(ents("民國115年出生。"), vec![d("民國115年", "2026")]);
+}
+
+#[test]
+fn zh_ordinal_prefix() {
+    // 第 marks an ordinal, so the numeral and the numerals inside it are not numbers.
+    assert_eq!(ents("第三十個"), vec![]);
+    assert_eq!(ents("第一"), vec![]);
+    assert_eq!(ents("第三十公斤"), vec![]);
+}
+
+#[test]
+fn huge_numbers_do_not_panic() {
+    let long = "9".repeat(45);
+    let texts = [
+        "民國18446744073709551615年出生。".to_owned(),
+        "民國184467440737095516160年出生。".to_owned(),
+        "三百億億億億億個".to_owned(),
+        "三百億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億億個"
+            .to_owned(),
+        "九九九九九九九九九九九九九九九九九九九九九九九九九九九九九九九九萬億億億億億個".to_owned(),
+        format!("有{long}個。"),
+        format!("{long}萬億億億公斤。"),
+        format!("{long}/12/2026 and {long} kg."),
+        format!("{long}-11-10 {long}年{long}月{long}日"),
+        "one billion billion billion billion billion billion billion billion billion billion"
+            .to_owned(),
+        "twenty thousand million billion billion hundred thousand".to_owned(),
+        "一萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬萬個".to_owned(),
+    ];
+    for text in &texts {
+        let doc = analyze(text);
+        for e in &doc.entities {
+            assert!(e.span.end_char <= text.chars().count(), "span in {text:?}");
+        }
+    }
+    // The overflowing 民國 year gives no date; its digits are a plain number.
+    assert_eq!(
+        ents("民國18446744073709551615年出生。"),
+        vec![n("18446744073709551615", "18446744073709551615")]
+    );
+    assert_eq!(ents("三百億億億億億個"), vec![]);
+}
+
+#[test]
+fn ambiguous_numeric_dates() {
+    assert_eq!(ents("Due 3/4."), vec![]);
+    assert_eq!(ent_unknown("Due 3/4."), vec!["3/4"]);
+    assert_eq!(ents("Due 13/4/2026."), vec![d("13/4/2026", "2026-04-13")]);
+    assert_eq!(ents("Due 3/4/2026."), vec![]);
+    assert_eq!(ent_unknown("Due 3/4/2026."), vec!["3/4/2026"]);
+    assert_eq!(ents("Due 4/13/2026."), vec![d("4/13/2026", "2026-04-13")]);
+    assert_eq!(
+        ents("Code 2026-13-45."),
+        vec![n("2026", "2026"), n("13", "13"), n("45", "45")]
+    );
+}
+
+#[test]
+fn url_email() {
+    assert_eq!(
+        ents("Mail a.b@example.com or see https://example.com now"),
+        vec![
+            row(EntityKind::Email, "a.b@example.com", None),
+            row(EntityKind::Url, "https://example.com", None),
+        ]
+    );
+}
+
+#[test]
+fn names() {
+    let text = "王小明 told Alice Lee hello.";
+    let doc = analyze_names(text, &["王小明", "Alice Lee"]);
+    assert_eq!(
+        rows(text, &doc),
+        vec![
+            row(EntityKind::Name, "王小明", None),
+            row(EntityKind::Name, "Alice Lee", None),
+        ]
+    );
+    let near = "Alice Leeds left.";
+    assert!(rows(near, &analyze_names(near, &["Alice Lee"])).is_empty());
+    assert!(ents(text).iter().all(|e| e.0 != EntityKind::Name));
+    assert_eq!(serde_json::to_value(Options::default()).unwrap(), json!({}));
+    let with = serde_json::to_value(Options {
+        names: vec!["王小明".to_owned()],
+    })
+    .unwrap();
+    assert_eq!(with, json!({ "names": ["王小明"] }));
+}
+
+#[test]
+fn casual_and_mixed() {
+    assert_eq!(
+        ents("明天下午3點見！"),
+        vec![r("明天"), t("下午3點", "15:00")]
+    );
+    // The `H點` time form needs the hour attached to 點. A spaced 5 is a number (rule a).
+    assert_eq!(ents("我們 5 點 見 😋"), vec![n("5", "5")]);
+    assert_eq!(ents("lol see u tmrw 5pm"), vec![t("5pm", "17:00")]);
+}
+
+#[test]
+fn opaque_is_skipped() {
+    assert_eq!(ents("Use `x = 5` for 2 cats."), vec![n("2", "2")]);
+    assert_eq!(
+        ents("See [1] and https://example.com/3 for 2 cats."),
+        vec![
+            row(EntityKind::Url, "https://example.com/3", None),
+            n("2", "2"),
+        ]
+    );
+    assert_eq!(
+        ents("# Plan 2026\n\nWe go on 5 May."),
+        vec![d("5 May", "--05-05")]
+    );
+}
+
+#[test]
+fn unsupported_sentence() {
+    let text = "こんにちは、3個です。";
+    let doc = analyze(text);
+    assert!(doc.entities.is_empty());
+    assert!(doc.unknown.iter().all(|u| u.layer != "entities"));
+}
+
+#[test]
+fn invariants() {
+    let gold = gold_items();
+    let mut texts: Vec<String> = TEXTS.iter().map(|s| s.to_string()).collect();
+    texts.extend(gold.iter().map(|g| g.text.clone()));
+    for text in &texts {
+        let doc = analyze(text);
+        let mut last_end = 0;
+        for e in &doc.entities {
+            assert!(e.span.start_char >= last_end, "overlap in {text:?}");
+            last_end = e.span.end_char;
+            let sentence = &doc.segmentation.sentences[e.sentence].span;
+            assert!(
+                sentence.start_char <= e.span.start_char && e.span.end_char <= sentence.end_char,
+                "entity crosses a sentence in {text:?}"
+            );
+            for o in &doc.segmentation.opaque {
+                let overlaps =
+                    e.span.start_char < o.span.end_char && o.span.start_char < e.span.end_char;
+                if overlaps {
+                    assert!(
+                        e.kind == EntityKind::Url && e.span == o.span,
+                        "entity inside opaque span in {text:?}"
+                    );
+                }
+            }
+        }
+        for u in doc.unknown.iter().filter(|u| u.layer == "entities") {
+            assert_eq!(u.reason, faberline_nlp::doc::Reason::Ambiguous);
+        }
+        let again = analyze(text);
+        assert_eq!(
+            serde_json::to_string(&doc).unwrap(),
+            serde_json::to_string(&again).unwrap()
+        );
+    }
+}
+
+struct Gold {
+    text: String,
+    entities: Vec<Row>,
+    ambiguous: Vec<String>,
+}
+
+fn gold_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/entity_gold.json")
+}
+
+fn gold_items() -> Vec<Gold> {
+    let raw = std::fs::read_to_string(gold_path()).expect("gold file");
+    let items: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("gold json");
+    items
+        .iter()
+        .map(|item| {
+            let entities = item["entities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| {
+                    let kind: EntityKind = serde_json::from_value(e["kind"].clone()).expect("kind");
+                    (
+                        kind,
+                        e["text"].as_str().unwrap().to_owned(),
+                        e["value"].as_str().map(str::to_owned),
+                        e["unit"].as_str().map(str::to_owned),
+                    )
+                })
+                .collect();
+            let ambiguous = item["ambiguous"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap().to_owned())
+                .collect();
+            Gold {
+                text: item["text"].as_str().unwrap().to_owned(),
+                entities,
+                ambiguous,
+            }
+        })
+        .collect()
+}
+
+fn kind_name(kind: EntityKind) -> String {
+    serde_json::to_value(kind)
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[test]
+fn entity_receipt() {
+    let raw = std::fs::read(gold_path()).expect("gold file");
+    let gold = gold_items();
+    let kinds = [
+        EntityKind::Number,
+        EntityKind::Date,
+        EntityKind::RelativeDate,
+        EntityKind::Time,
+        EntityKind::Quantity,
+        EntityKind::Url,
+        EntityKind::Email,
+        EntityKind::Name,
+    ];
+    // Per kind: (gold, predicted, matched).
+    let mut stats = vec![(0usize, 0usize, 0usize); kinds.len()];
+    let mut notes = vec![
+        "The gold was written by the same author as the rules, so it is not an independent check."
+            .to_owned(),
+        "Regression check only: the gold is self-written, so high scores show the rules did not change, not accuracy on new text."
+            .to_owned(),
+        "Known false positives: `Call 0912 345 678 now.` gives three numbers (a phone number is not a number entity); `In 2026 we won 3 prizes.` gives 2026 as a number, not a year."
+            .to_owned(),
+        "Known misses: `The room is 5 m wide.` and `The package weighs 2 g.` give plain numbers, since `g` and `m` need no space; `He paid 5 pounds.` gives a number, since pounds is not a unit; `我买了三十四十個蘋果。` gives nothing, because a run with two tens groups is rejected."
+            .to_owned(),
+        "Names come only from `options.names`, so `Bob and Alice went home.` gives no name entity without them."
+            .to_owned(),
+        "Spec test 9: `我們 5 點 見 😋` now yields number \"5\", since a spaced 5 before 點 is a number, not a time."
+            .to_owned(),
+    ];
+    let (mut gold_total, mut predicted_total, mut matched_total) = (0, 0, 0);
+    let (mut amb_gold, mut amb_matched) = (0, 0);
+    for item in &gold {
+        let doc = analyze(&item.text);
+        let predicted = rows(&item.text, &doc);
+        let mut used = vec![false; predicted.len()];
+        for g in &item.entities {
+            let k = kinds.iter().position(|k| *k == g.0).unwrap();
+            stats[k].0 += 1;
+            gold_total += 1;
+            let hit = predicted
+                .iter()
+                .enumerate()
+                .position(|(i, p)| !used[i] && p == g);
+            match hit {
+                Some(i) => {
+                    used[i] = true;
+                    stats[k].2 += 1;
+                    matched_total += 1;
+                }
+                None => notes.push(format!(
+                    "miss: {} {:?} in {:?}",
+                    kind_name(g.0),
+                    g.1,
+                    item.text
+                )),
+            }
+        }
+        for (i, p) in predicted.iter().enumerate() {
+            let k = kinds.iter().position(|k| *k == p.0).unwrap();
+            stats[k].1 += 1;
+            predicted_total += 1;
+            if !used[i] {
+                notes.push(format!(
+                    "false positive: {} {:?} in {:?}",
+                    kind_name(p.0),
+                    p.1,
+                    item.text
+                ));
+            }
+        }
+        let unknown: Vec<String> = doc
+            .unknown
+            .iter()
+            .filter(|u| u.layer == "entities")
+            .map(|u| slice(&item.text, u.span))
+            .collect();
+        for a in &item.ambiguous {
+            amb_gold += 1;
+            if unknown.contains(a) {
+                amb_matched += 1;
+            } else {
+                notes.push(format!("ambiguous miss: {a:?} in {:?}", item.text));
+            }
+        }
+    }
+    // None (JSON null) when the denominator is zero, so an empty kind is not scored as perfect.
+    let rate = |num: usize, den: usize| (den > 0).then(|| num as f64 / den as f64);
+    let precision = rate(matched_total, predicted_total);
+    let recall = rate(matched_total, gold_total);
+    let per_kind: serde_json::Map<String, serde_json::Value> = kinds
+        .iter()
+        .zip(&stats)
+        .map(|(k, (g, p, m))| {
+            // A kind with no gold items has no recall, and no precision either.
+            let (precision, recall) = if *g == 0 {
+                (None, None)
+            } else {
+                (rate(*m, *p), rate(*m, *g))
+            };
+            (
+                kind_name(*k),
+                json!({
+                    "gold": g,
+                    "predicted": p,
+                    "matched": m,
+                    "precision": precision,
+                    "recall": recall,
+                }),
+            )
+        })
+        .collect();
+    let receipt = json!({
+        "layer": "entities",
+        "date": "2026-11-10",
+        "gold_file": "tests/data/entity_gold.json",
+        "gold_sha256": Sha256::digest(&raw).iter().map(|b| format!("{b:02x}")).collect::<String>(),
+        "gold_sentences": gold.len(),
+        "gold_entities": gold_total,
+        "predicted": predicted_total,
+        "precision": precision,
+        "recall": recall,
+        "per_kind": per_kind,
+        "ambiguous_agreement": { "gold": amb_gold, "matched": amb_matched },
+        "notes": notes,
+    });
+    if std::env::var("NLP_WRITE_RECEIPT").as_deref() == Ok("1") {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("docs/receipts/entities-2026-11-10.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            serde_json::to_string_pretty(&receipt).unwrap() + "\n",
+        )
+        .unwrap();
+    }
+    assert!(
+        precision.is_none_or(|p| p >= 0.9),
+        "precision {precision:?}"
+    );
+    assert!(recall.is_none_or(|r| r >= 0.8), "recall {recall:?}");
+}

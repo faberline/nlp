@@ -1,0 +1,81 @@
+{
+  "ambiguous_agreement": {
+    "gold": 6,
+    "matched": 6
+  },
+  "date": "2026-11-10",
+  "gold_entities": 50,
+  "gold_file": "tests/data/entity_gold.json",
+  "gold_sentences": 54,
+  "gold_sha256": "4fe026635b803d339f805f5b153d3eb0b10ba97e20161e5779c9c39511c9b78c",
+  "layer": "entities",
+  "notes": [
+    "The gold was written by the same author as the rules, so it is not an independent check.",
+    "Regression check only: the gold is self-written, so high scores show the rules did not change, not accuracy on new text.",
+    "Known false positives: `Call 0912 345 678 now.` gives three numbers (a phone number is not a number entity); `In 2026 we won 3 prizes.` gives 2026 as a number, not a year.",
+    "Known misses: `The room is 5 m wide.` and `The package weighs 2 g.` give plain numbers, since `g` and `m` need no space; `He paid 5 pounds.` gives a number, since pounds is not a unit; `我买了三十四十個蘋果。` gives nothing, because a run with two tens groups is rejected.",
+    "Names come only from `options.names`, so `Bob and Alice went home.` gives no name entity without them.",
+    "Spec test 9: `我們 5 點 見 😋` now yields number \"5\", since a spaced 5 before 點 is a number, not a time."
+  ],
+  "per_kind": {
+    "date": {
+      "gold": 11,
+      "matched": 11,
+      "precision": 1.0,
+      "predicted": 11,
+      "recall": 1.0
+    },
+    "email": {
+      "gold": 2,
+      "matched": 2,
+      "precision": 1.0,
+      "predicted": 2,
+      "recall": 1.0
+    },
+    "name": {
+      "gold": 0,
+      "matched": 0,
+      "precision": null,
+      "predicted": 0,
+      "recall": null
+    },
+    "number": {
+      "gold": 21,
+      "matched": 21,
+      "precision": 1.0,
+      "predicted": 21,
+      "recall": 1.0
+    },
+    "quantity": {
+      "gold": 6,
+      "matched": 6,
+      "precision": 1.0,
+      "predicted": 6,
+      "recall": 1.0
+    },
+    "relative_date": {
+      "gold": 4,
+      "matched": 4,
+      "precision": 1.0,
+      "predicted": 4,
+      "recall": 1.0
+    },
+    "time": {
+      "gold": 6,
+      "matched": 6,
+      "precision": 1.0,
+      "predicted": 6,
+      "recall": 1.0
+    },
+    "url": {
+      "gold": 0,
+      "matched": 0,
+      "precision": null,
+      "predicted": 0,
+      "recall": null
+    }
+  },
+  "precision": 1.0,
+  "predicted": 50,
+  "recall": 1.0
+}

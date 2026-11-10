@@ -309,3 +309,76 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         unknown,
     }
 }
+
+/// Layers 1 and 3 over one line of text, in byte ranges of that line. The narrative code reads
+/// this instead of its own segmentation. `terms` are exact caller surfaces for the name rule.
+pub(crate) struct LineView {
+    /// Sentences, in order. Block opaque spans (heading, list item, fenced code, display
+    /// formula) belong to no sentence.
+    pub sentences: Vec<std::ops::Range<usize>>,
+    /// Name hits, in order of position.
+    pub names: Vec<std::ops::Range<usize>>,
+    /// True when the line holds an opaque span of any kind.
+    pub has_opaque: bool,
+}
+
+pub(crate) fn line_view(text: &str, terms: &[String]) -> LineView {
+    let c: Vec<char> = text.chars().collect();
+    let found = opaque::find(&c);
+    let m = opaque::mask(&c, &found);
+    let mut bytes = Vec::with_capacity(c.len() + 1);
+    let mut at = 0;
+    for ch in &c {
+        bytes.push(at);
+        at += ch.len_utf8();
+    }
+    bytes.push(at);
+    let range = |s: Span| bytes[s.start_char]..bytes[s.end_char];
+    let mut spans = Vec::new();
+    for paragraph in segment::paragraphs(&m) {
+        spans.extend(segment::sentences(&m, paragraph));
+    }
+    let names = entity::name_spans(&c, &found, &spans, terms)
+        .into_iter()
+        .map(range)
+        .collect();
+    LineView {
+        sentences: spans.into_iter().map(range).collect(),
+        names,
+        has_opaque: !found.is_empty(),
+    }
+}
+
+/// Layer 2 token ranges of one line, in bytes of that line. `None` when a sentence of the line
+/// has an unsupported language: layer 2 leaves such a sentence untokenized.
+pub(crate) fn line_tokens(text: &str) -> Option<Vec<std::ops::Range<usize>>> {
+    let c: Vec<char> = text.chars().collect();
+    let found = opaque::find(&c);
+    let m = opaque::mask(&c, &found);
+    let inline: Vec<(Span, OpaqueKind)> = found
+        .iter()
+        .filter(|f| !f.block && !matches!(f.item.kind, OpaqueKind::Heading | OpaqueKind::ListItem))
+        .map(|f| (f.item.span, f.item.kind))
+        .collect();
+    let mut bytes = Vec::with_capacity(c.len() + 1);
+    let mut at = 0;
+    for ch in &c {
+        bytes.push(at);
+        at += ch.len_utf8();
+    }
+    bytes.push(at);
+    let mut out = Vec::new();
+    for paragraph in segment::paragraphs(&m) {
+        for sentence in segment::sentences(&m, paragraph) {
+            if segment::lang(&c, sentence).1 {
+                return None;
+            }
+            out.extend(
+                token::tokenize(&c, sentence, &inline)
+                    .into_iter()
+                    .map(|p| bytes[p.span.start_char]..bytes[p.span.end_char]),
+            );
+        }
+    }
+    Some(out)
+}

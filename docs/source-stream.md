@@ -186,3 +186,10 @@ length. Some components retain the previous full chapter. Scoped processing
 collects segment data and reports; many short segments or a large report can
 use substantial memory. Empty output does not prove that no relationship or
 event exists.
+
+## Use of `nlp.doc.v1`
+
+For zh-TW chapters the stream reads sentences, actor name hits and written pronouns from the
+`nlp.doc.v1` layers. The records and ranges are the same as with the older splitter. Lines with
+`…`, an ASCII `.`, double spaces or opaque spans keep the older path. See `doc-v1.md`, section
+"Readers of `nlp.doc.v1`".

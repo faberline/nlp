@@ -684,3 +684,27 @@ against it within 1e-5 and Core ML within 1e-4. The four files total 88,655 byte
 
 Real models are not in this repository. They will come as GitHub Release assets, pinned in the
 manifest by a script (a later issue).
+
+## Readers of `nlp.doc.v1`
+
+For `Locale::ChineseTaiwan`, two consumers read the layers instead of their own splitters.
+
+- `NarrativeAnalyzer` (used by `analyze` and the source stream) takes its sentences from layer 1
+  and its actor name hits from the layer 3 name rule. The terms are `TAIWAN_TERMS` plus the
+  caller actors, objects and places.
+- `CrossChapterCandidates` (zh-TW) takes its pronoun tokens from layer 2.
+
+The output does not change. A differential test compares the whole `Analysis` of the doc path
+with the old ICU path on neutral fixtures. A line stays on the old ICU and jieba path when layer 1
+and ICU cut it in different places. This is an open point for the owner, not a silent change.
+The cases are:
+
+- A line with `…`, an ASCII `.` or two adjacent spaces.
+- A line with any opaque span (code, formula, URL, citation, emoji, heading, list item).
+- A line in a language that layer 1 does not support (layer 2 only).
+
+These stay on the old path too:
+
+- The plain `analyze()` function: it has no analyzer and uses its own quote splitter.
+- `timeline::build`: it scans windows with cue lexicons and has no segmenter.
+- English and zh-CN: the layers have no zh-CN reading.

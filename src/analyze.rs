@@ -5,6 +5,8 @@ use crate::recap_time;
 use crate::text::{Analyzer, Locale, TokenKind};
 use crate::{Analysis, Event, Lexicon, Review, Span, TextSection, TextUnit};
 
+#[cfg(test)]
+mod doc_line_tests;
 mod linking;
 #[cfg(test)]
 mod object_coverage_tests;
@@ -2910,8 +2912,62 @@ impl Focus {
     }
 }
 
+/// The `nlp.doc.v1` path: layer 1 sentences and layer 3 names of one line.
+///
+/// Open points, where layer 1 and the ICU segmenter cut differently. The caller keeps the old
+/// path for these lines, so the analysis does not change:
+///
+/// - `…`: layer 1 ends a sentence after it, ICU does not;
+/// - ASCII `.`: layer 1 treats abbreviations, `..` runs and `Mr.` by its own rules;
+/// - a run of two spaces: layer 1 ends a sentence there, ICU does not;
+/// - any opaque span (heading, list item, code, formula, citation, URL, emoji): layer 1 never
+///   cuts inside one and gives a heading or list line no sentence, ICU does the opposite.
+fn doc_applies(line: &str) -> bool {
+    let space = |ch: char| matches!(ch, ' ' | '\u{3000}');
+    !line.contains(['…', '.'])
+        && !line
+            .chars()
+            .zip(line.chars().skip(1))
+            .any(|(a, b)| space(a) && space(b))
+}
+
+/// The `nlp.doc.v1` path: layer 1 sentences and layer 3 names of one line. It returns `None`
+/// for a line where the old path must stay (see `doc_applies`).
+fn doc_line<'a>(line: &'a str, terms: &[String]) -> Option<LineRead<'a>> {
+    if !doc_applies(line) {
+        return None;
+    }
+    let view = crate::doc::line_view(line, terms);
+    if view.has_opaque {
+        return None;
+    }
+    let sentences = view
+        .sentences
+        .into_iter()
+        .map(|r| LineSentence {
+            text: &line[r.clone()],
+            start: r.start,
+            end: r.end,
+        })
+        .collect();
+    let hits = view.names.into_iter().map(|r| (r.start, r.end)).collect();
+    Some((sentences, hits))
+}
+
+/// Sentences of one line and the byte ranges of its term hits.
+type LineRead<'a> = (Vec<LineSentence<'a>>, Vec<(usize, usize)>);
+
+/// One sentence of a line: trimmed text and its byte range in the line.
+struct LineSentence<'a> {
+    text: &'a str,
+    start: usize,
+    end: usize,
+}
+
 /// Reuse the same locale and work vocabulary across chapters.
 pub struct NarrativeAnalyzer<'lexicon> {
+    /// Terms for the `nlp.doc.v1` name rule. `None` keeps the old ICU path (see `docs/doc-v1.md`).
+    doc_terms: Option<Vec<String>>,
     segmenter: Analyzer,
     lexicon: Lexicon<'lexicon>,
     actors: HashMap<&'lexicon str, usize>,
@@ -2946,7 +3002,16 @@ impl<'lexicon> NarrativeAnalyzer<'lexicon> {
             .map(|&(word, _)| word)
             .chain(lexicon.places.iter().copied())
             .collect();
+        // Only the zh-TW locale has a layer in `nlp.doc.v1`; other locales stay on the ICU path.
+        let doc_terms = (locale == Locale::ChineseTaiwan).then(|| {
+            crate::text::TAIWAN_TERMS
+                .iter()
+                .chain(&terms)
+                .map(|term| (*term).to_owned())
+                .collect()
+        });
         Ok(Self {
+            doc_terms,
             segmenter: Analyzer::with_terms(locale, &terms)?,
             lexicon: *lexicon,
             actors,
@@ -3343,6 +3408,39 @@ impl<'lexicon> NarrativeAnalyzer<'lexicon> {
         (clauses, cues, diagnostics)
     }
 
+    /// Sentences of one line and the byte ranges of the vocabulary terms in them.
+    ///
+    /// The zh-TW locale reads `nlp.doc.v1` layer 1 (sentences) and layer 3 (names). Other
+    /// locales keep the ICU segmenter, because the document has no layer for them.
+    fn line_sentences<'a>(&self, line: &'a str) -> LineRead<'a> {
+        if let Some(terms) = &self.doc_terms
+            && let Some(found) = doc_line(line, terms)
+        {
+            return found;
+        }
+        self.icu_line(line)
+    }
+
+    /// The old path: ICU sentences and `Term` tokens from the text segmenter.
+    fn icu_line<'a>(&self, line: &'a str) -> LineRead<'a> {
+        let sentences = self.segmenter.analyze(line);
+        let hits = sentences
+            .iter()
+            .flat_map(|sentence| sentence.tokens.iter())
+            .filter(|token| token.kind == TokenKind::Term)
+            .map(|token| (token.bytes.start, token.bytes.end))
+            .collect();
+        let sentences = sentences
+            .iter()
+            .map(|s| LineSentence {
+                text: s.text,
+                start: s.bytes.start,
+                end: s.bytes.end,
+            })
+            .collect();
+        (sentences, hits)
+    }
+
     fn append_line(
         &self,
         source: &mut Source<'_>,
@@ -3351,24 +3449,18 @@ impl<'lexicon> NarrativeAnalyzer<'lexicon> {
         line: &str,
         first_in_line: &mut bool,
     ) {
-        let sentences = self.segmenter.analyze(line);
+        let (sentences, hits) = self.line_sentences(line);
         let actor_tokens = source.actor_tokens.get_or_insert_with(Vec::new);
-        actor_tokens.extend(sentences.iter().flat_map(|sentence| {
-            sentence
-                .tokens
-                .iter()
-                .filter(|token| token.kind == TokenKind::Term)
-                .filter_map(|token| {
-                    let &actor = self.actors.get(token.text)?;
-                    Some((base + token.bytes.start, actor))
-                })
+        actor_tokens.extend(hits.into_iter().filter_map(|(start, end)| {
+            let &actor = self.actors.get(&line[start..end])?;
+            Some((base + start, actor))
         }));
 
         let mut stack = Vec::new();
         let mut start = 0;
         let mut scanned = 0;
         for (index, sentence) in sentences.iter().enumerate() {
-            let end = sentence.bytes.end;
+            let end = sentence.end;
             let mut closed_quote = false;
             for (offset, ch) in line[scanned..end].char_indices() {
                 if stack.len() == 1 && stack.last() == Some(&ch) {
@@ -3407,7 +3499,7 @@ impl<'lexicon> NarrativeAnalyzer<'lexicon> {
             }
             if closed_quote
                 && let Some(next) = sentences.get(index + 1)
-                && self.has_speaker_tag(source, base + next.bytes.start, next.text)
+                && self.has_speaker_tag(source, base + next.start, next.text)
             {
                 continue;
             }

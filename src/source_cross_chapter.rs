@@ -237,6 +237,26 @@ impl<'a> CrossChapterCandidates<'a> {
         })
     }
 
+    /// Written pronoun byte ranges of one line. zh-TW reads `nlp.doc.v1` layer 2 tokens and
+    /// falls back to the generic tokenizer when the line has no layer 2 reading.
+    fn line_pronouns(&self, tokenizer: &Analyzer, line: &str) -> Vec<Range<usize>> {
+        if self.locale == Locale::ChineseTaiwan
+            && let Some(tokens) = crate::doc::line_tokens(line)
+        {
+            return tokens
+                .into_iter()
+                .filter(|r| written_pronoun(&line[r.clone()]))
+                .collect();
+        }
+        tokenizer
+            .analyze(line)
+            .into_iter()
+            .flat_map(|sentence| sentence.tokens)
+            .filter(|token| written_pronoun(token.text))
+            .map(|token| token.bytes)
+            .collect()
+    }
+
     /// Observe one chapter in strictly increasing ordinal order.
     /// Empty chapters must be pushed too: skipped ordinals are reported missing.
     /// Errors leave history unchanged. All output is provisional written form.
@@ -278,21 +298,16 @@ impl<'a> CrossChapterCandidates<'a> {
             if pronouns_status == Inspection::Complete
                 && let Some(tokenizer) = &self.tokenizer
             {
-                'sentences: for sentence in tokenizer.analyze(line.text) {
-                    for token in sentence.tokens {
-                        if !written_pronoun(token.text) {
-                            continue;
-                        }
-                        let range = (line.start + token.bytes.start, line.start + token.bytes.end);
-                        if pronouns.contains(&range) {
-                            continue;
-                        }
-                        if pronouns.len() == self.policy.max_pronouns_per_chapter {
-                            pronouns_status = Inspection::Partial;
-                            break 'sentences;
-                        }
-                        pronouns.insert(range);
+                for bytes in self.line_pronouns(tokenizer, line.text) {
+                    let range = (line.start + bytes.start, line.start + bytes.end);
+                    if pronouns.contains(&range) {
+                        continue;
                     }
+                    if pronouns.len() == self.policy.max_pronouns_per_chapter {
+                        pronouns_status = Inspection::Partial;
+                        break;
+                    }
+                    pronouns.insert(range);
                 }
             }
         }
@@ -434,5 +449,52 @@ impl<'a> CrossChapterCandidates<'a> {
         });
         self.last_order = Some(order);
         Ok(output)
+    }
+}
+
+#[cfg(test)]
+mod doc_pronoun_tests {
+    //! zh-TW pronoun tokens come from `nlp.doc.v1` layer 2. They must equal the generic tokenizer.
+    use super::*;
+
+    const LINES: &[&str] = &[
+        "他走進木屋。她留在港口。\n",
+        "他們說：「我們明天出發。」它們不動。\n",
+        "他说她们走了，它也走了。\n",
+        "哈哈 他先走了 我也要回家了\n",
+        "Alice met him at the 港口. 她笑了。\n",
+        "他走了很久……終於到了。\n",
+        "他讀了 `a。b` 這段，她也讀了。\n",
+        "他看了 https://example.org/a 然後她走了。\n",
+        "一行沒有標點的文字\n",
+        "\n",
+    ];
+
+    #[test]
+    fn layer_2_gives_the_generic_tokenizer_pronouns() {
+        let lexicon = Lexicon::default();
+        let analyzer = Analyzer::new(Locale::ChineseTaiwan).expect("analyzer");
+        let policy = CrossChapterPolicy {
+            max_chapter_bytes: 1 << 20,
+            max_terms: 8,
+            max_term_bytes: 64,
+            history_distance: 4,
+            max_names_per_chapter: 8,
+            max_pronouns_per_chapter: 64,
+            max_pairs_per_pronoun: 8,
+            max_pairs_per_chapter: 64,
+        };
+        let candidates =
+            CrossChapterCandidates::new(Locale::ChineseTaiwan, lexicon, policy).expect("new");
+        for line in LINES {
+            let old: Vec<_> = analyzer
+                .analyze(line)
+                .into_iter()
+                .flat_map(|s| s.tokens)
+                .filter(|t| written_pronoun(t.text))
+                .map(|t| t.bytes)
+                .collect();
+            assert_eq!(candidates.line_pronouns(&analyzer, line), old, "{line:?}");
+        }
     }
 }

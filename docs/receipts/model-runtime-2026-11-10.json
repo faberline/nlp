@@ -1,0 +1,100 @@
+{
+  "arch": "arm64",
+  "backends": [
+    "onnx (tract-onnx)",
+    "coreml (objc2-core-ml, CPU only)"
+  ],
+  "files": [
+    {
+      "bytes": 8728,
+      "path": "model.onnx",
+      "sha256": "974f9138da91f1ff1f7e146ddf97335ec1129c993761f6efd9a72c46702bdaa2"
+    },
+    {
+      "bytes": 8611,
+      "path": "model.mlmodel",
+      "sha256": "7fcc5612a5798a2f29faef813d7dc0a10e5525307eb8ac6c4a147bfca7c94386"
+    }
+  ],
+  "fixtures": [
+    {
+      "id": "fx01",
+      "labels_equal": true,
+      "max_abs_diff": 4.76837158203125e-7,
+      "tokens": 33
+    },
+    {
+      "id": "fx02",
+      "labels_equal": true,
+      "max_abs_diff": 2.384185791015625e-7,
+      "tokens": 43
+    },
+    {
+      "id": "fx03",
+      "labels_equal": true,
+      "max_abs_diff": 2.384185791015625e-7,
+      "tokens": 30
+    },
+    {
+      "id": "fx04",
+      "labels_equal": true,
+      "max_abs_diff": 4.76837158203125e-7,
+      "tokens": 36
+    },
+    {
+      "id": "fx05",
+      "labels_equal": true,
+      "max_abs_diff": 2.384185791015625e-7,
+      "tokens": 27
+    },
+    {
+      "id": "fx06",
+      "labels_equal": true,
+      "max_abs_diff": 4.76837158203125e-7,
+      "tokens": 27
+    },
+    {
+      "id": "fx07",
+      "labels_equal": true,
+      "max_abs_diff": 9.5367431640625e-7,
+      "tokens": 25
+    },
+    {
+      "id": "fx08",
+      "labels_equal": true,
+      "max_abs_diff": 2.384185791015625e-7,
+      "tokens": 21
+    },
+    {
+      "id": "fx09",
+      "labels_equal": true,
+      "max_abs_diff": 2.384185791015625e-7,
+      "tokens": 24
+    },
+    {
+      "id": "fx10",
+      "labels_equal": true,
+      "max_abs_diff": 0.0,
+      "tokens": 0
+    },
+    {
+      "id": "fx11",
+      "labels_equal": true,
+      "max_abs_diff": 2.384185791015625e-7,
+      "tokens": 64
+    },
+    {
+      "id": "fx12",
+      "labels_equal": true,
+      "max_abs_diff": 2.384185791015625e-7,
+      "tokens": 3
+    }
+  ],
+  "labels_equal": true,
+  "macos": "26.5.2",
+  "max_abs_diff": 9.5367431640625e-7,
+  "model": "test-tiny",
+  "rust": "rustc 1.96.1 (31fca3adb 2026-06-26) (Homebrew)",
+  "schema": "nlp.receipt.model-runtime.v1",
+  "tolerance": 0.0001
+}

@@ -532,16 +532,22 @@ A model directory holds `manifest.json` and one subdirectory per model:
   "models": [ { "id": "test-tiny", "layers": ["test"], "licence": "CC0-1.0",
                 "dir": "test-tiny", "max_len": 64, "pad_id": 0,
                 "model": "model.onnx", "tokenizer": "tokenizer.json", "expected": "expected.json",
+                "coreml": { "model": "model.mlmodel", "vocab": 258 },
                 "files": [ {"path": "model.onnx", "sha256": "<lowercase hex>", "bytes": 8728}, ... ],
                 "receipt": null } ] }
 ```
 
 - `model`, `tokenizer` and `expected` must each be listed in `files`. The three paths must
   differ. Every path is relative to `<dir>` and has no `..` and no root.
-- `max_len` must be from 1 to 4096. It must also equal the input length that the ONNX file
-  declares (the second dimension of its input). A different value is refused at load.
-  An input length that the file does not fix is accepted.
+- `max_len` must be from 1 to 4096. For ONNX it must equal the input length that the file declares
+  (the second dimension of its input), and a different value is refused at load. An input length
+  that the ONNX file does not fix is accepted. For Core ML, the pad run at load refuses a
+  `max_len` that the model does not take (see "Core ML backend").
 - `bytes` is optional. When present it is checked too.
+- `coreml` is optional. When present, its `model` must be listed in `files` too, and it must not
+  name the same path as `model`, `tokenizer` or `expected`. `vocab` must be above 0. The Core ML
+  backend refuses an id outside `0..vocab`. `vocab` is read from the manifest only. It is not
+  checked against the embedding table in the `.mlmodel` file, so a wrong value is not caught.
 
 ### Hash check
 
@@ -571,8 +577,16 @@ never reported as `unknown`.
 `Backend::Onnx` runs on `tract-onnx` (feature `onnx`, which also enables `tokenizers`). tract is
 pure Rust, under MIT or Apache-2.0, and needs no native download at build time. The alternatives
 were rejected for this layer. `ort` links or downloads the ONNX Runtime native library. `candle`
-has no ONNX loader that covers encoders reliably. A Core ML backend (macOS only, `objc2-core-ml`)
-comes in a later issue, because it cannot run in CI.
+has no ONNX loader that covers encoders reliably.
+
+`Backend::Coreml` runs on `objc2-core-ml` 0.3.2 (feature `coreml`, macOS only). The bindings crate is
+generated from the Apple headers and is maintained in the `objc2` project. Its licence is
+MIT OR Apache-2.0 OR Zlib, and so are `objc2` 0.6 and `objc2-foundation` 0.3. We write no FFI by
+hand. The framework calls are still `unsafe` in the bindings, and the few `unsafe` blocks in
+`src/doc/model/coreml.rs` say why each is sound. The three `objc2` crates are declared under
+`[target.'cfg(target_os = "macos")'.dependencies]`. On Linux the feature adds only `tempfile`, and
+no Core ML code is built. On Linux, or without the feature, `Backend::Coreml` returns `NoBackend`.
+The default `cargo test` never needs Core ML.
 
 Tokenization uses `tokenizers` 0.23.2 with its `fancy-regex` feature. `fancy-regex` is pure Rust, so
 no C source is built and no network is needed. The default `onig` feature is off, so `onig` is not
@@ -589,6 +603,56 @@ An id outside `0..vocab` is a `Run` error, checked before any sequence runs. `vo
 of the model's one embedding table (`Gather`), read when the model is loaded. Without this check,
 tract would panic. A `pad_id` outside the vocabulary is refused at load.
 
+### Core ML backend
+
+Core ML loads only compiled models, from a file URL. So `load` writes the verified `.mlmodel` bytes
+to a private temporary directory (`tempfile`) and compiles them there with the synchronous
+`compileModelAtURL`. That call is deprecated, but it needs no run loop. The compiled model is loaded
+with `MLComputeUnitsCPUOnly`, and then the compiled copy is removed. The temporary directory that
+holds the `.mlmodel` file lives as long as the model. No GPU and no Neural Engine are used.
+
+The Core ML path takes the ids that the tokenizer gives, as the ONNX path does. After the model
+is loaded, `load` runs one sequence of `max_len` pad ids. A failure there is `Load`, with the
+message `pad run: ...`. This refuses a `max_len` that differs from the model's input length. A
+`pad_id` outside `0..vocab` is refused before the model is compiled.
+
+The run rules are the same as above: one sequence per prediction, padded with `pad_id` to
+`max_len`, ids as `Int32`, f32 output cut to the sequence length, and `TooLong` and the id range
+check before any run. A mutex holds the one model instance, so predictions are serialised, and
+`Model` is `Send + Sync`.
+
+The Core ML test model has the same graph as the ONNX one: a constant embedding table, a gather
+(`add_gather`), and a batched matrix multiply with a bias. It is made by `coremltools`
+(`NeuralNetworkBuilder`, no torch) from the same numpy weights.
+
+### Cross-backend receipt
+
+`tests/doc_coreml.rs` has two tests. CI runs on Linux and cannot run Core ML, so only
+`receipt_is_consistent` runs there.
+
+- `backends_agree` (macOS, features `onnx` and `coreml`) runs the 12 fixtures through both backends.
+  It asserts equal shapes and data lengths, equal labels and a logit difference of at most 1e-4.
+  With `NLP_WRITE_RECEIPT=1` it writes `docs/receipts/model-runtime-<date>.json`, where `<date>` is
+  the UTC date of the run. The receipt holds, per fixture, the token count, label equality and the
+  maximum absolute difference. It also holds the overall maximum, the sha256 and byte count of
+  `model.onnx` and `model.mlmodel`, and the macOS, architecture and Rust versions.
+- `receipt_is_consistent` runs everywhere, without Core ML. It asserts that exactly one
+  `model-runtime-*.json` file is in `docs/receipts`. It checks that labels are equal, that the
+  maximum is at most 1e-4 and equals the fixture maximum, that the fixtures are those of
+  `expected.json`, and that the two hashes equal the manifest.
+
+The repository keeps one receipt. When the model files change, write the receipt again on a Mac
+and remove the old one.
+
+To write the receipt:
+
+```
+NLP_WRITE_RECEIPT=1 cargo test --locked --features onnx,coreml --test doc_coreml
+```
+
+On the run that wrote the current receipt (macOS 26.5, Apple silicon) the maximum difference was
+9.5e-7, under 1e-6.
+
 ### Tokenizer offsets
 
 `SubwordTokenizer::encode` adds special tokens (none in the test model) and returns ids with
@@ -598,9 +662,10 @@ that character's span.
 
 ### When no model is available
 
-Without the `onnx` feature, `load` returns `NoBackend` at once and reads no file, so a layer
-reports `no_model`. `verify` works without the feature and gives the integrity errors. With the
-feature, `load` returns `Missing`, `UnknownModel`, `HashMismatch`, `Manifest` or `Load` for a bad
+When the feature of the backend asked for is not compiled in, `load` returns `NoBackend` at once
+and reads no file, so a layer reports `no_model`. That is the `onnx` feature for `Backend::Onnx`,
+and the `coreml` feature on macOS for `Backend::Coreml`. `verify` works without the feature and
+gives the integrity errors. With the feature, `load` returns `Missing`, `UnknownModel`, `HashMismatch`, `Manifest` or `Load` for a bad
 directory. `ModelError::into_reason` maps `NoBackend`, `UnknownModel` and
 `Missing` to `no_model`. A layer then reports
 `no_model_unknown(layer, span)`, which is `{"layer": ..., "span": ..., "reason": "no_model"}`.
@@ -611,11 +676,11 @@ To point at a model, pass the directory that holds `manifest.json` to `load`.
 ### The test model
 
 `models/test-tiny/` is made by `training/make_test_model.py`. Run it by hand on a Mac, inside
-`training/.venv` (packages numpy, onnx and tokenizers). CI never runs it. It is a byte-level BPE
+`training/.venv` (packages numpy, onnx, tokenizers and coremltools). CI never runs it. It is a byte-level BPE
 with no merges (256 byte symbols plus `[PAD]` and `[UNK]`), an embedding of 8 dimensions, and a dense
 layer to 5 labels. The weights are random with a fixed seed. The licence is CC0-1.0. `expected.json`
 holds the ids, spans and logits for 12 fixture texts, computed by numpy. The tests check tract
-against it within 1e-5.
+against it within 1e-5 and Core ML within 1e-4. The four files total 88,655 bytes.
 
 Real models are not in this repository. They will come as GitHub Release assets, pinned in the
 manifest by a script (a later issue).

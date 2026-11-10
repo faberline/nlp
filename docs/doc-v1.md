@@ -164,9 +164,11 @@ Known limits of opaque spans:
 
 ## Tokens and POS
 
-`tokens` is a list of tokens in text order, sorted by start. A token has a `span`, a `lang`
-(from the language rule above, computed on the token's own text), the index of its `sentence`,
-and an optional `upos` (Universal POS, UD v2 names in upper case). `upos` is absent when no
+`tokens` is a list of tokens in text order, sorted by start. A token has a `span`, a `lang`,
+the index of its `sentence`, and an optional `upos` (Universal POS, UD v2 names in upper case).
+A token's `lang` is `zh` when it has a Han char, `en` when it has a Latin letter (a letter that
+is not Han), and `und` otherwise. The Han set is U+3400–4DBF, U+4E00–9FFF, U+F900–FAFF, U+3005
+(々) and U+3007 (〇). Extension B is not in it. `upos` is absent when no
 rule or word decides it. Tokens never cross a sentence boundary, and no token is whitespace.
 
 ### Tokenization
@@ -174,17 +176,20 @@ rule or word decides it. Tokens never cross a sentence boundary, and no token is
 Each sentence is split by these rules, in order:
 
 1. Every opaque span inside the sentence is one token. Block spans are never tokens.
-2. Han runs (the Han letters of the language rule) are matched against the Taiwan term list
+2. Han runs (maximal runs of the Han set) are matched against the Taiwan term list
    (`臺灣`, `資料庫`, `記憶體` and so on), longest match first. The text between matches is
    segmented by jieba with its HMM.
 3. All other runs use Unicode word boundaries (UAX 29). Then:
    a. English clitics split off: `n't` (`didn't` gives `did`, `n't`; `can't` gives `ca`,
       `n't`), and `'s`, `'ll`, `'re`, `'ve`, `'m`, `'d`.
-   b. A hyphen between two words joins them: `well-known` is one token.
-   c. A dot after a listed abbreviation or a single uppercase letter (the abbreviation list of
-      the sentence rules) joins it: `Dr.` is one token. `etc.` keeps its dot too, although
-      `etc` is not in the list.
-   d. A run of the same char from `. … - — ~ ! ? ！ ？` joins: `!!` is one token.
+   b. A hyphen (`-` or `‐`, U+2010) between two words joins them: `well-known` is one token.
+      Both words must contain a letter, so `3-4` gives `3`, `-`, `4` and `COVID-19` gives
+      `COVID`, `-`, `19`.
+   c. A dot after a listed abbreviation, a single uppercase letter (the abbreviation list of
+      the sentence rules) or a word with a dot inside (`U.S`) joins it: `Dr.` and `U.S.` are
+      one token each. `etc.` keeps its dot too, although `etc` is not in the list.
+   d. A run of one char from `. … - — ~ ! ? ！ ？` is one token: `...`, `!!!`, `---`. A
+      different char starts a new token, so `?!!` is `?` and `!!`.
 4. Whitespace is dropped. Every other char belongs to exactly one token.
 
 ### POS tagging
@@ -211,8 +216,16 @@ absent.
 Known limits of tokens and POS:
 
 - jieba splits some Taiwan-usage words that are not in the term list. Those tokens may have
-  the wrong boundary.
+  the wrong boundary. Seen so far: jieba joins `門關` in `把門關上了`, where `門` and `關` are
+  separate words (pinned by a test); `臺灣讀` was also reported as a wrong cut in review.
 - Abbreviations other than the single capital letters and the listed words split at each dot.
+- `etc.` at the end of a sentence keeps its dot, so the sentence has no separate `.` token.
+- An abbreviation dot swallows a sentence-final period: `She said no. Then I left.` gives
+  `no.` as one token (`no_model`), and `I said I.` gives `I.` as one token.
+- Most content words are `no_model` until the model layers. The lexicon only has closed-class
+  words and a few numerals.
+- `&` is `und` by the token language rule, so it never matches the CCONJ entry in the
+  lexicon. The entry stays, and it is a known spec issue.
 - Japanese, Korean and other scripts get no tokens.
 
 ## Known limits

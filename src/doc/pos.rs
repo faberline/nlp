@@ -123,7 +123,8 @@ pub(super) fn tag(text: &str, lang: Lang, opaque: Option<OpaqueKind>) -> Tag {
         return Tag::Decided(Upos::Num);
     }
     let key = match lang {
-        Lang::En => text.to_lowercase(),
+        // A curly apostrophe in a clitic looks up as the straight one.
+        Lang::En => text.to_lowercase().replace('\u{2019}', "'"),
         Lang::Zh => text.to_owned(),
         Lang::Mixed | Lang::Und => return Tag::Missing,
     };

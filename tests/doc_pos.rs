@@ -33,6 +33,13 @@ const CASES: &[&str] = &[
     "one two",
     "こんにちは。",
     "# Title here\n\nThe cat sat.",
+    "I'm sure I'll go. I've done it, I'd say.",
+    "Wait... what?!! No!!!",
+    "The U.S. army left.",
+    "pages 3-4 and COVID-19 and well\u{2010}known",
+    "二〇二六年三月",
+    "It\u{2019}s fine, they\u{2019}ll come and we\u{2019}re ok.",
+    "Run `x = 1` now.",
 ];
 
 fn slice(text: &str, s: Span) -> String {
@@ -309,6 +316,131 @@ fn block_spans_have_no_tokens() {
     assert!(doc.tokens.iter().all(|tok| tok.span.start_char >= 14));
 }
 
+#[test]
+fn clitic_after_one_letter_stem() {
+    assert_eq!(
+        show("I'm sure I'll go. I've done it, I'd say."),
+        [
+            "I/PRON", "'m/AUX", "sure/M", "I/PRON", "'ll/AUX", "go/M", "./PUNCT", "I/PRON",
+            "'ve/AUX", "done/M", "it/PRON", ",/PUNCT", "I/PRON", "'d/A", "say/M", "./PUNCT",
+        ]
+    );
+}
+
+#[test]
+fn repeated_marks_are_one_token() {
+    assert_eq!(
+        show("Wait... what?!! No!!!"),
+        [
+            "Wait/M",
+            ".../PUNCT",
+            "what/A",
+            "?/PUNCT",
+            "!!/PUNCT",
+            "No/A",
+            "!!!/PUNCT",
+        ]
+    );
+    // jieba owns the Han words, so only the full-width marks are pinned.
+    let shown = show("好！！！真的嗎？？？");
+    assert!(shown.contains(&"！！！/PUNCT".to_owned()), "{shown:?}");
+    assert!(shown.contains(&"？？？/PUNCT".to_owned()), "{shown:?}");
+    assert_eq!(show("a --- b"), ["a/DET", "---/PUNCT", "b/M"]);
+}
+
+#[test]
+fn abbreviation_with_inner_dot_takes_dot() {
+    assert_eq!(
+        show("The U.S. army left."),
+        ["The/DET", "U.S./M", "army/M", "left/M", "./PUNCT"]
+    );
+    assert_eq!(
+        show("The U.K. army left."),
+        ["The/DET", "U.K./M", "army/M", "left/M", "./PUNCT"]
+    );
+}
+
+#[test]
+fn hyphen_needs_a_letter_on_both_sides() {
+    assert_eq!(show("pages 3-4"), ["pages/M", "3/NUM", "-/PUNCT", "4/NUM"]);
+    assert_eq!(show("COVID-19"), ["COVID/M", "-/PUNCT", "19/NUM"]);
+    assert_eq!(show("well\u{2010}known"), ["well\u{2010}known/M"]);
+}
+
+#[test]
+fn han_set_includes_ideographic_marks() {
+    // 〇 (U+3007) and 々 (U+3005) are Han for splitting and for the token language.
+    let doc = analyze("二〇二六年");
+    let zero = doc
+        .tokens
+        .iter()
+        .find(|t| slice("二〇二六年", t.span).contains('〇'))
+        .expect("a token holds 〇");
+    assert_eq!(zero.lang, Lang::Zh);
+    // The whole Han run goes to jieba, so 〇 gets jieba's cut (pinned on purpose), not the
+    // cut the old set gave it when 〇 was a separate run.
+    assert_eq!(
+        show("二〇二六年三月"),
+        ["二/NUM", "〇/NUM", "二/NUM", "六年/M", "三月/M"]
+    );
+}
+
+#[test]
+fn curly_apostrophe_clitics() {
+    assert_eq!(
+        show("It\u{2019}s fine, they\u{2019}ll come and we\u{2019}re ok."),
+        [
+            "It/PRON",
+            "\u{2019}s/A",
+            "fine/M",
+            ",/PUNCT",
+            "they/PRON",
+            "\u{2019}ll/AUX",
+            "come/M",
+            "and/CCONJ",
+            "we/PRON",
+            "\u{2019}re/AUX",
+            "ok/M",
+            "./PUNCT",
+        ]
+    );
+    assert_eq!(
+        show("Don\u{2019}t stop."),
+        ["Do/A", "n\u{2019}t/PART", "stop/M", "./PUNCT"]
+    );
+}
+
+#[test]
+fn token_lang_follows_the_rule() {
+    // A token with a Han char is zh even when it also has a Latin letter.
+    let doc = analyze("Run `臺x` now.");
+    let code = doc
+        .tokens
+        .iter()
+        .find(|t| slice("Run `臺x` now.", t.span) == "`臺x`")
+        .expect("code token");
+    assert_eq!(code.lang, Lang::Zh);
+    let doc = analyze("3 café");
+    assert_eq!(doc.tokens[0].lang, Lang::Und);
+    assert_eq!(doc.tokens[1].lang, Lang::En);
+}
+
+#[test]
+fn inline_code_with_space_is_one_token() {
+    assert_eq!(
+        show("Run `x = 1` now."),
+        ["Run/M", "`x = 1`/X", "now/ADV", "./PUNCT"]
+    );
+}
+
+#[test]
+fn fenced_code_block_is_never_a_token() {
+    let t = "```\nlet x = 1;\n```\nThe cat sat.";
+    let doc = analyze(t);
+    assert!(doc.tokens.iter().all(|tok| tok.span.start_char >= 19));
+    assert_eq!(show(t), ["The/DET", "cat/M", "sat/M", "./PUNCT"]);
+}
+
 /// Gold sentences of `tests/data/pos_gold.json`.
 #[derive(Deserialize)]
 struct Gold {
@@ -400,7 +532,13 @@ fn check_invariants(text: &str) {
         let s = doc.segmentation.sentences[t.sentence].span;
         assert!(t.span.start_char >= s.start_char && t.span.end_char <= s.end_char);
         assert!(t.span.end_char > t.span.start_char);
-        assert!(!slice(text, t.span).chars().any(char::is_whitespace));
+        // An inline opaque span is one token even when it holds whitespace.
+        let opaque = doc.segmentation.opaque.iter().any(|o| o.span == t.span);
+        assert!(
+            opaque || !slice(text, t.span).chars().any(char::is_whitespace),
+            "token {:?} holds whitespace in {text:?}",
+            slice(text, t.span)
+        );
     }
     for (i, s) in doc.segmentation.sentences.iter().enumerate() {
         if unsupported.contains(&s.span) {
@@ -667,6 +805,7 @@ fn pos_receipt() {
             "UD is used as the label scheme only. No UD treebank text was used, because of its CC BY-SA licence.",
             "Measured tokens are only those whose span equals a gold span. Tokens with no tag are counted in token_boundary_match and coverage, not in precision.",
             "Chinese token_boundary_match is the lowest of the three languages, because jieba word boundaries often differ from the gold segmentation; the Taiwan term list runs before jieba.",
+            "jieba boundary errors seen so far: 門關 in 把門關上了 (jieba joins it, but 門 and 關 are separate words) and 臺灣讀 (reported in review; not pinned by a test).",
             "Precision is the share of decided, matched tokens whose tag equals the gold tag."
         ],
     });

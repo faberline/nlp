@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use aho_corasick::{AhoCorasick, MatchKind};
 use unicode_segmentation::UnicodeSegmentation;
 
-use super::{OpaqueKind, segment};
+use super::{Lang, OpaqueKind, segment};
 use crate::Span;
 use crate::text::{TAIWAN_TERMS, default_jieba};
 
@@ -18,6 +18,27 @@ pub(super) struct Piece {
 
 const CLITICS: &[&str] = &["'s", "'ll", "'re", "'ve", "'m", "'d"];
 const REPEATABLE: &[char] = &['.', '…', '-', '—', '~', '!', '?', '！', '？'];
+const HYPHENS: &[&str] = &["-", "\u{2010}"];
+
+/// The Han set of `nlp.doc.v1` tokens: CJK ideographs, compatibility ideographs, 々 and 〇.
+/// Layer 1 keeps its own set (`segment::is_han`).
+pub(super) fn is_han(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}' | '\u{3005}' | '\u{3007}'
+    )
+}
+
+/// Language of one token: zh with a Han char, en with a Latin letter, otherwise und.
+pub(super) fn token_lang(text: &str) -> Lang {
+    if text.chars().any(is_han) {
+        Lang::Zh
+    } else if text.chars().any(char::is_alphabetic) {
+        Lang::En
+    } else {
+        Lang::Und
+    }
+}
 
 fn terms() -> &'static AhoCorasick {
     static TERMS: OnceLock<AhoCorasick> = OnceLock::new();
@@ -90,7 +111,7 @@ fn text_pieces(c: &[char], start: usize, end: usize, out: &mut Vec<Piece>) {
 fn runs(s: &str) -> Vec<(usize, usize, bool)> {
     let mut out: Vec<(usize, usize, bool)> = Vec::new();
     for (b, ch) in s.char_indices() {
-        let han = segment::is_han(ch);
+        let han = is_han(ch);
         let end = b + ch.len_utf8();
         match out.last_mut() {
             Some(last) if last.2 == han => last.1 = end,
@@ -144,10 +165,10 @@ fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
             continue;
         };
         let prev_text = &s[pa..a];
-        if text == "-"
-            && is_word(prev_text)
+        if HYPHENS.contains(&text)
+            && has_letter(prev_text)
             && let Some(&(na, nb)) = raw.get(i).filter(|&&(na, _)| na == b)
-            && is_word(&s[na..nb])
+            && has_letter(&s[na..nb])
         {
             if let Some(last) = merged.last_mut() {
                 last.1 = nb;
@@ -155,18 +176,22 @@ fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
             i += 1;
             continue;
         }
+        // A dot after a listed abbreviation, a single capital, `etc`, or a word with an inner dot.
         if text == "."
-            && (segment::is_abbreviation(prev_text) || prev_text.eq_ignore_ascii_case("etc"))
+            && (segment::is_abbreviation(prev_text)
+                || prev_text.eq_ignore_ascii_case("etc")
+                || (has_letter(prev_text) && prev_text.contains('.')))
         {
             if let Some(last) = merged.last_mut() {
                 last.1 = b;
             }
             continue;
         }
+        // A run of one repeatable char: the previous token is made of that same char only.
         let mut chars = text.chars();
         if let (Some(ch), None) = (chars.next(), chars.next())
             && REPEATABLE.contains(&ch)
-            && prev_text == text
+            && prev_text.chars().all(|p| p == ch)
         {
             if let Some(last) = merged.last_mut() {
                 last.1 = b;
@@ -178,8 +203,8 @@ fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
     out.extend(merged);
 }
 
-fn is_word(text: &str) -> bool {
-    text.chars().any(char::is_alphanumeric)
+fn has_letter(text: &str) -> bool {
+    text.chars().any(char::is_alphabetic)
 }
 
 /// Split English clitics off a word: `didn't` gives `did` and `n't`, `They'll` gives `They` and
@@ -191,10 +216,12 @@ fn split_clitic(s: &str, a: usize, b: usize, out: &mut Vec<(usize, usize)>) {
         .rev()
         .find(|&(_, ch)| ch == '\'' || ch == '’')
         .map(|(i, _)| i);
-    if let Some(p) = apostrophe.filter(|&p| p > 1) {
+    // The stem must be non-empty, so the apostrophe is never the first char.
+    if let Some(p) = apostrophe.filter(|&p| p > 0) {
         let suffix = word[p..].to_lowercase().replace('’', "'");
         let before = &word[..p];
-        if suffix == "'t" && before.ends_with(['n', 'N']) {
+        // `n't` alone has no stem, so the `n` must be preceded by something.
+        if suffix == "'t" && before.ends_with(['n', 'N']) && before.len() > 1 {
             let at = p - 1;
             out.push((a, a + at));
             out.push((a + at, b));

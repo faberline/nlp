@@ -142,11 +142,10 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
     };
     let mut unknown = Vec::new();
     let mut tokens = Vec::new();
-    let inline: Vec<(Span, OpaqueKind)> = seg
-        .opaque
+    let inline: Vec<(Span, OpaqueKind)> = found
         .iter()
-        .filter(|o| !matches!(o.kind, OpaqueKind::Heading | OpaqueKind::ListItem))
-        .map(|o| (o.span, o.kind))
+        .filter(|f| !f.block && !matches!(f.item.kind, OpaqueKind::Heading | OpaqueKind::ListItem))
+        .map(|f| (f.item.span, f.item.kind))
         .collect();
 
     for paragraph in segment::paragraphs(&m) {
@@ -188,7 +187,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
                 let text: String = c[piece.span.start_char..piece.span.end_char]
                     .iter()
                     .collect();
-                let lang = segment::lang(&c, piece.span).0;
+                let lang = token::token_lang(&text);
                 let undecided = |reason| Unknown {
                     layer: "pos".to_owned(),
                     span: piece.span,

@@ -658,6 +658,11 @@ const CASES: &[&str] = &[
     "It works. But it is slow. これはテストです。",
     "It works. But これはテストです。",
     "We left, because, it rained.",
+    "如果，我們回家。",
+    "Because, we stayed.",
+    "先，然後吃飯。",
+    "先洗手，然後，如果餓了，就吃飯。",
+    "If it rains.\n\nThen we stay home.",
     "We lost, 😋 because it rained.",
     "如果明天有空，便宜的也可以。",
     "先走吧，再見。",
@@ -1104,6 +1109,12 @@ fn review_then_after_an_if_sentence_is_not_a_sequence() {
         ]
     );
     assert!(rel_unknown("If it rains, we stay. Then we rest.").is_empty());
+    // A new paragraph breaks the sentence relation: `Then` has no unit before it.
+    assert!(rels("If it rains.\n\nThen we stay home.").is_empty());
+    assert_eq!(
+        rel_unknown("If it rains.\n\nThen we stay home."),
+        ["If", "Then"]
+    );
     // The last clause of the sentence before opens with `if`: `Then` gives nothing.
     let text = "We go, if it rains. Then we rest.";
     assert!(rels(text).is_empty());
@@ -1138,4 +1149,39 @@ fn review_bare_correlate_before_another_connector() {
         )]
     );
     assert_eq!(rel_unknown("If it rains, then, because we stay."), ["If"]);
+}
+
+#[test]
+fn review_bare_opener_gives_no_relation() {
+    // A bare opener gives no relation; its unknown is the opener itself.
+    assert!(rels("如果，我們回家。").is_empty());
+    assert_eq!(rel_unknown("如果，我們回家。"), ["如果"]);
+    assert!(rels("Because, we stayed.").is_empty());
+    assert_eq!(rel_unknown("Because, we stayed."), ["Because"]);
+    // A bare `先` gives nothing; the next clause is read on its own.
+    assert_eq!(
+        rels("先，然後吃飯。"),
+        [rel(
+            K::Sequence,
+            L::Clause,
+            "然後",
+            None,
+            "先",
+            "然後吃飯。"
+        )]
+    );
+    assert!(rel_unknown("先，然後吃飯。").is_empty());
+    // The opener `如果` in the clause after a bare correlate gives only its own relation.
+    assert_eq!(
+        rels("先洗手，然後，如果餓了，就吃飯。"),
+        [rel(
+            K::Condition,
+            L::Clause,
+            "如果",
+            Some("就"),
+            "如果餓了",
+            "就吃飯。"
+        )]
+    );
+    assert!(rel_unknown("先洗手，然後，如果餓了，就吃飯。").is_empty());
 }

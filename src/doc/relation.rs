@@ -2,7 +2,9 @@
 //! layer 1 is read. See `docs/doc-v1.md`.
 
 use super::segment;
-use super::{Reason, Relation, RelationKind, RelationLevel, Segmentation, Unknown};
+use super::{
+    Opaque, OpaqueKind, Reason, Relation, RelationKind, RelationLevel, Segmentation, Unknown,
+};
 use crate::Span;
 use RelationKind as K;
 use RelationLevel::{Clause as Cl, Sentence as Se};
@@ -24,6 +26,13 @@ const SEQ_RESULT: &[&str] = &["然後", "接著", "再", "隨後"];
 const PAR_RESULT: &[&str] = &["另一方面"];
 const SO_NOT: &[&str] = &[
     "far", "much", "many", "long", "as", "that", "good", "bad", "little", "few", "called", "on",
+];
+/// Chars that, right after a correlate, show it is part of a longer word and not a correlate:
+/// `便宜`, `再見`, `就近`. A stop list of following chars, not a longest-word match.
+const CORRELATE_STOP: &[(&str, &str)] = &[
+    ("便", "宜利當條於民秘"),
+    ("再", "見次度三也說加"),
+    ("就", "近業讀地"),
 ];
 const OPENING: &[char] = &['「', '『', '“', '‘', '（', '(', '[', '"', '\''];
 const CLOSING: &[char] = &[
@@ -155,7 +164,8 @@ impl Pass<'_> {
                 continue;
             }
             let clause = self.clause(ci);
-            let Some((role, conn)) = connector(self.c, clause, sentence.end_char) else {
+            let Some((role, conn)) = connector(self.c, &self.seg.opaque, clause, sentence.end_char)
+            else {
                 continue;
             };
             let next = ids.get(k + 1).copied();
@@ -166,7 +176,12 @@ impl Pass<'_> {
                 Back(_)
                     if k > 0
                         && is_then(self.c, conn)
-                        && opens_if(self.c, self.clause(ids[k - 1]), sentence.end_char) => {}
+                        && opens_if(
+                            self.c,
+                            &self.seg.opaque,
+                            self.clause(ids[k - 1]),
+                            sentence.end_char,
+                        ) => {}
                 Back(kind) if k == 0 => match prev {
                     Some(p) => {
                         let a = self.seg.sentences[p].span;
@@ -210,13 +225,29 @@ impl Pass<'_> {
                         continue;
                     };
                     let n_span = self.clause(n);
-                    match correlate(self.c, n_span, sentence.end_char, results) {
+                    let opaque = &self.seg.opaque;
+                    match correlate(self.c, opaque, n_span, sentence.end_char, results) {
                         Some(cor) => {
-                            self.emit(kind, Cl, conn, Some(cor), clause, n_span);
                             self.used[n] = true;
+                            // A bare correlate (`then,`) takes the clause after it as arg2.
+                            let arg2 = if is_bare(self.c, cor.end_char, n_span.end_char) {
+                                let after = ids.get(k + 2).copied().filter(|&n2| {
+                                    connector(self.c, opaque, self.clause(n2), sentence.end_char)
+                                        .is_none()
+                                });
+                                let Some(n2) = after else {
+                                    self.unknown(conn);
+                                    continue;
+                                };
+                                self.used[n2] = true;
+                                self.clause(n2)
+                            } else {
+                                n_span
+                            };
+                            self.emit(kind, Cl, conn, Some(cor), clause, arg2);
                         }
                         None if silent => {}
-                        None if connector(self.c, n_span, sentence.end_char).is_some() => {
+                        None if connector(self.c, opaque, n_span, sentence.end_char).is_some() => {
                             self.unknown(conn);
                         }
                         None => self.emit(kind, Cl, conn, None, clause, n_span),
@@ -228,8 +259,17 @@ impl Pass<'_> {
 }
 
 /// The first connector of a clause, with its role. Special cases are applied here.
-fn connector(c: &[char], clause: Span, sentence_end: usize) -> Option<(Role, Span)> {
-    let from = skip_opening(c, clause);
+fn connector(
+    c: &[char],
+    opaque: &[Opaque],
+    clause: Span,
+    sentence_end: usize,
+) -> Option<(Role, Span)> {
+    let from = skip_opening(c, opaque, clause);
+    // A connector never starts inside code, a citation or another opaque span.
+    if hides(opaque, from) {
+        return None;
+    }
     let (text, span) = longest(c, from, clause.end_char, ENTRIES.iter().map(|e| e.0))?;
     let role = ENTRIES.iter().find(|e| e.0 == text)?.1;
     let end = span.end_char;
@@ -253,18 +293,25 @@ fn connector(c: &[char], clause: Span, sentence_end: usize) -> Option<(Role, Spa
 /// connector (not `so far`, not `So,`).
 fn correlate(
     c: &[char],
+    opaque: &[Opaque],
     clause: Span,
     sentence_end: usize,
     texts: &'static [&'static str],
 ) -> Option<Span> {
-    let from = skip_opening(c, clause);
+    let from = skip_opening(c, opaque, clause);
+    if hides(opaque, from) {
+        return None;
+    }
     let (text, span) = longest(c, from, clause.end_char, texts.iter().copied())?;
     let ok = text != "so"
         || matches!(
-            connector(c, clause, sentence_end),
+            connector(c, opaque, clause, sentence_end),
             Some((Back(K::Cause), _))
         );
-    ok.then_some(span)
+    let part_of_word = CORRELATE_STOP.iter().any(|&(word, stop)| {
+        word == text && c.get(span.end_char).is_some_and(|ch| stop.contains(*ch))
+    });
+    (ok && !part_of_word).then_some(span)
 }
 
 /// Whether the connector span reads `then` (ASCII, case-insensitive).
@@ -276,9 +323,9 @@ fn is_then(c: &[char], conn: Span) -> bool {
 }
 
 /// Whether the clause starts with an `if` opener.
-fn opens_if(c: &[char], clause: Span, sentence_end: usize) -> bool {
+fn opens_if(c: &[char], opaque: &[Opaque], clause: Span, sentence_end: usize) -> bool {
     matches!(
-        connector(c, clause, sentence_end),
+        connector(c, opaque, clause, sentence_end),
         Some((Open(K::Condition, _), _))
     )
 }
@@ -320,10 +367,43 @@ fn longest(
     })
 }
 
-fn skip_opening(c: &[char], clause: Span) -> usize {
-    (clause.start_char..clause.end_char)
-        .find(|&i| !(c[i].is_whitespace() || OPENING.contains(&c[i])))
-        .unwrap_or(clause.end_char)
+/// The start of the clause text after spaces, opening marks, emoji and symbols. It stops at an
+/// opaque span other than an emoji.
+fn skip_opening(c: &[char], opaque: &[Opaque], clause: Span) -> usize {
+    let mut i = clause.start_char;
+    while i < clause.end_char {
+        if let Some(o) = opaque
+            .iter()
+            .find(|o| o.span.start_char <= i && i < o.span.end_char)
+        {
+            if o.kind != OpaqueKind::Emoji {
+                break;
+            }
+            i = o.span.end_char;
+        } else if c[i].is_whitespace() || OPENING.contains(&c[i]) || is_symbol(c[i]) {
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    i.min(clause.end_char)
+}
+
+/// True when `i` is inside an opaque span that is not an emoji.
+fn hides(opaque: &[Opaque], i: usize) -> bool {
+    opaque
+        .iter()
+        .any(|o| o.kind != OpaqueKind::Emoji && o.span.start_char <= i && i < o.span.end_char)
+}
+
+/// Symbol and pictograph chars that can start a clause before a connector: arrows, dingbats,
+/// emoji, and the marks `© ® ™`.
+fn is_symbol(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{A9}' | '\u{AE}' | '\u{2122}' | '\u{2190}'..='\u{2BFF}' | '\u{1F000}'..='\u{1FAFF}'
+            | '\u{200D}' | '\u{FE0F}'
+    )
 }
 
 /// The connector ends the clause, or only closers and terminators follow it inside the clause.

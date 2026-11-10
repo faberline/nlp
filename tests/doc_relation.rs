@@ -889,3 +889,52 @@ fn relation_receipt() {
     text.push('\n');
     fs::write(&path, text).expect("write receipt");
 }
+
+#[test]
+fn review_correlate_is_a_whole_word() {
+    // 便 inside 便宜 and 再 inside 再見 are not correlates.
+    let text = "如果明天有空，便宜的也可以。";
+    assert!(rels(text).iter().all(|r| r.3.is_none()));
+    let text = "先走吧，再見。";
+    assert!(rels(text).iter().all(|r| r.3.is_none()));
+    // The real correlates still pair.
+    assert_eq!(rels("如果明天有空，便來找你。")[0].3.as_deref(), Some("便"));
+    assert_eq!(rels("先走吧，再去找你。")[0].3.as_deref(), Some("再"));
+}
+
+#[test]
+fn review_clause_after_an_emoji() {
+    let text = "We won. 😋 But we lost.";
+    assert!(rels(text).iter().any(|r| r.2 == "But"));
+}
+
+#[test]
+fn review_connector_inside_opaque_is_not_a_connector() {
+    let text = "We ran it, `but` it failed.";
+    assert!(rels(text).is_empty());
+    let text = "We ran it. `But it failed.`";
+    assert!(rels(text).is_empty());
+    // A citation that holds the word is opaque, so its text is not a connector.
+    let text = "We ran it. (But 2020) says it failed.";
+    assert!(rels(text).is_empty());
+    assert!(rel_unknown(text).is_empty());
+}
+
+#[test]
+fn review_bare_correlate_takes_the_next_clause() {
+    assert_eq!(
+        rels("If it rains, then, we stay."),
+        [rel(
+            K::Condition,
+            L::Clause,
+            "If",
+            Some("then"),
+            "If it rains",
+            "we stay."
+        )]
+    );
+    // Nothing follows the bare correlate: unknown, no relation.
+    let text = "If it rains, then.";
+    assert!(rels(text).is_empty());
+    assert_eq!(rel_unknown(text), ["If"]);
+}

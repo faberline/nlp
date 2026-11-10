@@ -252,8 +252,11 @@ has `kind`, `level`, `connector`, an optional `correlate`, `arg1` and `arg2`:
 
 ### Connectors
 
-A connector counts only at the start of a clause. Before matching, whitespace and opening marks
-(`「『“‘（([“"'`) are skipped. The longest entry wins. English entries match ASCII
+A connector counts only at the start of a clause. Before matching, whitespace, opening marks
+(`「『“‘（([“"'`), emoji and symbol chars (arrows, dingbats, pictographs, `© ® ™`) are skipped, so
+`😋 But we lost.` still starts with `But`. The scan stops at any other opaque span (code, formula,
+citation, heading, list item, URL): a connector inside one is not a connector, as in
+`(But 2020) says so.` The longest entry wins. English entries match ASCII
 case-insensitively and need a word boundary after them (no letter, digit, `'`, `’` or `-`
 follows). Multi-word English entries use exactly one space.
 
@@ -271,7 +274,13 @@ follows). Multi-word English entries use exactly one space.
 Connectors of arg2 take arg1 from the clause before them (or the sentence before, when they
 start a sentence). Connectors of arg1 take arg2 from the clause after them. A correlate in that
 clause consumes it: its own connector gives no second relation. `先` and `一方面` give a
-relation only with their correlate, and never an `unknown`.
+relation only with their correlate, and never an `unknown`. A correlate that is the whole clause
+(`If it rains, then, we stay.`) takes the clause after it as `arg2`; if no clause follows, or that
+clause starts with another connector, the opener gives an `unknown` and there is no relation.
+
+A correlate must be a whole word. A stop list of following chars rejects `便` before `宜 利 當 條
+於 民 秘`, `再` before `見 次 度 三 也 說 加`, and `就` before `近 業 讀 地`, so `便宜`, `再見` and
+`就近` are not correlates. (It is a stop list of following chars, not a longest-word match.)
 
 A `because` or `因為` clause followed by a cause-result connector is one pair, not two readings:
 `Because A, so B.`, `Because it rained, therefore we stayed.` and `因為下雨，therefore we stayed.`
@@ -315,8 +324,10 @@ A new paragraph also breaks the sentence relation.
 - Simplified Chinese connectors are not matched. zh `又`, `而`, `並` alone are not connectors.
 - Argument spans are always clauses or sentences, never smaller.
 - A bare connector can leave an argument that is only the connector: `We stayed home, because.`
-  (`arg1` is `because.`), `We slept. So.` (`arg2` is `So.`), and `如果下雨，就，取消。` (`arg2` is
-  `就`). Such a relation is still reported.
+  (`arg1` is `because.`) and `We slept. So.` (`arg2` is `So.`). Such a relation is still
+  reported. A bare correlate is the exception (see above).
+- The correlate tables are shared by both languages. A correlate of the other language still
+  pairs (`因為下雨，so we left.` gives `so`).
 - English connectors accept only an ASCII `,` after them. `However,` is a bare connector, and
   `However，` with a full-width comma is not one.
 - Correlates may cross languages: `If 天氣好，就…` pairs the English `If` with the zh `就`.

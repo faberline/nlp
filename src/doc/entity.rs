@@ -278,7 +278,10 @@ pub(super) fn extract(
         let bad = x.bad_dates.take();
         cands.retain(|c| {
             let hit = |&(s, e): &(usize, usize)| c.span.start_char < e && s < c.span.end_char;
-            !(dead.iter().any(hit) || (c.kind == Some(EntityKind::Date) && bad.iter().any(hit)))
+            // Inside an invalid full date, no date and no undecided candidate (such as `2/30`)
+            // is read. Its digits stay numbers.
+            let dated = matches!(c.kind, Some(EntityKind::Date) | None);
+            !(dead.iter().any(hit) || (dated && bad.iter().any(hit)))
         });
         emails(&x, &mut cands);
         if let Some(ac) = &ac {
@@ -513,9 +516,17 @@ fn en_day_month(x: &Sent, i: usize) -> Option<Cand> {
     }
     let (word, wend) = word_at(t, dend + 1, e)?;
     let month = month_of(&word)?;
-    if wend < e
-        && t[wend] == ' '
-        && let Some((year, yend)) = year4_at(t, wend + 1, e)
+    // `10 Nov. 2026`: the dot after an abbreviated month is part of the date, as in en_month_date.
+    let abbreviation = word.len() == 3 || word == "sept";
+    let dot = abbreviation
+        && wend + 2 < e
+        && t[wend] == '.'
+        && t[wend + 1] == ' '
+        && t[wend + 2].is_ascii_digit();
+    let sp = if dot { wend + 1 } else { wend };
+    if sp < e
+        && t[sp] == ' '
+        && let Some((year, yend)) = year4_at(t, sp + 1, e)
     {
         return full(x, i, yend, year, month, day);
     }
@@ -565,13 +576,20 @@ fn numeric_date(x: &Sent, i: usize) -> Option<Cand> {
         && t[k] == '/'
         && let Some((year, k2)) = year4_at(t, k + 1, e)
     {
-        let (month, day) = match (a > 12, b > 12) {
-            (true, false) => (b, a),
-            (false, true) => (a, b),
-            (false, false) => return Some(x.cand(i, k2, None, None, None)),
-            (true, true) => return None,
+        // A part over 12 is the day (`13/4`) or the month (`4/13`). When both are 12 or less,
+        // both readings are tried: both real dates is ambiguous, one is that date, neither is a
+        // bad date and its digits are numbers.
+        return match (a > 12, b > 12) {
+            (true, false) => full(x, i, k2, year, b, a),
+            (false, true) => full(x, i, k2, year, a, b),
+            (false, false) => match (valid(Some(year), a, b), valid(Some(year), b, a)) {
+                (true, true) => Some(x.cand(i, k2, None, None, None)),
+                (true, false) => full(x, i, k2, year, a, b),
+                (false, true) => full(x, i, k2, year, b, a),
+                (false, false) => x.bad_date(i, k2),
+            },
+            (true, true) => x.bad_date(i, k2),
         };
-        return full(x, i, k2, year, month, day);
     }
     if k < e && (t[k].is_ascii_digit() || t[k] == '/') {
         return None;
@@ -809,6 +827,10 @@ fn number_cand(x: &Sent, i: usize) -> Option<Cand> {
 }
 
 fn number_at(x: &Sent, i: usize) -> Option<Num> {
+    // A prefix such as `$` that ends the text or the sentence has no number after it.
+    if i >= x.e {
+        return None;
+    }
     let (t, e) = (x.t, x.e);
     let ch = t[i];
     if ch.is_ascii_digit() {
@@ -965,13 +987,37 @@ fn shift(s: &str, k: usize) -> String {
 
 /// English number words, joined by one space or hyphen. Returns None if the first word is not one.
 fn en_number_at(t: &[char], i: usize, e: usize) -> Option<Num> {
-    let (mut toks, mut words) = (Vec::new(), Vec::new());
+    let (mut toks, mut words, mut ends) = (Vec::new(), Vec::new(), Vec::new());
     let (mut j, mut last) = (i, i);
+    let (mut hundred, mut big) = (false, 0);
     while let Some((word, end)) = word_at(t, j, e)
         && let Some(tok) = en_tok(&word)
     {
+        // A word that breaks the order ends the number before it, and reads as a new number.
+        if !en_follows(toks.last().copied(), tok, hundred, big) {
+            // A multiplier that cannot join this number belongs to the words right before it
+            // (`two hundred three hundred` is 200 and 300), so those words are given back.
+            if !matches!(tok, Tok::Add(_))
+                && let Some(keep) = toks.iter().rposition(|k| !matches!(k, Tok::Add(_)))
+            {
+                toks.truncate(keep + 1);
+                words.truncate(keep + 1);
+                ends.truncate(keep + 1);
+                last = ends[keep];
+            }
+            break;
+        }
+        match tok {
+            Tok::Mul(_) => hundred = true,
+            Tok::Big(m) => {
+                hundred = false;
+                big = m;
+            }
+            Tok::Add(_) => {}
+        }
         toks.push(tok);
         words.push(word);
+        ends.push(end);
         last = end;
         if last + 1 < e && (t[last] == '-' || t[last] == ' ') {
             j = last + 1;
@@ -979,8 +1025,7 @@ fn en_number_at(t: &[char], i: usize, e: usize) -> Option<Num> {
             break;
         }
     }
-    // A leading `hundred` is not a number, like a leading `thousand` (combine rejects that one).
-    if matches!(toks.first(), None | Some(Tok::Mul(_))) {
+    if toks.is_empty() {
         return None;
     }
     let value = combine(&toks)?;
@@ -989,6 +1034,34 @@ fn en_number_at(t: &[char], i: usize, e: usize) -> Option<Num> {
         end: last,
         bare_one: words.len() == 1 && words[0] == "one",
     })
+}
+
+/// Whether English number word `tok` may follow `prev` (None at the start) in one number. A group
+/// starts at the beginning or after thousand, million or billion. A unit (0 to 9) follows a group
+/// start, a tens word or hundred, and only 1 to 9 after a tens word or hundred (`twenty-one`,
+/// `two hundred three`). A teen or tens word
+/// follows a group start or hundred. Hundred follows a non-zero unit, teen or tens word, once per
+/// group. Thousand, million or billion follows a non-zero unit, teen, tens or hundred, and is
+/// smaller than the one before. `hundred` says whether this group has one, and `big` is the last
+/// thousand, million or billion (0 for none).
+fn en_follows(prev: Option<Tok>, tok: Tok, hundred: bool, big: u64) -> bool {
+    match tok {
+        Tok::Add(v) if v < 10 => match prev {
+            None | Some(Tok::Big(_)) => true,
+            Some(Tok::Add(p)) => (20..=90).contains(&p) && v > 0,
+            Some(Tok::Mul(_)) => v > 0,
+        },
+        Tok::Add(_) => matches!(prev, None | Some(Tok::Big(_)) | Some(Tok::Mul(_))),
+        Tok::Mul(_) => !hundred && matches!(prev, Some(Tok::Add(p)) if p > 0),
+        Tok::Big(m) => {
+            let after_number = match prev {
+                Some(Tok::Add(p)) => p > 0,
+                Some(Tok::Mul(_)) => true,
+                _ => false,
+            };
+            after_number && (big == 0 || m < big)
+        }
+    }
 }
 
 fn en_tok(word: &str) -> Option<Tok> {

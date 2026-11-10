@@ -407,19 +407,26 @@ Scanners, run at each position of a supported sentence:
   上個月 下個月`, and `today tomorrow yesterday tonight`, and `last|this|next` followed by
   `week|month|year` (ASCII case-insensitive, one space).
 - Dates, all checked for a real calendar day (leap years included):
-  - Chinese: an optional year (four ASCII or Chinese digits then `年`, or `民國N年` which is
-    N+1911), an optional `N月`, and an optional `N日` or `N號`. Year and month need month 1 to 12.
+  - Chinese: `Y年M月D日` (or `號` for `日`), `Y年M月`, `M月D日` (or `號`), and `Y年` alone. `Y` is
+    four ASCII or Chinese digits, or `民國N` (N+1911). Month 1 to 12 is needed. `M月` alone and
+    `D日` alone are not dates. Their digits are numbers: `11月` gives the number 11, and `10日`
+    gives the number 10. `十一月` alone gives nothing, since a Chinese numeral needs a measure word.
   - English: `Month D[st|nd|rd|th][,] YYYY`, `Month YYYY`, `Month D`, `D Month YYYY`, `D Month`.
-    Full names and 3-letter names, and `Sept`.
+    Full names and 3-letter names, and `Sept`. An abbreviated month may have a dot before the day
+    or the year (`Nov. 10`, `10 Nov. 2026`).
   - Numeric: `YYYY-MM-DD`, `YYYY/MM/DD`, `YYYY.MM.DD`, `YYYY-MM` (month 1 to 12). `A/B/YYYY` is
-    read by the one part over 12, which is the day. If both parts are 12 or less the candidate is
-    ambiguous. If both are over 12 there is no entity.
-  - An invalid full date such as `2026-13-45`, `2023年2月29日`, `二〇二三年二月二十九日` or
-    `29 Feb 2023` is not a date, and no shorter date inside it is read instead (`2月29日`,
-    `Feb 2023`). Its digits are numbers.
+    read by the one part over 12, which is the day (`13/4/2026`) or the month (`4/13/2026`). If
+    both parts are 12 or less, both readings are tried: when both are real dates the candidate is
+    ambiguous, when one is it is that date, and when neither is it is not a date. So `3/4/2026` is
+    ambiguous, and `0/5/2026` gives the numbers 0, 5 and 2026. If both are over 12 there is no
+    date; the digits are numbers.
+  - An invalid full date such as `2026-13-45`, `2026/2/30`, `2023年2月29日`, `二〇二三年二月二十九日`
+    or `29 Feb 2023` is not a date, and no shorter date inside it is read instead (`2月29日`,
+    `Feb 2023`, `2/30`). Its digits are numbers.
 - Times: `H:MM` with an optional `:SS`, `H點`, `H點M分`, `H點半`, `H am|a.m.|pm|p.m.` (the space
   before the marker is optional; seconds must be 0 to 59, so `3:30:99 pm` is not a time), `noon` (12:00), and the Chinese markers `凌晨 上午 早上 下午
-  晚上 傍晚 中午` placed before the hour. Hour 0 and hours 13 to 24 with no marker are 24-hour. `12 am` is
+  晚上 傍晚 中午` placed before the hour. The hour must be attached to `點`: `我們15點見` gives the
+  time `15:00`, but `我們 5 點` with a space gives the number 5. Hour 0 and hours 13 to 24 with no marker are 24-hour. `12 am` is
   `00:00` and `12 pm` is `12:00`, but `上午 早上 晚上 傍晚` with 12 are ambiguous. `midnight` is
   ambiguous. An hour of 1 to 12 with no marker is ambiguous, so `3:30` alone is ambiguous. A bare
   `一點` with no marker and no `半` or `M分` is "a bit" (`他有一點累`), so it gives no time and no
@@ -437,6 +444,12 @@ Scanners, run at each position of a supported sentence:
 - A decimal point in Chinese is `點` and then digits read one by one: `三點五公斤` is 3.5 `公斤`,
   `百分之三點五` is 3.5 `%`. `三點`, `三點五分` and `三點半` stay times.
 - A lone English `hundred` is not a number, like a lone `thousand`.
+- English number words follow the order of a number. A word that breaks the order ends the
+  number before it, and the word starts a new number: `two three` gives 2 and 3, `nineteen
+  eighty-four` gives 19 and 84, `twenty twenty` gives 20 and 20, and `two hundred three hundred`
+  gives 200 and 300, and `Five thousand two thousand` gives 5000 and 2000. Valid forms keep their
+  value: `two thousand five hundred` is 2500, `two hundred three` is 203 and `twenty-one` is 21. A lone `one` is not a number, so `one two three` gives an ambiguous `one`
+  and the numbers 2 and 3.
 - Chinese numerals (`〇零一二三四五六七八九十百千萬万億亿兩两`):
   - All digits, at least two: digit by digit (`二〇二六`). 兩 and 两 are not digits here: `一兩天`
     and `兩三個` give no number. A lone `兩個` is 2.
@@ -475,6 +488,13 @@ Known limits of entities:
   layer 1 (a digit must follow the dot).
 - No model. Names come only from `options.names`. Other proper nouns are not entities.
 - Dates, times and numbers without a marker or unit are only numbers or ambiguous.
+- No signs or ranges: `-5` gives the number 5, and `3-5` gives 3 and 5.
+- No weekdays: `Monday` gives nothing.
+- No ordinals: `1st` and `第三` give nothing.
+- Durations written with `年` are numbers: `3年` gives the number 3.
+- No time zones: `3pm EST` gives the time `15:00`, and `EST` gives nothing.
+- Chinese numerals need a measure word: `三十五` gives nothing, and `三十五個` gives 35.
+- `and` ends an English number, so `one hundred and twenty-three` gives 100 and 23.
 - A run of two plain Chinese digits such as `二三個` or `三四個` is read digit by digit (23, 34),
   though `三四個` can be an approximate range. Only a run of 兩/两 or a run with a multiplier is
   refused.

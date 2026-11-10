@@ -125,6 +125,28 @@ const TEXTS: &[&str] = &[
     "See [1] and https://example.com/3 for 2 cats.",
     "# Plan 2026\n\nWe go on 5 May.",
     "こんにちは、3個です。",
+    "10 Nov. 2026 was fine.",
+    "5 Sept. 2026 was fine.",
+    "Due 0/5/2026.",
+    "Due 2026/2/30.",
+    "$",
+    "NT$",
+    "US$",
+    "¥",
+    "€",
+    "£",
+    "百分之",
+    "Pay $",
+    "It costs NT$",
+    "漲了百分之",
+    "Pay `x`$",
+    "I owe you 10€",
+    "I have two three cats.",
+    "In nineteen eighty-four it rained.",
+    "It was twenty twenty.",
+    "They sold two hundred three hundred boxes.",
+    "one two three",
+    "Five thousand two thousand",
 ];
 
 #[test]
@@ -142,6 +164,15 @@ fn en_dates() {
     assert_eq!(ents("Due 2026-11-10."), vec![d("2026-11-10", "2026-11-10")]);
     assert_eq!(ents("We go on 5 May."), vec![d("5 May", "--05-05")]);
     assert_eq!(ents("Sept. 3rd was fine."), vec![d("Sept. 3rd", "--09-03")]);
+    // The dot after an abbreviated month is part of the date, with the year.
+    assert_eq!(
+        ents("10 Nov. 2026 was fine."),
+        vec![d("10 Nov. 2026", "2026-11-10")]
+    );
+    assert_eq!(
+        ents("5 Sept. 2026 was fine."),
+        vec![d("5 Sept. 2026", "2026-09-05")]
+    );
 }
 
 #[test]
@@ -335,6 +366,45 @@ fn ambiguous_numeric_dates() {
         ents("Code 2026-13-45."),
         vec![n("2026", "2026"), n("13", "13"), n("45", "45")]
     );
+    // Neither reading of A/B/YYYY is a real date: a bad date, so its digits are numbers.
+    assert_eq!(
+        ents("Due 0/5/2026."),
+        vec![n("0", "0"), n("5", "5"), n("2026", "2026")]
+    );
+    assert!(ent_unknown("Due 0/5/2026.").is_empty());
+    assert_eq!(
+        ents("Due 5/0/2026."),
+        vec![n("5", "5"), n("0", "0"), n("2026", "2026")]
+    );
+    assert_eq!(
+        ents("Due 12/0/2026."),
+        vec![n("12", "12"), n("0", "0"), n("2026", "2026")]
+    );
+    assert!(ent_unknown("Due 12/0/2026.").is_empty());
+    assert_eq!(
+        ents("Due 0/0/2026."),
+        vec![n("0", "0"), n("0", "0"), n("2026", "2026")]
+    );
+    assert_eq!(
+        ents("Due 13/14/2026."),
+        vec![n("13", "13"), n("14", "14"), n("2026", "2026")]
+    );
+    assert!(ent_unknown("Due 13/14/2026.").is_empty());
+    // An invalid YYYY/MM/DD is a bad date as a whole: no A/B candidate is read inside it.
+    assert_eq!(
+        ents("Due 2026/2/30."),
+        vec![n("2026", "2026"), n("2", "2"), n("30", "30")]
+    );
+    assert!(ent_unknown("Due 2026/2/30.").is_empty());
+    assert_eq!(
+        ents("Due 2026/02/30."),
+        vec![n("2026", "2026"), n("02", "02"), n("30", "30")]
+    );
+    assert_eq!(
+        ents("Due 2026/13/10."),
+        vec![n("2026", "2026"), n("13", "13"), n("10", "10")]
+    );
+    assert!(ent_unknown("Due 2026/13/10.").is_empty());
 }
 
 #[test]
@@ -378,6 +448,8 @@ fn casual_and_mixed() {
     );
     // The `H點` time form needs the hour attached to 點. A spaced 5 is a number (rule a).
     assert_eq!(ents("我們 5 點 見 😋"), vec![n("5", "5")]);
+    assert!(ent_unknown("我們 5 點 見 😋").is_empty());
+    assert_eq!(ents("我們15點見"), vec![t("15點", "15:00")]);
     assert_eq!(ents("lol see u tmrw 5pm"), vec![t("5pm", "17:00")]);
 }
 
@@ -721,4 +793,131 @@ fn review_small_rules() {
     assert!(rows(text, &analyze_names(text, &["\u{0}x"])).is_empty());
     let doc = analyze_names("Bob \u{0} left.", &["\u{0}"]);
     assert!(doc.entities.iter().all(|e| e.kind != EntityKind::Name));
+}
+
+/// A prefix with no number after it, at the end of the text or of a sentence, must not panic.
+#[test]
+fn currency_prefix_at_end_does_not_panic() {
+    for text in [
+        "$",
+        "NT$",
+        "US$",
+        "¥",
+        "€",
+        "£",
+        "百分之",
+        "Pay $",
+        "It costs NT$",
+        "漲了百分之",
+        "Pay `x`$",
+    ] {
+        assert_eq!(ents(text), vec![], "{text:?}");
+    }
+    assert_eq!(ents("I owe you 10€"), vec![n("10", "10")]);
+}
+
+#[test]
+fn english_number_order() {
+    // A word that breaks the order ends the number before it, and the word starts a new number.
+    assert_eq!(
+        ents("I have two three cats."),
+        vec![n("two", "2"), n("three", "3")]
+    );
+    assert_eq!(
+        ents("In nineteen eighty-four it rained."),
+        vec![n("nineteen", "19"), n("eighty-four", "84")]
+    );
+    assert_eq!(
+        ents("It was twenty twenty."),
+        vec![n("twenty", "20"), n("twenty", "20")]
+    );
+    assert_eq!(
+        ents("They sold two hundred three hundred boxes."),
+        vec![n("two hundred", "200"), n("three hundred", "300")]
+    );
+    // `one` alone is ambiguous, so it is an unknown and not a number.
+    assert_eq!(ents("one two three"), vec![n("two", "2"), n("three", "3")]);
+    assert_eq!(ent_unknown("one two three"), vec!["one"]);
+    assert_eq!(
+        ents("Five thousand two thousand"),
+        vec![n("Five thousand", "5000"), n("two thousand", "2000")]
+    );
+    // Valid forms keep their values.
+    assert_eq!(
+        ents("They sold two thousand five hundred people."),
+        vec![n("two thousand five hundred", "2500")]
+    );
+    assert_eq!(
+        ents("one hundred twenty-three people"),
+        vec![n("one hundred twenty-three", "123")]
+    );
+    // `and` ends a number, so this one is two numbers.
+    assert_eq!(
+        ents("one hundred and twenty-three people"),
+        vec![n("one hundred", "100"), n("twenty-three", "23")]
+    );
+    // A unit after hundred is part of the number, but `zero` is not.
+    assert_eq!(
+        ents("two hundred three people"),
+        vec![n("two hundred three", "203")]
+    );
+    assert_eq!(
+        ents("two hundred zero people"),
+        vec![n("two hundred", "200"), n("zero", "0")]
+    );
+}
+
+/// The examples in the docs ("Entities" and "Known limits of entities"), each checked here.
+#[test]
+fn doc_examples() {
+    // Signs and ranges.
+    assert_eq!(ents("It was -5 there."), vec![n("5", "5")]);
+    assert_eq!(ents("Pages 3-5 are dull."), vec![n("3", "3"), n("5", "5")]);
+    // Weekdays, ordinals and time zones.
+    assert_eq!(ents("We meet on Monday."), vec![]);
+    assert_eq!(ents("Chapter 1st edition"), vec![]);
+    assert_eq!(ents("統一第三。"), vec![]);
+    assert_eq!(ents("Call at 3pm EST."), vec![t("3pm", "15:00")]);
+    // Durations with 年 are numbers.
+    assert_eq!(ents("他工作了3年。"), vec![n("3", "3")]);
+    // Chinese numerals need a measure word.
+    assert_eq!(ents("我有三十五。"), vec![]);
+    assert_eq!(ents("我有三十五個。"), vec![n("三十五", "35")]);
+    // Chinese date shapes: Y年M月D日 (or 號), Y年M月, M月D日 (or 號), Y年 alone.
+    assert_eq!(
+        ents("2026年11月10號"),
+        vec![d("2026年11月10號", "2026-11-10")]
+    );
+    assert_eq!(ents("2026年11月"), vec![d("2026年11月", "2026-11")]);
+    assert_eq!(ents("11月10日"), vec![d("11月10日", "--11-10")]);
+    assert_eq!(ents("2026年"), vec![d("2026年", "2026")]);
+    // M月 alone and D日 alone are not dates. ASCII digits are numbers; a Chinese run needs a
+    // measure word, so 十一月 alone gives nothing.
+    assert_eq!(ents("11月"), vec![n("11", "11")]);
+    assert_eq!(ents("10日"), vec![n("10", "10")]);
+    assert_eq!(ents("十一月"), vec![]);
+    assert_eq!(ents("2026年10日"), vec![d("2026年", "2026"), n("10", "10")]);
+    // Ambiguous and bad numeric dates.
+    assert_eq!(
+        ents("Due 13/14/2026."),
+        vec![n("13", "13"), n("14", "14"), n("2026", "2026")]
+    );
+    assert_eq!(
+        ents("Due 2026/2/30."),
+        vec![n("2026", "2026"), n("2", "2"), n("30", "30")]
+    );
+    assert_eq!(
+        ents("Due 2/30/2026."),
+        vec![n("2", "2"), n("30", "30"), n("2026", "2026")]
+    );
+    assert_eq!(ents("Due 3/4/2026."), vec![]);
+    assert_eq!(ent_unknown("Due 3/4/2026."), vec!["3/4/2026"]);
+    assert_eq!(
+        ents("Due 0/5/2026."),
+        vec![n("0", "0"), n("5", "5"), n("2026", "2026")]
+    );
+    // An abbreviated month takes a dot before the day.
+    assert_eq!(ents("It is Nov. 10 now."), vec![d("Nov. 10", "--11-10")]);
+    // The hour is attached to 點 in the H點 form.
+    assert_eq!(ents("我們 5 點 見"), vec![n("5", "5")]);
 }

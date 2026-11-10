@@ -177,7 +177,7 @@ fn counts(chars: &[char]) -> (usize, usize, usize) {
     (han, latin, other)
 }
 
-fn is_han(ch: char) -> bool {
+pub(super) fn is_han(ch: char) -> bool {
     matches!(
         ch,
         '\u{4e00}'..='\u{9fff}'
@@ -242,19 +242,26 @@ fn dots(c: &[char], paragraph: Span, i: usize) -> (Option<(usize, usize)>, usize
         .last()
         .unwrap_or(i);
     let word: String = c[word_start..i].iter().collect();
-    let lower = word.to_ascii_lowercase();
-    let mut letters = word.chars();
-    let single_upper =
-        matches!((letters.next(), letters.next()), (Some(ch), None) if ch.is_ascii_uppercase());
-    if single_upper || ABBREVIATIONS.contains(&lower.as_str()) {
+    if is_abbreviation(&word) {
         return (None, j);
     }
+    let lower = word.to_ascii_lowercase();
     if matches!(lower.as_str(), "etc" | "al")
         && !next_nonspace(c, k, end).is_none_or(char::is_uppercase)
     {
         return (None, j);
     }
     (Some((k, k)), k)
+}
+
+/// A single uppercase ASCII letter, or a listed abbreviation with ASCII case folding. Layer 1
+/// uses it before a dot, and the tokenizer uses it to keep the dot in the token.
+pub(super) fn is_abbreviation(word: &str) -> bool {
+    let lower = word.to_ascii_lowercase();
+    let mut letters = word.chars();
+    let single_upper =
+        matches!((letters.next(), letters.next()), (Some(ch), None) if ch.is_ascii_uppercase());
+    single_upper || ABBREVIATIONS.contains(&lower.as_str())
 }
 
 /// Rule 4: a newline ends the sentence unless it is a soft wrap.

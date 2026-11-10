@@ -1,0 +1,43 @@
+{
+  "coverage": 0.5431,
+  "date": "2026-11-10",
+  "decided": 214,
+  "gold_file": "tests/data/pos_gold.json",
+  "gold_sentences": 63,
+  "gold_sha256": "be5a3632f9e665e6b1a0cf7441660a9d9625a7726012c65a3e0a3a7cb30e9aa6",
+  "gold_tokens": 424,
+  "layer": "pos",
+  "lexicon_entries": 319,
+  "notes": [
+    "The gold set was written by the same author as the lexicon, so it is not independent. The independent gold set comes with issue 28.",
+    "UD is used as the label scheme only. No UD treebank text was used, because of its CC BY-SA licence.",
+    "Measured tokens are only those whose span equals a gold span. Tokens with no tag are counted in token_boundary_match and coverage, not in precision.",
+    "Chinese token_boundary_match is the lowest of the three languages, because jieba word boundaries often differ from the gold segmentation; the Taiwan term list runs before jieba.",
+    "Precision is the share of decided, matched tokens whose tag equals the gold tag."
+  ],
+  "per_lang": {
+    "en": {
+      "coverage": 0.5543,
+      "decided": 97,
+      "gold_tokens": 177,
+      "precision": 1.0,
+      "token_boundary_match": 0.9887
+    },
+    "mixed": {
+      "coverage": 0.5089,
+      "decided": 57,
+      "gold_tokens": 116,
+      "precision": 1.0,
+      "token_boundary_match": 0.9655
+    },
+    "zh": {
+      "coverage": 0.5607,
+      "decided": 60,
+      "gold_tokens": 131,
+      "precision": 1.0,
+      "token_boundary_match": 0.8168
+    }
+  },
+  "precision": 1.0,
+  "token_boundary_match": 0.9292
+}

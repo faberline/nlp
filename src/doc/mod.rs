@@ -1,7 +1,9 @@
 //! Layer 1 of `nlp.doc.v1`. See `docs/doc-v1.md`.
 
 mod opaque;
+mod pos;
 mod segment;
+mod token;
 
 use crate::Span;
 use serde::{Deserialize, Serialize};
@@ -84,6 +86,38 @@ pub struct Segmentation {
     pub opaque: Vec<Opaque>,
 }
 
+/// Universal POS tags (UD v2 names).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum Upos {
+    Adj,
+    Adp,
+    Adv,
+    Aux,
+    Cconj,
+    Det,
+    Intj,
+    Noun,
+    Num,
+    Part,
+    Pron,
+    Propn,
+    Punct,
+    Sconj,
+    Sym,
+    Verb,
+    X,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Token {
+    pub span: Span,
+    pub lang: Lang,
+    pub sentence: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upos: Option<Upos>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Document {
     pub schema: String,
@@ -91,6 +125,7 @@ pub struct Document {
     pub text_sha256: String,
     pub options: Options,
     pub segmentation: Segmentation,
+    pub tokens: Vec<Token>,
     pub unknown: Vec<Unknown>,
 }
 
@@ -106,6 +141,13 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         opaque: found.iter().map(|f| f.item.clone()).collect(),
     };
     let mut unknown = Vec::new();
+    let mut tokens = Vec::new();
+    let inline: Vec<(Span, OpaqueKind)> = seg
+        .opaque
+        .iter()
+        .filter(|o| !matches!(o.kind, OpaqueKind::Heading | OpaqueKind::ListItem))
+        .map(|o| (o.span, o.kind))
+        .collect();
 
     for paragraph in segment::paragraphs(&m) {
         let paragraph_index = seg.paragraphs.len();
@@ -138,8 +180,48 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
                     sentence: sentence_index,
                 });
             }
+
+            if unsupported {
+                continue;
+            }
+            for piece in token::tokenize(&c, span, &inline) {
+                let text: String = c[piece.span.start_char..piece.span.end_char]
+                    .iter()
+                    .collect();
+                let lang = segment::lang(&c, piece.span).0;
+                let undecided = |reason| Unknown {
+                    layer: "pos".to_owned(),
+                    span: piece.span,
+                    reason,
+                };
+                let upos = match pos::tag(&text, lang, piece.opaque) {
+                    pos::Tag::Decided(upos) => Some(upos),
+                    pos::Tag::Ambiguous => {
+                        unknown.push(undecided(Reason::Ambiguous));
+                        None
+                    }
+                    pos::Tag::Missing => {
+                        unknown.push(undecided(Reason::NoModel));
+                        None
+                    }
+                };
+                tokens.push(Token {
+                    span: piece.span,
+                    lang,
+                    sentence: sentence_index,
+                    upos,
+                });
+            }
         }
     }
+
+    unknown.sort_by(|a, b| {
+        (a.span.start_char, a.span.end_char, a.layer.as_str()).cmp(&(
+            b.span.start_char,
+            b.span.end_char,
+            b.layer.as_str(),
+        ))
+    });
 
     Document {
         schema: SCHEMA.to_owned(),
@@ -150,6 +232,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
             .collect(),
         options: options.clone(),
         segmentation: seg,
+        tokens,
         unknown,
     }
 }

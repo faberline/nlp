@@ -516,3 +516,106 @@ Known limits of entities:
 - Layer 7 (Relations) sees only connectors at the start of a clause. See "Relations limits".
 - Layers 1 and 3 are rules only. There is no model, no network and no abbreviation list beyond
   the one given.
+
+## Model runtime
+
+`faberline_nlp::doc::model` loads a trained model from a directory and runs it on the CPU. It is
+the base for layers 4 to 6. The rule layers (1, 2, 3 and 7) do not use it. Nothing here is
+downloaded by cargo, and cargo runs no Python.
+
+### Layout and manifest
+
+A model directory holds `manifest.json` and one subdirectory per model:
+
+```json
+{ "schema": "nlp.models.v1",
+  "models": [ { "id": "test-tiny", "layers": ["test"], "licence": "CC0-1.0",
+                "dir": "test-tiny", "max_len": 64, "pad_id": 0,
+                "model": "model.onnx", "tokenizer": "tokenizer.json", "expected": "expected.json",
+                "files": [ {"path": "model.onnx", "sha256": "<lowercase hex>", "bytes": 8728}, ... ],
+                "receipt": null } ] }
+```
+
+- `model`, `tokenizer` and `expected` must each be listed in `files`. The three paths must
+  differ. Every path is relative to `<dir>` and has no `..` and no root.
+- `max_len` must be from 1 to 4096. It must also equal the input length that the ONNX file
+  declares (the second dimension of its input). A different value is refused at load.
+  An input length that the file does not fix is accepted.
+- `bytes` is optional. When present it is checked too.
+
+### Hash check
+
+`verify` reads the manifest and checks every listed file for existence and sha256 before any model
+file is parsed. With the `onnx` feature, `load` calls `verify` first. Each file is read once. Its
+bytes are hashed and kept in `Verified`, and the parsers read those bytes. Nothing is read from disk
+again, so a file replaced after `verify` has no effect. `Verified` is public (`info` and the bytes of the
+model, tokenizer and expected files). `verify(models_dir, id)` returns it, and
+`load_verified(&Verified, backend)` loads a model from it. `SubwordTokenizer::from_verified(&Verified)`
+builds the tokenizer from it and replaces the earlier `from_file`: no model or tokenizer file is
+read by path any more.
+
+Only regular files are read. A listed file that is a symlink is refused, and so is anything that is
+not a regular file. A model directory that is a symlink is followed. The size from the file metadata
+is compared with `bytes` before the read, so a large or truncated file is refused without being read
+in full.
+
+The errors are `UnknownModel`, `Missing` (a listed file is absent), `HashMismatch` (`file` is
+`path (bytes)` for a byte count mismatch), `Manifest` (bad schema, an absolute path or `..` in `dir`
+or `files`, a `model`, `tokenizer` or `expected` not listed in `files`, two of `model`, `tokenizer`
+and `expected` naming the same path, or a `max_len` outside 1 to 4096) and `Load` (a refused file,
+a `max_len` that differs from the model's input length, or a parse failure). A hash mismatch is
+never reported as `unknown`.
+
+### Backends and the engine choice
+
+`Backend::Onnx` runs on `tract-onnx` (feature `onnx`, which also enables `tokenizers`). tract is
+pure Rust, under MIT or Apache-2.0, and needs no native download at build time. The alternatives
+were rejected for this layer. `ort` links or downloads the ONNX Runtime native library. `candle`
+has no ONNX loader that covers encoders reliably. A Core ML backend (macOS only, `objc2-core-ml`)
+comes in a later issue, because it cannot run in CI.
+
+Tokenization uses `tokenizers` 0.23.2 with its `fancy-regex` feature. `fancy-regex` is pure Rust, so
+no C source is built and no network is needed. The default `onig` feature is off, so `onig` is not
+in the dependency tree. Under `onnx`, `tokenizers` pulls in `rayon` transitively. This layer does not call it: `run` and
+`encode` stay sequential and start no thread pool.
+
+### Determinism
+
+The tract model is loaded with the fixed input shape `[1, max_len]` of `i64`. Each sequence runs
+alone on the CPU in f32. The batch is never run as one tensor, so a batch gives the same bits as
+single runs. Each sequence is padded with `pad_id` to `max_len`, and the output is cut to its own
+length. A sequence longer than `max_len` is `TooLong`. An empty sequence gives shape `[0, labels]`.
+An id outside `0..vocab` is a `Run` error, checked before any sequence runs. `vocab` is the row count
+of the model's one embedding table (`Gather`), read when the model is loaded. Without this check,
+tract would panic. A `pad_id` outside the vocabulary is refused at load.
+
+### Tokenizer offsets
+
+`SubwordTokenizer::encode` adds special tokens (none in the test model) and returns ids with
+spans. The crate reports UTF-8 byte offsets, and `encode` converts them to Unicode scalar offsets of
+the input text. A special token has an empty span. The tokens from one character's bytes all get
+that character's span.
+
+### When no model is available
+
+Without the `onnx` feature, `load` returns `NoBackend` at once and reads no file, so a layer
+reports `no_model`. `verify` works without the feature and gives the integrity errors. With the
+feature, `load` returns `Missing`, `UnknownModel`, `HashMismatch`, `Manifest` or `Load` for a bad
+directory. `ModelError::into_reason` maps `NoBackend`, `UnknownModel` and
+`Missing` to `no_model`. A layer then reports
+`no_model_unknown(layer, span)`, which is `{"layer": ..., "span": ..., "reason": "no_model"}`.
+Other errors are not `unknown`. They are returned to the caller.
+
+To point at a model, pass the directory that holds `manifest.json` to `load`.
+
+### The test model
+
+`models/test-tiny/` is made by `training/make_test_model.py`. Run it by hand on a Mac, inside
+`training/.venv` (packages numpy, onnx and tokenizers). CI never runs it. It is a byte-level BPE
+with no merges (256 byte symbols plus `[PAD]` and `[UNK]`), an embedding of 8 dimensions, and a dense
+layer to 5 labels. The weights are random with a fixed seed. The licence is CC0-1.0. `expected.json`
+holds the ids, spans and logits for 12 fixture texts, computed by numpy. The tests check tract
+against it within 1e-5.
+
+Real models are not in this repository. They will come as GitHub Release assets, pinned in the
+manifest by a script (a later issue).

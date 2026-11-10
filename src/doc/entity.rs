@@ -7,6 +7,7 @@ use super::opaque::Found;
 use super::{Entity, EntityKind, OpaqueKind, Reason, Unknown};
 use crate::Span;
 use aho_corasick::{AhoCorasick, MatchKind};
+use std::cell::RefCell;
 use std::cmp::Reverse;
 
 const SENTINEL: char = '\u{0}';
@@ -158,6 +159,7 @@ const AM_PM: &[(&str, Marker)] = &[
     ("p.m.", Marker::Afternoon(true)),
 ];
 
+#[derive(Clone, Copy)]
 enum Tok {
     Add(u64),
     Mul(u64),
@@ -179,6 +181,9 @@ struct Sent<'a> {
     s: usize,
     e: usize,
     idx: usize,
+    /// Spans of invalid full dates. No date candidate may overlap one, so a shorter date inside
+    /// is not read instead.
+    bad_dates: RefCell<Vec<(usize, usize)>>,
 }
 
 impl Sent<'_> {
@@ -190,7 +195,16 @@ impl Sent<'_> {
     /// True when a Chinese numeral char may start a candidate at `i`: it is not inside a numeral
     /// run and not after 第. Every scanner that starts at a Chinese numeral char checks this.
     fn zh_start_ok(&self, i: usize) -> bool {
-        i == self.s || !(is_zh_num(self.t[i - 1]) || self.t[i - 1] == '第')
+        i == self.s
+            || !(is_zh_num(self.t[i - 1])
+                || self.t[i - 1] == '第'
+                || self.t[i - 1].is_ascii_digit())
+    }
+
+    /// Notes an invalid full date, and returns None for the caller.
+    fn bad_date(&self, start: usize, end: usize) -> Option<Cand> {
+        self.bad_dates.borrow_mut().push((start, end));
+        None
     }
 
     fn cand(
@@ -234,7 +248,7 @@ pub(super) fn extract(
     let names: Vec<&str> = names
         .iter()
         .map(String::as_str)
-        .filter(|n| !n.is_empty() && !n.contains('\n'))
+        .filter(|n| !n.is_empty() && !n.contains(['\n', SENTINEL]))
         .collect();
     let ac = (!names.is_empty()).then(|| {
         AhoCorasick::builder()
@@ -249,10 +263,23 @@ pub(super) fn extract(
             s: span.start_char,
             e: span.end_char,
             idx,
+            bad_dates: RefCell::new(Vec::new()),
         };
+        let mut dead = Vec::new();
         for i in x.s..x.e {
             scan_at(&x, i, &mut cands);
+            if t[i].is_ascii_digit()
+                && x.bound(i)
+                && let Some((None, end)) = mixed_at(&t, i, x.e)
+            {
+                dead.push((i, end));
+            }
         }
+        let bad = x.bad_dates.take();
+        cands.retain(|c| {
+            let hit = |&(s, e): &(usize, usize)| c.span.start_char < e && s < c.span.end_char;
+            !(dead.iter().any(hit) || (c.kind == Some(EntityKind::Date) && bad.iter().any(hit)))
+        });
         emails(&x, &mut cands);
         if let Some(ac) = &ac {
             names_in(ac, &x, &mut cands);
@@ -397,14 +424,17 @@ fn zh_date(x: &Sent, i: usize) -> Option<Cand> {
         }
     }
     let year = year.map(|(y, _)| y);
-    let value = match (year, month, day) {
+    let ok = match (year, month, day) {
         (Some(y), Some(m), Some(d)) => {
-            valid(Some(y), m, d).then(|| format!("{y:04}-{m:02}-{d:02}"))?
+            valid(Some(y), m, d).then(|| format!("{y:04}-{m:02}-{d:02}"))
         }
-        (Some(y), Some(m), None) => (1..=12).contains(&m).then(|| format!("{y:04}-{m:02}"))?,
-        (None, Some(m), Some(d)) => valid(None, m, d).then(|| format!("--{m:02}-{d:02}"))?,
-        (Some(y), None, None) => format!("{y:04}"),
+        (Some(y), Some(m), None) => (1..=12).contains(&m).then(|| format!("{y:04}-{m:02}")),
+        (None, Some(m), Some(d)) => valid(None, m, d).then(|| format!("--{m:02}-{d:02}")),
+        (Some(y), None, None) => Some(format!("{y:04}")),
         _ => return None,
+    };
+    let Some(value) = ok else {
+        return x.bad_date(i, end);
     };
     Some(x.cand(i, end, Some(EntityKind::Date), Some(value), None))
 }
@@ -550,15 +580,16 @@ fn numeric_date(x: &Sent, i: usize) -> Option<Cand> {
 }
 
 fn full(x: &Sent, start: usize, end: usize, year: u64, month: u64, day: u64) -> Option<Cand> {
-    valid(Some(year), month, day).then(|| {
-        x.cand(
-            start,
-            end,
-            Some(EntityKind::Date),
-            Some(format!("{year:04}-{month:02}-{day:02}")),
-            None,
-        )
-    })
+    if !valid(Some(year), month, day) {
+        return x.bad_date(start, end);
+    }
+    Some(x.cand(
+        start,
+        end,
+        Some(EntityKind::Date),
+        Some(format!("{year:04}-{month:02}-{day:02}")),
+        None,
+    ))
 }
 
 fn valid(year: Option<u64>, month: u64, day: u64) -> bool {
@@ -629,6 +660,14 @@ fn clock(x: &Sent, start: usize, h0: usize, mut marker: Option<Marker>) -> Optio
             && t[end + 1..end + 3].iter().all(char::is_ascii_digit)
             && !(end + 3 < e && t[end + 3].is_ascii_digit())
         {
+            let second: u64 = t[end + 1..end + 3]
+                .iter()
+                .collect::<String>()
+                .parse()
+                .ok()?;
+            if second > 59 {
+                return None;
+            }
             end += 3;
         }
         if let Some((m, after)) = after_marker(t, end, e) {
@@ -637,6 +676,8 @@ fn clock(x: &Sent, start: usize, h0: usize, mut marker: Option<Marker>) -> Optio
         }
     } else if k < e && (t[k] == '點' || t[k] == '点') {
         end = k + 1;
+        // `一點` alone with no marker is "a bit" (`有一點累`), not one o'clock.
+        let a_bit = marker.is_none() && h0 + 1 == k && t[h0] == '一';
         if end < e && t[end] == '半' {
             minute = 30;
             end += 1;
@@ -646,6 +687,8 @@ fn clock(x: &Sent, start: usize, h0: usize, mut marker: Option<Marker>) -> Optio
         {
             minute = m;
             end = j + 1;
+        } else if a_bit {
+            return None;
         }
     } else {
         let (m, after) = after_marker(t, k, e)?;
@@ -772,6 +815,14 @@ fn number_at(x: &Sent, i: usize) -> Option<Num> {
         if !x.bound(i) {
             return None;
         }
+        if let Some((value, end)) = mixed_at(t, i, e) {
+            // None is a run that cannot be read: no number, and extract drops what is inside.
+            return Some(Num {
+                value: value?,
+                end,
+                bare_one: false,
+            });
+        }
         let (value, end) = ascii_number_at(t, i, e);
         return Some(Num {
             value,
@@ -786,6 +837,19 @@ fn number_at(x: &Sent, i: usize) -> Option<Num> {
         }
         let end = zh_run_end(t, i, e);
         let value = zh_value(&t[i..end])?;
+        // `三點五` is 3.5: 點 and then Chinese digits, read one by one.
+        if let Some(frac_end) = zh_fraction_end(t, end, e) {
+            let frac: String = t[end + 1..frac_end]
+                .iter()
+                .filter_map(|&ch| zh_digit(ch))
+                .map(|d| char::from(b'0' + d as u8))
+                .collect();
+            return Some(Num {
+                value: format!("{value}.{frac}"),
+                end: frac_end,
+                bare_one: false,
+            });
+        }
         return Some(Num {
             value: value.to_string(),
             end,
@@ -798,7 +862,68 @@ fn number_at(x: &Sent, i: usize) -> Option<Num> {
     None
 }
 
-/// `1,000`, `3.5`, optionally followed by 萬 or 億 (`3萬`, `1.5億`).
+/// The end of `點` and one or more digits (`〇零一二三四五六七八九`) at `j`. 兩 is not a digit here.
+fn zh_fraction_end(t: &[char], j: usize, e: usize) -> Option<usize> {
+    if j >= e || !matches!(t[j], '點' | '点') {
+        return None;
+    }
+    let end = (j + 1..e)
+        .find(|&k| zh_digit(t[k]).is_none() || matches!(t[k], '兩' | '两'))
+        .unwrap_or(e);
+    (end > j + 1).then_some(end)
+}
+
+/// An ASCII number with a Chinese numeral char right after it: `5千`, `3萬5千`, `1.5億`,
+/// `3千萬`. Returns the end of the whole run, and its value when the rule reads it. The rule is
+/// `<ascii number>` then a chain of numerals that ends in a multiplier (`十百千萬億`). A decimal
+/// may have one multiplier only. Anything else (`3萬5`, `3五千`, `3萬4萬`) has no value.
+/// None when no numeral follows the ASCII number.
+fn mixed_at(t: &[char], i: usize, e: usize) -> Option<(Option<String>, usize)> {
+    let (value, j) = ascii_number_at(t, i, e);
+    if j >= e || !is_zh_num(t[j]) {
+        return None;
+    }
+    let (mut toks, mut zeros) = (Vec::new(), Vec::new());
+    let mut k = j;
+    while k < e {
+        if let Some(tok) = zh_tok(t[k]) {
+            zeros.push(matches!(t[k], '零' | '〇'));
+            toks.push(tok);
+            k += 1;
+        } else if t[k].is_ascii_digit() {
+            let m = digits_end(t, k, e);
+            let Ok(n) = t[k..m].iter().collect::<String>().parse() else {
+                return Some((None, m));
+            };
+            zeros.push(false);
+            toks.push(Tok::Add(n));
+            k = m;
+        } else {
+            break;
+        }
+    }
+    let ends_in_multiplier = matches!(toks.last(), Some(Tok::Mul(_) | Tok::Big(_)));
+    let read = if !ends_in_multiplier {
+        None
+    } else if value.contains('.') {
+        match toks[..] {
+            [Tok::Mul(m) | Tok::Big(m)] => Some(shift(&value, m.ilog10() as usize)),
+            _ => None,
+        }
+    } else {
+        let first = value.parse().ok();
+        first
+            .and_then(|n| {
+                toks.insert(0, Tok::Add(n));
+                zeros.insert(0, false);
+                ordered_value(&toks, &zeros)
+            })
+            .map(|v| v.to_string())
+    };
+    Some((read, k))
+}
+
+/// `1,000`, `3.5`.
 fn ascii_number_at(t: &[char], i: usize, e: usize) -> (String, usize) {
     let mut j = digits_end(t, i, e);
     let mut out: String = t[i..j].iter().collect();
@@ -815,16 +940,6 @@ fn ascii_number_at(t: &[char], i: usize, e: usize) -> (String, usize) {
         out.push('.');
         out.extend(&t[j + 1..k]);
         j = k;
-    }
-    if j < e {
-        let exp = match t[j] {
-            '萬' | '万' => Some(4),
-            '億' | '亿' => Some(8),
-            _ => None,
-        };
-        if let Some(k) = exp {
-            return (shift(&out, k), j + 1);
-        }
     }
     (out, j)
 }
@@ -864,7 +979,8 @@ fn en_number_at(t: &[char], i: usize, e: usize) -> Option<Num> {
             break;
         }
     }
-    if toks.is_empty() {
+    // A leading `hundred` is not a number, like a leading `thousand` (combine rejects that one).
+    if matches!(toks.first(), None | Some(Tok::Mul(_))) {
         return None;
     }
     let value = combine(&toks)?;
@@ -918,7 +1034,12 @@ fn zh_digit(ch: char) -> Option<u64> {
 /// Digit-by-digit when every char is a digit and there are at least two, otherwise the standard
 /// reading (`一百零五` is 105, `三萬五千` is 35000).
 fn zh_value(run: &[char]) -> Option<u64> {
-    if run.len() >= 2 && run.iter().all(|&ch| zh_digit(ch).is_some()) {
+    // 兩 and 两 are a count (`一兩天`, `兩三個`), so they are never read digit by digit.
+    if run.len() >= 2
+        && run
+            .iter()
+            .all(|&ch| zh_digit(ch).is_some() && !matches!(ch, '兩' | '两'))
+    {
         let digits: String = run
             .iter()
             .filter_map(|&ch| zh_digit(ch))
@@ -927,6 +1048,13 @@ fn zh_value(run: &[char]) -> Option<u64> {
         return digits.parse().ok();
     }
     let toks: Vec<Tok> = run.iter().map(|&ch| zh_tok(ch)).collect::<Option<_>>()?;
+    let zeros: Vec<bool> = run.iter().map(|&ch| matches!(ch, '零' | '〇')).collect();
+    ordered_value(&toks, &zeros)
+}
+
+/// The value of numeral tokens, or None when their order is not a number. `zeros[k]` is true
+/// when token `k` is 零 or 〇.
+fn ordered_value(toks: &[Tok], zeros: &[bool]) -> Option<u64> {
     if matches!(toks.first()?, Tok::Big(_)) {
         return None;
     }
@@ -939,11 +1067,7 @@ fn zh_value(run: &[char]) -> Option<u64> {
     let mut last_big: Option<u64> = None;
     for (k, tok) in toks.iter().enumerate() {
         match tok {
-            Tok::Add(_)
-                if k > 0
-                    && matches!(toks[k - 1], Tok::Add(_))
-                    && !matches!(run[k - 1], '零' | '〇') =>
-            {
+            Tok::Add(_) if k > 0 && matches!(toks[k - 1], Tok::Add(_)) && !zeros[k - 1] => {
                 return None;
             }
             Tok::Mul(m) => {
@@ -962,7 +1086,7 @@ fn zh_value(run: &[char]) -> Option<u64> {
             Tok::Add(_) => {}
         }
     }
-    combine(&toks)
+    combine(toks)
 }
 
 fn zh_tok(ch: char) -> Option<Tok> {

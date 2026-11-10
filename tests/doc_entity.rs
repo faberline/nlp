@@ -638,3 +638,87 @@ fn entity_receipt() {
     );
     assert!(recall.is_none_or(|r| r >= 0.8), "recall {recall:?}");
 }
+
+#[test]
+fn review_liang_is_not_a_digit() {
+    assert_eq!(ents("我們要一兩天才能完成。"), vec![]);
+    assert_eq!(ents("來了兩三個人。"), vec![]);
+    // Alone, 兩 is still 2.
+    assert_eq!(ents("來了兩個人。"), vec![n("兩", "2")]);
+    // Three or more plain digits stay digit by digit.
+    assert_eq!(ents("二〇二三個"), vec![n("二〇二三", "2023")]);
+}
+
+#[test]
+fn review_mixed_ascii_and_chinese_multiplier() {
+    assert_eq!(ents("它值5千元。"), vec![qty("5千元", "5000", "元")]);
+    assert_eq!(ents("它值3萬5千元。"), vec![qty("3萬5千元", "35000", "元")]);
+    assert_eq!(ents("有3千萬人。"), vec![n("3千萬", "30000000")]);
+    assert_eq!(ents("他買了3萬個蘋果。"), vec![n("3萬", "30000")]);
+    assert_eq!(
+        ents("它值1.5億元。"),
+        vec![qty("1.5億元", "150000000", "元")]
+    );
+    // A run that cannot be read gives no number, and never a bare multiplier.
+    assert_eq!(ents("它值3萬5元。"), vec![]);
+    assert_eq!(ents("它值3萬4萬元。"), vec![]);
+    assert_eq!(ents("它值3五千元。"), vec![]);
+}
+
+#[test]
+fn review_invalid_full_date_has_no_fallback() {
+    assert_eq!(ents("二〇二三年二月二十九日"), vec![]);
+    assert_eq!(
+        ents("2023年2月29日"),
+        vec![n("2023", "2023"), n("2", "2"), n("29", "29")]
+    );
+    assert!(
+        ents("29 Feb 2023 was it.")
+            .iter()
+            .all(|e| e.0 != EntityKind::Date)
+    );
+    assert!(
+        ents("Feb 29, 2023 was it.")
+            .iter()
+            .all(|e| e.0 != EntityKind::Date)
+    );
+    assert_eq!(
+        ents("2024年2月29日"),
+        vec![d("2024年2月29日", "2024-02-29")]
+    );
+}
+
+#[test]
+fn review_zh_decimal_point() {
+    assert_eq!(
+        ents("增加了百分之三點五。"),
+        vec![qty("百分之三點五", "3.5", "%")]
+    );
+    assert_eq!(
+        ents("重三點五公斤。"),
+        vec![qty("三點五公斤", "3.5", "公斤")]
+    );
+    assert_eq!(ents("三點五個"), vec![n("三點五", "3.5")]);
+    // Time readings stay.
+    assert_eq!(ent_unknown("三點見。"), vec!["三點"]);
+    assert_eq!(ent_unknown("三點半見。"), vec!["三點半"]);
+    assert_eq!(ent_unknown("三點五分見。"), vec!["三點五分"]);
+    assert_eq!(ents("下午三點五分見。"), vec![t("下午三點五分", "15:05")]);
+    // A bit.
+    assert_eq!(ents("他有一點累。"), vec![]);
+    assert_eq!(ent_unknown("他有一點累。"), Vec::<String>::new());
+}
+
+#[test]
+fn review_small_rules() {
+    assert!(ents("3:30:99 pm").iter().all(|e| e.0 != EntityKind::Time));
+    assert_eq!(ents("3:30:59 pm"), vec![t("3:30:59 pm", "15:30")]);
+    assert_eq!(ents("hundred dogs"), vec![]);
+    assert_eq!(ents("two hundred dogs"), vec![n("two hundred", "200")]);
+    // A name with NUL is ignored.
+    let text = "Use `x` here.";
+    assert!(rows(text, &analyze_names(text, &["\u{0}"])).is_empty());
+    assert!(rows(text, &analyze_names(text, &["\u{0}x"])).is_empty());
+    let doc = analyze_names("Bob \u{0} left.", &["\u{0}"]);
+    assert!(doc.entities.iter().all(|e| e.kind != EntityKind::Name));
+}

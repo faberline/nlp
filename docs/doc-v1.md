@@ -414,20 +414,32 @@ Scanners, run at each position of a supported sentence:
   - Numeric: `YYYY-MM-DD`, `YYYY/MM/DD`, `YYYY.MM.DD`, `YYYY-MM` (month 1 to 12). `A/B/YYYY` is
     read by the one part over 12, which is the day. If both parts are 12 or less the candidate is
     ambiguous. If both are over 12 there is no entity.
-  - An invalid full date such as `2026-13-45` is not a date. Its digits are numbers.
+  - An invalid full date such as `2026-13-45`, `2023年2月29日`, `二〇二三年二月二十九日` or
+    `29 Feb 2023` is not a date, and no shorter date inside it is read instead (`2月29日`,
+    `Feb 2023`). Its digits are numbers.
 - Times: `H:MM` with an optional `:SS`, `H點`, `H點M分`, `H點半`, `H am|a.m.|pm|p.m.` (the space
-  before the marker is optional), `noon` (12:00), and the Chinese markers `凌晨 上午 早上 下午
+  before the marker is optional; seconds must be 0 to 59, so `3:30:99 pm` is not a time), `noon` (12:00), and the Chinese markers `凌晨 上午 早上 下午
   晚上 傍晚 中午` placed before the hour. Hour 0 and hours 13 to 24 with no marker are 24-hour. `12 am` is
   `00:00` and `12 pm` is `12:00`, but `上午 早上 晚上 傍晚` with 12 are ambiguous. `midnight` is
-  ambiguous. An hour of 1 to 12 with no marker is ambiguous, so `3:30` alone is ambiguous.
+  ambiguous. An hour of 1 to 12 with no marker is ambiguous, so `3:30` alone is ambiguous. A bare
+  `一點` with no marker and no `半` or `M分` is "a bit" (`他有一點累`), so it gives no time and no
+  unknown.
 - Quantities: a number, then optionally one space, then a unit. Units such as `kg km 分鐘 天
   days` need a space or none. `g m l` are units only when attached (`5m`, not `5 m`). A currency
   prefix is `US$ NT$ $ ¥ € £`, and `百分之N` is a percent. A bare English `one` is not a
   quantity.
 - Numbers: ASCII digits with comma groups of exactly three digits and an optional decimal part.
-  `萬 万` and `億 亿` multiply the number before them (`3萬`, `1.5億`).
+  `萬 万` and `億 亿` multiply the number before them (`3萬`, `1.5億`). An ASCII number followed
+  by Chinese numerals is read as `<number><chain>` where the chain ends in a multiplier: `5千元`
+  is 5000, `3萬5千元` is 35000, `3千萬人` is 30000000. A decimal takes one multiplier. If the run
+  cannot be read (`3萬5元`, `3五千`, `3萬4萬`), the whole run gives no number, and no bare
+  multiplier from it is a number either.
+- A decimal point in Chinese is `點` and then digits read one by one: `三點五公斤` is 3.5 `公斤`,
+  `百分之三點五` is 3.5 `%`. `三點`, `三點五分` and `三點半` stay times.
+- A lone English `hundred` is not a number, like a lone `thousand`.
 - Chinese numerals (`〇零一二三四五六七八九十百千萬万億亿兩两`):
-  - All digits, at least two: digit by digit (`二〇二六`).
+  - All digits, at least two: digit by digit (`二〇二六`). 兩 and 两 are not digits here: `一兩天`
+    and `兩三個` give no number. A lone `兩個` is 2.
   - Otherwise the standard reading (`一百零五`, `一百〇五`, `三萬五千`, `三億五千萬`).
   - A multiplier with no digit before it reads as 1 (`十` is 10, `百` is 100).
   - A run cannot start with 萬 or 億, and `三億萬` is not a number.
@@ -444,7 +456,8 @@ Scanners, run at each position of a supported sentence:
   label is 2 or more ASCII letters.
 - URL: taken from the opaque `url` spans.
 - Name: each entry of `options.names`, matched exactly and case-sensitively, leftmost-longest. An
-  ASCII name must not touch an ASCII letter or digit on either side.
+  ASCII name must not touch an ASCII letter or digit on either side. An entry that contains a
+  line feed or NUL (`\u{0}`) is ignored.
 
 Overlap: entities never start or end inside an inline opaque span. Candidates are sorted by
 start, then longer first, then by priority: `name` 0, `email` and `url` 1, `quantity` 2, `time`
@@ -462,6 +475,9 @@ Known limits of entities:
   layer 1 (a digit must follow the dot).
 - No model. Names come only from `options.names`. Other proper nouns are not entities.
 - Dates, times and numbers without a marker or unit are only numbers or ambiguous.
+- A run of two plain Chinese digits such as `二三個` or `三四個` is read digit by digit (23, 34),
+  though `三四個` can be an approximate range. Only a run of 兩/两 or a run with a multiplier is
+  refused.
 - The gold file `tests/data/entity_gold.json` was written with the same rules, so the receipt
   `docs/receipts/entities-2026-11-10.json` is a regression check, not an independent measure.
 

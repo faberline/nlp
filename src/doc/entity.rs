@@ -278,10 +278,17 @@ pub(super) fn extract(
         let bad = x.bad_dates.take();
         cands.retain(|c| {
             let hit = |&(s, e): &(usize, usize)| c.span.start_char < e && s < c.span.end_char;
-            // Inside an invalid full date, no date and no undecided candidate (such as `2/30`)
-            // is read. Its digits stay numbers.
-            let dated = matches!(c.kind, Some(EntityKind::Date) | None);
-            !(dead.iter().any(hit) || (dated && bad.iter().any(hit)))
+            // Inside an invalid full date, no date and no undecided candidate inside it (such as
+            // `2/30`) is read, and its digits stay numbers. A date that overlaps the bad date is
+            // dropped. An undecided candidate is dropped only when it lies fully inside the bad
+            // date, so `9:45` before `Jan 2027` stays an unknown.
+            let inside = |&(s, e): &(usize, usize)| s <= c.span.start_char && c.span.end_char <= e;
+            let dated = match c.kind {
+                Some(EntityKind::Date) => bad.iter().any(hit),
+                None => bad.iter().any(inside),
+                Some(_) => false,
+            };
+            !(dead.iter().any(hit) || dated)
         });
         emails(&x, &mut cands);
         if let Some(ac) = &ac {
@@ -997,9 +1004,14 @@ fn en_number_at(t: &[char], i: usize, e: usize) -> Option<Num> {
         if !en_follows(toks.last().copied(), tok, hundred, big) {
             // A multiplier that cannot join this number belongs to the words right before it
             // (`two hundred three hundred` is 200 and 300), so those words are given back.
-            if !matches!(tok, Tok::Add(_))
-                && let Some(keep) = toks.iter().rposition(|k| !matches!(k, Tok::Add(_)))
-            {
+            // A breaking `thousand`, `million` or `billion` takes back everything after the
+            // last such word, so `Five thousand two hundred thousand` is 5000 and 200000.
+            let keep = match tok {
+                Tok::Big(_) => toks.iter().rposition(|k| matches!(k, Tok::Big(_))),
+                Tok::Mul(_) => toks.iter().rposition(|k| !matches!(k, Tok::Add(_))),
+                Tok::Add(_) => None,
+            };
+            if let Some(keep) = keep {
                 toks.truncate(keep + 1);
                 words.truncate(keep + 1);
                 ends.truncate(keep + 1);

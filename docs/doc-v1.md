@@ -422,7 +422,9 @@ Scanners, run at each position of a supported sentence:
     date; the digits are numbers.
   - An invalid full date such as `2026-13-45`, `2026/2/30`, `2023年2月29日`, `二〇二三年二月二十九日`
     or `29 Feb 2023` is not a date, and no shorter date inside it is read instead (`2月29日`,
-    `Feb 2023`, `2/30`). Its digits are numbers.
+    `Feb 2023`, `2/30`). Its ASCII digits are numbers (`2023年2月29日` gives 2023, 2 and 29).
+    A date written in Chinese numerals such as `二〇二三年二月二十九日` gives nothing, since a
+    Chinese numeral needs a measure word.
 - Times: `H:MM` with an optional `:SS`, `H點`, `H點M分`, `H點半`, `H am|a.m.|pm|p.m.` (the space
   before the marker is optional; seconds must be 0 to 59, so `3:30:99 pm` is not a time), `noon` (12:00), and the Chinese markers `凌晨 上午 早上 下午
   晚上 傍晚 中午` placed before the hour. The hour must be attached to `點`: `我們15點見` gives the
@@ -447,9 +449,12 @@ Scanners, run at each position of a supported sentence:
 - English number words follow the order of a number. A word that breaks the order ends the
   number before it, and the word starts a new number: `two three` gives 2 and 3, `nineteen
   eighty-four` gives 19 and 84, `twenty twenty` gives 20 and 20, and `two hundred three hundred`
-  gives 200 and 300, and `Five thousand two thousand` gives 5000 and 2000. Valid forms keep their
-  value: `two thousand five hundred` is 2500, `two hundred three` is 203 and `twenty-one` is 21. A lone `one` is not a number, so `one two three` gives an ambiguous `one`
-  and the numbers 2 and 3.
+  gives 200 and 300, and `Five thousand two thousand` gives 5000 and 2000. When the breaking word
+  is `hundred`, the unit words right before it start the new number; when it is `thousand`,
+  `million` or `billion`, all the words after the last `thousand`, `million` or `billion` do:
+  `Five thousand two hundred thousand` gives 5000 and 200000. Valid forms keep their value:
+  `two thousand five hundred` is 2500, `two hundred three` is 203 and `twenty-one` is 21. A lone
+  `one` is not a number, so `one two three` gives an ambiguous `one` and the numbers 2 and 3.
 - Chinese numerals (`〇零一二三四五六七八九十百千萬万億亿兩两`):
   - All digits, at least two: digit by digit (`二〇二六`). 兩 and 两 are not digits here: `一兩天`
     and `兩三個` give no number. A lone `兩個` is 2.

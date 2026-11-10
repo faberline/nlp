@@ -147,6 +147,11 @@ const TEXTS: &[&str] = &[
     "They sold two hundred three hundred boxes.",
     "one two three",
     "Five thousand two thousand",
+    "Five thousand two hundred thousand",
+    "five hundred thousand two hundred thousand",
+    "one million two hundred million",
+    "Updated 9:45 Jan 2027.",
+    "Call at 3:30 Feb 2026 please.",
 ];
 
 #[test]
@@ -405,6 +410,20 @@ fn ambiguous_numeric_dates() {
         vec![n("2026", "2026"), n("13", "13"), n("10", "10")]
     );
     assert!(ent_unknown("Due 2026/13/10.").is_empty());
+}
+
+#[test]
+fn ambiguous_time_before_month() {
+    // Only a candidate that lies fully inside a bad date is dropped: the time is an unknown.
+    assert_eq!(ent_unknown("Updated 9:45 Jan 2027."), vec!["9:45"]);
+    assert_eq!(ents("Updated 9:45 Jan 2027."), vec![n("2027", "2027")]);
+    assert_eq!(ent_unknown("Call at 3:30 Feb 2026 please."), vec!["3:30"]);
+    // The bad date `2026/2/30` still gives its digits as numbers and no unknown.
+    assert_eq!(
+        ents("Due 2026/2/30."),
+        vec![n("2026", "2026"), n("2", "2"), n("30", "30")]
+    );
+    assert!(ent_unknown("Due 2026/2/30.").is_empty());
 }
 
 #[test]
@@ -842,6 +861,38 @@ fn english_number_order() {
         ents("Five thousand two thousand"),
         vec![n("Five thousand", "5000"), n("two thousand", "2000")]
     );
+    // When the breaking word is thousand, million or billion, the words after the last such
+    // word start the new number.
+    assert_eq!(
+        ents("Five thousand two hundred thousand"),
+        vec![
+            n("Five thousand", "5000"),
+            n("two hundred thousand", "200000")
+        ]
+    );
+    assert_eq!(
+        ents("five hundred thousand two hundred thousand"),
+        vec![
+            n("five hundred thousand", "500000"),
+            n("two hundred thousand", "200000")
+        ]
+    );
+    assert_eq!(
+        ents("one million two hundred million"),
+        vec![
+            n("one million", "1000000"),
+            n("two hundred million", "200000000")
+        ]
+    );
+    // These stay one number each.
+    assert_eq!(
+        ents("three hundred thousand two hundred"),
+        vec![n("three hundred thousand two hundred", "300200")]
+    );
+    assert_eq!(
+        ents("two million three hundred thousand"),
+        vec![n("two million three hundred thousand", "2300000")]
+    );
     // Valid forms keep their values.
     assert_eq!(
         ents("They sold two thousand five hundred people."),
@@ -920,4 +971,10 @@ fn doc_examples() {
     assert_eq!(ents("It is Nov. 10 now."), vec![d("Nov. 10", "--11-10")]);
     // The hour is attached to 點 in the H點 form.
     assert_eq!(ents("我們 5 點 見"), vec![n("5", "5")]);
+    // Chinese numerals in a full date need a measure word; ASCII digits are numbers.
+    assert_eq!(ents("二〇二三年二月二十九日"), vec![]);
+    assert_eq!(
+        ents("2023年2月29日"),
+        vec![n("2023", "2023"), n("2", "2"), n("29", "29")]
+    );
 }

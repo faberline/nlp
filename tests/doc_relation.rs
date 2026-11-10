@@ -494,9 +494,13 @@ fn chains_scope_and_opaque() {
     // The unsupported sentence starts with the connector: no relation and no unknown.
     let text = "It works. But これはテストです。";
     let doc = analyze(text);
-    assert!(doc.unknown.iter().any(|u| u.layer == "segmentation"
-        && u.reason == Reason::UnsupportedLanguage
-        && u.span == doc.segmentation.sentences[1].span));
+    let unsupported: Vec<Span> = doc
+        .unknown
+        .iter()
+        .filter(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
+        .map(|u| u.span)
+        .collect();
+    assert_eq!(unsupported, [doc.segmentation.sentences[1].span]);
     assert!(rels(text).is_empty());
     assert!(rel_unknown(text).is_empty());
 
@@ -665,6 +669,10 @@ const CASES: &[&str] = &[
     "We ran it. (But 2020) says it failed.",
     "If it rains, then, we stay.",
     "If it rains, then.",
+    // second review
+    "If it rains. Then we stay home.",
+    "如果明天下雨。Then we stay home.",
+    "先洗手，然後，但是吃飯。",
 ];
 
 /// Brackets and quotes that may stand before a connector inside a clause.
@@ -965,8 +973,28 @@ fn review_correlate_is_a_whole_word() {
     );
     assert!(rels("先走吧，再見。").is_empty());
     // The real correlates still pair.
-    assert_eq!(rels("如果明天有空，便來找你。")[0].3.as_deref(), Some("便"));
-    assert_eq!(rels("先走吧，再去找你。")[0].3.as_deref(), Some("再"));
+    assert_eq!(
+        rels("如果明天有空，便來找你。"),
+        [rel(
+            K::Condition,
+            L::Clause,
+            "如果",
+            Some("便"),
+            "如果明天有空",
+            "便來找你。"
+        )]
+    );
+    assert_eq!(
+        rels("先走吧，再去找你。"),
+        [rel(
+            K::Sequence,
+            L::Clause,
+            "先",
+            Some("再"),
+            "先走吧",
+            "再去找你。"
+        )]
+    );
 }
 
 #[test]
@@ -1038,4 +1066,31 @@ fn review_bare_correlate_takes_the_next_clause() {
     let text = "If it rains, then.";
     assert!(rels(text).is_empty());
     assert_eq!(rel_unknown(text), ["If"]);
+}
+
+#[test]
+fn review_then_after_an_if_sentence_is_not_a_sequence() {
+    // `then` that starts the next sentence is the correlate of the `if` before it: no relation.
+    // The `if` has no argument, so it is an unknown.
+    assert!(rels("If it rains. Then we stay home.").is_empty());
+    assert_eq!(rel_unknown("If it rains. Then we stay home."), ["If"]);
+    assert!(rels("如果明天下雨。Then we stay home.").is_empty());
+    assert_eq!(rel_unknown("如果明天下雨。Then we stay home."), ["如果"]);
+}
+
+#[test]
+fn review_bare_correlate_before_another_connector() {
+    // The bare `然後` is arg1 of `但是`; the opener `先` gives nothing.
+    assert_eq!(
+        rels("先洗手，然後，但是吃飯。"),
+        [rel(
+            K::Contrast,
+            L::Clause,
+            "但是",
+            None,
+            "然後",
+            "但是吃飯。"
+        )]
+    );
+    assert!(rel_unknown("先洗手，然後，但是吃飯。").is_empty());
 }

@@ -128,6 +128,22 @@ impl Pass<'_> {
         self.seg.clauses[i].span
     }
 
+    /// Whether the last clause of sentence `s` opens with an `if` opener.
+    fn last_opens_if(&self, s: usize) -> bool {
+        self.seg
+            .clauses
+            .iter()
+            .rposition(|c| c.sentence == s)
+            .is_some_and(|i| {
+                opens_if(
+                    self.c,
+                    &self.seg.opaque,
+                    self.clause(i),
+                    self.seg.sentences[s].span.end_char,
+                )
+            })
+    }
+
     fn unknown(&mut self, span: Span) {
         self.unknown.push(Unknown {
             layer: "relations".to_owned(),
@@ -183,6 +199,8 @@ impl Pass<'_> {
                             sentence.end_char,
                         ) => {}
                 Back(kind) if k == 0 => match prev {
+                    // `then` that starts a sentence after an `if` clause is that `if`'s correlate.
+                    Some(p) if is_then(self.c, conn) && self.last_opens_if(p) => {}
                     Some(p) => {
                         let a = self.seg.sentences[p].span;
                         self.emit(kind, Se, conn, None, a, sentence);

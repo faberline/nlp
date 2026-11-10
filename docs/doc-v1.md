@@ -268,8 +268,8 @@ follows). Multi-word English entries use exactly one space.
 | cause (result) | arg2 | 所以 因此 | so, therefore, thus |
 | contrast | arg2 | 但是 然而 可是 但 | but, however |
 | parallel | arg2 | 另一方面 另外 此外 而且 並且 同樣 | also, moreover, furthermore, likewise, similarly, in addition |
-| cause (reason) | arg1 | 因為 (correlate 所以 因此 so therefore thus) | because (correlate so therefore thus) |
-| condition | arg1 | 如果 假如 要是 若 (correlate 就 那麼 便) | if (correlate then) |
+| cause (reason) | arg1 | 因為 (correlate 所以 因此 so therefore thus) | because (correlate 所以 因此 so therefore thus) |
+| condition | arg1 | 如果 假如 要是 若 (correlate 就 那麼 便 then) | if (correlate 就 那麼 便 then) |
 | sequence | arg1 | 先 (correlate 然後 接著 再 隨後) | none |
 | parallel | arg1 | 一方面 (correlate 另一方面) | none |
 
@@ -305,7 +305,9 @@ Special cases:
 - `however` counts only when `,` follows it (`However,`), not in `However hard he tried`.
 - `so` is not a connector before `far much many long as that good bad little few called on`.
   `So,` (a comma follows) gives an `unknown` and no relation.
-- `then` after a clause that starts with `if` is the correlate of that `if`, not a sequence.
+- `then` after a clause that starts with `if` is the correlate of that `if`, not a sequence. This
+  also holds when `then` starts the next sentence: in `If it rains. Then we stay home.` the `then`
+  gives nothing, and the `if` gives an `unknown`.
 
 ### Unknown
 
@@ -329,11 +331,16 @@ A new paragraph also breaks the sentence relation.
 - Only one unit before (or after) a connector is its argument. No implicit relations: a relation
   needs a connector.
 - No `雖然…但是` or `although` concession pair beyond the contrast of `但是`.
-- Simplified Chinese connectors are not matched. zh `又`, `而`, `並` alone are not connectors.
+- Simplified-only connector forms are not matched, such as `因为` for `因為`. Forms that are the
+  same in both scripts still match: `因为下雨，所以比赛取消了。` gives a cause relation for `所以`, and
+  no relation for `因为`. zh `又`, `而`, `並` alone are not connectors.
 - Argument spans are always clauses or sentences, never smaller.
 - A bare connector can leave an argument that is only the connector: `We stayed home, because.`
   (`arg1` is `because.`) and `We slept. So.` (`arg2` is `So.`). Such a relation is still
-  reported. A bare correlate is the exception (see above).
+  reported. A bare correlate is the exception (see above). A bare correlate followed by a clause
+  that starts with another connector gives no relation for the opener. The correlate clause is
+  still `arg1` of that connector's relation: `先洗手，然後，但是吃飯。` gives a contrast with `arg1`
+  = `然後`.
 - A `because` or `因為` that is not first in its sentence takes the clause before it as `arg2`,
   also when bare: `We left, because, it rained.` gives `arg1` = `because` and `arg2` = `We left`.
 - The correlate tables are shared by both languages. A correlate of the other language still

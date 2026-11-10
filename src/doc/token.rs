@@ -180,7 +180,7 @@ fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
         if text == "."
             && (segment::is_abbreviation(prev_text)
                 || prev_text.eq_ignore_ascii_case("etc")
-                || (has_letter(prev_text) && prev_text.contains('.')))
+                || (has_letter(prev_text) && prev_text.contains('.') && !prev_text.ends_with('.')))
         {
             if let Some(last) = merged.last_mut() {
                 last.1 = b;

@@ -361,6 +361,23 @@ fn abbreviation_with_inner_dot_takes_dot() {
 }
 
 #[test]
+fn dot_run_after_word_is_not_swallowed() {
+    // `No` and `Mr` are listed abbreviations: they take ONE dot, the rest is a run.
+    assert_eq!(
+        show("No... I don't think so."),
+        [
+            "No./M", "../PUNCT", "I/PRON", "do/A", "n't/PART", "think/M", "so/A", "./PUNCT"
+        ]
+    );
+    assert_eq!(show("Mr... Smith"), ["Mr./M", "../PUNCT", "Smith/M"]);
+    assert_eq!(show("I... go"), ["I./M", "../PUNCT", "go/M"]);
+    assert_eq!(
+        show("Hello... world"),
+        ["Hello/INTJ", ".../PUNCT", "world/M"]
+    );
+}
+
+#[test]
 fn hyphen_needs_a_letter_on_both_sides() {
     assert_eq!(show("pages 3-4"), ["pages/M", "3/NUM", "-/PUNCT", "4/NUM"]);
     assert_eq!(show("COVID-19"), ["COVID/M", "-/PUNCT", "19/NUM"]);

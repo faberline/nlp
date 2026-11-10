@@ -2,14 +2,14 @@
 """Generates the tiny test model under models/test-tiny/ and models/manifest.json.
 
 Licence: CC0-1.0. The weights are random (numpy, fixed seed), so the model has no meaning.
-It exists to test the model runtime (manifest, hashes, tokenizer offsets, tract backend).
+It exists to test the model runtime (manifest, hashes, tokenizer offsets, tract and Core ML backends).
 
 Run by hand, not by cargo or CI:
     python3 -m venv training/.venv
-    training/.venv/bin/pip install numpy onnx tokenizers
+    training/.venv/bin/pip install numpy onnx tokenizers coremltools
     training/.venv/bin/python training/make_test_model.py
 
-Packages: numpy, onnx, tokenizers. No torch.
+Packages: numpy, onnx, tokenizers, coremltools. No torch.
 """
 
 import hashlib
@@ -115,6 +115,41 @@ def make_onnx(path, embedding, dense_w, dense_b):
     onnx.save(model, str(path))
 
 
+def make_coreml(path, embedding, dense_w, dense_b):
+    """The same graph as the ONNX model, as a Core ML neural network (no torch)."""
+    import coremltools as ct
+    from coremltools.models import datatypes
+    from coremltools.models.neural_network import NeuralNetworkBuilder
+    from coremltools.proto import FeatureTypes_pb2
+
+    builder = NeuralNetworkBuilder(
+        [("input_ids", datatypes.Array(MAX_LEN))],
+        [("logits", datatypes.Array(1, MAX_LEN, LABELS))],
+        disable_rank5_shape_mapping=True,
+    )
+    builder.add_load_constant_nd("embedding", "table", embedding, shape=list(embedding.shape))
+    builder.add_gather("gather", ["table", "input_ids"], "emb", axis=0)
+    builder.add_batched_mat_mul(
+        "dense",
+        ["emb"],
+        "logits",
+        weight_matrix_rows=EMBED_DIM,
+        weight_matrix_columns=LABELS,
+        W=dense_w,
+        bias=dense_b,
+    )
+    spec = builder.spec
+    ids = spec.description.input[0].type.multiArrayType
+    ids.dataType = FeatureTypes_pb2.ArrayFeatureType.INT32
+    del ids.shape[:]
+    ids.shape.extend([1, MAX_LEN])
+    logits = spec.description.output[0].type.multiArrayType
+    logits.dataType = FeatureTypes_pb2.ArrayFeatureType.FLOAT32
+    del logits.shape[:]
+    logits.shape.extend([1, MAX_LEN, LABELS])
+    ct.models.MLModel(spec).save(str(path))
+
+
 def numpy_logits(ids, embedding, dense_w, dense_b):
     """Logits for the real positions only, computed without tract."""
     padded = np.full(MAX_LEN, PAD_ID, dtype=np.int64)
@@ -173,11 +208,12 @@ def main():
     tok = make_tokenizer(MODEL_DIR / "tokenizer.json")
     weights = make_weights()
     make_onnx(MODEL_DIR / "model.onnx", *weights)
+    make_coreml(MODEL_DIR / "model.mlmodel", *weights)
     write_json(MODEL_DIR / "expected.json", make_expected(tok, weights))
 
     files = []
     total = 0
-    for name in ["model.onnx", "tokenizer.json", "expected.json"]:
+    for name in ["model.onnx", "model.mlmodel", "tokenizer.json", "expected.json"]:
         path = MODEL_DIR / name
         size = path.stat().st_size
         total += size
@@ -200,6 +236,7 @@ def main():
                 "model": "model.onnx",
                 "tokenizer": "tokenizer.json",
                 "expected": "expected.json",
+                "coreml": {"model": "model.mlmodel", "vocab": VOCAB},
                 "files": files,
                 "receipt": None,
             }

@@ -5,6 +5,8 @@
 //! verifies too, then loads the model. Without the `onnx` feature, [`load`] returns `NoBackend`
 //! at once, so a layer reports `unknown` with reason `no_model`.
 
+#[cfg(all(feature = "coreml", target_os = "macos"))]
+mod coreml;
 #[cfg(feature = "onnx")]
 mod onnx;
 
@@ -124,6 +126,8 @@ impl std::error::Error for ModelError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     Onnx,
+    /// Core ML on the CPU. Compiled only with the `coreml` feature on macOS.
+    Coreml,
 }
 
 /// A manifest entry whose files were read once, hashed, and found to match. The parsers read
@@ -137,6 +141,15 @@ pub struct Verified {
     pub tokenizer: Vec<u8>,
     /// The verified bytes of the expected-output file (for tests and checks).
     pub expected: Vec<u8>,
+    /// The Core ML model, when the manifest lists one.
+    pub coreml: Option<CoremlFile>,
+}
+
+/// The verified bytes of a Core ML model file and the size of its embedding table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CoremlFile {
+    pub model: Vec<u8>,
+    pub vocab: usize,
 }
 
 #[derive(Deserialize)]
@@ -156,7 +169,15 @@ struct Entry {
     model: String,
     tokenizer: String,
     expected: String,
+    #[serde(default)]
+    coreml: Option<CoremlEntry>,
     files: Vec<FileEntry>,
+}
+
+#[derive(Deserialize)]
+struct CoremlEntry {
+    model: String,
+    vocab: usize,
 }
 
 #[derive(Deserialize)]
@@ -210,6 +231,24 @@ pub fn verify(models_dir: &Path, model_id: &str) -> Result<Verified, ModelError>
             entry.expected
         )));
     }
+    let coreml_ix = match &entry.coreml {
+        Some(c) => {
+            if c.vocab == 0 {
+                return Err(ModelError::Manifest(
+                    "coreml vocab must be positive".to_owned(),
+                ));
+            }
+            let ix = listed(&c.model)?;
+            if ix == model_ix || ix == tokenizer_ix || ix == expected_ix {
+                return Err(ModelError::Manifest(format!(
+                    "coreml names the same file as model, tokenizer or expected: {}",
+                    c.model
+                )));
+            }
+            Some(ix)
+        }
+        None => None,
+    };
     for f in &entry.files {
         check_relative(&f.path)?;
     }
@@ -242,6 +281,14 @@ pub fn verify(models_dir: &Path, model_id: &str) -> Result<Verified, ModelError>
         });
     }
 
+    let coreml = match (&entry.coreml, coreml_ix) {
+        (Some(c), Some(ix)) => Some(CoremlFile {
+            model: std::mem::take(&mut contents[ix]),
+            vocab: c.vocab,
+        }),
+        _ => None,
+    };
+
     Ok(Verified {
         info: ModelInfo {
             id: entry.id,
@@ -254,25 +301,29 @@ pub fn verify(models_dir: &Path, model_id: &str) -> Result<Verified, ModelError>
         model: std::mem::take(&mut contents[model_ix]),
         tokenizer: std::mem::take(&mut contents[tokenizer_ix]),
         expected: std::mem::take(&mut contents[expected_ix]),
+        coreml,
     })
 }
 
-/// Verifies the model and loads it with `backend`. Without the `onnx` feature this returns
-/// `NoBackend` at once, and no file is read.
+/// Whether `backend` is compiled into this build.
+fn compiled(backend: Backend) -> bool {
+    match backend {
+        Backend::Onnx => cfg!(feature = "onnx"),
+        Backend::Coreml => cfg!(all(feature = "coreml", target_os = "macos")),
+    }
+}
+
+/// Verifies the model and loads it with `backend`. When that backend is not compiled into this
+/// build, this returns `NoBackend` at once, and no file is read.
 pub fn load(
     models_dir: &Path,
     model_id: &str,
     backend: Backend,
 ) -> Result<Box<dyn Model>, ModelError> {
-    #[cfg(feature = "onnx")]
-    {
-        load_verified(&verify(models_dir, model_id)?, backend)
+    if !compiled(backend) {
+        return Err(ModelError::NoBackend);
     }
-    #[cfg(not(feature = "onnx"))]
-    {
-        let _ = (models_dir, model_id, backend);
-        Err(ModelError::NoBackend)
-    }
+    load_verified(&verify(models_dir, model_id)?, backend)
 }
 
 /// Loads a model from bytes that `verify` has already checked.
@@ -284,6 +335,17 @@ pub fn load_verified(verified: &Verified, backend: Backend) -> Result<Box<dyn Mo
                 onnx::load(verified).map(|m| Box::new(m) as Box<dyn Model>)
             }
             #[cfg(not(feature = "onnx"))]
+            {
+                let _ = verified;
+                Err(ModelError::NoBackend)
+            }
+        }
+        Backend::Coreml => {
+            #[cfg(all(feature = "coreml", target_os = "macos"))]
+            {
+                coreml::load(verified).map(|m| Box::new(m) as Box<dyn Model>)
+            }
+            #[cfg(not(all(feature = "coreml", target_os = "macos")))]
             {
                 let _ = verified;
                 Err(ModelError::NoBackend)

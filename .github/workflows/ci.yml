@@ -31,6 +31,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo clippy --workspace --all-targets --locked --features onnx -- -D warnings
+      - run: cargo clippy --workspace --all-targets --locked --features onnx,coreml -- -D warnings
 
   test-workspace:
     name: "test: workspace"

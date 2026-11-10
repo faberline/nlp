@@ -13,11 +13,20 @@
       "model": "model.onnx",
       "tokenizer": "tokenizer.json",
       "expected": "expected.json",
+      "coreml": {
+        "model": "model.mlmodel",
+        "vocab": 258
+      },
       "files": [
         {
           "path": "model.onnx",
           "sha256": "974f9138da91f1ff1f7e146ddf97335ec1129c993761f6efd9a72c46702bdaa2",
           "bytes": 8728
+        },
+        {
+          "path": "model.mlmodel",
+          "sha256": "7fcc5612a5798a2f29faef813d7dc0a10e5525307eb8ac6c4a147bfca7c94386",
+          "bytes": 8611
         },
         {
           "path": "tokenizer.json",

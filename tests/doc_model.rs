@@ -75,7 +75,7 @@ fn err_of<T>(r: Result<T, ModelError>) -> ModelError {
     }
 }
 
-/// The error of `verify`. With `onnx`, `load` must give the same error.
+/// The error of `verify`. With each backend compiled in, `load` must give the same error.
 fn refused(dir: &Path, id: &str) -> ModelError {
     let e = match verify(dir, id) {
         Ok(_) => panic!("verify accepted"),
@@ -88,6 +88,14 @@ fn refused(dir: &Path, id: &str) -> ModelError {
             Err(l) => l,
         };
         assert_eq!(l, e, "load and verify disagree");
+    }
+    #[cfg(all(feature = "coreml", target_os = "macos"))]
+    {
+        let l = match load(dir, id, Backend::Coreml) {
+            Ok(_) => panic!("load accepted"),
+            Err(l) => l,
+        };
+        assert_eq!(l, e, "load and verify disagree (coreml)");
     }
     e
 }
@@ -160,7 +168,9 @@ fn manifest_parses_and_lists_hashes() {
         .expect("test-tiny entry");
     let dir = models_dir().join(entry["dir"].as_str().unwrap());
     let files = entry["files"].as_array().unwrap();
-    assert_eq!(files.len(), 3);
+    assert_eq!(files.len(), 4);
+    assert_eq!(entry["coreml"]["model"], "model.mlmodel");
+    assert_eq!(entry["coreml"]["vocab"], 258);
     let mut total = 0u64;
     for f in files {
         let path = f["path"].as_str().unwrap();
@@ -625,5 +635,203 @@ fn pad_id_outside_vocabulary_is_refused() {
             ModelError::Load(_) => {}
             other => panic!("{pad_id}: unexpected {other:?}"),
         }
+    }
+}
+
+#[test]
+fn coreml_vocab_zero_is_refused() {
+    let e = load_edited(|m| m["models"][0]["coreml"]["vocab"] = serde_json::json!(0));
+    match e {
+        ModelError::Manifest(msg) => assert!(msg.contains("vocab"), "{msg}"),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn coreml_not_listed_in_files_is_refused() {
+    let e = load_edited(|m| m["models"][0]["coreml"]["model"] = serde_json::json!("other.mlmodel"));
+    match e {
+        ModelError::Manifest(msg) => assert!(msg.contains("other.mlmodel"), "{msg}"),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn coreml_with_the_same_path_as_another_file_is_refused() {
+    for name in ["model.onnx", "tokenizer.json", "expected.json"] {
+        let e = load_edited(|m| m["models"][0]["coreml"]["model"] = serde_json::json!(name));
+        match e {
+            ModelError::Manifest(msg) => assert!(msg.contains("same file"), "{name}: {msg}"),
+            other => panic!("{name}: unexpected {other:?}"),
+        }
+    }
+}
+
+#[cfg(not(all(feature = "coreml", target_os = "macos")))]
+#[test]
+fn no_coreml_backend_without_feature_or_macos() {
+    fn assert_no_backend(dir: &Path, id: &str) {
+        assert_eq!(
+            err_of(load(dir, id, Backend::Coreml)),
+            ModelError::NoBackend
+        );
+    }
+    assert_no_backend(&models_dir(), MODEL);
+
+    let changed = copied_models();
+    fs::write(changed.path().join(MODEL).join("model.mlmodel"), b"junk").unwrap();
+    assert_no_backend(changed.path(), MODEL);
+
+    let tmp = tempfile::tempdir().unwrap();
+    assert_no_backend(&tmp.path().join("no-such-dir"), MODEL);
+}
+
+#[cfg(all(feature = "coreml", target_os = "macos"))]
+mod coreml {
+    use super::*;
+    use faberline_nlp::doc::model::{Batch, Model};
+
+    fn coreml() -> Box<dyn Model> {
+        load(&models_dir(), MODEL, Backend::Coreml).unwrap()
+    }
+
+    fn bits(t: &Tensor) -> (Vec<usize>, Vec<u32>) {
+        (
+            t.shape.clone(),
+            t.data.iter().map(|x| x.to_bits()).collect(),
+        )
+    }
+
+    #[test]
+    fn logits_match_numpy() {
+        let m = coreml();
+        assert_eq!(m.info().id, MODEL);
+        for fx in &expected().fixtures {
+            let out = m
+                .run(&Batch {
+                    ids: vec![fx.ids.clone()],
+                })
+                .unwrap();
+            let t = &out.logits[0];
+            assert_eq!(t.shape, vec![fx.ids.len(), LABELS], "{}", fx.id);
+            assert_eq!(t.data.chunks(LABELS).count(), fx.logits.len(), "{}", fx.id);
+            for (row, want) in t.data.chunks(LABELS).zip(&fx.logits) {
+                for (got, w) in row.iter().zip(want) {
+                    assert!((got - w).abs() <= 1e-4, "{}: {got} vs {w}", fx.id);
+                }
+            }
+            assert_eq!(argmax_labels(t), fx.argmax, "{}", fx.id);
+        }
+    }
+
+    #[test]
+    fn max_len_must_match_the_coreml_model() {
+        let tmp = copied_models();
+        let mut m = manifest_value(tmp.path());
+        m["models"][0]["max_len"] = serde_json::json!(16);
+        write_manifest(tmp.path(), &m);
+        assert!(matches!(
+            err_of(load(tmp.path(), MODEL, Backend::Coreml)),
+            ModelError::Load(_)
+        ));
+    }
+
+    #[test]
+    fn pad_id_outside_coreml_vocabulary_is_refused() {
+        for pad_id in [-1i64, 258] {
+            let tmp = copied_models();
+            let mut m = manifest_value(tmp.path());
+            m["models"][0]["pad_id"] = serde_json::json!(pad_id);
+            write_manifest(tmp.path(), &m);
+            match err_of(load(tmp.path(), MODEL, Backend::Coreml)) {
+                ModelError::Load(_) => {}
+                other => panic!("{pad_id}: unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn batch_equals_single_runs_and_repeats() {
+        let m = coreml();
+        let ids: Vec<Vec<i64>> = expected().fixtures.iter().map(|f| f.ids.clone()).collect();
+        let batch = m.run(&Batch { ids: ids.clone() }).unwrap();
+        let again = m.run(&Batch { ids: ids.clone() }).unwrap();
+        for (i, id) in ids.iter().enumerate() {
+            let single = m
+                .run(&Batch {
+                    ids: vec![id.clone()],
+                })
+                .unwrap();
+            assert_eq!(bits(&batch.logits[i]), bits(&single.logits[0]), "item {i}");
+            assert_eq!(bits(&batch.logits[i]), bits(&again.logits[i]), "item {i}");
+        }
+    }
+
+    #[test]
+    fn too_long_and_bad_ids_are_errors() {
+        let m = coreml();
+        assert!(matches!(
+            m.run(&Batch {
+                ids: vec![vec![2; MAX_LEN + 1]]
+            }),
+            Err(ModelError::TooLong { len, max }) if len == MAX_LEN + 1 && max == MAX_LEN
+        ));
+        for bad in [258i64, 100_000, -1] {
+            let r = m.run(&Batch {
+                ids: vec![vec![2, bad]],
+            });
+            assert!(matches!(r, Err(ModelError::Run(_))), "id {bad}: {r:?}");
+        }
+        assert!(
+            m.run(&Batch {
+                ids: vec![vec![257]]
+            })
+            .is_ok()
+        );
+        let empty = m.run(&Batch { ids: vec![vec![]] }).unwrap();
+        assert_eq!(empty.logits[0].shape, vec![0, LABELS]);
+    }
+
+    #[test]
+    fn model_is_usable_from_threads() {
+        let m = std::sync::Arc::new(coreml());
+        let ids = expected().fixtures[1].ids.clone();
+        let want = m
+            .run(&Batch {
+                ids: vec![ids.clone()],
+            })
+            .unwrap();
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let m = m.clone();
+                let ids = ids.clone();
+                std::thread::spawn(move || m.run(&Batch { ids: vec![ids] }).unwrap())
+            })
+            .collect();
+        for h in handles {
+            assert_eq!(bits(&h.join().unwrap().logits[0]), bits(&want.logits[0]));
+        }
+    }
+
+    #[test]
+    fn manifest_without_coreml_entry_is_a_load_error() {
+        let tmp = copied_models();
+        let mut m = manifest_value(tmp.path());
+        m["models"][0].as_object_mut().unwrap().remove("coreml");
+        write_manifest(tmp.path(), &m);
+        assert!(matches!(
+            err_of(load(tmp.path(), MODEL, Backend::Coreml)),
+            ModelError::Load(_)
+        ));
+    }
+
+    #[test]
+    fn coreml_file_must_match_its_hash() {
+        let tmp = copied_models();
+        fs::write(tmp.path().join(MODEL).join("model.mlmodel"), b"junk").unwrap();
+        assert!(matches!(
+            err_of(load(tmp.path(), MODEL, Backend::Coreml)),
+            ModelError::HashMismatch { .. }
+        ));
     }
 }

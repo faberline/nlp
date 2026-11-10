@@ -247,8 +247,10 @@ has `kind`, `level`, `connector`, an optional `correlate`, `arg1` and `arg2`:
 - Roles: `sequence` has `arg1` earlier and `arg2` later. `contrast` and `parallel` keep text
   order. `cause`: `arg1` is the reason and `arg2` the result, so `B, because A` has `arg1` =
   `because A`. `condition`: `arg1` is the `if` clause and `arg2` the consequence.
-- A bare connector is one that ends its clause, such as `然後，` or `However,`. Its unit is the
-  clause after it, if there is one.
+- A bare connector is one that ends its clause, such as `然後，` or `However,`. A bare backward
+  connector that is not first in its sentence takes the clause after it as `arg2`, if there is
+  one; `arg1` is still the clause before it. A bare `because` or `因為` that is not first takes
+  the clause before it as `arg2` (see Connectors).
 
 ### Connectors
 
@@ -271,12 +273,18 @@ follows). Multi-word English entries use exactly one space.
 | sequence | arg1 | 先 (correlate 然後 接著 再 隨後) | none |
 | parallel | arg1 | 一方面 (correlate 另一方面) | none |
 
+The correlate lists are shared by both languages. Every cause opener (`因為`, `because`) takes
+`所以 因此 so therefore thus`, and every condition opener (`如果 假如 要是 若`, `if`) takes
+`就 那麼 便 then`.
+
 Connectors of arg2 take arg1 from the clause before them (or the sentence before, when they
-start a sentence). Connectors of arg1 take arg2 from the clause after them. A correlate in that
-clause consumes it: its own connector gives no second relation. `先` and `一方面` give a
-relation only with their correlate, and never an `unknown`. A correlate that is the whole clause
-(`If it rains, then, we stay.`) takes the clause after it as `arg2`; if no clause follows, or that
-clause starts with another connector, the opener gives an `unknown` and there is no relation.
+start a sentence). Connectors of arg1 take arg2 from the clause after them, except a `because` or
+`因為` that is not first in its sentence: it takes arg2 from the clause before it, also when
+bare. A correlate in that clause consumes it: its own connector gives no second relation. `先` and
+`一方面` give a relation only with their correlate, and never an `unknown`. A correlate that is
+the whole clause (`If it rains, then, we stay.`) takes the clause after it as `arg2`; if no
+clause follows, or that clause starts with another connector, the opener gives an `unknown` and
+there is no relation. `先` and `一方面` give no `unknown` in that case either.
 
 A correlate must be a whole word. A stop list of following chars rejects `便` before `宜 利 當 條
 於 民 秘`, `再` before `見 次 度 三 也 說 加`, and `就` before `近 業 讀 地`, so `便宜`, `再見` and
@@ -326,9 +334,11 @@ A new paragraph also breaks the sentence relation.
 - A bare connector can leave an argument that is only the connector: `We stayed home, because.`
   (`arg1` is `because.`) and `We slept. So.` (`arg2` is `So.`). Such a relation is still
   reported. A bare correlate is the exception (see above).
+- A `because` or `因為` that is not first in its sentence takes the clause before it as `arg2`,
+  also when bare: `We left, because, it rained.` gives `arg1` = `because` and `arg2` = `We left`.
 - The correlate tables are shared by both languages. A correlate of the other language still
   pairs (`因為下雨，so we left.` gives `so`).
-- English connectors accept only an ASCII `,` after them. `However,` is a bare connector, and
+- Only `However` and `So` look at the comma after them. `However,` is a bare connector, and
   `However，` with a full-width comma is not one.
 - Correlates may cross languages: `If 天氣好，就…` pairs the English `If` with the zh `就`.
 

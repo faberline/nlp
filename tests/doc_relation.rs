@@ -460,15 +460,45 @@ fn chains_scope_and_opaque() {
 
     let text = "これはテストです。But it works.";
     let doc = analyze(text);
-    assert!(
-        doc.unknown
-            .iter()
-            .any(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
-    );
+    let unsupported: Vec<Span> = doc
+        .unknown
+        .iter()
+        .filter(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
+        .map(|u| u.span)
+        .collect();
+    assert_eq!(unsupported, [doc.segmentation.sentences[0].span]);
     assert!(rels(text).is_empty());
     assert_eq!(rel_unknown(text), ["But"]);
     assert!(rels("We ran it. これはテストです。").is_empty());
     assert!(rel_unknown("We ran it. これはテストです。").is_empty());
+    // The unsupported sentence after a connector sentence is not used as an argument.
+    let text = "It works. But it is slow. これはテストです。";
+    let japanese = "これはテストです。";
+    assert_eq!(
+        rels(text),
+        [rel(
+            K::Contrast,
+            L::Sentence,
+            "But",
+            None,
+            "It works.",
+            "But it is slow."
+        )]
+    );
+    assert!(
+        rels(text)
+            .iter()
+            .all(|r| r.4 != japanese && r.5 != japanese)
+    );
+    assert!(rel_unknown(text).is_empty());
+    // The unsupported sentence starts with the connector: no relation and no unknown.
+    let text = "It works. But これはテストです。";
+    let doc = analyze(text);
+    assert!(doc.unknown.iter().any(|u| u.layer == "segmentation"
+        && u.reason == Reason::UnsupportedLanguage
+        && u.span == doc.segmentation.sentences[1].span));
+    assert!(rels(text).is_empty());
+    assert!(rel_unknown(text).is_empty());
 
     assert_eq!(
         rels("`then` is a keyword, then we go."),
@@ -618,10 +648,39 @@ const CASES: &[&str] = &[
     "これはテストです。But it works.",
     "We ran it. これはテストです。",
     "`then` is a keyword, then we go.",
+    // review corrections
+    "先洗手，然後。",
+    "一方面便宜，另一方面。",
+    "It works. But it is slow. これはテストです。",
+    "It works. But これはテストです。",
+    "We left, because, it rained.",
+    "We lost, 😋 because it rained.",
+    "如果明天有空，便宜的也可以。",
+    "先走吧，再見。",
+    "如果明天有空，便來找你。",
+    "先走吧，再去找你。",
+    "We won. 😋 But we lost.",
+    "We ran it, `but` it failed.",
+    "We ran it. `But it failed.`",
+    "We ran it. (But 2020) says it failed.",
+    "If it rains, then, we stay.",
+    "If it rains, then.",
 ];
 
 /// Brackets and quotes that may stand before a connector inside a clause.
 const OPENING_MARKS: &str = "「『“‘（([\"'";
+
+/// Chars that the clause start skips before a connector: whitespace, opening marks, and symbols and
+/// pictographs (the same ranges as `is_symbol` in relation.rs, where emoji are skipped too).
+fn skipped_before_connector(ch: char) -> bool {
+    ch.is_whitespace()
+        || OPENING_MARKS.contains(ch)
+        || matches!(
+            ch,
+            '\u{A9}' | '\u{AE}' | '\u{2122}' | '\u{2190}'..='\u{2BFF}' | '\u{1F000}'..='\u{1FAFF}'
+                | '\u{200D}' | '\u{FE0F}'
+        )
+}
 
 /// Every returned relation and unknown: offsets are in range, relations are sorted by connector,
 /// the arguments are whole layer-1 units and do not overlap, the connector lies in a clause or a
@@ -667,7 +726,7 @@ fn check_invariants(text: &str) {
             let before = r.arg1.start_char <= r.connector.start_char
                 && chars[r.arg1.start_char..r.connector.start_char]
                     .iter()
-                    .all(|ch| ch.is_whitespace() || OPENING_MARKS.contains(*ch));
+                    .all(|ch| skipped_before_connector(*ch));
             assert!(
                 before,
                 "{text}: connector overlaps arg1 without starting it"
@@ -893,10 +952,18 @@ fn relation_receipt() {
 #[test]
 fn review_correlate_is_a_whole_word() {
     // 便 inside 便宜 and 再 inside 再見 are not correlates.
-    let text = "如果明天有空，便宜的也可以。";
-    assert!(rels(text).iter().all(|r| r.3.is_none()));
-    let text = "先走吧，再見。";
-    assert!(rels(text).iter().all(|r| r.3.is_none()));
+    assert_eq!(
+        rels("如果明天有空，便宜的也可以。"),
+        [rel(
+            K::Condition,
+            L::Clause,
+            "如果",
+            None,
+            "如果明天有空",
+            "便宜的也可以。"
+        )]
+    );
+    assert!(rels("先走吧，再見。").is_empty());
     // The real correlates still pair.
     assert_eq!(rels("如果明天有空，便來找你。")[0].3.as_deref(), Some("便"));
     assert_eq!(rels("先走吧，再去找你。")[0].3.as_deref(), Some("再"));
@@ -905,7 +972,41 @@ fn review_correlate_is_a_whole_word() {
 #[test]
 fn review_clause_after_an_emoji() {
     let text = "We won. 😋 But we lost.";
-    assert!(rels(text).iter().any(|r| r.2 == "But"));
+    assert_eq!(
+        rels(text),
+        [rel(
+            K::Contrast,
+            L::Sentence,
+            "But",
+            None,
+            "We won.",
+            "😋 But we lost."
+        )]
+    );
+}
+
+#[test]
+fn review_silent_opener_with_a_bare_correlate() {
+    // `先` and `一方面` never give an unknown, even when their correlate is bare.
+    for text in ["先洗手，然後。", "一方面便宜，另一方面。"] {
+        assert!(rels(text).is_empty(), "{text}");
+        assert!(rel_unknown(text).is_empty(), "{text}");
+    }
+}
+
+#[test]
+fn review_bare_because_not_first_takes_the_clause_before() {
+    assert_eq!(
+        rels("We left, because, it rained."),
+        [rel(
+            K::Cause,
+            L::Clause,
+            "because",
+            None,
+            "because",
+            "We left"
+        )]
+    );
 }
 
 #[test]

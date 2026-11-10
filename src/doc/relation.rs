@@ -236,7 +236,9 @@ impl Pass<'_> {
                                         .is_none()
                                 });
                                 let Some(n2) = after else {
-                                    self.unknown(conn);
+                                    if !silent {
+                                        self.unknown(conn);
+                                    }
                                     continue;
                                 };
                                 self.used[n2] = true;

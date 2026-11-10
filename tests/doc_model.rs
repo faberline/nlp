@@ -75,6 +75,23 @@ fn err_of<T>(r: Result<T, ModelError>) -> ModelError {
     }
 }
 
+/// The error of `verify`. With `onnx`, `load` must give the same error.
+fn refused(dir: &Path, id: &str) -> ModelError {
+    let e = match verify(dir, id) {
+        Ok(_) => panic!("verify accepted"),
+        Err(e) => e,
+    };
+    #[cfg(feature = "onnx")]
+    {
+        let l = match load(dir, id, Backend::Onnx) {
+            Ok(_) => panic!("load accepted"),
+            Err(l) => l,
+        };
+        assert_eq!(l, e, "load and verify disagree");
+    }
+    e
+}
+
 #[cfg(feature = "onnx")]
 fn verified() -> faberline_nlp::doc::model::Verified {
     faberline_nlp::doc::model::verify(&models_dir(), MODEL).unwrap()
@@ -87,7 +104,7 @@ fn load_edited(edit: impl FnOnce(&mut serde_json::Value)) -> ModelError {
     let mut m = manifest_value(tmp.path());
     edit(&mut m);
     write_manifest(tmp.path(), &m);
-    err_of(verify(tmp.path(), MODEL))
+    refused(tmp.path(), MODEL)
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -178,7 +195,7 @@ fn hash_mismatch_is_refused() {
     let last = bytes.len() - 1;
     bytes[last] ^= 1;
     fs::write(&path, bytes).unwrap();
-    match err_of(verify(tmp.path(), MODEL)) {
+    match refused(tmp.path(), MODEL) {
         ModelError::HashMismatch { file, .. } => assert_eq!(file, "model.onnx"),
         other => panic!("unexpected {other:?}"),
     }
@@ -188,7 +205,7 @@ fn hash_mismatch_is_refused() {
 fn missing_file_is_refused() {
     let tmp = copied_models();
     fs::remove_file(tmp.path().join(MODEL).join("tokenizer.json")).unwrap();
-    match err_of(verify(tmp.path(), MODEL)) {
+    match refused(tmp.path(), MODEL) {
         ModelError::Missing(path) => assert_eq!(path, "tokenizer.json"),
         other => panic!("unexpected {other:?}"),
     }
@@ -196,7 +213,7 @@ fn missing_file_is_refused() {
 
 #[test]
 fn unknown_model_id_is_refused() {
-    match err_of(verify(&models_dir(), "no-such-model")) {
+    match refused(&models_dir(), "no-such-model") {
         ModelError::UnknownModel(id) => assert_eq!(id, "no-such-model"),
         other => panic!("unexpected {other:?}"),
     }
@@ -209,7 +226,7 @@ fn manifest_path_escape_is_refused() {
     m["models"][0]["model"] = serde_json::json!("../model.onnx");
     write_manifest(tmp.path(), &m);
     assert!(matches!(
-        err_of(verify(tmp.path(), MODEL)),
+        refused(tmp.path(), MODEL),
         ModelError::Manifest(_)
     ));
 }
@@ -246,7 +263,7 @@ fn truncated_file_is_refused_by_size() {
     let path = tmp.path().join(MODEL).join("model.onnx");
     let bytes = fs::read(&path).unwrap();
     fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
-    match err_of(verify(tmp.path(), MODEL)) {
+    match refused(tmp.path(), MODEL) {
         ModelError::HashMismatch { file, .. } => assert_eq!(file, "model.onnx (bytes)"),
         other => panic!("unexpected {other:?}"),
     }
@@ -259,7 +276,7 @@ fn appended_file_is_refused_by_size() {
     let mut bytes = fs::read(&path).unwrap();
     bytes.extend_from_slice(b" ");
     fs::write(&path, bytes).unwrap();
-    match err_of(verify(tmp.path(), MODEL)) {
+    match refused(tmp.path(), MODEL) {
         ModelError::HashMismatch { file, .. } => assert_eq!(file, "tokenizer.json (bytes)"),
         other => panic!("unexpected {other:?}"),
     }
@@ -274,7 +291,7 @@ fn symlinked_file_is_refused() {
     fs::copy(dir.join("tokenizer.json"), &real).unwrap();
     fs::remove_file(dir.join("tokenizer.json")).unwrap();
     std::os::unix::fs::symlink(&real, dir.join("tokenizer.json")).unwrap();
-    match err_of(verify(tmp.path(), MODEL)) {
+    match refused(tmp.path(), MODEL) {
         ModelError::Load(msg) => assert!(msg.contains("tokenizer.json"), "{msg}"),
         other => panic!("unexpected {other:?}"),
     }
@@ -301,6 +318,10 @@ fn no_backend_without_feature() {
     assert_no_backend(&tmp.path().join("no-such-dir"), MODEL);
 
     assert_no_backend(&models_dir(), "no-such-model");
+
+    let bad_manifest = copied_models();
+    fs::write(bad_manifest.path().join("manifest.json"), "not json").unwrap();
+    assert_no_backend(bad_manifest.path(), MODEL);
 }
 
 #[test]

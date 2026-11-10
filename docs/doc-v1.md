@@ -540,14 +540,15 @@ A model directory holds `manifest.json` and one subdirectory per model:
   differ. Every path is relative to `<dir>` and has no `..` and no root.
 - `max_len` must be from 1 to 4096. It must also equal the input length that the ONNX file
   declares (the second dimension of its input). A different value is refused at load.
+  An input length that the file does not fix is accepted.
 - `bytes` is optional. When present it is checked too.
 
 ### Hash check
 
-`load` (or `verify`, which does the check alone) reads the manifest and checks every listed file
-for existence and sha256 before it parses any model file. Each file is read once. Its bytes are
-hashed and kept in `Verified`, and the parsers read those bytes. Nothing is read from disk again, so
-a file replaced after `verify` has no effect. `Verified` is public (`info` and the bytes of the
+`verify` reads the manifest and checks every listed file for existence and sha256 before any model
+file is parsed. With the `onnx` feature, `load` calls `verify` first. Each file is read once. Its
+bytes are hashed and kept in `Verified`, and the parsers read those bytes. Nothing is read from disk
+again, so a file replaced after `verify` has no effect. `Verified` is public (`info` and the bytes of the
 model, tokenizer and expected files). `verify(models_dir, id)` returns it, and
 `load_verified(&Verified, backend)` loads a model from it. `SubwordTokenizer::from_verified(&Verified)`
 builds the tokenizer from it and replaces the earlier `from_file`: no model or tokenizer file is

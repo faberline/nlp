@@ -49,6 +49,12 @@ pub(super) fn load(v: &Verified) -> Result<OnnxModel, ModelError> {
 /// Refuses a model whose declared input length (the second dimension of input 0) is fixed and
 /// differs from `max_len`. A symbolic or unknown dimension is accepted.
 fn check_input_len(model: &InferenceModel, max_len: usize) -> Result<(), ModelError> {
+    let inputs = model
+        .input_outlets()
+        .map_err(|e| ModelError::Load(format!("model: {e}")))?;
+    if inputs.is_empty() {
+        return Err(ModelError::Load("model: no graph input".to_owned()));
+    }
     let fact = model
         .input_fact(0)
         .map_err(|e| ModelError::Load(format!("model: {e}")))?;

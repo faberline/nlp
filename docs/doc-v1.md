@@ -108,14 +108,15 @@ for inline spans. Every span is trimmed of whitespace.
 
 Blocks:
 
-1. Code: the line starts (after at most 3 spaces) with at least 3 backticks or at least 3 `~`.
+1. Code: the line starts (after at most 3 spaces) with at least 3 backticks or at least 3 `~`, and the rest of that line has no more of the same
+   fence char (so ```` ```x``` ```` and `~~~好開心~~~` are normal text).
    It ends at the next line made only of the same fence char, with at least as many chars as the
    opening, and only whitespace after. The span runs from the first fence char to the last char
    of the closing fence. An unclosed fence runs to the end of the text.
 2. Formula: the line starts with `$$`. It ends at the first line whose last non-whitespace text
    is `$$` after the opening, and the opening line may be that line (`$$x$$`). The span runs from
    the opening `$$` to the end of that closing `$$`. Without a closing `$$` the line is normal
-   text.
+   text. A blank line before the closing `$$` also makes it normal text.
 3. Heading: the whole trimmed line is one of:
    - Markdown: 1 to 6 `#`, then a space or tab, then at least one non-space char.
    - Chinese: `第`, then digits or any of `一二三四五六七八九十百零〇兩`, then one of `章節回卷篇部`,

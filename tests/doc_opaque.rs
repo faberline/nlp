@@ -459,3 +459,57 @@ fn cli_has_opaque() {
     assert_eq!(opaque.len(), 1);
     assert_eq!(opaque[0]["kind"], "url");
 }
+
+#[test]
+fn fence_on_one_line_is_not_a_code_block() {
+    let text = "```x``` is inline.\n\nNext para.";
+    let doc = analyze(text);
+    assert!(
+        doc.segmentation
+            .opaque
+            .iter()
+            .all(|o| o.kind != OpaqueKind::Code)
+            || opaque_pairs(text, &doc).iter().all(|(_, t)| t != text)
+    );
+    assert_eq!(
+        sentence_texts(text, &doc),
+        owned(&["```x``` is inline.", "Next para."])
+    );
+
+    let text = "~~~好開心~~~\n\n明天見。";
+    let doc = analyze(text);
+    assert!(doc.segmentation.opaque.is_empty());
+    assert_eq!(
+        paragraph_texts(text, &doc),
+        owned(&["~~~好開心~~~", "明天見。"])
+    );
+    assert_eq!(sentence_texts(text, &doc).last().unwrap(), "明天見。");
+
+    // A real fence still is one.
+    let text = "```\nlet x = 1;\n```\n\nNext para.";
+    let doc = analyze(text);
+    assert_eq!(opaque_pairs(text, &doc)[0].0, OpaqueKind::Code);
+    assert_eq!(sentence_texts(text, &doc), owned(&["Next para."]));
+}
+
+#[test]
+fn display_formula_does_not_cross_a_blank_line() {
+    let text = "$$ x\n\nlong text here.\n\nend $$\n\nAfter.";
+    let doc = analyze(text);
+    assert!(
+        doc.segmentation
+            .opaque
+            .iter()
+            .all(|o| o.kind != OpaqueKind::Formula)
+    );
+    assert!(sentence_texts(text, &doc).contains(&"long text here.".to_string()));
+    assert!(sentence_texts(text, &doc).contains(&"After.".to_string()));
+}
+
+#[test]
+fn sentence_ending_emoji_does_not_split_paragraph() {
+    let text = "晚安👍🏽\n明天見";
+    let doc = analyze(text);
+    assert_eq!(paragraph_texts(text, &doc), owned(&["晚安👍🏽\n明天見"]));
+    assert_eq!(sentence_texts(text, &doc), owned(&["晚安👍🏽", "明天見"]));
+}

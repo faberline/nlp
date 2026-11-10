@@ -50,7 +50,7 @@ pub(super) fn find(c: &[char]) -> Vec<Found> {
 }
 
 /// Blank the block spans, and replace every other opaque char with `x`. An emoji run that ends a
-/// sentence keeps a `。` as its last char, so the sentence still ends there.
+/// sentence keeps a `!` as its last char, so the sentence still ends there.
 pub(super) fn mask(c: &[char], found: &[Found]) -> Vec<char> {
     let mut m = c.to_vec();
     for f in found {
@@ -67,7 +67,7 @@ pub(super) fn mask(c: &[char], found: &[Found]) -> Vec<char> {
         } else {
             m[s..e].fill('x');
             if f.item.kind == OpaqueKind::Emoji && ends_sentence(c, s, e) {
-                m[e - 1] = '。';
+                m[e - 1] = '!';
             }
         }
     }
@@ -93,7 +93,7 @@ fn code_block(
         return None;
     }
     let n = run_len(c, s, le, fence);
-    if n < 3 {
+    if n < 3 || c[s + n..le].contains(&fence) {
         return None;
     }
     for (k, &(cs, ce)) in lines.iter().enumerate().skip(li + 1) {
@@ -121,6 +121,9 @@ fn formula_block(
         return None;
     }
     for (k, &(cs, ce)) in lines.iter().enumerate().skip(li) {
+        if k > li && first_non_ws(c, cs, ce).is_none() {
+            return None;
+        }
         let end = trimmed_end(c, cs, ce);
         let min = if k == li { s + 2 } else { cs };
         if end >= min + 2 && c[end - 2] == '$' && c[end - 1] == '$' {

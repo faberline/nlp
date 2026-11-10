@@ -520,8 +520,8 @@ Known limits of entities:
 ## Model runtime
 
 `faberline_nlp::doc::model` loads a trained model from a directory and runs it on the CPU. It is
-the base for layers 4 to 6. Layers 1 and 2 do not use it. Nothing here is downloaded by cargo, and
-cargo runs no Python.
+the base for layers 4 to 6. The rule layers (1, 2, 3 and 7) do not use it. Nothing here is
+downloaded by cargo, and cargo runs no Python.
 
 ### Layout and manifest
 

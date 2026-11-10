@@ -22,6 +22,7 @@ read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and 
     "opaque": [{"kind": "url", "span": {...}}]
   },
   "tokens": [{"span": {...}, "lang": "en", "sentence": 0, "upos": "PRON"}],
+  "relations": [{"kind": "sequence", "level": "clause", "connector": {...}, "arg1": {...}, "arg2": {...}}],
   "unknown": [{"layer": "segmentation", "span": {...}, "reason": "unsupported_language"}]
 }
 ```
@@ -32,6 +33,7 @@ read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and 
   `ambiguous`, with `layer: "pos"`.
 - `sentence.paragraph` indexes `paragraphs`; `clause.sentence` indexes `sentences`.
 - All lists are sorted by start. `unknown` is sorted by span start.
+- `relations` is always present, `[]` when no relation is found. It comes after `tokens`.
 
 ## Offsets
 
@@ -228,6 +230,97 @@ Known limits of tokens and POS:
   lexicon. The entry stays, and it is a known spec issue.
 - Japanese, Korean and other scripts get no tokens.
 
+## Relations
+
+`relations` is a list of discourse relations between layer-1 units, sorted by the start of
+`connector`. It reads only `segmentation`; it does not use tokens. It uses no model and no
+network, and order and cause come only from the connector words and the text order. A relation
+has `kind`, `level`, `connector`, an optional `correlate`, `arg1` and `arg2`:
+
+- `kind` is one of `sequence`, `cause`, `contrast`, `parallel`, `condition`.
+- `level` is `clause` when `arg1` and `arg2` are layer-1 clauses, and `sentence` when they are
+  layer-1 sentences. A sentence relation comes from a connector that starts its sentence, or a
+  `because` that is the only clause of its sentence.
+- `connector` is the first connector in the text. `correlate` is the second connector of a pair
+  (`因為 … 所以`, `如果 … 就`, `一方面 … 另一方面`, `先 … 再`, `if … then`), and is absent when
+  there is none.
+- Roles: `sequence` has `arg1` earlier and `arg2` later. `contrast` and `parallel` keep text
+  order. `cause`: `arg1` is the reason and `arg2` the result, so `B, because A` has `arg1` =
+  `because A`. `condition`: `arg1` is the `if` clause and `arg2` the consequence.
+- A bare connector is one that ends its clause, such as `然後，` or `However,`. Its unit is the
+  clause after it, if there is one.
+
+### Connectors
+
+A connector counts only at the start of a clause. Before matching, whitespace and opening marks
+(`「『“‘（([“"'`) are skipped. The longest entry wins. English entries match ASCII
+case-insensitively and need a word boundary after them (no letter, digit, `'`, `’` or `-`
+follows). Multi-word English entries use exactly one space.
+
+| kind | connector sits in | zh | en |
+|---|---|---|---|
+| sequence | arg2 | 然後 接著 隨後 | then, afterwards, after that |
+| cause (result) | arg2 | 所以 因此 | so, therefore, thus |
+| contrast | arg2 | 但是 然而 可是 但 | but, however |
+| parallel | arg2 | 另一方面 另外 此外 而且 並且 同樣 | also, moreover, furthermore, likewise, similarly, in addition |
+| cause (reason) | arg1 | 因為 (correlate 所以 因此 so therefore thus) | because (correlate so therefore thus) |
+| condition | arg1 | 如果 假如 要是 若 (correlate 就 那麼 便) | if (correlate then) |
+| sequence | arg1 | 先 (correlate 然後 接著 再 隨後) | none |
+| parallel | arg1 | 一方面 (correlate 另一方面) | none |
+
+Connectors of arg2 take arg1 from the clause before them (or the sentence before, when they
+start a sentence). Connectors of arg1 take arg2 from the clause after them. A correlate in that
+clause consumes it: its own connector gives no second relation. `先` and `一方面` give a
+relation only with their correlate, and never an `unknown`.
+
+A `because` or `因為` clause followed by a cause-result connector is one pair, not two readings:
+`Because A, so B.`, `Because it rained, therefore we stayed.` and `因為下雨，therefore we stayed.`
+give one cause relation with `connector` = `Because` (or `因為`), `correlate` = `so` (or
+`therefore`), `arg1` = the `Because …` clause and `arg2` = the `so …` clause. There is no
+`unknown` over the opener and no relation for the result connector. The correlates are `所以`,
+`因此`, `so`, `therefore` and `thus`, and `so` as a correlate follows the `so` rules below (`so
+far` is not one, and `So,` is not one).
+
+Special cases:
+
+- `但` is not a connector before `願 凡 求 見`. `若` is not one before `干 無 非 是 即`. `先` is
+  not one before `生 前 後`. `if only` is not a connector.
+- `however` counts only when `,` follows it (`However,`), not in `However hard he tried`.
+- `so` is not a connector before `far much many long as that good bad little few called on`.
+  `So,` (a comma follows) gives an `unknown` and no relation.
+- `then` after a clause that starts with `if` is the correlate of that `if`, not a sequence.
+
+### Unknown
+
+A connector gives an `unknown` with `layer: "relations"`, `reason: "ambiguous"`, and the
+connector's span, and no relation, in these cases:
+
+- It has several readings: zh `同時`; en `while`, `since`.
+- Its argument is not clear: a backward connector with no unit before it (for example the first
+  sentence of a paragraph, or the first sentence after an unsupported sentence), or a connector
+  with no unit after it, or an opener whose next clause starts with another connector (for
+  example `If it rains, but we go`).
+- A discourse marker: `So,`.
+
+A sentence with `unsupported_language` has no relations, and no relation uses it as an argument.
+A new paragraph also breaks the sentence relation.
+
+### Relations limits
+
+- Connectors in the middle of a clause are not seen: `He left because it rained`, `A but B`
+  without a comma, `如果下雨我們就…` with `就` mid-clause, `We tested it, and then we ran it`.
+- Only one unit before (or after) a connector is its argument. No implicit relations: a relation
+  needs a connector.
+- No `雖然…但是` or `although` concession pair beyond the contrast of `但是`.
+- Simplified Chinese connectors are not matched. zh `又`, `而`, `並` alone are not connectors.
+- Argument spans are always clauses or sentences, never smaller.
+- A bare connector can leave an argument that is only the connector: `We stayed home, because.`
+  (`arg1` is `because.`), `We slept. So.` (`arg2` is `So.`), and `如果下雨，就，取消。` (`arg2` is
+  `就`). Such a relation is still reported.
+- English connectors accept only an ASCII `,` after them. `However,` is a bare connector, and
+  `However，` with a full-width comma is not one.
+- Correlates may cross languages: `If 天氣好，就…` pairs the English `If` with the zh `就`.
+
 ## Known limits
 
 - Hard-wrapped Chinese text splits at each line break. Rule 4 only keeps a wrap when the next
@@ -235,3 +328,4 @@ Known limits of tokens and POS:
 - Japanese, Korean and other scripts are `und` with `unsupported_language`.
 - Layer 2 has no statistical tagger. Its UPOS comes from the rules and the lexicon in
   "Tokens and POS". There is no model and no network.
+- Layer 7 (Relations) sees only connectors at the start of a clause. See "Relations limits".

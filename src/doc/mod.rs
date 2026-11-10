@@ -2,6 +2,7 @@
 
 mod opaque;
 mod pos;
+mod relation;
 mod segment;
 mod token;
 
@@ -118,6 +119,37 @@ pub struct Token {
     pub upos: Option<Upos>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationKind {
+    Sequence,
+    Cause,
+    Contrast,
+    Parallel,
+    Condition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationLevel {
+    Clause,
+    Sentence,
+}
+
+/// A discourse relation between two layer-1 units. See `docs/doc-v1.md`, section Relations.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Relation {
+    pub kind: RelationKind,
+    pub level: RelationLevel,
+    /// The first connector in the text.
+    pub connector: Span,
+    /// The second connector of a pair, such as `所以` after `因為`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub correlate: Option<Span>,
+    pub arg1: Span,
+    pub arg2: Span,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Document {
     pub schema: String,
@@ -126,6 +158,7 @@ pub struct Document {
     pub options: Options,
     pub segmentation: Segmentation,
     pub tokens: Vec<Token>,
+    pub relations: Vec<Relation>,
     pub unknown: Vec<Unknown>,
 }
 
@@ -214,6 +247,8 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         }
     }
 
+    let (relations, relation_unknown) = relation::relations(&c, &seg);
+    unknown.extend(relation_unknown);
     unknown.sort_by(|a, b| {
         (a.span.start_char, a.span.end_char, a.layer.as_str()).cmp(&(
             b.span.start_char,
@@ -232,6 +267,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         options: options.clone(),
         segmentation: seg,
         tokens,
+        relations,
         unknown,
     }
 }

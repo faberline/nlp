@@ -1,0 +1,60 @@
+{
+  "ambiguous_agreement": {
+    "gold": 5,
+    "matched": 5,
+    "rate": 1.0
+  },
+  "date": "2026-11-10",
+  "gold_file": "tests/data/relation_gold.json",
+  "gold_items": 45,
+  "gold_relations": 30,
+  "gold_sha256": "7acf70ba199d413e515f970a4348ea864fe18f65e24abb37f2a6eb6c3ee17031",
+  "layer": "relations",
+  "matched": 30,
+  "notes": [
+    "The gold set was written by the same author as the rules, so it is not independent.",
+    "Known misses: connectors in the middle of a clause (for example `He left because it rained`, `A but B` without a comma, and `如果下雨我們就` with 就 mid-clause) are not seen by design.",
+    "Only the clause before, or the sentence before in the same paragraph, is the other argument. Implicit relations are not in the gold set.",
+    "Precision is matched predicted relations over all predicted; recall is matched gold relations over all gold relations. A match needs kind, level, connector, correlate, arg1 and arg2 to be equal."
+  ],
+  "per_kind": {
+    "cause": {
+      "gold": 11,
+      "matched": 11,
+      "precision": 1.0,
+      "predicted": 11,
+      "recall": 1.0
+    },
+    "condition": {
+      "gold": 4,
+      "matched": 4,
+      "precision": 1.0,
+      "predicted": 4,
+      "recall": 1.0
+    },
+    "contrast": {
+      "gold": 6,
+      "matched": 6,
+      "precision": 1.0,
+      "predicted": 6,
+      "recall": 1.0
+    },
+    "parallel": {
+      "gold": 4,
+      "matched": 4,
+      "precision": 1.0,
+      "predicted": 4,
+      "recall": 1.0
+    },
+    "sequence": {
+      "gold": 5,
+      "matched": 5,
+      "precision": 1.0,
+      "predicted": 5,
+      "recall": 1.0
+    }
+  },
+  "precision": 1.0,
+  "predicted": 30,
+  "recall": 1.0
+}

@@ -1,0 +1,227 @@
+[
+  {
+    "genre": "novel", "lang": "zh", "text": "他推開門，然後走進了房間。",
+    "relations": [{"kind": "sequence", "level": "clause", "connector": "然後", "correlate": null, "arg1": "他推開門", "arg2": "然後走進了房間。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "zh", "text": "因為風很大，所以船沒有出海。",
+    "relations": [{"kind": "cause", "level": "clause", "connector": "因為", "correlate": "所以", "arg1": "因為風很大", "arg2": "所以船沒有出海。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "zh", "text": "她想回家，但是門已經鎖了。",
+    "relations": [{"kind": "contrast", "level": "clause", "connector": "但是", "correlate": null, "arg1": "她想回家", "arg2": "但是門已經鎖了。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "zh", "text": "如果天亮以前他沒有回來，就報警。",
+    "relations": [{"kind": "condition", "level": "clause", "connector": "如果", "correlate": "就", "arg1": "如果天亮以前他沒有回來", "arg2": "就報警。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "zh", "text": "他把信收好，想起了母親。",
+    "relations": [],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "en", "text": "He opened the letter, then he sat down.",
+    "relations": [{"kind": "sequence", "level": "clause", "connector": "then", "correlate": null, "arg1": "He opened the letter", "arg2": "then he sat down."}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "en", "text": "Because the bridge was out, the carriage stopped.",
+    "relations": [{"kind": "cause", "level": "clause", "connector": "Because", "correlate": null, "arg1": "Because the bridge was out", "arg2": "the carriage stopped."}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "en", "text": "The wind was cold. However, the fire stayed warm.",
+    "relations": [{"kind": "contrast", "level": "sentence", "connector": "However", "correlate": null, "arg1": "The wind was cold.", "arg2": "However, the fire stayed warm."}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "en", "text": "If the tide turns, then we sail at dawn.",
+    "relations": [{"kind": "condition", "level": "clause", "connector": "If", "correlate": "then", "arg1": "If the tide turns", "arg2": "then we sail at dawn."}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "en", "text": "It was so far away that nobody came.",
+    "relations": [],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "mixed", "text": "他說 OK，but 我不信。",
+    "relations": [{"kind": "contrast", "level": "clause", "connector": "but", "correlate": null, "arg1": "他說 OK", "arg2": "but 我不信。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "mixed", "text": "The door creaked，然後 他停住了。",
+    "relations": [{"kind": "sequence", "level": "clause", "connector": "然後", "correlate": null, "arg1": "The door creaked", "arg2": "然後 他停住了。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "mixed", "text": "雨停了，so we went out.",
+    "relations": [{"kind": "cause", "level": "clause", "connector": "so", "correlate": null, "arg1": "雨停了", "arg2": "so we went out."}],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "mixed", "text": "The plan 很好，但願 everyone agrees.",
+    "relations": [],
+    "ambiguous": []
+  },
+  {
+    "genre": "novel", "lang": "mixed", "text": "I waited 了很久，while the rain fell.",
+    "relations": [],
+    "ambiguous": ["while"]
+  },
+  {
+    "genre": "paper", "lang": "zh", "text": "方法甲速度較快。此外，方法乙的記憶體用量較低。",
+    "relations": [{"kind": "parallel", "level": "sentence", "connector": "此外", "correlate": null, "arg1": "方法甲速度較快。", "arg2": "此外，方法乙的記憶體用量較低。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "zh", "text": "一方面速度要快，另一方面成本要低。",
+    "relations": [{"kind": "parallel", "level": "clause", "connector": "一方面", "correlate": "另一方面", "arg1": "一方面速度要快", "arg2": "另一方面成本要低。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "zh", "text": "實驗很久才完成，因此我們延後發表。",
+    "relations": [{"kind": "cause", "level": "clause", "connector": "因此", "correlate": null, "arg1": "實驗很久才完成", "arg2": "因此我們延後發表。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "zh", "text": "會議在下午開始。先生說明了規則。",
+    "relations": [],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "zh", "text": "我們不急著發表，但願審稿人喜歡。",
+    "relations": [],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "en", "text": "The method is simple. Moreover, it scales linearly.",
+    "relations": [{"kind": "parallel", "level": "sentence", "connector": "Moreover", "correlate": null, "arg1": "The method is simple.", "arg2": "Moreover, it scales linearly."}],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "en", "text": "We tested three models, and then we selected the best.",
+    "relations": [],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "en", "text": "The loss decreased, thus the model converged.",
+    "relations": [{"kind": "cause", "level": "clause", "connector": "thus", "correlate": null, "arg1": "The loss decreased", "arg2": "thus the model converged."}],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "en", "text": "Accuracy improved. Therefore, we report the new numbers.",
+    "relations": [{"kind": "cause", "level": "sentence", "connector": "Therefore", "correlate": null, "arg1": "Accuracy improved.", "arg2": "Therefore, we report the new numbers."}],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "en", "text": "Since the data was small, we used cross-validation.",
+    "relations": [],
+    "ambiguous": ["Since"]
+  },
+  {
+    "genre": "paper", "lang": "mixed", "text": "The sample was small，因為 the budget was tight.",
+    "relations": [{"kind": "cause", "level": "clause", "connector": "因為", "correlate": null, "arg1": "因為 the budget was tight.", "arg2": "The sample was small"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "mixed", "text": "我們用了 transformer，so 結果很好。",
+    "relations": [{"kind": "cause", "level": "clause", "connector": "so", "correlate": null, "arg1": "我們用了 transformer", "arg2": "so 結果很好。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "mixed", "text": "Latency fell 很多。Moreover，memory 也降了。",
+    "relations": [{"kind": "parallel", "level": "sentence", "connector": "Moreover", "correlate": null, "arg1": "Latency fell 很多。", "arg2": "Moreover，memory 也降了。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "mixed", "text": "Sorry，however the test 失敗了。",
+    "relations": [],
+    "ambiguous": []
+  },
+  {
+    "genre": "paper", "lang": "mixed", "text": "we ran it，while 他等著。",
+    "relations": [],
+    "ambiguous": ["while"]
+  },
+  {
+    "genre": "casual", "lang": "zh", "text": "我好累，所以先睡了。",
+    "relations": [{"kind": "cause", "level": "clause", "connector": "所以", "correlate": null, "arg1": "我好累", "arg2": "所以先睡了。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "zh", "text": "他說要來，但是又沒來。",
+    "relations": [{"kind": "contrast", "level": "clause", "connector": "但是", "correlate": null, "arg1": "他說要來", "arg2": "但是又沒來。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "zh", "text": "如果你要來，就早點講啊。",
+    "relations": [{"kind": "condition", "level": "clause", "connector": "如果", "correlate": "就", "arg1": "如果你要來", "arg2": "就早點講啊。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "zh", "text": "我想去，可是很怕熱。",
+    "relations": [{"kind": "contrast", "level": "clause", "connector": "可是", "correlate": null, "arg1": "我想去", "arg2": "可是很怕熱。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "zh", "text": "我們今天很忙，同時也很開心。",
+    "relations": [],
+    "ambiguous": ["同時"]
+  },
+  {
+    "genre": "casual", "lang": "en", "text": "lol it broke again, so I gave up",
+    "relations": [{"kind": "cause", "level": "clause", "connector": "so", "correlate": null, "arg1": "lol it broke again", "arg2": "so I gave up"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "en", "text": "It was so good. So, what now?",
+    "relations": [],
+    "ambiguous": ["So"]
+  },
+  {
+    "genre": "casual", "lang": "en", "text": "the build is green, but the tests are red",
+    "relations": [{"kind": "contrast", "level": "clause", "connector": "but", "correlate": null, "arg1": "the build is green", "arg2": "but the tests are red"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "en", "text": "I stayed home. Then I cooked dinner.",
+    "relations": [{"kind": "sequence", "level": "sentence", "connector": "Then", "correlate": null, "arg1": "I stayed home.", "arg2": "Then I cooked dinner."}],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "en", "text": "So far, the results look fine.",
+    "relations": [],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "mixed", "text": "這個 bug 很煩，我修好了。",
+    "relations": [],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "mixed", "text": "our tests pass，所以 we ship。",
+    "relations": [{"kind": "cause", "level": "clause", "connector": "所以", "correlate": null, "arg1": "our tests pass", "arg2": "所以 we ship。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "mixed", "text": "this is fine. 不過 it is slow.",
+    "relations": [],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "mixed", "text": "If 天氣好，我們就去爬山。",
+    "relations": [{"kind": "condition", "level": "clause", "connector": "If", "correlate": null, "arg1": "If 天氣好", "arg2": "我們就去爬山。"}],
+    "ambiguous": []
+  },
+  {
+    "genre": "casual", "lang": "mixed", "text": "The run finished，then 我們 checked the logs.",
+    "relations": [{"kind": "sequence", "level": "clause", "connector": "then", "correlate": null, "arg1": "The run finished", "arg2": "then 我們 checked the logs."}],
+    "ambiguous": []
+  }
+]

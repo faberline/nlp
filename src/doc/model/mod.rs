@@ -1,8 +1,9 @@
 //! Model runtime for layers 4 to 6 of `nlp.doc.v1`. See `docs/doc-v1.md`, "Model runtime".
 //!
 //! A model lives in `<models_dir>/<dir>/` and is listed in `<models_dir>/manifest.json`.
-//! [`load`] checks every listed file against its sha256 before any file is parsed. Without a
-//! backend feature, or without a model, a layer reports `unknown` with reason `no_model`.
+//! [`verify`] checks every listed file against its sha256 before any file is parsed. [`load`]
+//! verifies too, then loads the model. Without the `onnx` feature, [`load`] returns `NoBackend`
+//! at once, so a layer reports `unknown` with reason `no_model`.
 
 #[cfg(feature = "onnx")]
 mod onnx;
@@ -17,6 +18,9 @@ use std::io::{self, Read};
 use std::path::{Component, Path};
 
 pub const MANIFEST_SCHEMA: &str = "nlp.models.v1";
+
+/// The largest `max_len` that a manifest may give.
+pub const MAX_LEN_CAP: usize = 4096;
 
 /// A dense f32 tensor in row-major order.
 #[derive(Clone, Debug, PartialEq)]
@@ -200,11 +204,19 @@ pub fn verify(models_dir: &Path, model_id: &str) -> Result<Verified, ModelError>
             entry.model
         )));
     }
+    if expected_ix == model_ix || expected_ix == tokenizer_ix {
+        return Err(ModelError::Manifest(format!(
+            "expected names the same file as model or tokenizer: {}",
+            entry.expected
+        )));
+    }
     for f in &entry.files {
         check_relative(&f.path)?;
     }
-    if entry.max_len == 0 {
-        return Err(ModelError::Manifest("max_len must be positive".to_owned()));
+    if entry.max_len == 0 || entry.max_len > MAX_LEN_CAP {
+        return Err(ModelError::Manifest(format!(
+            "max_len must be from 1 to {MAX_LEN_CAP}"
+        )));
     }
 
     let dir = models_dir.join(&entry.dir);
@@ -245,13 +257,22 @@ pub fn verify(models_dir: &Path, model_id: &str) -> Result<Verified, ModelError>
     })
 }
 
-/// Verifies the model and loads it with `backend`.
+/// Verifies the model and loads it with `backend`. Without the `onnx` feature this returns
+/// `NoBackend` at once, and no file is read.
 pub fn load(
     models_dir: &Path,
     model_id: &str,
     backend: Backend,
 ) -> Result<Box<dyn Model>, ModelError> {
-    load_verified(&verify(models_dir, model_id)?, backend)
+    #[cfg(feature = "onnx")]
+    {
+        load_verified(&verify(models_dir, model_id)?, backend)
+    }
+    #[cfg(not(feature = "onnx"))]
+    {
+        let _ = (models_dir, model_id, backend);
+        Err(ModelError::NoBackend)
+    }
 }
 
 /// Loads a model from bytes that `verify` has already checked.
@@ -385,10 +406,11 @@ fn read_file(path: &Path, shown: &str, bytes: Option<u64>) -> Result<Vec<u8>, Mo
         _ => ModelError::Load(format!("{shown}: {e}")),
     };
     let meta = fs::symlink_metadata(path).map_err(io_err)?;
+    if meta.file_type().is_symlink() {
+        return Err(ModelError::Load(format!("{shown}: symlinks are refused")));
+    }
     if !meta.file_type().is_file() {
-        return Err(ModelError::Load(format!(
-            "{shown}: not a regular file (symlinks are refused)"
-        )));
+        return Err(ModelError::Load(format!("{shown}: not a regular file")));
     }
     let size_mismatch = |actual: u64| ModelError::HashMismatch {
         file: format!("{shown} (bytes)"),

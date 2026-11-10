@@ -536,8 +536,10 @@ A model directory holds `manifest.json` and one subdirectory per model:
                 "receipt": null } ] }
 ```
 
-- `model`, `tokenizer` and `expected` must each be listed in `files`. Every path is relative to
-  `<dir>` and has no `..` and no root.
+- `model`, `tokenizer` and `expected` must each be listed in `files`. The three paths must
+  differ. Every path is relative to `<dir>` and has no `..` and no root.
+- `max_len` must be from 1 to 4096. It must also equal the input length that the ONNX file
+  declares (the second dimension of its input). A different value is refused at load.
 - `bytes` is optional. When present it is checked too.
 
 ### Hash check
@@ -551,15 +553,17 @@ model, tokenizer and expected files). `verify(models_dir, id)` returns it, and
 builds the tokenizer from it and replaces the earlier `from_file`: no model or tokenizer file is
 read by path any more.
 
-Only regular files are read. A symlink is refused, and so is anything that is not a file. The size
-from the file metadata is compared with `bytes` before the read, so a large or truncated file is
-refused without being read in full.
+Only regular files are read. A listed file that is a symlink is refused, and so is anything that is
+not a regular file. A model directory that is a symlink is followed. The size from the file metadata
+is compared with `bytes` before the read, so a large or truncated file is refused without being read
+in full.
 
 The errors are `UnknownModel`, `Missing` (a listed file is absent), `HashMismatch` (`file` is
 `path (bytes)` for a byte count mismatch), `Manifest` (bad schema, an absolute path or `..` in `dir`
-or `files`, or `model`, `tokenizer` or `expected` not listed in `files`, or `model` and `tokenizer` naming the
-same path) and `Load` (a refused file
-or a parse failure). A hash mismatch is never reported as `unknown`.
+or `files`, a `model`, `tokenizer` or `expected` not listed in `files`, two of `model`, `tokenizer`
+and `expected` naming the same path, or a `max_len` outside 1 to 4096) and `Load` (a refused file,
+a `max_len` that differs from the model's input length, or a parse failure). A hash mismatch is
+never reported as `unknown`.
 
 ### Backends and the engine choice
 
@@ -593,9 +597,10 @@ that character's span.
 
 ### When no model is available
 
-The directory is checked before the backend is looked at. So without the `onnx` feature, `load`
-returns `Missing`, `UnknownModel` or `HashMismatch` when the directory is bad. It returns `NoBackend`
-only when the directory is valid. `ModelError::into_reason` maps `NoBackend`, `UnknownModel` and
+Without the `onnx` feature, `load` returns `NoBackend` at once and reads no file, so a layer
+reports `no_model`. `verify` works without the feature and gives the integrity errors. With the
+feature, `load` returns `Missing`, `UnknownModel`, `HashMismatch`, `Manifest` or `Load` for a bad
+directory. `ModelError::into_reason` maps `NoBackend`, `UnknownModel` and
 `Missing` to `no_model`. A layer then reports
 `no_model_unknown(layer, span)`, which is `{"layer": ..., "span": ..., "reason": "no_model"}`.
 Other errors are not `unknown`. They are returned to the caller.

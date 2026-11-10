@@ -3,7 +3,7 @@ use faberline_nlp::doc::Reason;
 #[cfg(feature = "onnx")]
 use faberline_nlp::doc::model::Batch;
 use faberline_nlp::doc::model::{
-    Backend, Model, ModelError, Tensor, argmax_labels, load, no_model_unknown,
+    Backend, ModelError, Tensor, argmax_labels, load, no_model_unknown, verify,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -68,7 +68,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn err_of(r: Result<Box<dyn Model>, ModelError>) -> ModelError {
+fn err_of<T>(r: Result<T, ModelError>) -> ModelError {
     match r {
         Ok(_) => panic!("expected an error"),
         Err(e) => e,
@@ -80,14 +80,14 @@ fn verified() -> faberline_nlp::doc::model::Verified {
     faberline_nlp::doc::model::verify(&models_dir(), MODEL).unwrap()
 }
 
-/// Copies `models/` to a temporary directory, rewrites the manifest with `edit`, and loads
+/// Copies `models/` to a temporary directory, rewrites the manifest with `edit`, and verifies
 /// the model from there.
 fn load_edited(edit: impl FnOnce(&mut serde_json::Value)) -> ModelError {
     let tmp = copied_models();
     let mut m = manifest_value(tmp.path());
     edit(&mut m);
     write_manifest(tmp.path(), &m);
-    err_of(load(tmp.path(), MODEL, Backend::Onnx))
+    err_of(verify(tmp.path(), MODEL))
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -178,7 +178,7 @@ fn hash_mismatch_is_refused() {
     let last = bytes.len() - 1;
     bytes[last] ^= 1;
     fs::write(&path, bytes).unwrap();
-    match err_of(load(tmp.path(), MODEL, Backend::Onnx)) {
+    match err_of(verify(tmp.path(), MODEL)) {
         ModelError::HashMismatch { file, .. } => assert_eq!(file, "model.onnx"),
         other => panic!("unexpected {other:?}"),
     }
@@ -188,7 +188,7 @@ fn hash_mismatch_is_refused() {
 fn missing_file_is_refused() {
     let tmp = copied_models();
     fs::remove_file(tmp.path().join(MODEL).join("tokenizer.json")).unwrap();
-    match err_of(load(tmp.path(), MODEL, Backend::Onnx)) {
+    match err_of(verify(tmp.path(), MODEL)) {
         ModelError::Missing(path) => assert_eq!(path, "tokenizer.json"),
         other => panic!("unexpected {other:?}"),
     }
@@ -196,7 +196,7 @@ fn missing_file_is_refused() {
 
 #[test]
 fn unknown_model_id_is_refused() {
-    match err_of(load(&models_dir(), "no-such-model", Backend::Onnx)) {
+    match err_of(verify(&models_dir(), "no-such-model")) {
         ModelError::UnknownModel(id) => assert_eq!(id, "no-such-model"),
         other => panic!("unexpected {other:?}"),
     }
@@ -209,7 +209,7 @@ fn manifest_path_escape_is_refused() {
     m["models"][0]["model"] = serde_json::json!("../model.onnx");
     write_manifest(tmp.path(), &m);
     assert!(matches!(
-        err_of(load(tmp.path(), MODEL, Backend::Onnx)),
+        err_of(verify(tmp.path(), MODEL)),
         ModelError::Manifest(_)
     ));
 }
@@ -246,7 +246,7 @@ fn truncated_file_is_refused_by_size() {
     let path = tmp.path().join(MODEL).join("model.onnx");
     let bytes = fs::read(&path).unwrap();
     fs::write(&path, &bytes[..bytes.len() / 2]).unwrap();
-    match err_of(load(tmp.path(), MODEL, Backend::Onnx)) {
+    match err_of(verify(tmp.path(), MODEL)) {
         ModelError::HashMismatch { file, .. } => assert_eq!(file, "model.onnx (bytes)"),
         other => panic!("unexpected {other:?}"),
     }
@@ -259,7 +259,7 @@ fn appended_file_is_refused_by_size() {
     let mut bytes = fs::read(&path).unwrap();
     bytes.extend_from_slice(b" ");
     fs::write(&path, bytes).unwrap();
-    match err_of(load(tmp.path(), MODEL, Backend::Onnx)) {
+    match err_of(verify(tmp.path(), MODEL)) {
         ModelError::HashMismatch { file, .. } => assert_eq!(file, "tokenizer.json (bytes)"),
         other => panic!("unexpected {other:?}"),
     }
@@ -274,7 +274,7 @@ fn symlinked_file_is_refused() {
     fs::copy(dir.join("tokenizer.json"), &real).unwrap();
     fs::remove_file(dir.join("tokenizer.json")).unwrap();
     std::os::unix::fs::symlink(&real, dir.join("tokenizer.json")).unwrap();
-    match err_of(load(tmp.path(), MODEL, Backend::Onnx)) {
+    match err_of(verify(tmp.path(), MODEL)) {
         ModelError::Load(msg) => assert!(msg.contains("tokenizer.json"), "{msg}"),
         other => panic!("unexpected {other:?}"),
     }
@@ -283,10 +283,24 @@ fn symlinked_file_is_refused() {
 #[cfg(not(feature = "onnx"))]
 #[test]
 fn no_backend_without_feature() {
-    assert!(matches!(
-        err_of(load(&models_dir(), MODEL, Backend::Onnx)),
-        ModelError::NoBackend
-    ));
+    fn assert_no_backend(dir: &Path, id: &str) {
+        let e = err_of(load(dir, id, Backend::Onnx));
+        assert_eq!(e, ModelError::NoBackend);
+        assert_eq!(e.into_reason(), Some(Reason::NoModel));
+    }
+    assert_no_backend(&models_dir(), MODEL);
+
+    let flipped = copied_models();
+    let path = flipped.path().join(MODEL).join("model.onnx");
+    let mut bytes = fs::read(&path).unwrap();
+    bytes[0] ^= 1;
+    fs::write(&path, bytes).unwrap();
+    assert_no_backend(flipped.path(), MODEL);
+
+    let tmp = tempfile::tempdir().unwrap();
+    assert_no_backend(&tmp.path().join("no-such-dir"), MODEL);
+
+    assert_no_backend(&models_dir(), "no-such-model");
 }
 
 #[test]
@@ -523,5 +537,72 @@ fn model_and_tokenizer_with_the_same_path_is_refused() {
     match e {
         ModelError::Manifest(msg) => assert!(msg.contains("same file"), "{msg}"),
         other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn expected_with_the_same_path_as_another_file_is_refused() {
+    for name in ["model.onnx", "tokenizer.json"] {
+        let e = load_edited(|m| m["models"][0]["expected"] = serde_json::json!(name));
+        match e {
+            ModelError::Manifest(msg) => assert!(msg.contains("same file"), "{name}: {msg}"),
+            other => panic!("{name}: unexpected {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn expected_not_listed_in_files_is_refused() {
+    let e = load_edited(|m| {
+        let files = m["models"][0]["files"].as_array_mut().unwrap();
+        files.retain(|f| f["path"] != "expected.json");
+    });
+    match e {
+        ModelError::Manifest(msg) => assert_eq!(msg, "expected.json is not listed in files"),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+#[test]
+fn max_len_out_of_range_is_refused() {
+    for max_len in [0u64, 4097, 18446744073709551615] {
+        let e = load_edited(|m| m["models"][0]["max_len"] = serde_json::json!(max_len));
+        match e {
+            ModelError::Manifest(msg) => assert_eq!(msg, "max_len must be from 1 to 4096"),
+            other => panic!("{max_len}: unexpected {other:?}"),
+        }
+    }
+}
+
+#[cfg(feature = "onnx")]
+#[test]
+fn max_len_must_match_the_model() {
+    for max_len in [16usize, 65] {
+        let tmp = copied_models();
+        let mut m = manifest_value(tmp.path());
+        m["models"][0]["max_len"] = serde_json::json!(max_len);
+        write_manifest(tmp.path(), &m);
+        match err_of(load(tmp.path(), MODEL, Backend::Onnx)) {
+            ModelError::Load(msg) => assert_eq!(
+                msg,
+                format!("max_len is {max_len}, but the model declares input length {MAX_LEN}")
+            ),
+            other => panic!("{max_len}: unexpected {other:?}"),
+        }
+    }
+}
+
+#[cfg(feature = "onnx")]
+#[test]
+fn pad_id_outside_vocabulary_is_refused() {
+    for pad_id in [-1i64, 258] {
+        let tmp = copied_models();
+        let mut m = manifest_value(tmp.path());
+        m["models"][0]["pad_id"] = serde_json::json!(pad_id);
+        write_manifest(tmp.path(), &m);
+        match err_of(load(tmp.path(), MODEL, Backend::Onnx)) {
+            ModelError::Load(_) => {}
+            other => panic!("{pad_id}: unexpected {other:?}"),
+        }
     }
 }

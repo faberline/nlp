@@ -4,6 +4,7 @@ use super::{Batch, Model, ModelError, ModelInfo, Output, Tensor, Verified};
 use std::sync::Arc;
 use tract_onnx::prelude::*;
 use tract_onnx::tract_core::ops::array::Gather;
+use tract_onnx::tract_hir::infer::Factoid;
 
 type Plan = Arc<TypedRunnableModel>;
 
@@ -20,9 +21,10 @@ pub(super) fn load(v: &Verified) -> Result<OnnxModel, ModelError> {
     let max_len = v.info.max_len;
     let inference = tract_onnx::onnx()
         .model_for_read(&mut v.model.as_slice())
-        .and_then(|m| {
-            m.with_input_fact(0, InferenceFact::dt_shape(i64::datum_type(), [1, max_len]))
-        })
+        .map_err(|e| ModelError::Load(format!("model: {e}")))?;
+    check_input_len(&inference, max_len)?;
+    let inference = inference
+        .with_input_fact(0, InferenceFact::dt_shape(i64::datum_type(), [1, max_len]))
         .map_err(|e| ModelError::Load(format!("model: {e}")))?;
     let typed = inference
         .into_optimized()
@@ -42,6 +44,26 @@ pub(super) fn load(v: &Verified) -> Result<OnnxModel, ModelError> {
         plan,
         vocab,
     })
+}
+
+/// Refuses a model whose declared input length (the second dimension of input 0) is fixed and
+/// differs from `max_len`. A symbolic or unknown dimension is accepted.
+fn check_input_len(model: &InferenceModel, max_len: usize) -> Result<(), ModelError> {
+    let fact = model
+        .input_fact(0)
+        .map_err(|e| ModelError::Load(format!("model: {e}")))?;
+    let declared = fact
+        .shape
+        .dim(1)
+        .and_then(|d| d.concretize())
+        .and_then(|d| d.to_i64().ok())
+        .and_then(|n| usize::try_from(n).ok());
+    match declared {
+        Some(n) if n != max_len => Err(ModelError::Load(format!(
+            "max_len is {max_len}, but the model declares input length {n}"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 fn embedding_rows(model: &TypedModel) -> Result<usize, ModelError> {

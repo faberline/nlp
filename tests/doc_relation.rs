@@ -682,6 +682,18 @@ const CASES: &[&str] = &[
     "If it rains, then, because we stay.",
     "If it rains, we stay. Then we rest.",
     "We go, if it rains. Then we rest.",
+    // because alone in its sentence
+    "We stayed. Because it rained.",
+    "我們留下。因為。",
+    "Because.",
+    "We stayed. Because, it rained.",
+    "We stayed.\n\nBecause it rained.",
+    // unknown examples of the docs
+    "If it rains.",
+    "We left, but.",
+    "先洗手。",
+    "先洗手，吃飯。",
+    "一方面便宜，但是不好。",
 ];
 
 /// Brackets and quotes that may stand before a connector inside a clause.
@@ -1184,4 +1196,61 @@ fn review_bare_opener_gives_no_relation() {
         )]
     );
     assert!(rel_unknown("先洗手，然後，如果餓了，就吃飯。").is_empty());
+}
+
+#[test]
+fn review_because_alone_in_its_sentence() {
+    // A `Because` that is the only clause of its sentence takes the sentence before it as arg2.
+    assert_eq!(
+        rels("We stayed. Because it rained."),
+        [rel(
+            K::Cause,
+            L::Sentence,
+            "Because",
+            None,
+            "Because it rained.",
+            "We stayed."
+        )]
+    );
+    assert!(rel_unknown("We stayed. Because it rained.").is_empty());
+    // The same when the connector is bare.
+    assert_eq!(
+        rels("我們留下。因為。"),
+        [rel(
+            K::Cause,
+            L::Sentence,
+            "因為",
+            None,
+            "因為。",
+            "我們留下。"
+        )]
+    );
+    assert!(rel_unknown("我們留下。因為。").is_empty());
+    // A `Because` with nothing before it or after it gives no relation, only an unknown.
+    assert!(rels("Because.").is_empty());
+    assert_eq!(rel_unknown("Because."), ["Because"]);
+    // The sentence before must be in the same paragraph.
+    assert!(rels("We stayed.\n\nBecause it rained.").is_empty());
+    assert_eq!(rel_unknown("We stayed.\n\nBecause it rained."), ["Because"]);
+    // A bare `Because` with a clause after it is not alone: an unknown, no relation.
+    assert!(rels("We stayed. Because, it rained.").is_empty());
+    assert_eq!(rel_unknown("We stayed. Because, it rained."), ["Because"]);
+}
+
+#[test]
+fn review_unknown_examples_of_the_docs() {
+    // An opener with no clause after it in its sentence.
+    assert!(rels("If it rains.").is_empty());
+    assert_eq!(rel_unknown("If it rains."), ["If"]);
+    // A bare backward connector that is not first and has no clause after it.
+    assert!(rels("We left, but.").is_empty());
+    assert_eq!(rel_unknown("We left, but."), ["but"]);
+    // `先` and `一方面` give nothing where another opener gives an unknown.
+    for text in ["先洗手。", "先洗手，吃飯。", "一方面便宜，但是不好。"] {
+        assert!(
+            rels(text).iter().all(|r| r.2 != "先" && r.2 != "一方面"),
+            "{text}"
+        );
+        assert!(rel_unknown(text).is_empty(), "{text}");
+    }
 }

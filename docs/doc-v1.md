@@ -21,13 +21,15 @@ read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and 
     "clauses": [{"span": {...}, "lang": "en", "sentence": 0}],
     "opaque": [{"kind": "url", "span": {...}}]
   },
+  "tokens": [{"span": {...}, "lang": "en", "sentence": 0, "upos": "PRON"}],
   "unknown": [{"layer": "segmentation", "span": {...}, "reason": "unsupported_language"}]
 }
 ```
 
 - `lang` is one of `zh`, `en`, `mixed`, `und`.
 - `reason` is one of `no_model`, `ambiguous`, `low_confidence`, `unsupported_language`,
-  `not_applicable`. Layer 1 only produces `unsupported_language`.
+  `not_applicable`. Layer 1 produces `unsupported_language`. Layer 2 produces `no_model` and
+  `ambiguous`, with `layer: "pos"`.
 - `sentence.paragraph` indexes `paragraphs`; `clause.sentence` indexes `sentences`.
 - All lists are sorted by start. `unknown` is sorted by span start.
 
@@ -160,10 +162,76 @@ Known limits of opaque spans:
 - Continuation lines of a list item are normal text.
 - No Markdown tables, quotes, links or footnotes.
 
+## Tokens and POS
+
+`tokens` is a list of tokens in text order, sorted by start. A token has a `span`, a `lang`,
+the index of its `sentence`, and an optional `upos` (Universal POS, UD v2 names in upper case).
+A token's `lang` is `zh` when it has a Han char, `en` when it has a Latin letter (a letter that
+is not Han), and `und` otherwise. The Han set is U+3400–4DBF, U+4E00–9FFF, U+F900–FAFF, U+3005
+(々) and U+3007 (〇). Extension B is not in it. `upos` is absent when no
+rule or word decides it. Tokens never cross a sentence boundary, and no token is whitespace.
+
+### Tokenization
+
+Each sentence is split by these rules, in order:
+
+1. Every opaque span inside the sentence is one token. Block spans are never tokens.
+2. Han runs (maximal runs of the Han set) are matched against the Taiwan term list
+   (`臺灣`, `資料庫`, `記憶體` and so on), longest match first. The text between matches is
+   segmented by jieba with its HMM.
+3. All other runs use Unicode word boundaries (UAX 29). Then:
+   a. English clitics split off: `n't` (`didn't` gives `did`, `n't`; `can't` gives `ca`,
+      `n't`), and `'s`, `'ll`, `'re`, `'ve`, `'m`, `'d`.
+   b. A hyphen (`-` or `‐`, U+2010) between two words joins them: `well-known` is one token.
+      Both words must contain a letter, so `3-4` gives `3`, `-`, `4` and `COVID-19` gives
+      `COVID`, `-`, `19`.
+   c. A dot after a listed abbreviation, a single uppercase letter (the abbreviation list of
+      the sentence rules) or a word with a dot inside (`U.S`) joins it: `Dr.` and `U.S.` are
+      one token each. `etc.` keeps its dot too, although `etc` is not in the list.
+   d. A run of one char from `. … - — ~ ! ? ！ ？` is one token: `...`, `!!!`, `---`. A
+      different char starts a new token, so `?!!` is `?` and `!!`.
+4. Whitespace is dropped. Every other char belongs to exactly one token.
+
+### POS tagging
+
+The tag of each token is decided by the first rule that matches:
+
+1. Opaque `url`, `citation` and `code` are `X`. Opaque `formula` and `emoji` are `SYM`.
+2. Only punctuation characters (ASCII and CJK punctuation) are `PUNCT`.
+3. Only symbol characters (for example `$ % + = @ ° × ± © € →`) are `SYM`.
+4. A number is `NUM`: ASCII digits, with `.` or `,` allowed between them (`3.5`, `1,000`), or
+   a run of Chinese numerals (`〇零一二三四五六七八九十百千萬万億亿兩两`).
+5. The lexicon. English words are looked up in lower case, Chinese words exactly. A word has
+   one tag.
+6. A word in the ambiguous list gets no tag, with reason `ambiguous`.
+7. Anything else gets no tag, with reason `no_model`.
+
+Every undecided token has exactly one `unknown` entry with `layer: "pos"` and the token's span.
+The lexicon is hand-written and small. It has no statistical model, so most content words
+(nouns, verbs, adjectives) are `no_model`.
+
+Sentences with `unsupported_language` have no tokens, and the sentence's `pos` entries are
+absent.
+
+Known limits of tokens and POS:
+
+- jieba splits some Taiwan-usage words that are not in the term list. Those tokens may have
+  the wrong boundary. Seen so far: jieba joins `門關` in `把門關上了`, where `門` and `關` are
+  separate words (pinned by a test); `臺灣讀` was also reported as a wrong cut in review.
+- Abbreviations other than the single capital letters and the listed words split at each dot.
+- `etc.` at the end of a sentence keeps its dot, so the sentence has no separate `.` token.
+- An abbreviation dot swallows a sentence-final period: `She said no. Then I left.` gives
+  `no.` as one token (`no_model`), and `I said I.` gives `I.` as one token.
+- Most content words are `no_model` until the model layers. The lexicon only has closed-class
+  words and a few numerals.
+- `&` is `und` by the token language rule, so it never matches the CCONJ entry in the
+  lexicon. The entry stays, and it is a known spec issue.
+- Japanese, Korean and other scripts get no tokens.
+
 ## Known limits
 
 - Hard-wrapped Chinese text splits at each line break. Rule 4 only keeps a wrap when the next
   line starts lowercase Latin, so Chinese line wraps become sentence boundaries.
 - Japanese, Korean and other scripts are `und` with `unsupported_language`.
-- Only the layer 1 rules above are implemented. There is no model, no network and no
-  abbreviation list beyond the one given.
+- Layer 2 has no statistical tagger. Its UPOS comes from the rules and the lexicon in
+  "Tokens and POS". There is no model and no network.

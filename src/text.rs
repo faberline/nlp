@@ -15,7 +15,7 @@ pub(crate) fn default_jieba() -> &'static Jieba {
     JIEBA.get_or_init(Jieba::new)
 }
 
-const TAIWAN_TERMS: &[&str] = &[
+pub(crate) const TAIWAN_TERMS: &[&str] = &[
     "臺灣",
     "台灣",
     "人工智慧",

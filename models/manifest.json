@@ -1,0 +1,36 @@
+{
+  "schema": "nlp.models.v1",
+  "models": [
+    {
+      "id": "test-tiny",
+      "layers": [
+        "test"
+      ],
+      "licence": "CC0-1.0",
+      "dir": "test-tiny",
+      "max_len": 64,
+      "pad_id": 0,
+      "model": "model.onnx",
+      "tokenizer": "tokenizer.json",
+      "expected": "expected.json",
+      "files": [
+        {
+          "path": "model.onnx",
+          "sha256": "974f9138da91f1ff1f7e146ddf97335ec1129c993761f6efd9a72c46702bdaa2",
+          "bytes": 8728
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "7ad2522dd4c0b7451481112d93503d06093c73e57567e98c1f61b66e218e6e12",
+          "bytes": 4849
+        },
+        {
+          "path": "expected.json",
+          "sha256": "d99de79187c621613ad879500a3be19ac8579eb0ebb958c3880d9c23dd76383a",
+          "bytes": 66467
+        }
+      ],
+      "receipt": null
+    }
+  ]
+}

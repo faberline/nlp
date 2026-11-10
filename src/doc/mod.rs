@@ -1,6 +1,7 @@
 //! Layer 1 of `nlp.doc.v1`. See `docs/doc-v1.md`.
 
 mod entity;
+pub mod model;
 mod opaque;
 mod pos;
 mod relation;

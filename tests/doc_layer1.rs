@@ -173,6 +173,27 @@ fn abbreviation_and_number_cases() {
 }
 
 #[test]
+fn abbreviated_month_dot() {
+    // A digit after an abbreviated month keeps the sentence whole.
+    let t = "Nov. 10, 2026 was fine.";
+    assert_eq!(sentence_texts(t, &analyze(t)), [t]);
+    let t = "Sept. 3rd was fine.";
+    assert_eq!(sentence_texts(t, &analyze(t)), [t]);
+    // Any other word after the month dot still ends the sentence.
+    let t = "It was Dec. Then we ran.";
+    assert_eq!(
+        sentence_texts(t, &analyze(t)),
+        ["It was Dec.", "Then we ran."]
+    );
+    // May is not abbreviated, and a dot after a non-month word is unchanged.
+    let t = "It was May. 10 was the day.";
+    assert_eq!(
+        sentence_texts(t, &analyze(t)),
+        ["It was May.", "10 was the day."]
+    );
+}
+
+#[test]
 fn casual_lines() {
     let t = "今天好累\n晚上吃什麼\n不知道";
     let doc = analyze(t);

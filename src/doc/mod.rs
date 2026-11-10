@@ -1,5 +1,6 @@
 //! Layer 1 of `nlp.doc.v1`. See `docs/doc-v1.md`.
 
+mod entity;
 mod opaque;
 mod pos;
 mod relation;
@@ -13,7 +14,11 @@ use sha2::{Digest, Sha256};
 pub const SCHEMA: &str = "nlp.doc.v1";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Options {}
+pub struct Options {
+    /// Names for the name rule. Matched as exact text, leftmost-longest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub names: Vec<String>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -150,6 +155,30 @@ pub struct Relation {
     pub arg2: Span,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntityKind {
+    Number,
+    Date,
+    RelativeDate,
+    Time,
+    Quantity,
+    Url,
+    Email,
+    Name,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Entity {
+    pub kind: EntityKind,
+    pub span: Span,
+    pub sentence: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Document {
     pub schema: String,
@@ -158,6 +187,7 @@ pub struct Document {
     pub options: Options,
     pub segmentation: Segmentation,
     pub tokens: Vec<Token>,
+    pub entities: Vec<Entity>,
     pub relations: Vec<Relation>,
     pub unknown: Vec<Unknown>,
 }
@@ -180,6 +210,8 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         .filter(|f| !f.block && !matches!(f.item.kind, OpaqueKind::Heading | OpaqueKind::ListItem))
         .map(|f| (f.item.span, f.item.kind))
         .collect();
+    // Supported sentences only, as (sentence index, span). Unsupported text gets no entities.
+    let mut scanned = Vec::new();
 
     for paragraph in segment::paragraphs(&m) {
         let paragraph_index = seg.paragraphs.len();
@@ -197,6 +229,8 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
                     span,
                     reason: Reason::UnsupportedLanguage,
                 });
+            } else {
+                scanned.push((sentence_index, span));
             }
             seg.sentences.push(Sentence {
                 span,
@@ -247,6 +281,8 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         }
     }
 
+    let (entities, entity_unknown) = entity::extract(&c, &found, &scanned, &options.names);
+    unknown.extend(entity_unknown);
     let (relations, relation_unknown) = relation::relations(&c, &seg);
     unknown.extend(relation_unknown);
     unknown.sort_by(|a, b| {
@@ -267,6 +303,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         options: options.clone(),
         segmentation: seg,
         tokens,
+        entities,
         relations,
         unknown,
     }

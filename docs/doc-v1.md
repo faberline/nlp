@@ -1,8 +1,9 @@
-# nlp.doc.v1, layer 1
+# nlp.doc.v1, layers 1 and 3
 
 `faberline_nlp::doc` returns a JSON `Document` with paragraphs, sentences, clauses and a
-language tag per span, and the opaque spans (code, formula, heading, list item, citation, URL,
-emoji) that sentences never split. It uses no model and no network.
+language tag per span, the opaque spans (code, formula, heading, list item, citation, URL,
+emoji) that sentences never split, and the entities found by rules. It uses no model and no
+network.
 
 CLI: `nlp_doc` reads UTF-8 text from stdin and prints one JSON document plus a newline. On a
 read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and exits with 1.
@@ -14,7 +15,7 @@ read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and 
   "schema": "nlp.doc.v1",
   "text_chars": 3,
   "text_sha256": "<lowercase hex of SHA-256 over the UTF-8 input bytes>",
-  "options": {},
+  "options": {"names": ["Alice Lee"]},
   "segmentation": {
     "paragraphs": [{"span": {"start_char": 0, "end_char": 3}, "lang": "en"}],
     "sentences": [{"span": {...}, "lang": "en", "paragraph": 0}],
@@ -22,18 +23,22 @@ read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and 
     "opaque": [{"kind": "url", "span": {...}}]
   },
   "tokens": [{"span": {...}, "lang": "en", "sentence": 0, "upos": "PRON"}],
+  "entities": [{"kind": "date", "span": {...}, "sentence": 0, "value": "2026-11-10"}],
   "relations": [{"kind": "sequence", "level": "clause", "connector": {...}, "arg1": {...}, "arg2": {...}}],
   "unknown": [{"layer": "segmentation", "span": {...}, "reason": "unsupported_language"}]
 }
 ```
 
+- `options.names` is optional and empty by default (see Entities).
 - `lang` is one of `zh`, `en`, `mixed`, `und`.
 - `reason` is one of `no_model`, `ambiguous`, `low_confidence`, `unsupported_language`,
   `not_applicable`. Layer 1 produces `unsupported_language`. Layer 2 produces `no_model` and
-  `ambiguous`, with `layer: "pos"`.
+  `ambiguous`, with `layer: "pos"`. Layer 3 produces `ambiguous`, with `layer: "entities"`.
 - `sentence.paragraph` indexes `paragraphs`; `clause.sentence` indexes `sentences`.
-- All lists are sorted by start. `unknown` is sorted by span start.
-- `relations` is always present, `[]` when no relation is found. It comes after `tokens`.
+  `entity.sentence` indexes `sentences`.
+- All lists are sorted by start. `unknown` is sorted by span start, then end, then layer.
+- `entities` and `relations` are always present, `[]` when nothing is found. The order of
+  the lists is `segmentation`, `tokens`, `entities`, `relations`, `unknown`.
 
 ## Offsets
 
@@ -63,7 +68,10 @@ Scan each paragraph left to right. A sentence ends after the characters named be
    the maximal run of ASCII letters and dots before the dot. Abbreviations, compared with ASCII
    case folding: `mr mrs ms mx dr prof rev sr jr st vs cf fig eq no e.g i.e`, and any single
    uppercase letter. `etc` and `al` also require the next non-whitespace char to be uppercase or
-   absent.
+   absent. An abbreviated month (`jan feb mar apr jun jul aug sep sept oct nov dec`, ASCII
+   case-insensitive; `May` is not one) does not end the sentence when one space and then an ASCII
+   digit follow, so `Nov. 10, 2026 was fine.` is one sentence. `It was Dec. Then we ran.` still
+   splits.
 3. A run of two or more ASCII dots ends the sentence only if whitespace or the paragraph end
    follows and the next non-whitespace char is not a lowercase ASCII letter. Closers are not
    skipped here.
@@ -377,6 +385,127 @@ A new paragraph also breaks the sentence relation.
   `However，` with a full-width comma is not one.
 - Correlates may cross languages: `If 天氣好，就…` pairs the English `If` with the zh `就`.
 
+## Entities (layer 3)
+
+`entities` lists entities found by rules in supported sentences. A sentence whose language is
+unsupported gets no entities. Each entity has a `kind`, a `span`, the `sentence` index, and
+`value` and `unit` when the kind has them. Kinds: `number`, `date`, `relative_date`, `time`,
+`quantity`, `url`, `email`, `name`. The list is sorted by start.
+
+Values (`value` is omitted for kinds that have none):
+
+- `date`: `YYYY-MM-DD`, `YYYY-MM`, `YYYY`, or `--MM-DD` when the year is not given.
+- `time`: 24-hour `HH:MM`. Seconds are part of the span but not the value.
+- `number`: a plain decimal string with no grouping, such as `1000`, `34.5` or `150000000`.
+- `quantity`: the number as in `number`, and `unit` as written. Currency prefixes are
+  lowercased in `unit` (`NT$` gives `nt$`). `%` is the unit for percent.
+- `relative_date`, `url`, `email`, `name`: no value.
+
+Scanners, run at each position of a supported sentence:
+
+- Relative dates: `今天 明天 昨天 後天 前天 今晚 昨晚 今年 明年 去年 這週 本週 上週 下週 這個月
+  上個月 下個月`, and `today tomorrow yesterday tonight`, and `last|this|next` followed by
+  `week|month|year` (ASCII case-insensitive, one space).
+- Dates, all checked for a real calendar day (leap years included):
+  - Chinese: `Y年M月D日` (or `號` for `日`), `Y年M月`, `M月D日` (or `號`), and `Y年` alone. `Y` is
+    four ASCII or Chinese digits, or `民國N` (N+1911). Month 1 to 12 is needed. `M月` alone and
+    `D日` alone are not dates. Their digits are numbers: `11月` gives the number 11, and `10日`
+    gives the number 10. `十一月` alone gives nothing, since a Chinese numeral needs a measure word.
+  - English: `Month D[st|nd|rd|th][,] YYYY`, `Month YYYY`, `Month D`, `D Month YYYY`, `D Month`.
+    Full names and 3-letter names, and `Sept`. An abbreviated month may have a dot before the day
+    or the year (`Nov. 10`, `10 Nov. 2026`).
+  - Numeric: `YYYY-MM-DD`, `YYYY/MM/DD`, `YYYY.MM.DD`, `YYYY-MM` (month 1 to 12). `A/B/YYYY` is
+    read by the one part over 12, which is the day (`13/4/2026`) or the month (`4/13/2026`). If
+    both parts are 12 or less, both readings are tried: when both are real dates the candidate is
+    ambiguous, when one is it is that date, and when neither is it is not a date. So `3/4/2026` is
+    ambiguous, and `0/5/2026` gives the numbers 0, 5 and 2026. If both are over 12 there is no
+    date; the digits are numbers.
+  - An invalid full date such as `2026-13-45`, `2026/2/30`, `2023年2月29日`, `二〇二三年二月二十九日`
+    or `29 Feb 2023` is not a date, and no shorter date inside it is read instead (`2月29日`,
+    `Feb 2023`, `2/30`). Its ASCII digits are numbers (`2023年2月29日` gives 2023, 2 and 29).
+    A date written in Chinese numerals such as `二〇二三年二月二十九日` gives nothing, since a
+    Chinese numeral needs a measure word.
+- Times: `H:MM` with an optional `:SS`, `H點`, `H點M分`, `H點半`, `H am|a.m.|pm|p.m.` (the space
+  before the marker is optional; seconds must be 0 to 59, so `3:30:99 pm` is not a time), `noon` (12:00), and the Chinese markers `凌晨 上午 早上 下午
+  晚上 傍晚 中午` placed before the hour. The hour must be attached to `點`: `我們15點見` gives the
+  time `15:00`, but `我們 5 點` with a space gives the number 5. Hour 0 and hours 13 to 24 with no marker are 24-hour. `12 am` is
+  `00:00` and `12 pm` is `12:00`, but `上午 早上 晚上 傍晚` with 12 are ambiguous. `midnight` is
+  ambiguous. An hour of 1 to 12 with no marker is ambiguous, so `3:30` alone is ambiguous. A bare
+  `一點` with no marker and no `半` or `M分` is "a bit" (`他有一點累`), so it gives no time and no
+  unknown.
+- Quantities: a number, then optionally one space, then a unit. Units such as `kg km 分鐘 天
+  days` need a space or none. `g m l` are units only when attached (`5m`, not `5 m`). A currency
+  prefix is `US$ NT$ $ ¥ € £`, and `百分之N` is a percent. A bare English `one` is not a
+  quantity.
+- Numbers: ASCII digits with comma groups of exactly three digits and an optional decimal part.
+  `萬 万` and `億 亿` multiply the number before them (`3萬`, `1.5億`). An ASCII number followed
+  by Chinese numerals is read as `<number><chain>` where the chain ends in a multiplier: `5千元`
+  is 5000, `3萬5千元` is 35000, `3千萬人` is 30000000. A decimal takes one multiplier. If the run
+  cannot be read (`3萬5元`, `3五千`, `3萬4萬`), the whole run gives no number, and no bare
+  multiplier from it is a number either.
+- A decimal point in Chinese is `點` and then digits read one by one: `三點五公斤` is 3.5 `公斤`,
+  `百分之三點五` is 3.5 `%`. `三點`, `三點五分` and `三點半` stay times.
+- A lone English `hundred` is not a number, like a lone `thousand`.
+- English number words follow the order of a number. A word that breaks the order ends the
+  number before it, and the word starts a new number: `two three` gives 2 and 3, `nineteen
+  eighty-four` gives 19 and 84, `twenty twenty` gives 20 and 20, and `two hundred three hundred`
+  gives 200 and 300, and `Five thousand two thousand` gives 5000 and 2000. When the breaking word
+  is `hundred`, the unit words right before it start the new number; when it is `thousand`,
+  `million` or `billion`, all the words after the last `thousand`, `million` or `billion` do:
+  `Five thousand two hundred thousand` gives 5000 and 200000. Valid forms keep their value:
+  `two thousand five hundred` is 2500, `two hundred three` is 203 and `twenty-one` is 21. A lone
+  `one` is not a number, so `one two three` gives an ambiguous `one` and the numbers 2 and 3.
+- Chinese numerals (`〇零一二三四五六七八九十百千萬万億亿兩两`):
+  - All digits, at least two: digit by digit (`二〇二六`). 兩 and 两 are not digits here: `一兩天`
+    and `兩三個` give no number. A lone `兩個` is 2.
+  - Otherwise the standard reading (`一百零五`, `一百〇五`, `三萬五千`, `三億五千萬`).
+  - A multiplier with no digit before it reads as 1 (`十` is 10, `百` is 100).
+  - A run cannot start with 萬 or 億, and `三億萬` is not a number.
+  - Two plain digits in a row are allowed only as digit by digit, or after 零 or 〇.
+  - A multiplier must be smaller than the one before it in its group: `十二十`, `三十四十`,
+    `五百六百` are not numbers.
+  - 萬 and 億 groups must decrease: `三萬四萬`, `一萬二億`, `三萬億` are not numbers.
+  - A run counts only with a measure word after it (`個`, `人`, ...).
+  - A run starts only after a non-numeral and not after `第`, so `第三十個` gives no number and
+    the `十` in `三十個` gives no number of its own.
+  - Times and dates that start with a Chinese numeral follow the same start rule. So `三十五點`
+    and `第三點` give no time, and `三十一月五日` gives no date.
+- Email: a local part of `A-Za-z0-9._%+-`, then a domain of at least two labels, where the last
+  label is 2 or more ASCII letters.
+- URL: taken from the opaque `url` spans.
+- Name: each entry of `options.names`, matched exactly and case-sensitively, leftmost-longest. An
+  ASCII name must not touch an ASCII letter or digit on either side. An entry that contains a
+  line feed or NUL (`\u{0}`) is ignored.
+
+Overlap: entities never start or end inside an inline opaque span. Candidates are sorted by
+start, then longer first, then by priority: `name` 0, `email` and `url` 1, `quantity` 2, `time`
+3, `date` 4, `relative_date` 5, ambiguous 6, `number` 7. A candidate is kept only if it does not
+overlap a kept one.
+
+Ambiguous candidates are not entities. Each one is an `unknown` with layer `entities` and reason
+`ambiguous`. It takes part in overlap resolution, so it can block a `number` inside its span.
+
+Known limits of entities:
+
+- The sentence splitter ends a sentence after `a.m.` or `p.m.` when whitespace follows, as it
+  does for any dot. The time entity still resolves: `3:30 p.m.` gives `15:30` and `10 a.m.` gives
+  `10:00`. `Sept. 3rd` and `Nov. 10` resolve as dates, because of the abbreviated-month rule in
+  layer 1 (a digit must follow the dot).
+- No model. Names come only from `options.names`. Other proper nouns are not entities.
+- Dates, times and numbers without a marker or unit are only numbers or ambiguous.
+- No signs or ranges: `-5` gives the number 5, and `3-5` gives 3 and 5.
+- No weekdays: `Monday` gives nothing.
+- No ordinals: `1st` and `第三` give nothing.
+- Durations written with `年` are numbers: `3年` gives the number 3.
+- No time zones: `3pm EST` gives the time `15:00`, and `EST` gives nothing.
+- Chinese numerals need a measure word: `三十五` gives nothing, and `三十五個` gives 35.
+- `and` ends an English number, so `one hundred and twenty-three` gives 100 and 23.
+- A run of two plain Chinese digits such as `二三個` or `三四個` is read digit by digit (23, 34),
+  though `三四個` can be an approximate range. Only a run of 兩/两 or a run with a multiplier is
+  refused.
+- The gold file `tests/data/entity_gold.json` was written with the same rules, so the receipt
+  `docs/receipts/entities-2026-11-10.json` is a regression check, not an independent measure.
+
 ## Known limits
 
 - Hard-wrapped Chinese text splits at each line break. Rule 4 only keeps a wrap when the next
@@ -385,3 +514,5 @@ A new paragraph also breaks the sentence relation.
 - Layer 2 has no statistical tagger. Its UPOS comes from the rules and the lexicon in
   "Tokens and POS". There is no model and no network.
 - Layer 7 (Relations) sees only connectors at the start of a clause. See "Relations limits".
+- Layers 1 and 3 are rules only. There is no model, no network and no abbreviation list beyond
+  the one given.

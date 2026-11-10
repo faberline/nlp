@@ -11,6 +11,11 @@ const ABBREVIATIONS: &[&str] = &[
     "mr", "mrs", "ms", "mx", "dr", "prof", "rev", "sr", "jr", "st", "vs", "cf", "fig", "eq", "no",
     "e.g", "i.e",
 ];
+/// Abbreviated month names (`May` is not one). A dot after one does not end the sentence when
+/// a digit follows, so `Nov. 10, 2026` stays one sentence.
+const ABBREVIATED_MONTHS: &[&str] = &[
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+];
 
 pub(super) fn paragraphs(c: &[char]) -> Vec<Span> {
     let mut out = Vec::new();
@@ -243,6 +248,14 @@ fn dots(c: &[char], paragraph: Span, i: usize) -> (Option<(usize, usize)>, usize
         .unwrap_or(i);
     let word: String = c[word_start..i].iter().collect();
     if is_abbreviation(&word) {
+        return (None, j);
+    }
+    let month = word.to_ascii_lowercase();
+    if ABBREVIATED_MONTHS.contains(&month.as_str())
+        && k + 1 < end
+        && c[k] == ' '
+        && c[k + 1].is_ascii_digit()
+    {
         return (None, j);
     }
     let lower = word.to_ascii_lowercase();

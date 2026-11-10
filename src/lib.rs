@@ -5,6 +5,7 @@
 //! include the start and exclude the end.
 
 mod analyze;
+pub mod doc;
 mod language;
 mod recap_time;
 pub mod scoped_transfer;

@@ -194,6 +194,12 @@ pub fn verify(models_dir: &Path, model_id: &str) -> Result<Verified, ModelError>
     let model_ix = listed(&entry.model)?;
     let tokenizer_ix = listed(&entry.tokenizer)?;
     let expected_ix = listed(&entry.expected)?;
+    if model_ix == tokenizer_ix {
+        return Err(ModelError::Manifest(format!(
+            "model and tokenizer name the same file: {}",
+            entry.model
+        )));
+    }
     for f in &entry.files {
         check_relative(&f.path)?;
     }

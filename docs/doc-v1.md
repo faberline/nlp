@@ -545,8 +545,11 @@ A model directory holds `manifest.json` and one subdirectory per model:
 `load` (or `verify`, which does the check alone) reads the manifest and checks every listed file
 for existence and sha256 before it parses any model file. Each file is read once. Its bytes are
 hashed and kept in `Verified`, and the parsers read those bytes. Nothing is read from disk again, so
-a file replaced after `verify` has no effect. `SubwordTokenizer::from_verified` and `load_verified`
-take a `Verified`.
+a file replaced after `verify` has no effect. `Verified` is public (`info` and the bytes of the
+model, tokenizer and expected files). `verify(models_dir, id)` returns it, and
+`load_verified(&Verified, backend)` loads a model from it. `SubwordTokenizer::from_verified(&Verified)`
+builds the tokenizer from it and replaces the earlier `from_file`: no model or tokenizer file is
+read by path any more.
 
 Only regular files are read. A symlink is refused, and so is anything that is not a file. The size
 from the file metadata is compared with `bytes` before the read, so a large or truncated file is
@@ -554,7 +557,8 @@ refused without being read in full.
 
 The errors are `UnknownModel`, `Missing` (a listed file is absent), `HashMismatch` (`file` is
 `path (bytes)` for a byte count mismatch), `Manifest` (bad schema, an absolute path or `..` in `dir`
-or `files`, or `model`, `tokenizer` or `expected` not listed in `files`) and `Load` (a refused file
+or `files`, or `model`, `tokenizer` or `expected` not listed in `files`, or `model` and `tokenizer` naming the
+same path) and `Load` (a refused file
 or a parse failure). A hash mismatch is never reported as `unknown`.
 
 ### Backends and the engine choice
@@ -567,8 +571,8 @@ comes in a later issue, because it cannot run in CI.
 
 Tokenization uses `tokenizers` 0.23.2 with its `fancy-regex` feature. `fancy-regex` is pure Rust, so
 no C source is built and no network is needed. The default `onig` feature is off, so `onig` is not
-in the dependency tree. Under `onnx`, `tokenizers` also links `rayon`. This layer does not use it and
-starts no thread pool.
+in the dependency tree. Under `onnx`, `tokenizers` pulls in `rayon` transitively. This layer does not call it: `run` and
+`encode` stay sequential and start no thread pool.
 
 ### Determinism
 

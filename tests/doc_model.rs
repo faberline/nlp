@@ -514,3 +514,14 @@ fn ids_outside_vocabulary_are_errors() {
         .is_ok()
     );
 }
+
+#[test]
+fn model_and_tokenizer_with_the_same_path_is_refused() {
+    let e = load_edited(|m| {
+        m["models"][0]["tokenizer"] = serde_json::json!("model.onnx");
+    });
+    match e {
+        ModelError::Manifest(msg) => assert!(msg.contains("same file"), "{msg}"),
+        other => panic!("unexpected {other:?}"),
+    }
+}

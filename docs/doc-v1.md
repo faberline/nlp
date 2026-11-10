@@ -306,8 +306,8 @@ Special cases:
 - `so` is not a connector before `far much many long as that good bad little few called on`.
   `So,` (a comma follows) gives an `unknown` and no relation.
 - `then` after a clause that starts with `if` is the correlate of that `if`, not a sequence. This
-  also holds when `then` starts the next sentence: in `If it rains. Then we stay home.` the `then`
-  gives nothing, and the `if` gives an `unknown`.
+  also holds when `then` starts the next sentence of the same paragraph: in
+  `If it rains. Then we stay home.` the `then` gives nothing, and the `if` gives an `unknown`.
 
 ### Unknown
 
@@ -338,9 +338,11 @@ A new paragraph also breaks the sentence relation.
 - A bare connector can leave an argument that is only the connector: `We stayed home, because.`
   (`arg1` is `because.`) and `We slept. So.` (`arg2` is `So.`). Such a relation is still
   reported. A bare correlate is the exception (see above). A bare correlate followed by a clause
-  that starts with another connector gives no relation for the opener. The correlate clause is
-  still `arg1` of that connector's relation: `先洗手，然後，但是吃飯。` gives a contrast with `arg1`
-  = `然後`.
+  that starts with another connector gives no relation for the opener. The correlate clause can
+  still be an argument of that connector. A backward connector takes it as `arg1`:
+  `先洗手，然後，但是吃飯。` gives a contrast with `arg1` = `然後`. A `because` or `因為` takes it as
+  `arg2`: `If it rains, then, because we stay.` gives `arg2` = `then`. A connector that gives no
+  relation leaves the clause without a role.
 - A `because` or `因為` that is not first in its sentence takes the clause before it as `arg2`,
   also when bare: `We left, because, it rained.` gives `arg1` = `because` and `arg2` = `We left`.
 - The correlate tables are shared by both languages. A correlate of the other language still

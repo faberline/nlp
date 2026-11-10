@@ -673,6 +673,10 @@ const CASES: &[&str] = &[
     "If it rains. Then we stay home.",
     "如果明天下雨。Then we stay home.",
     "先洗手，然後，但是吃飯。",
+    // third review
+    "If it rains, then, because we stay.",
+    "If it rains, we stay. Then we rest.",
+    "We go, if it rains. Then we rest.",
 ];
 
 /// Brackets and quotes that may stand before a connector inside a clause.
@@ -1076,6 +1080,34 @@ fn review_then_after_an_if_sentence_is_not_a_sequence() {
     assert_eq!(rel_unknown("If it rains. Then we stay home."), ["If"]);
     assert!(rels("如果明天下雨。Then we stay home.").is_empty());
     assert_eq!(rel_unknown("如果明天下雨。Then we stay home."), ["如果"]);
+    // Only the last clause of the sentence before counts: here it does not open with `if`, so
+    // `Then` is a sequence.
+    assert_eq!(
+        rels("If it rains, we stay. Then we rest."),
+        [
+            rel(
+                K::Condition,
+                L::Clause,
+                "If",
+                None,
+                "If it rains",
+                "we stay."
+            ),
+            rel(
+                K::Sequence,
+                L::Sentence,
+                "Then",
+                None,
+                "If it rains, we stay.",
+                "Then we rest."
+            ),
+        ]
+    );
+    assert!(rel_unknown("If it rains, we stay. Then we rest.").is_empty());
+    // The last clause of the sentence before opens with `if`: `Then` gives nothing.
+    let text = "We go, if it rains. Then we rest.";
+    assert!(rels(text).is_empty());
+    assert_eq!(rel_unknown(text), ["if"]);
 }
 
 #[test]
@@ -1093,4 +1125,17 @@ fn review_bare_correlate_before_another_connector() {
         )]
     );
     assert!(rel_unknown("先洗手，然後，但是吃飯。").is_empty());
+    // The bare `then` is arg2 of `because`; the `If` before it gives an unknown.
+    assert_eq!(
+        rels("If it rains, then, because we stay."),
+        [rel(
+            K::Cause,
+            L::Clause,
+            "because",
+            None,
+            "because we stay.",
+            "then"
+        )]
+    );
+    assert_eq!(rel_unknown("If it rains, then, because we stay."), ["If"]);
 }

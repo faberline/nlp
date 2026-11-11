@@ -704,6 +704,23 @@ can verify and load the model once and call `analyze_document_with_loaded_model(
 model, tokenizer)` (or `doc::syntax::annotate`). Calling `analyze_document(text, options)` never
 runs a model and leaves `syntax` empty (omitted from JSON).
 
+### Language coverage (`en`, `zh-TW`, `zh-CN`, and `mixed`)
+
+`doc-syntax-v1` covers English (`en`), Traditional Chinese (`zh-TW`, Taiwan vocabulary and
+phrasing), Simplified Chinese (`zh-CN`, Mainland China vocabulary and phrasing), and code-switched
+`mixed` sentences (`zh-TW/en` and `zh-CN/en`) across novel, paper, and casual registers:
+
+- Layer 1 tags both Traditional and Simplified Chinese spans as `lang: "zh"` (or `"mixed"` when
+  paired with Latin words), and Layer 2 segments Simplified Han runs through `jieba` (`软件`,
+  `数据库`, `内存`, `服务器`, `出租车`, `地铁`, `我们`, `他们`, `因为`, `通过`, `已经`, `马上`).
+- Because Layer 2's hand-written Chinese lexicon lists Traditional closed-class forms (`我們`, `因為`,
+  `從`, `已經`, `馬上`) plus script-shared single-character words (`我`, `他`, `的`, `了`, `很`, `不`),
+  Simplified-distinct function words (`我们`, `他们`, `因为`, `虽然`, `已经`, `马上`, `从`, `对`, `这`,
+  `那`, `个`, `会`, `里`) and Mainland content words arrive at Layer 4 with `upos: None` and a `"pos"`
+  `no_model` `unknown`. When Layer 4 runs (`upos_prob >= 0.50`), it assigns their contextual UPOS
+  tags (`PRON`, `SCONJ`, `ADV`, `ADP`, `DET`, `AUX`, `NOUN`, `VERB`, ...) and clears those `"pos"`
+  `no_model` entries while keeping rule-decided tags (`的`, `了`, `很`, numerals, punctuation).
+
 ### Subword alignment and packed `[len, 421]` output
 
 For each supported sentence, `SubwordTokenizer::encode` runs on `&text[byte_start..byte_end]` of

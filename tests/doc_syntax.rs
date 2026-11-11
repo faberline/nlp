@@ -20,18 +20,54 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 const GENRE_LANG_SAMPLES: &[(&str, &str)] = &[
-    ("novel_zh", "小甲推開木門。阿乙坐在窗邊看書。"),
+    ("novel_zh_tw", "小甲搭計程車到捷運站。阿乙在車廂裡看影片。"),
+    (
+        "novel_zh_cn",
+        "小甲坐出租车到地铁站。阿乙已经从房间里出来了。",
+    ),
     (
         "novel_en",
         "Alice opened the wooden door. Bob waited quietly.",
     ),
-    ("novel_mixed", "小甲打開 laptop，然後寫了一封 message。"),
-    ("paper_zh", "本研究量測兩組樣本。結果顯示誤差穩定。"),
+    (
+        "novel_mixed_tw",
+        "小甲打開筆電測試演算法，然後傳了一封 message。",
+    ),
+    (
+        "novel_mixed_cn",
+        "他们刚到酒店就打开 laptop，马上回了一封 email。",
+    ),
+    (
+        "paper_zh_tw",
+        "本專案透過新演算法最佳化資料庫與記憶體配置。",
+    ),
+    (
+        "paper_zh_cn",
+        "因为该软件通过新算法优化数据库与内存占用，服务器响应稳定。",
+    ),
     ("paper_en", "We evaluate the parser on three datasets."),
-    ("paper_mixed", "我們訓練 transformer 模型，並比較 latency。"),
-    ("casual_zh", "今天天氣超好！我們去買咖啡吧。"),
+    (
+        "paper_mixed_tw",
+        "我們透過 transformer 模型壓低伺服器 latency。",
+    ),
+    (
+        "paper_mixed_cn",
+        "我们通过 transformer 模型降低服务器 latency。",
+    ),
+    ("casual_zh_tw", "今天搭捷運上班超順！晚上一起去看部影片吧。"),
+    (
+        "casual_zh_cn",
+        "今天坐地铁上班真快，这软件的视频加载马上就好了！",
+    ),
     ("casual_en", "grabbed coffee this morning, feeling great!"),
-    ("casual_mixed", "剛剛跑完 benchmark，結果超 fast！"),
+    (
+        "casual_mixed_tw",
+        "剛剛更新軟體跑完 benchmark，結果超 fast！",
+    ),
+    (
+        "casual_mixed_cn",
+        "刚才重启服务器跑完 benchmark，结果特别 fast！",
+    ),
 ];
 
 fn assert_valid_single_root_tree(heads: &[usize]) {
@@ -506,6 +542,121 @@ fn unsupported_language_sentence_is_skipped_cleanly() {
             .iter()
             .any(|u| u.layer == "syntax" && u.span == doc.segmentation.sentences[0].span)
     );
+}
+
+#[test]
+fn zh_cn_mainland_tokens_upgrade_contextual_upos_and_decode_syntax() {
+    let text = "因为我们通过软件查询了数据库，内存已经很稳定。";
+    let chars: Vec<char> = text.chars().collect();
+    let base = analyze_document(text, &Options::default());
+
+    let surface = |span: Span| -> String { chars[span.start_char..span.end_char].iter().collect() };
+    let tok_surfaces: Vec<String> = base.tokens.iter().map(|t| surface(t.span)).collect();
+    for mainland_word in ["因为", "我们", "通过", "软件", "数据库", "内存", "已经"] {
+        let idx = tok_surfaces
+            .iter()
+            .position(|w| w == mainland_word)
+            .unwrap_or_else(|| {
+                panic!("expected Mainland token {mainland_word:?} in {tok_surfaces:?}")
+            });
+        assert_eq!(
+            base.tokens[idx].upos, None,
+            "Layer 2 must leave Simplified {mainland_word:?} undecided"
+        );
+        assert!(
+            base.unknown.contains(&Unknown {
+                layer: "pos".to_owned(),
+                span: base.tokens[idx].span,
+                reason: Reason::NoModel,
+            }),
+            "Layer 2 must emit pos NoModel for {mainland_word:?}"
+        );
+    }
+    // Shared characters ("了", "很", "，", "。") are already decided in Layer 2.
+    let le_idx = tok_surfaces.iter().position(|w| w == "了").unwrap();
+    let hen_idx = tok_surfaces.iter().position(|w| w == "很").unwrap();
+    assert_eq!(base.tokens[le_idx].upos, Some(Upos::Part));
+    assert_eq!(base.tokens[hen_idx].upos, Some(Upos::Adv));
+
+    // Map each Mainland token's first subword index (`s_u` under `char_subword_encode`) to its
+    // true contextual UD UPOS tag, while deliberately predicting `Verb` (15) on "了" and "很" to
+    // verify Layer-2 decided tags are never overwritten!
+    let enc = char_subword_encode(text).unwrap();
+    let subword_of = |span: Span| -> usize {
+        enc.spans
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find_map(|(s_idx, sub)| {
+                (sub.start_char < sub.end_char
+                    && sub.start_char < span.end_char
+                    && span.start_char < sub.end_char)
+                    .then_some(s_idx)
+            })
+            .unwrap()
+    };
+
+    let wanted_upos: Vec<(&str, usize, Upos)> = vec![
+        ("因为", 13, Upos::Sconj),
+        ("我们", 10, Upos::Pron),
+        ("通过", 1, Upos::Adp),
+        ("软件", 7, Upos::Noun),
+        ("数据库", 7, Upos::Noun),
+        ("内存", 7, Upos::Noun),
+        ("已经", 2, Upos::Adv),
+    ];
+    let mut subword_upos_plan = Vec::new();
+    for &(word, upos_col, _) in &wanted_upos {
+        let idx = tok_surfaces.iter().position(|w| w == word).unwrap();
+        subword_upos_plan.push((subword_of(base.tokens[idx].span), upos_col));
+    }
+    let query_idx = tok_surfaces
+        .iter()
+        .position(|w| w.starts_with('查'))
+        .unwrap();
+    let root_sub = subword_of(base.tokens[query_idx].span);
+
+    let max_len = 128;
+    let model = SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
+        let rel_off = 17 + max_len;
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            // Default confident Verb (15), overridden per Mainland token plan.
+            let upos_col = subword_upos_plan
+                .iter()
+                .find_map(|&(target_s, col)| (target_s == s).then_some(col))
+                .unwrap_or(15);
+            row[upos_col] = 11.0;
+
+            if s == root_sub {
+                row[17] = 13.0; // Attach main predicate to [CLS] root
+            } else {
+                row[17 + root_sub] = 13.0;
+                row[rel_off + 29] = 11.0; // "obl"
+            }
+        }
+    });
+
+    let mut doc = base;
+    annotate_with_encoder(&mut doc, text, &model, char_subword_encode).expect("annotate zh-CN");
+
+    for &(word, _, expected_tag) in &wanted_upos {
+        let idx = tok_surfaces.iter().position(|w| w == word).unwrap();
+        assert_eq!(
+            doc.tokens[idx].upos,
+            Some(expected_tag),
+            "Mainland token {word:?} should upgrade to {expected_tag:?}"
+        );
+    }
+    // Shared Layer-2 decided tags stay intact even though model logits favored Verb.
+    assert_eq!(doc.tokens[le_idx].upos, Some(Upos::Part));
+    assert_eq!(doc.tokens[hen_idx].upos, Some(Upos::Adv));
+    assert!(!doc.unknown.iter().any(|u| u.layer == "pos"));
+    assert_eq!(doc.syntax.len(), doc.tokens.len());
+    let roots: Vec<_> = doc.syntax.iter().filter(|s| s.head.is_none()).collect();
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].token, query_idx);
+    assert_eq!(roots[0].deprel, "root");
 }
 
 #[test]

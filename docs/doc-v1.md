@@ -6,10 +6,12 @@ emoji) that sentences never split, and the entities found by rules. It uses no m
 network.
 
 CLI: `nlp_doc` reads UTF-8 text from stdin and prints one JSON document plus a newline. With no
-flags it runs `analyze_document` (rules only, no model). With `--models <DIR>` and optional
-`--backend <coreml|coreml-fast|onnx>` (defaulting to `coreml` on macOS when compiled in, otherwise
-`onnx`), it runs `analyze_document_with_model` to populate Layer 4 (`syntax`). On a read or model
-integrity/runtime error, it prints `nlp_doc: <error>` to stderr and exits with 1.
+flags it runs `analyze_document` (rules only, no model). Optional flags `--name <SURFACE>` and
+`--lexicon <SURFACE>` (repeatable), `--mask-editorial`, and `--normalize-traditional` populate
+`Options`. With `--models <DIR>` and optional `--backend <coreml|coreml-fast|onnx>` (defaulting to
+`coreml` on macOS when compiled in, otherwise `onnx`), it runs `analyze_document_with_model` to
+populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prints
+`nlp_doc: <error>` to stderr and exits with 1.
 
 ## Schema
 
@@ -33,7 +35,9 @@ integrity/runtime error, it prints `nlp_doc: <error>` to stderr and exits with 1
 }
 ```
 
-- `options.names` is optional and empty by default (see Entities).
+- `options.names` and `options.lexicon` are optional (`Vec<String>`, omitted when empty);
+  `options.mask_editorial` and `options.normalize_traditional` are optional booleans (`false` by
+  default, omitted when `false`), so `Options::default()` serializes to `{}`.
 - `lang` is one of `zh`, `en`, `mixed`, `und`.
 - `reason` is one of `no_model`, `ambiguous`, `low_confidence`, `unsupported_language`,
   `not_applicable`. Layer 1 produces `unsupported_language`. Layer 2 produces `no_model` and
@@ -142,20 +146,31 @@ Blocks:
    - Chinese: `第`, then digits or any of `一二三四五六七八九十百千萬万零〇兩两`, optional spaces, then
      one of `章節回卷篇部`, then the end of the line, or whitespace / `：` / `:` / `、` and a title.
      Punctuation-free web-novel header variants (`<numerals>章 <title>`, `<Prefix>\u{00a0}<Title>`,
-     `<Prefix> 第...章 <Title>`, and `第...卷...第...章...`) are also matched. The line is at most
-     50 chars and has none of `。！？`.
+     `<Prefix> 第...章 <Title>`, `VIP第...卷...`, concatenated `[正文]第...卷...第...章...`, and
+     standalone missing-`章` `第<numerals>=2> <short_title>`) are also matched. The line is at most
+     60 chars and has none of `。！？`.
    - English: `chapter`, `part` or `section` (ASCII case-insensitive), one space, then one or
      more digits or `IVXLC`, then the end of the line, or one of `:` `.` `-` `—` and a title. The
      line is at most 60 chars.
 4. List item: the trimmed line starts with `- `, `* `, `+ `, `• ` or `・ ` (the marker, then a
    space, tab or U+3000), or with 1 to 3 ASCII digits, then `.` or `)`, then a space. The span
    is the trimmed line. Continuation lines are not included.
+5. Noise and optional editorial blocks (`kind: "code"`):
+   - By default, ASCII/Unicode box-drawing banner blocks (`┏━...┗━` / `┌─...└─`) and standalone
+     raw/unclosed HTML tag lines (`<P`, `<p>`, `</p>`, `<br>`, `<br/>`) are masked as block spans.
+   - When `options.mask_editorial` is `true`, standalone/parenthetical web-novel editorial
+     postscripts (vote/update pleas, bookshelf/scraper footer lines, and `>= 4` parenthesized
+     tag-list lines) are also masked as block spans while keeping exact original scalar offsets.
 
 Inline spans are found left to right in a line. At each position the kinds are tried in this
 order, and a match continues after its span:
 
-1. Code: a run of N backticks, then the next run of exactly N backticks on the same line, with at
-   least one char between. Without that closing run, the whole backtick run is plain text.
+1. Code / inline noise: a run of N backticks, then the next run of exactly N backticks on the same
+   line, with at least one char between (without that closing run, the whole backtick run is plain
+   text); plus raw/unclosed inline HTML tags (`<P`, `<p>`, `<br/>`), raw/corrupted HTML entities
+   (`&qut;`, `&quot;`, `&nbsp;`, `&amp;`, `&lt;`, `&gt;`), Unicode Private Use Area runs
+   (`U+E000..=U+F8FF`), and — when `options.mask_editorial` is `true` — inline scraper tags such as
+   `/首/發` and `(..#..#..)`.
 2. URL: starts with `http://`, `https://` or `www.` (scheme ASCII case-insensitive). It goes on
    over ASCII graphic chars, stopping at whitespace and at `<`, `>` and `"`. Trailing
    `.,;:!?)]}'` are dropped. At least one char must follow the scheme.
@@ -197,8 +212,15 @@ Each sentence is split by these rules, in order:
 
 1. Every opaque span inside the sentence is one token. Block spans are never tokens.
 2. Han runs (maximal runs of the Han set) are matched against the Taiwan term list
-   (`臺灣`, `資料庫`, `記憶體` and so on), longest match first. The text between matches is
-   segmented by jieba with its HMM.
+   (`臺灣`, `資料庫`, `記憶體` and so on) plus pure-Han entries of `options.lexicon` and
+   `options.names`, longest match first. The text between matches is segmented by `doc_jieba()`
+   (jieba with HMM plus classical self-pronouns and generic genre nouns such as `在下`, `妾身`,
+   `老夫`, `貧道`, `本座`, `儲物袋`, `築基丹`). When `options.normalize_traditional` is `true`,
+   unmatched Han slices are projected 1-to-1 through `t2s` to Simplified characters for dictionary
+   lookup, sliced back by exact scalar index onto the original text, and passed through the
+   coverb/demonstrative de-gluing guard (splitting false single-char coverb/demonstrative HMM
+   merges such as `將X`, `當X`, `對此`, `這XXX` while keeping lexicalized compounds such as `將軍`,
+   `當時`, `對方`, `那天`).
 3. All other runs use Unicode word boundaries (UAX 29). Then:
    a. English clitics split off: `n't` (`didn't` gives `did`, `n't`; `can't` gives `ca`,
       `n't`), and `'s`, `'ll`, `'re`, `'ve`, `'m`, `'d`.
@@ -723,13 +745,15 @@ phrasing), Simplified Chinese (`zh-CN`, Mainland China vocabulary and phrasing),
 - Layer 1 tags both Traditional and Simplified Chinese spans as `lang: "zh"` (or `"mixed"` when
   paired with Latin words), and Layer 2 segments Simplified Han runs through `jieba` (`软件`,
   `数据库`, `内存`, `服务器`, `出租车`, `地铁`, `我们`, `他们`, `因为`, `通过`, `已经`, `马上`).
-- Because Layer 2's hand-written Chinese lexicon lists Traditional closed-class forms (`我們`, `因為`,
-  `從`, `已經`, `馬上`) plus script-shared single-character words (`我`, `他`, `的`, `了`, `很`, `不`),
-  Simplified-distinct function words (`我们`, `他们`, `因为`, `虽然`, `已经`, `马上`, `从`, `对`, `这`,
-  `那`, `个`, `会`, `里`) and Mainland content words arrive at Layer 4 with `upos: None` and a `"pos"`
-  `no_model` `unknown`. When Layer 4 runs (`upos_prob >= 0.50`), it assigns their contextual UPOS
-  tags (`PRON`, `SCONJ`, `ADV`, `ADP`, `DET`, `AUX`, `NOUN`, `VERB`, ...) and clears those `"pos"`
-  `no_model` entries while keeping rule-decided tags (`的`, `了`, `很`, numerals, punctuation).
+- Layer 2's hand-written Chinese lexicon covers both Traditional and Simplified closed-class forms
+  (`我們`/`我们`, `因為`/`因为`, `雖然`/`虽然`, `從`/`从`, `已經`/`已经`, `馬上`/`马上`, `這裡`/`这里`, ...)
+  plus classical first-person pronouns (`在下`, `妾身`, `老夫`, `老身`, `貧道`, `贫道`, `本座` -> `PRON`)
+  and script-shared single-character words (`我`, `他`, `的`, `了`, `很`, `不`). Ambiguous words
+  (`對`/`对`, `這`/`这`, `那`, `個`/`个`, `會`/`会`, `裡`/`里`, `什麼`/`什么`) and content words arrive at
+  Layer 4 with `upos: None` and a `"pos"` `ambiguous` or `no_model` `unknown`. When Layer 4 runs
+  (`upos_prob >= 0.50`), it assigns contextual UPOS tags to `no_model` tokens and clears their
+  `"pos"` `no_model` entries while keeping rule-decided tags (`的`, `了`, `很`, numerals,
+  punctuation).
 
 ### Subword alignment and packed `[len, 421]` output
 

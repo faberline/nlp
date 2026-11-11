@@ -39,6 +39,22 @@ struct Args {
     /// Model runtime backend to use when --models is supplied.
     #[arg(long, value_enum, requires = "models")]
     backend: Option<BackendArg>,
+
+    /// Exact surface names to match in Layer 3 (`options.names`, repeatable).
+    #[arg(long = "name", value_name = "SURFACE")]
+    names: Vec<String>,
+
+    /// Extra domain compounds to protect during Chinese word segmentation (`options.lexicon`, repeatable).
+    #[arg(long = "lexicon", value_name = "SURFACE")]
+    lexicon: Vec<String>,
+
+    /// Mask generic web-novel editorial postscripts and scraper watermarks (`options.mask_editorial`).
+    #[arg(long)]
+    mask_editorial: bool,
+
+    /// Project Traditional Han characters 1:1 onto Simplified equivalents during dictionary lookup (`options.normalize_traditional`).
+    #[arg(long)]
+    normalize_traditional: bool,
 }
 
 fn main() {
@@ -48,7 +64,12 @@ fn main() {
         eprintln!("nlp_doc: {err}");
         std::process::exit(1);
     }
-    let options = Options::default();
+    let options = Options {
+        names: args.names,
+        mask_editorial: args.mask_editorial,
+        normalize_traditional: args.normalize_traditional,
+        lexicon: args.lexicon,
+    };
     let doc = match &args.models {
         Some(models_dir) => {
             let backend = args.backend.map_or_else(default_backend, Backend::from);

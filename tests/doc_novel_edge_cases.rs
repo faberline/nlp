@@ -4,7 +4,7 @@ use faberline_nlp::doc::model::{
 };
 use faberline_nlp::doc::syntax::{DEPRELS, annotate_with_encoder};
 use faberline_nlp::doc::{
-    Document, EntityKind, OpaqueKind, Options, Reason, RelationKind, RelationLevel, Unknown,
+    Document, EntityKind, OpaqueKind, Options, Reason, RelationKind, RelationLevel, Unknown, Upos,
     analyze_document, analyze_document_with_model,
 };
 use std::collections::HashSet;
@@ -668,4 +668,105 @@ fn hybrid_traditional_simplified_and_novel_entities_relations() {
     annotate_with_encoder(&mut doc, text, &make_chain_model(256), novel_subword_encode)
         .expect("annotate hybrid doc");
     assert!(doc.tokens.iter().all(|t| t.upos.is_some()));
+}
+
+#[test]
+fn ws1_ws2_ws3_opaque_t2s_degluing_and_classical_pronouns_synthetic() {
+    // 1. WS1: HTML `<P`, `&qut;`, PUA run, box-drawing banner, missing-`章` heading, and `mask_editorial`.
+    let raw_ch = concat!(
+        "┏━━━━━━━━━━┓\n",
+        "┃ 合成測試橫幅 ┃\n",
+        "┗━━━━━━━━━━┛\n\n",
+        "第一千六百九十六 古道夜行\n\n",
+        "<P在下與妾身帶著築基丹走進石室，&qut;老夫已等候多時&qut;。\u{e101}\u{e102}\u{e103}\n\n",
+        "他將那青雲石盤放在木桌上，對此毫不在意，當石門緩緩合上時，外頭還在下雨。\n\n",
+        "（月底最後一天，求下月票與推薦票支持！）\n"
+    );
+    let opts = Options {
+        mask_editorial: true,
+        normalize_traditional: true,
+        lexicon: vec!["青雲石盤".to_owned()],
+        ..Options::default()
+    };
+    let doc = analyze_document(raw_ch, &opts);
+
+    // Heading `第一千六百九十六 古道夜行` masked as Heading; box banner, `<P`, `&qut;`, PUA, and vote plea masked!
+    assert!(
+        doc.segmentation
+            .opaque
+            .iter()
+            .any(|o| o.kind == OpaqueKind::Heading
+                && slice(raw_ch, o.span) == "第一千六百九十六 古道夜行")
+    );
+    let tok_surfaces: Vec<String> = doc.tokens.iter().map(|t| slice(raw_ch, t.span)).collect();
+    assert!(
+        !tok_surfaces
+            .iter()
+            .any(|t| t.contains("月票") || t.contains("橫幅")),
+        "box banner and editorial postscript must not leak into tokens: {tok_surfaces:?}"
+    );
+    // `<P` and `&qut;` are inline opaque `Code` tokens (`upos == Some(Upos::X)`), never glued to `在下` or `老夫`.
+    for expected in [
+        "在下",
+        "妾身",
+        "築基丹",
+        "老夫",
+        "將",
+        "那",
+        "青雲石盤",
+        "對",
+        "此",
+        "當",
+        "在",
+        "下雨",
+    ] {
+        assert!(
+            tok_surfaces.iter().any(|t| t == expected),
+            "expected token {expected:?} in {tok_surfaces:?}"
+        );
+    }
+
+    // Classical pronouns (`在下`, `妾身`, `老夫`) get `Upos::Pron` in Layer 2.
+    for pron in ["在下", "妾身", "老夫"] {
+        let tok = doc
+            .tokens
+            .iter()
+            .find(|t| slice(raw_ch, t.span) == pron)
+            .unwrap_or_else(|| panic!("missing pronoun token {pron}"));
+        assert_eq!(tok.upos, Some(Upos::Pron), "{pron} should be Upos::Pron");
+    }
+
+    // Verify `nlp_doc` CLI exposes `--mask-editorial`, `--normalize-traditional`, `--lexicon`, and `--name`.
+    let bin = env!("CARGO_BIN_EXE_nlp_doc");
+    let mut child = Command::new(bin)
+        .args([
+            "--mask-editorial",
+            "--normalize-traditional",
+            "--lexicon",
+            "青雲石盤",
+            "--name",
+            "沈星河",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn nlp_doc");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all("沈星河將青雲石盤收起。\n（求下月票！）\n".as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cli_doc: Document = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(cli_doc.options.mask_editorial);
+    assert!(cli_doc.options.normalize_traditional);
+    assert_eq!(cli_doc.entities.len(), 1);
+    assert_eq!(cli_doc.entities[0].kind, EntityKind::Name);
 }

@@ -2384,11 +2384,16 @@ fn compute_chapter_outputs_sha256(entries: &[CompletedIndexEntry]) -> String {
 
 fn build_doc_options(
     names: Vec<String>,
-    _mask_editorial: bool,
-    _normalize_traditional: bool,
-    _lexicon: Vec<String>,
+    mask_editorial: bool,
+    normalize_traditional: bool,
+    lexicon: Vec<String>,
 ) -> Options {
-    Options { names }
+    Options {
+        names,
+        mask_editorial,
+        normalize_traditional,
+        lexicon,
+    }
 }
 
 #[cfg(all(feature = "coreml", target_os = "macos"))]
@@ -3305,6 +3310,7 @@ mod tests {
             text,
             &Options {
                 names: vec!["林舟".to_owned()],
+                ..Options::default()
             },
         );
         let cues_filtered =

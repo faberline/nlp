@@ -850,6 +850,35 @@ fn auto_lexicon_and_high_signal_timeline_cues_cli_end_to_end() {
     assert_eq!(r1["zero_root_sentences"].as_u64(), Some(0));
     assert_eq!(r1["orphan_syntax_arcs"].as_u64(), Some(0));
 
+    // Verify Chapter 1 kept discovered compound `蒼雲鐵劍` as one intact token and masked editorial vote-plea line!
+    let ch1_json: Value =
+        serde_json::from_slice(&fs::read(out_dir.join("chapters/0001.json")).unwrap()).unwrap();
+    let ch1_sb = ch1_json["source_span"]["start_byte"].as_u64().unwrap() as usize;
+    let ch1_eb = ch1_json["source_span"]["end_byte"].as_u64().unwrap() as usize;
+    let ch1_raw = &bundle_content[ch1_sb..ch1_eb];
+    let ch1_chars: Vec<char> = ch1_raw.chars().collect();
+    let ch1_doc: Document = serde_json::from_value(ch1_json["doc"].clone()).unwrap();
+    assert!(ch1_doc.options.mask_editorial);
+    assert!(ch1_doc.options.normalize_traditional);
+    assert!(ch1_doc.options.lexicon.iter().any(|w| w == "蒼雲鐵劍"));
+    let ch1_toks: Vec<String> = ch1_doc
+        .tokens
+        .iter()
+        .map(|t| {
+            ch1_chars[t.span.start_char..t.span.end_char]
+                .iter()
+                .collect()
+        })
+        .collect();
+    assert!(
+        ch1_toks.iter().any(|t| t == "蒼雲鐵劍"),
+        "expected discovered compound `蒼雲鐵劍` to stay one token, got: {ch1_toks:?}"
+    );
+    assert!(
+        !ch1_toks.iter().any(|t| t.contains("月票")),
+        "editorial postscript line should be masked by default: {ch1_toks:?}"
+    );
+
     let cues1: Vec<Value> = fs::read_to_string(out_dir.join("entities_timeline_cues.jsonl"))
         .unwrap()
         .lines()

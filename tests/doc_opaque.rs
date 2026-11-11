@@ -513,3 +513,190 @@ fn sentence_ending_emoji_does_not_split_paragraph() {
     assert_eq!(paragraph_texts(text, &doc), owned(&["晚安👍🏽\n明天見"]));
     assert_eq!(sentence_texts(text, &doc), owned(&["晚安👍🏽", "明天見"]));
 }
+
+#[test]
+fn web_novel_headings_expanded() {
+    let text = [
+        "VIP第八卷 遠山紀行 第一千二百章 青石古道",
+        "第一段正文。",
+        "vip第十卷 風起雲湧",
+        "正文第三卷山河志第一百零八章溪橋夜雨",
+        "第四卷雲海篇第二百五十六章晨鐘",
+        "第一千六百九十六 青竹石室",
+        "第五十八 渡口微光（下）",
+        "正文第十八卷遠古遺跡探索錄第一千九百九十九章雲霧深處的古老石橋與松林秘境",
+        "第二段正文。",
+    ]
+    .join("\n\n");
+
+    let doc = analyze(&text);
+    let headings: Vec<String> = doc
+        .segmentation
+        .opaque
+        .iter()
+        .filter(|o| o.kind == OpaqueKind::Heading)
+        .map(|o| slice(&text, o.span))
+        .collect();
+    assert_eq!(
+        headings,
+        owned(&[
+            "VIP第八卷 遠山紀行 第一千二百章 青石古道",
+            "vip第十卷 風起雲湧",
+            "正文第三卷山河志第一百零八章溪橋夜雨",
+            "第四卷雲海篇第二百五十六章晨鐘",
+            "第一千六百九十六 青竹石室",
+            "第五十八 渡口微光（下）",
+            "正文第十八卷遠古遺跡探索錄第一千九百九十九章雲霧深處的古老石橋與松林秘境",
+        ])
+    );
+    assert_eq!(
+        sentence_texts(&text, &doc),
+        owned(&["第一段正文。", "第二段正文。"])
+    );
+
+    // Prose lines and >60-char lines must not match as headings.
+    let over_60 = format!("第一千二百章 {}", "遠山雲霧古道石橋松林溪谷".repeat(5));
+    assert!(over_60.chars().count() > 60);
+    for non_heading in [
+        over_60.as_str(),
+        "第一 名次已經公佈",
+        "第一千二百章講述了資料整理方法。",
+        "第三章的內容",
+        "正文第一段。",
+        "第一千六百九十六 這裡有逗號，所以不是標題",
+    ] {
+        assert!(
+            analyze(non_heading).segmentation.opaque.is_empty(),
+            "unexpected heading match for: {non_heading}"
+        );
+    }
+}
+
+#[test]
+fn raw_html_tags_entities_pua_and_box_banners() {
+    let pua_long = format!("{}9k", "\u{E010}".repeat(12));
+    let pua_short = "\u{E001}\u{E002}\u{E003}";
+    let box_heavy = "┏━━━━━━━━━━━━┓\n┃ 網站公告欄 ┃\n┗━━━━━━━━━━━━┛";
+    let box_light = "┌────────────┐\n│ 閱讀提示欄 │\n└────────────┘";
+
+    let text = format!(
+        "{box_heavy}\n\n<P\n\n<br/>\n\n<P 旅人走進木屋。<br>桌上放著&qut;舊書&quot;&nbsp;&amp;&lt;&gt;。\n\n{pua_long}清晨出發，{pua_short}ab繼續前行。\n\n{box_light}\n\n最後一句。"
+    );
+    let doc = analyze(&text);
+    assert_eq!(
+        opaque_pairs(&text, &doc),
+        vec![
+            (OpaqueKind::Code, box_heavy.to_owned()),
+            (OpaqueKind::Code, "<P".to_owned()),
+            (OpaqueKind::Code, "<br/>".to_owned()),
+            (OpaqueKind::Code, "<P".to_owned()),
+            (OpaqueKind::Code, "<br>".to_owned()),
+            (OpaqueKind::Code, "&qut;".to_owned()),
+            (OpaqueKind::Code, "&quot;".to_owned()),
+            (OpaqueKind::Code, "&nbsp;".to_owned()),
+            (OpaqueKind::Code, "&amp;".to_owned()),
+            (OpaqueKind::Code, "&lt;".to_owned()),
+            (OpaqueKind::Code, "&gt;".to_owned()),
+            (OpaqueKind::Code, pua_long.clone()),
+            (OpaqueKind::Code, pua_short.to_owned()),
+            (OpaqueKind::Code, box_light.to_owned()),
+        ]
+    );
+
+    let sents = sentence_texts(&text, &doc);
+    assert!(sents.iter().any(|s| s.contains("旅人走進木屋。")));
+    assert!(sents.iter().any(|s| s.contains("最後一句。")));
+    assert!(!sents.iter().any(|s| s == "<P" || s == "<br/>"));
+
+    // `<path>` and attached `a<p` must not be masked as `<P` tags; 3+ letter ASCII words after
+    // PUA runs must not be swallowed.
+    let safe = format!("Check <path> and a<p now. {}hello.", "\u{E020}".repeat(10));
+    let safe_doc = analyze(&safe);
+    assert_eq!(
+        opaque_pairs(&safe, &safe_doc),
+        vec![(OpaqueKind::Code, "\u{E020}".repeat(10))]
+    );
+}
+
+#[test]
+fn opt_in_editorial_masking_preserves_char_offsets() {
+    let text = [
+        "旅人推開石門，走入幽靜的庭院。",
+        "（月底最後一天，求月票、推薦票鼎立支持！）",
+        "今天保底第一更送到，晚上還有加更！",
+        "(奇幻)(冒險)(古典)(連載)",
+        "老者收起木匣/首/發，緩步走下石階(ab#cd#ef)。（未完待續）",
+        "本書收集于網絡，屬轉載作品，請別忘本書，點擊加入書架查看熱門書籍與書友正在讀。",
+    ]
+    .join("\n\n");
+
+    let default_doc = analyze_document(&text, &Options::default());
+    assert!(default_doc.segmentation.opaque.is_empty());
+
+    let masked_doc = analyze_document(
+        &text,
+        &Options {
+            mask_editorial: true,
+            ..Options::default()
+        },
+    );
+    assert_eq!(masked_doc.text_chars, default_doc.text_chars);
+    assert_eq!(masked_doc.text_sha256, default_doc.text_sha256);
+
+    assert_eq!(
+        opaque_pairs(&text, &masked_doc),
+        vec![
+            (
+                OpaqueKind::Code,
+                "（月底最後一天，求月票、推薦票鼎立支持！）".to_owned()
+            ),
+            (
+                OpaqueKind::Code,
+                "今天保底第一更送到，晚上還有加更！".to_owned()
+            ),
+            (OpaqueKind::Code, "(奇幻)(冒險)(古典)(連載)".to_owned()),
+            (OpaqueKind::Code, "/首/發".to_owned()),
+            (OpaqueKind::Code, "(ab#cd#ef)".to_owned()),
+            (OpaqueKind::Code, "（未完待續）".to_owned()),
+            (
+                OpaqueKind::Code,
+                "本書收集于網絡，屬轉載作品，請別忘本書，點擊加入書架查看熱門書籍與書友正在讀。"
+                    .to_owned()
+            ),
+        ]
+    );
+
+    assert_eq!(
+        sentence_texts(&text, &masked_doc),
+        owned(&[
+            "旅人推開石門，走入幽靜的庭院。",
+            "老者收起木匣/首/發，緩步走下石階(ab#cd#ef)。",
+            "（未完待續）",
+        ])
+    );
+    // Verify exact char offsets and block-vs-inline invariants on the masked document.
+    let chars: Vec<char> = text.chars().collect();
+    let whole_line = |s: Span| {
+        (s.start_char == 0 || chars[s.start_char - 1] == '\n')
+            && (s.end_char == chars.len() || chars[s.end_char] == '\n')
+    };
+    for o in &masked_doc.segmentation.opaque {
+        if whole_line(o.span) {
+            for s in &masked_doc.segmentation.sentences {
+                assert!(
+                    s.span.end_char <= o.span.start_char || o.span.end_char <= s.span.start_char
+                );
+            }
+        } else {
+            assert!(masked_doc.segmentation.sentences.iter().any(|s| {
+                s.span.start_char <= o.span.start_char && o.span.end_char <= s.span.end_char
+            }));
+        }
+    }
+    for tok in &masked_doc.tokens {
+        assert!(tok.span.start_char < tok.span.end_char);
+        assert!(tok.span.end_char <= masked_doc.text_chars);
+        let s = slice(&text, tok.span);
+        assert!(!s.is_empty());
+    }
+}

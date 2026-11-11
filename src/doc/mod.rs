@@ -7,6 +7,7 @@ mod pos;
 mod relation;
 mod segment;
 pub mod syntax;
+mod t2s;
 mod token;
 
 use crate::Span;
@@ -21,11 +22,26 @@ pub use syntax::{
 
 pub const SCHEMA: &str = "nlp.doc.v1";
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Options {
     /// Names for the name rule. Matched as exact text, leftmost-longest.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<String>,
+    /// Mask generic web-novel editorial/scraper boilerplate lines and inline scraper tags.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mask_editorial: bool,
+    /// Project Traditional Han characters onto Simplified equivalents during Chinese word
+    /// segmentation and split false coverb/demonstrative HMM merges while preserving exact
+    /// original character offsets.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub normalize_traditional: bool,
+    /// Extra domain vocabulary matched leftmost-longest before Chinese word segmentation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lexicon: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,9 +230,10 @@ pub(crate) fn sort_unknown(unknown: &mut [Unknown]) {
 
 pub fn analyze_document(text: &str, options: &Options) -> Document {
     let c: Vec<char> = text.chars().collect();
-    let found = opaque::find(&c);
+    let found = opaque::find_with_options(&c, options.mask_editorial);
     // Splitting runs on the masked text, so no boundary falls inside an opaque span.
     let m = opaque::mask(&c, &found);
+    let token_matcher = token::TokenMatcher::from_options(options);
     let mut seg = Segmentation {
         paragraphs: Vec::new(),
         sentences: Vec::new(),
@@ -270,7 +287,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
             if unsupported {
                 continue;
             }
-            for piece in token::tokenize(&c, span, &inline) {
+            for piece in token::tokenize_with_matcher(&c, span, &inline, &token_matcher) {
                 let text: String = c[piece.span.start_char..piece.span.end_char]
                     .iter()
                     .collect();

@@ -569,7 +569,7 @@ fn zh_cn_mainland_tokens_upgrade_contextual_upos_and_decode_syntax() {
 
     let surface = |span: Span| -> String { chars[span.start_char..span.end_char].iter().collect() };
     let tok_surfaces: Vec<String> = base.tokens.iter().map(|t| surface(t.span)).collect();
-    for mainland_word in ["因为", "我们", "通过", "软件", "数据库", "内存", "已经"] {
+    for mainland_word in ["通过", "软件", "数据库", "内存"] {
         let idx = tok_surfaces
             .iter()
             .position(|w| w == mainland_word)
@@ -578,7 +578,7 @@ fn zh_cn_mainland_tokens_upgrade_contextual_upos_and_decode_syntax() {
             });
         assert_eq!(
             base.tokens[idx].upos, None,
-            "Layer 2 must leave Simplified {mainland_word:?} undecided"
+            "Layer 2 must leave open-class Mainland {mainland_word:?} undecided"
         );
         assert!(
             base.unknown.contains(&Unknown {
@@ -589,11 +589,19 @@ fn zh_cn_mainland_tokens_upgrade_contextual_upos_and_decode_syntax() {
             "Layer 2 must emit pos NoModel for {mainland_word:?}"
         );
     }
-    // Shared characters ("了", "很", "，", "。") are already decided in Layer 2.
     let le_idx = tok_surfaces.iter().position(|w| w == "了").unwrap();
     let hen_idx = tok_surfaces.iter().position(|w| w == "很").unwrap();
-    assert_eq!(base.tokens[le_idx].upos, Some(Upos::Part));
-    assert_eq!(base.tokens[hen_idx].upos, Some(Upos::Adv));
+    // Unambiguous closed-class characters/words are already decided in Layer 2.
+    for (decided_word, expected_upos) in [
+        ("因为", Upos::Sconj),
+        ("我们", Upos::Pron),
+        ("了", Upos::Part),
+        ("已经", Upos::Adv),
+        ("很", Upos::Adv),
+    ] {
+        let idx = tok_surfaces.iter().position(|w| w == decided_word).unwrap();
+        assert_eq!(base.tokens[idx].upos, Some(expected_upos));
+    }
 
     // Map each Mainland token's first subword index (`s_u` under `char_subword_encode`) to its
     // true contextual UD UPOS tag, while deliberately predicting `Verb` (15) on "了" and "很" to

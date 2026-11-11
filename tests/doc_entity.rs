@@ -21,6 +21,7 @@ fn analyze(text: &str) -> Document {
 fn analyze_names(text: &str, names: &[&str]) -> Document {
     let options = Options {
         names: names.iter().map(|n| n.to_string()).collect(),
+        ..Options::default()
     };
     analyze_document(text, &options)
 }
@@ -454,6 +455,7 @@ fn names() {
     assert_eq!(serde_json::to_value(Options::default()).unwrap(), json!({}));
     let with = serde_json::to_value(Options {
         names: vec!["王小明".to_owned()],
+        ..Options::default()
     })
     .unwrap();
     assert_eq!(with, json!({ "names": ["王小明"] }));

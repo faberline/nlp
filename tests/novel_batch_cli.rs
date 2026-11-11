@@ -771,3 +771,161 @@ fn onnx_backend_runs_multiworker_cleanly() {
     assert_eq!(receipt["total_chapters"].as_u64(), Some(2));
     assert!(receipt["syntax_tokens"].as_u64().unwrap() > 0);
 }
+
+#[test]
+fn auto_lexicon_and_high_signal_timeline_cues_cli_end_to_end() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundles_dir = tmp.path().join("bundles");
+    let out_dir = tmp.path().join("out");
+    fs::create_dir_all(&bundles_dir).unwrap();
+
+    let templates = [
+        "清晨，沈星河拔出蒼雲鐵劍守住石門。",
+        "黃昏時，老匠人擦拭蒼雲鐵劍遞給沈星河。",
+        "雷聲中，沈星河舉起蒼雲鐵劍劈開木樁。",
+        "院落外，眾學徒圍觀蒼雲鐵劍並向沈星河請教。",
+        "燈火下，沈星河收好蒼雲鐵劍走進書房。",
+    ];
+    let mut bundle_content = String::new();
+    for ch_idx in 1..=4 {
+        bundle_content.push_str(&format!("第{ch_idx}章 演武紀事{ch_idx}\n\n"));
+        for tpl in &templates {
+            bundle_content.push_str(tpl);
+            bundle_content.push('\n');
+        }
+        bundle_content
+            .push_str("沈星河拿了兩個木盒，走了三公里。「因為山路濕滑，所以我們放慢腳步。」\n");
+        bundle_content.push_str("（月底求下月票與推薦票，紫電閣歡迎您！）\n\n\n");
+    }
+    fs::write(bundles_dir.join("01.txt"), bundle_content.as_bytes()).unwrap();
+
+    // 1. Default run (`--auto-lexicon` enabled, bare numbers filtered).
+    let run1 = Command::new(bin_path())
+        .args([
+            "--bundles-dir",
+            bundles_dir.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--backend",
+            "none",
+            "--workers",
+            "2",
+            "--name",
+            "沈星河",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        run1.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&run1.stderr)
+    );
+
+    let lex_json: Value =
+        serde_json::from_slice(&fs::read(out_dir.join("discovered_lexicon.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        lex_json["schema"].as_str(),
+        Some("nlp.novel_discovered_lexicon.v1")
+    );
+    let terms: Vec<&str> = lex_json["terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["term"].as_str())
+        .collect();
+    assert!(terms.contains(&"蒼雲鐵劍"), "terms={terms:?}");
+    assert!(terms.contains(&"沈星河"), "terms={terms:?}");
+    assert!(!terms.contains(&"蒼雲"), "terms={terms:?}");
+    assert!(!terms.contains(&"紫電閣"), "terms={terms:?}");
+
+    let r1: Value =
+        serde_json::from_slice(&fs::read(out_dir.join("book_manifest_receipt.json")).unwrap())
+            .unwrap();
+    assert_eq!(r1["auto_lexicon_enabled"].as_bool(), Some(true));
+    assert_eq!(
+        r1["discovered_lexicon_count"].as_u64(),
+        Some(terms.len() as u64)
+    );
+    assert_eq!(r1["zero_root_sentences"].as_u64(), Some(0));
+    assert_eq!(r1["orphan_syntax_arcs"].as_u64(), Some(0));
+
+    let cues1: Vec<Value> = fs::read_to_string(out_dir.join("entities_timeline_cues.jsonl"))
+        .unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(
+        !cues1.iter().any(|c| c["kind"].as_str() == Some("number")),
+        "bare numbers must be excluded by default"
+    );
+    assert!(
+        cues1
+            .iter()
+            .any(|c| c["kind"].as_str() == Some("name") && c["text"].as_str() == Some("沈星河"))
+    );
+    assert!(
+        cues1.iter().any(
+            |c| c["kind"].as_str() == Some("quantity") && c["text"].as_str() == Some("三公里")
+        )
+    );
+    let cause_cue = cues1
+        .iter()
+        .find(|c| c["cue_type"].as_str() == Some("relation") && c["kind"].as_str() == Some("cause"))
+        .expect("expected cause relation cue");
+    assert_eq!(cause_cue["clean_arg1_text"].as_str(), Some("山路濕滑"));
+    assert_eq!(cause_cue["clean_arg2_text"].as_str(), Some("我們放慢腳步"));
+
+    // 2. Re-running with `--include-bare-numbers` refreshes cues to include unitless `number` entities.
+    let run2 = Command::new(bin_path())
+        .args([
+            "--bundles-dir",
+            bundles_dir.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--backend",
+            "none",
+            "--workers",
+            "2",
+            "--name",
+            "沈星河",
+            "--include-bare-numbers",
+        ])
+        .output()
+        .unwrap();
+    assert!(run2.status.success());
+    let cues2: Vec<Value> = fs::read_to_string(out_dir.join("entities_timeline_cues.jsonl"))
+        .unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(
+        cues2
+            .iter()
+            .any(|c| c["kind"].as_str() == Some("number") && c["text"].as_str() == Some("兩"))
+    );
+
+    // 3. Re-running with `--no-auto-lexicon` sets `auto_lexicon_enabled = false`.
+    let out_no_lex = tmp.path().join("out_no_lex");
+    let run3 = Command::new(bin_path())
+        .args([
+            "--bundles-dir",
+            bundles_dir.to_str().unwrap(),
+            "--out-dir",
+            out_no_lex.to_str().unwrap(),
+            "--backend",
+            "none",
+            "--no-auto-lexicon",
+        ])
+        .output()
+        .unwrap();
+    assert!(run3.status.success());
+    assert!(!out_no_lex.join("discovered_lexicon.json").exists());
+    let r3: Value =
+        serde_json::from_slice(&fs::read(out_no_lex.join("book_manifest_receipt.json")).unwrap())
+            .unwrap();
+    assert_eq!(r3["auto_lexicon_enabled"].as_bool(), Some(false));
+    assert_eq!(r3["discovered_lexicon_count"].as_u64(), Some(0));
+}

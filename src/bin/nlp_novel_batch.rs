@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
+use std::hash::{BuildHasherDefault, Hasher};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -31,6 +32,9 @@ pub const CHAPTER_SCHEMA: &str = "nlp.novel_chapter.v1";
 pub const INDEX_SCHEMA: &str = "nlp.novel_completed_index.v1";
 pub const RECEIPT_SCHEMA: &str = "nlp.novel_book_receipt.v1";
 pub const CUE_SCHEMA: &str = "nlp.novel_timeline_cue.v1";
+pub const LEXICON_SCHEMA: &str = "nlp.novel_discovered_lexicon.v1";
+
+const DEFAULT_AUTO_LEXICON_MAX: usize = 1500;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 enum BackendMode {
@@ -134,6 +138,50 @@ struct Args {
     /// Optional exact surface names to pass to `nlp.doc.v1` Layer 3 name extraction.
     #[arg(long = "name", value_name = "SURFACE")]
     names: Vec<String>,
+
+    /// Automatically discover recurring multi-character domain compounds and proper names across the corpus (enabled by default).
+    #[arg(long, overrides_with = "no_auto_lexicon")]
+    auto_lexicon: bool,
+
+    /// Disable statistical two-pass corpus lexicon discovery.
+    #[arg(long, overrides_with = "auto_lexicon")]
+    no_auto_lexicon: bool,
+
+    /// Maximum number of statistically discovered compounds passed to Layer 1 tokenization.
+    #[arg(long, default_value_t = DEFAULT_AUTO_LEXICON_MAX, value_name = "N")]
+    auto_lexicon_max: usize,
+
+    /// Optional manual lexicon compounds to protect during Layer 1 tokenization (repeatable).
+    #[arg(long = "lexicon", value_name = "SURFACE")]
+    lexicon: Vec<String>,
+
+    /// Mask web-novel editorial postscripts, vote pleas, and scraper watermarks in Layer 0 (enabled by default).
+    #[arg(
+        long,
+        visible_alias = "mask-editorial",
+        overrides_with = "no_editorial_mask"
+    )]
+    editorial_mask: bool,
+
+    /// Disable Layer 0 web-novel editorial postscript and watermark masking.
+    #[arg(
+        long,
+        visible_alias = "no-mask-editorial",
+        overrides_with = "editorial_mask"
+    )]
+    no_editorial_mask: bool,
+
+    /// Project Traditional Han characters 1:1 to Simplified during Jieba dictionary lookup (enabled by default).
+    #[arg(long, overrides_with = "no_normalize_traditional")]
+    normalize_traditional: bool,
+
+    /// Disable 1:1 Traditional-to-Simplified dictionary projection in Layer 1.
+    #[arg(long, overrides_with = "normalize_traditional")]
+    no_normalize_traditional: bool,
+
+    /// Include unitless `EntityKind::Number` records in `entities_timeline_cues.jsonl` (filtered out by default).
+    #[arg(long)]
+    include_bare_numbers: bool,
 }
 
 /// Exact Unicode scalar (`start_char..end_char`) and UTF-8 byte (`start_byte..end_byte`) span within `source_file`.
@@ -176,6 +224,10 @@ struct CompletedIndexEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model_sha256: Option<String>,
     backend: String,
+    #[serde(default)]
+    options_sha256: String,
+    #[serde(default)]
+    include_bare_numbers: bool,
     output_file: String,
     output_sha256: String,
     file_len: u64,
@@ -192,6 +244,10 @@ struct ChapterStats {
     tokens: usize,
     decided_upos_tokens: usize,
     syntax_tokens: usize,
+    #[serde(default)]
+    zero_root_sentences: usize,
+    #[serde(default)]
+    orphan_syntax_arcs: usize,
     entities: usize,
     relations: usize,
     timeline_cues: usize,
@@ -215,6 +271,10 @@ struct BookManifestReceipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model_sha256: Option<String>,
     workers: usize,
+    #[serde(default)]
+    auto_lexicon_enabled: bool,
+    #[serde(default)]
+    discovered_lexicon_count: usize,
     total_chapters: usize,
     resumed_chapters: usize,
     processed_chapters: usize,
@@ -228,6 +288,10 @@ struct BookManifestReceipt {
     decided_upos_rate: f64,
     syntax_tokens: usize,
     syntax_token_coverage_rate: f64,
+    #[serde(default)]
+    zero_root_sentences: usize,
+    #[serde(default)]
+    orphan_syntax_arcs: usize,
     total_entities: usize,
     total_relations: usize,
     total_timeline_cues: usize,
@@ -240,6 +304,32 @@ struct BookManifestReceipt {
     processed_sentences_per_sec: f64,
     chapter_outputs_sha256: String,
     timeline_cues_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct DiscoveredLexiconTerm {
+    term: String,
+    char_len: usize,
+    freq: u32,
+    chapter_df: u32,
+    min_pmi: f64,
+    min_npmi: f64,
+    left_av: usize,
+    right_av: usize,
+    left_entropy: f64,
+    right_entropy: f64,
+    score: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+struct DiscoveredLexiconArtifact {
+    schema: String,
+    total_chapters: usize,
+    total_han_chars: u64,
+    max_terms: usize,
+    discovered_count: usize,
+    elapsed_ms: f64,
+    terms: Vec<DiscoveredLexiconTerm>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -274,6 +364,14 @@ struct TimelineCueRecord {
     arg1: Option<Span>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     arg2: Option<Span>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clean_arg1_span: Option<Span>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clean_arg2_span: Option<Span>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clean_arg1_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    clean_arg2_text: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1163,6 +1261,587 @@ fn load_inputs_from_manifest(manifest_path: &Path) -> Result<Vec<InputChapter>> 
 }
 
 // ============================================================================
+// Pure Statistical Two-Pass Corpus Term & Name Discovery (`--auto-lexicon`)
+// ============================================================================
+
+#[derive(Default)]
+struct FxHasher(u64);
+
+impl Hasher for FxHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h = self.0;
+        for &b in bytes {
+            h = (h.rotate_left(5) ^ u64::from(b)).wrapping_mul(0x517c_c1b7_2722_0a95);
+        }
+        self.0 = h;
+    }
+    #[inline]
+    fn write_u16(&mut self, i: u16) {
+        self.0 = (self.0.rotate_left(5) ^ u64::from(i)).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.0 = (self.0.rotate_left(5) ^ u64::from(i)).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    #[inline]
+    fn write_u128(&mut self, i: u128) {
+        let lo = i as u64;
+        let hi = (i >> 64) as u64;
+        let h = (self.0.rotate_left(5) ^ lo).wrapping_mul(0x517c_c1b7_2722_0a95);
+        self.0 = (h.rotate_left(5) ^ hi).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+}
+
+type FastMap<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
+
+fn is_bmp_han(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}'
+    )
+}
+
+/// Closed-class characters that never appear inside a discovered lexical compound or proper name.
+fn is_internal_stop_char(ch: char) -> bool {
+    const STOP: &str = concat!(
+        // Aspect, structural, and modal particles
+        "的得地了著着過过嗎吗呢吧啊呀啦喔哦唄呗麼么罷罢吶呐哉乎矣焉耳",
+        // Personal pronouns & plural markers
+        "我你妳您他她它牠咱們们",
+        // Demonstratives & interrogatives
+        "這这那哪誰谁啥何",
+        // Coverbs, conjunctions, and copulas
+        "把被讓让給给從从對对與与及並并但卻却而或因雖虽既若倘縱纵",
+        // High-frequency adverbs & negations
+        "不沒没別别很更最都也還还只就才又再已曾剛刚豈岂難难頗颇稍略漸渐越愈",
+        // Numerals & approximate quantifiers
+        "零〇一二兩两三四五六七八九十百千萬万億亿半數数幾几餘余多第",
+        // Common auxiliary / light verbs & localizer glues
+        "是為为有在將将當当向朝往自由連连和跟同使令叫受"
+    );
+    STOP.contains(ch)
+}
+
+/// Characters forbidden strictly in the interior (`1..len-1`) of `>= 4`-char compounds.
+fn is_medial_phrase_glue(ch: char) -> bool {
+    "中內内外上下前後后裡里裏間间之所如似出入進进起開开過过成為为作聲声色".contains(ch)
+}
+
+/// Characters forbidden at the leading boundary of a discovered compound.
+fn is_leading_stop_char(ch: char) -> bool {
+    const LEAD: &str = concat!(
+        "於于以按依順顺沿隨随趁除沖衝離离距",
+        "說说道看見见想聽听知覺觉感問问答笑哭喊叫喝罵骂嘆叹哼搖摇點点抬低轉转回望盯凝瞥掃扫",
+        "去來来上下前後后裡里裏內内外中間间旁側侧左右",
+        "此其該该每各某本全諸诸眾众群整姓",
+        "所能可會会要欲敢肯願愿須须應应",
+        "之者兒儿頭头子",
+        "級级階阶品轉转重代等號号流成倍種种樣样個个位名隻只件條条道股陣阵聲声口步次遍番層层座"
+    );
+    LEAD.contains(ch)
+}
+
+/// Characters forbidden at the trailing boundary of a discovered compound.
+fn is_trailing_stop_char(ch: char) -> bool {
+    const TRAIL: &str = concat!(
+        "於于以之其此",
+        "說说道看見见想聽听知覺觉感問问答笑哭喊叫喝罵骂嘆叹哼",
+        "去來来上下前後后裡里裏內内外中間间旁側侧",
+        "出入起開开住掉完好到走動动落飛飞退進进回成",
+        "時时年月日天夜刻秒分歲岁載载",
+        "個个位次件隻只張张本條条顆颗枚塊块片道股聲声口步丈尺寸里處处種种樣样般番下頓顿場场層层座具柄株滴瓶粒"
+    );
+    TRAIL.contains(ch)
+}
+
+fn is_boilerplate_or_heading_line(line: &str) -> bool {
+    let trimmed = line.trim_matches(is_heading_ws);
+    if trimmed.is_empty()
+        || trimmed.contains('\u{00a0}')
+        || detect_chapter_heading(trimmed).is_some()
+    {
+        return true;
+    }
+    const CUES: &[&str] = &[
+        "月票",
+        "推薦票",
+        "推荐票",
+        "保底",
+        "第一更",
+        "第二更",
+        "第三更",
+        "第四更",
+        "第五更",
+        "加更",
+        "待續",
+        "待续",
+        "加入書架",
+        "加入书架",
+        "熱門書籍",
+        "热门书籍",
+        "熱門標簽",
+        "热门标签",
+        "書友正在讀",
+        "书友正在读",
+        "收集于網絡",
+        "收集於網路",
+        "轉載作品",
+        "转载作品",
+        "請別忘本書",
+        "请别忘本书",
+        "鼎立支持",
+        "求下票",
+        "歡迎您",
+        "欢迎您",
+        "書庫",
+        "书库",
+        "中文網",
+        "中文网",
+        "小說網",
+        "小说网",
+        "最新章節",
+        "最新章节",
+        "更新快",
+        "www.",
+        "http",
+        ".com",
+        ".net",
+        "┏",
+        "┗",
+        "┃",
+    ];
+    CUES.iter().any(|cue| trimmed.contains(cue))
+}
+
+#[derive(Clone, Copy, Default)]
+struct LexCountStat {
+    freq: u32,
+    last_chap: u32,
+    chap_df: u32,
+}
+
+#[derive(Default)]
+struct LexContextPair {
+    sampled: u32,
+    left: FastMap<u16, u32>,
+    right: FastMap<u16, u32>,
+}
+
+fn entropy_and_av(counts: &FastMap<u16, u32>, total: u32) -> (usize, f64, f64) {
+    if total == 0 || counts.is_empty() {
+        return (0, 0.0, 1.0);
+    }
+    let n = f64::from(total);
+    let mut h = 0.0f64;
+    let mut max_c = 0u32;
+    for &c in counts.values() {
+        if c > max_c {
+            max_c = c;
+        }
+        let p = f64::from(c) / n;
+        h -= p * p.ln();
+    }
+    (counts.len(), h, f64::from(max_c) / n)
+}
+
+#[inline]
+fn pack_u16_gram(slice: &[u16]) -> u128 {
+    let mut out = (slice.len() as u128) << 96;
+    for (i, &v) in slice.iter().enumerate() {
+        out |= u128::from(v) << (i * 16);
+    }
+    out
+}
+
+fn unpack_u16_gram_string(key: u128) -> String {
+    let len = ((key >> 96) & 0xff) as usize;
+    let mut s = String::with_capacity(len * 3);
+    for i in 0..len {
+        let code = ((key >> (i * 16)) & 0xffff) as u32;
+        if let Some(ch) = char::from_u32(code) {
+            s.push(ch);
+        }
+    }
+    s
+}
+
+/// Pure statistical two-pass discovery of recurring multi-character compounds and proper names
+/// (`2..=5` BMP Han scalars) across the input chapters, using Apriori frequent-bigram pruning,
+/// internal split-point PMI / Normalized PMI, left/right Accessor Variety & branching entropy,
+/// chapter burstiness, closed-class boundary filtering, and superstring dominance suppression.
+fn discover_corpus_lexicon(
+    chapters: &[InputChapter],
+    max_terms: usize,
+) -> DiscoveredLexiconArtifact {
+    const MIN_FREQ: u32 = 15;
+    const MIN_CHAP_DF: u32 = 3;
+    const MIN_AV: usize = 4;
+    const MAX_SAMPLE_CTX: u32 = 512;
+
+    let t0 = Instant::now();
+
+    let mut han_ok = vec![false; 65536];
+    let mut lead_ok = vec![false; 65536];
+    let mut trail_ok = vec![false; 65536];
+    let mut medial_glue = vec![false; 65536];
+    for cp in 0u32..65536 {
+        if let Some(ch) = char::from_u32(cp)
+            && is_bmp_han(ch)
+            && !is_internal_stop_char(ch)
+        {
+            let idx = cp as usize;
+            han_ok[idx] = true;
+            lead_ok[idx] = !is_leading_stop_char(ch);
+            trail_ok[idx] = !is_trailing_stop_char(ch);
+            medial_glue[idx] = is_medial_phrase_glue(ch);
+        }
+    }
+
+    // Pass 1: Build compact `u16` streams per chapter while counting unigrams and bigrams.
+    let mut chap_streams: Vec<Vec<u16>> = Vec::with_capacity(chapters.len());
+    let mut unigram_freq = vec![0u32; 65536];
+    let mut bigram_freq: FastMap<u32, u32> = FastMap::default();
+    bigram_freq.reserve(chapters.len().saturating_mul(64).min(262_144));
+    let mut total_han_chars = 0u64;
+    let mut boundary_counter: u16 = 1;
+
+    for ch_item in chapters {
+        let mut cur_chap: Vec<u16> = Vec::with_capacity(ch_item.text.len() / 3 + 16);
+        for line in ch_item.text.lines() {
+            if is_boilerplate_or_heading_line(line) {
+                continue;
+            }
+            boundary_counter = (boundary_counter % 1024) + 1;
+            cur_chap.push(boundary_counter);
+            for ch in line.trim_matches(is_heading_ws).chars() {
+                let cp = ch as u32;
+                if cp < 65536 && is_bmp_han(ch) {
+                    let u = cp as u16;
+                    unigram_freq[u as usize] += 1;
+                    total_han_chars += 1;
+                    if let Some(&prev) = cur_chap.last()
+                        && prev >= 0x3000
+                        && han_ok[prev as usize]
+                        && han_ok[u as usize]
+                    {
+                        let bg = (u32::from(prev) << 16) | u32::from(u);
+                        *bigram_freq.entry(bg).or_insert(0) += 1;
+                    }
+                    cur_chap.push(u);
+                } else {
+                    boundary_counter = (boundary_counter % 1024) + 1;
+                    cur_chap.push(boundary_counter);
+                }
+            }
+        }
+        chap_streams.push(cur_chap);
+    }
+
+    if max_terms == 0
+        || chapters.len() < MIN_CHAP_DF as usize
+        || total_han_chars < u64::from(MIN_FREQ)
+    {
+        return DiscoveredLexiconArtifact {
+            schema: LEXICON_SCHEMA.to_owned(),
+            total_chapters: chapters.len(),
+            total_han_chars,
+            max_terms,
+            discovered_count: 0,
+            elapsed_ms: round6(t0.elapsed().as_secs_f64() * 1000.0),
+            terms: Vec::new(),
+        };
+    }
+
+    bigram_freq.retain(|_, &mut f| f >= MIN_FREQ);
+
+    // Pass 2a: Count `2..=5`-grams whose every adjacent bigram is frequent.
+    let mut cands: FastMap<u128, LexCountStat> = FastMap::default();
+    cands.reserve(bigram_freq.len().saturating_mul(2).min(180_000));
+
+    for (chap_idx, stream) in chap_streams.iter().enumerate() {
+        let chap_id = (chap_idx + 1) as u32;
+        let n = stream.len();
+        for i in 0..n {
+            let c0 = stream[i];
+            if c0 < 0x3000 || !han_ok[c0 as usize] {
+                continue;
+            }
+            let max_k = 5.min(n - i);
+            for k in 2..=max_k {
+                let ck = stream[i + k - 1];
+                if ck < 0x3000 || !han_ok[ck as usize] {
+                    break;
+                }
+                let prev_c = stream[i + k - 2];
+                let bg = (u32::from(prev_c) << 16) | u32::from(ck);
+                if !bigram_freq.contains_key(&bg) {
+                    break;
+                }
+                let key = pack_u16_gram(&stream[i..i + k]);
+                let entry = cands.entry(key).or_default();
+                entry.freq += 1;
+                if entry.last_chap != chap_id {
+                    entry.last_chap = chap_id;
+                    entry.chap_df += 1;
+                }
+            }
+        }
+    }
+
+    // Filter by frequency, chapter dispersion, stop boundaries, and internal split-point PMI/NPMI.
+    let total_n = total_han_chars as f64;
+    let sub_freq = |slice: &[u16]| -> u32 {
+        match slice.len() {
+            1 => unigram_freq[slice[0] as usize],
+            2 => bigram_freq
+                .get(&((u32::from(slice[0]) << 16) | u32::from(slice[1])))
+                .copied()
+                .unwrap_or(1),
+            _ => cands
+                .get(&pack_u16_gram(slice))
+                .map(|s| s.freq)
+                .unwrap_or(1),
+        }
+    };
+
+    let mut ctx_targets: FastMap<u128, (LexCountStat, f64, f64, LexContextPair)> =
+        FastMap::default();
+    let mut active_prefix_mask: FastMap<u32, u8> = FastMap::default();
+
+    for (&key, &st) in &cands {
+        if st.freq < MIN_FREQ || st.chap_df < MIN_CHAP_DF {
+            continue;
+        }
+        let len = ((key >> 96) & 0xff) as usize;
+        let mut u16s = [0u16; 5];
+        for (idx, slot) in u16s.iter_mut().enumerate().take(len) {
+            *slot = ((key >> (idx * 16)) & 0xffff) as u16;
+        }
+        let word = &u16s[..len];
+        if !lead_ok[word[0] as usize] || !trail_ok[word[len - 1] as usize] {
+            continue;
+        }
+        // Reject AA, ABB, and AABB reduplications.
+        if (len == 2 && word[0] == word[1])
+            || (len == 3 && word[1] == word[2])
+            || (len == 4 && word[0] == word[1] && word[2] == word[3])
+        {
+            continue;
+        }
+        // Reject `>= 4`-char syntactic phrases containing medial locative/verbal/plural glues.
+        if len >= 4
+            && word[1..len - 1].iter().any(|&c| {
+                (medial_glue[c as usize] && !(len == 4 && c == '之' as u16)) || c == '等' as u16
+            })
+        {
+            continue;
+        }
+
+        let self_info = (total_n / f64::from(st.freq)).ln().max(1e-6);
+        let mut min_pmi = f64::INFINITY;
+        let mut min_npmi = f64::INFINITY;
+        for split in 1..len {
+            let fu = f64::from(sub_freq(&word[..split]));
+            let fv = f64::from(sub_freq(&word[split..]));
+            let pmi = (f64::from(st.freq) * total_n / (fu * fv)).ln();
+            let npmi = pmi / self_info;
+            if pmi < min_pmi {
+                min_pmi = pmi;
+            }
+            if npmi < min_npmi {
+                min_npmi = npmi;
+            }
+        }
+        let cohesive = match len {
+            2 => (min_pmi >= 5.2 || min_npmi >= 0.60) && min_pmi >= 2.2,
+            3 => (min_pmi >= 4.5 || min_npmi >= 0.55) && min_pmi >= 2.2,
+            4 => min_npmi >= 0.65 && min_pmi >= 2.2,
+            _ => min_npmi >= 0.58 && min_pmi >= 2.2,
+        };
+        if cohesive {
+            let pfx = (u32::from(word[0]) << 16) | u32::from(word[1]);
+            *active_prefix_mask.entry(pfx).or_insert(0) |= 1u8 << len;
+            ctx_targets.insert(key, (st, min_pmi, min_npmi, LexContextPair::default()));
+        }
+    }
+
+    // Pass 2b: Collect left/right neighbour distributions at active candidate prefixes.
+    for stream in &chap_streams {
+        let n = stream.len();
+        if n < 2 {
+            continue;
+        }
+        for i in 0..n - 1 {
+            let c0 = stream[i];
+            let c1 = stream[i + 1];
+            if c0 < 0x3000 || c1 < 0x3000 {
+                continue;
+            }
+            let pfx = (u32::from(c0) << 16) | u32::from(c1);
+            let Some(&mask) = active_prefix_mask.get(&pfx) else {
+                continue;
+            };
+            let left_ctx = if i > 0 { stream[i - 1] } else { 0 };
+            let max_k = 5.min(n - i);
+            for k in 2..=max_k {
+                let ck = stream[i + k - 1];
+                if ck < 0x3000 || !han_ok[ck as usize] {
+                    break;
+                }
+                if (mask & (1u8 << k)) != 0 {
+                    let key = pack_u16_gram(&stream[i..i + k]);
+                    if let Some((_, _, _, pair)) = ctx_targets.get_mut(&key)
+                        && pair.sampled < MAX_SAMPLE_CTX
+                    {
+                        pair.sampled += 1;
+                        let right_ctx = if i + k < n { stream[i + k] } else { 0 };
+                        *pair.left.entry(left_ctx).or_insert(0) += 1;
+                        *pair.right.entry(right_ctx).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    struct ScoredCandidate {
+        term: String,
+        u16s: Vec<u16>,
+        freq: u32,
+        chap_df: u32,
+        min_pmi: f64,
+        min_npmi: f64,
+        left_av: usize,
+        right_av: usize,
+        left_h: f64,
+        right_h: f64,
+        score: f64,
+    }
+
+    let mut prelim: Vec<ScoredCandidate> = Vec::with_capacity(ctx_targets.len());
+    for (key, (st, min_pmi, min_npmi, pair)) in ctx_targets {
+        let (left_av, left_h, left_max_p) = entropy_and_av(&pair.left, pair.sampled);
+        let (right_av, right_h, right_max_p) = entropy_and_av(&pair.right, pair.sampled);
+        if left_av < MIN_AV || right_av < MIN_AV {
+            continue;
+        }
+        if left_h < 1.1 || right_h < 1.1 || left_max_p > 0.72 || right_max_p > 0.72 {
+            continue;
+        }
+        let len = ((key >> 96) & 0xff) as usize;
+        let burstiness = f64::from(st.freq) / f64::from(st.chap_df.max(1));
+        let min_burst = match len {
+            2 => 2.15,
+            3 | 4 => 1.30,
+            _ => 1.25,
+        };
+        if burstiness < min_burst {
+            continue;
+        }
+        let mut u16s = Vec::with_capacity(len);
+        for idx in 0..len {
+            u16s.push(((key >> (idx * 16)) & 0xffff) as u16);
+        }
+        let min_h = left_h.min(right_h);
+        let score = 12.0 * min_npmi
+            + 1.1 * min_h
+            + 0.8 * f64::from(st.freq).ln()
+            + 1.8 * burstiness.ln()
+            + 0.8 * ((len - 2) as f64);
+        prelim.push(ScoredCandidate {
+            term: unpack_u16_gram_string(key),
+            u16s,
+            freq: st.freq,
+            chap_df: st.chap_df,
+            min_pmi,
+            min_npmi,
+            left_av,
+            right_av,
+            left_h,
+            right_h,
+            score,
+        });
+    }
+
+    // Suppress bound substrings dominated (`>= 65%` occurrence share) by a longer kept compound.
+    prelim.sort_by(|a, b| {
+        b.u16s
+            .len()
+            .cmp(&a.u16s.len())
+            .then_with(|| b.freq.cmp(&a.freq))
+            .then_with(|| a.u16s.cmp(&b.u16s))
+    });
+    let mut kept: Vec<ScoredCandidate> = Vec::with_capacity(prelim.len());
+    for cand in prelim {
+        let dominated = kept.iter().any(|longer| {
+            longer.u16s.len() > cand.u16s.len()
+                && longer
+                    .u16s
+                    .windows(cand.u16s.len())
+                    .any(|w| w == cand.u16s.as_slice())
+                && f64::from(longer.freq) >= 0.65 * f64::from(cand.freq)
+        });
+        if !dominated {
+            kept.push(cand);
+        }
+    }
+
+    kept.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| a.term.cmp(&b.term))
+    });
+    kept.truncate(max_terms);
+
+    let terms: Vec<DiscoveredLexiconTerm> = kept
+        .into_iter()
+        .map(|k| DiscoveredLexiconTerm {
+            char_len: k.u16s.len(),
+            term: k.term,
+            freq: k.freq,
+            chapter_df: k.chap_df,
+            min_pmi: round6(k.min_pmi),
+            min_npmi: round6(k.min_npmi),
+            left_av: k.left_av,
+            right_av: k.right_av,
+            left_entropy: round6(k.left_h),
+            right_entropy: round6(k.right_h),
+            score: round6(k.score),
+        })
+        .collect();
+
+    DiscoveredLexiconArtifact {
+        schema: LEXICON_SCHEMA.to_owned(),
+        total_chapters: chapters.len(),
+        total_han_chars,
+        max_terms,
+        discovered_count: terms.len(),
+        elapsed_ms: round6(t0.elapsed().as_secs_f64() * 1000.0),
+        terms,
+    }
+}
+
+fn merge_lexicon_terms(manual: &[String], discovered: &[DiscoveredLexiconTerm]) -> Vec<String> {
+    let mut seen = HashSet::with_capacity(manual.len() + discovered.len());
+    let mut out = Vec::with_capacity(manual.len() + discovered.len());
+    for item in manual
+        .iter()
+        .map(String::as_str)
+        .chain(discovered.iter().map(|d| d.term.as_str()))
+    {
+        let trimmed = item.trim();
+        if !trimmed.is_empty() && seen.insert(trimmed.to_owned()) {
+            out.push(trimmed.to_owned());
+        }
+    }
+    out
+}
+
+// ============================================================================
 // Stats & Timeline Cue Extraction
 // ============================================================================
 
@@ -1183,7 +1862,8 @@ fn entity_kind_snake_str(k: EntityKind) -> Option<&'static str> {
         EntityKind::Time => Some("time"),
         EntityKind::Quantity => Some("quantity"),
         EntityKind::Number => Some("number"),
-        EntityKind::Url | EntityKind::Email | EntityKind::Name => None,
+        EntityKind::Name => Some("name"),
+        EntityKind::Url | EntityKind::Email => None,
     }
 }
 
@@ -1212,6 +1892,223 @@ fn slice_span<'a>(text: &'a str, char_to_byte: &[usize], span: Span) -> Option<&
     (start <= end && end <= text.len()).then(|| &text[start..end])
 }
 
+fn char_at(text: &str, char_to_byte: &[usize], idx: usize) -> Option<char> {
+    let start = *char_to_byte.get(idx)?;
+    let end = *char_to_byte.get(idx + 1)?;
+    text.get(start..end)?.chars().next()
+}
+
+fn is_plain_arg_trim_char(ch: char) -> bool {
+    ch.is_whitespace()
+        || matches!(
+            ch,
+            '\u{00a0}'
+                | '\u{3000}'
+                | '\u{feff}'
+                | '，'
+                | '。'
+                | '！'
+                | '？'
+                | '；'
+                | '：'
+                | '、'
+                | '…'
+                | '—'
+                | ','
+                | '.'
+                | '!'
+                | '?'
+                | ';'
+                | ':'
+        )
+}
+
+fn open_bracket_partner(ch: char) -> Option<char> {
+    match ch {
+        '「' => Some('」'),
+        '『' => Some('』'),
+        '“' => Some('”'),
+        '‘' => Some('’'),
+        '（' => Some('）'),
+        '(' => Some(')'),
+        _ => None,
+    }
+}
+
+fn close_bracket_partner(ch: char) -> Option<char> {
+    match ch {
+        '」' => Some('「'),
+        '』' => Some('『'),
+        '”' => Some('“'),
+        '’' => Some('‘'),
+        '）' => Some('（'),
+        ')' => Some('('),
+        _ => None,
+    }
+}
+
+/// Trims boundary whitespace, clause/sentence punctuation, outer matching quote/parenthesis wrappers,
+/// and unmatched boundary quotes/parentheses while preserving balanced internal pairs (such as
+/// `他祭出了「星盤」` or `「甲」與「乙」`).
+fn trim_arg_bounds(text: &str, tbl: &[usize], mut s: usize, mut e: usize) -> (usize, usize) {
+    while s < e {
+        let Some(first) = char_at(text, tbl, s) else {
+            break;
+        };
+        let Some(last) = char_at(text, tbl, e - 1) else {
+            break;
+        };
+
+        if is_plain_arg_trim_char(first) {
+            s += 1;
+            continue;
+        }
+        if is_plain_arg_trim_char(last) {
+            e -= 1;
+            continue;
+        }
+
+        if let Some(close_ch) = open_bracket_partner(first) {
+            let mut depth = 0i32;
+            let mut closed_at = None;
+            for k in s..e {
+                if let Some(c) = char_at(text, tbl, k) {
+                    if c == first {
+                        depth += 1;
+                    } else if c == close_ch {
+                        depth -= 1;
+                        if depth == 0 {
+                            closed_at = Some(k);
+                            break;
+                        }
+                    }
+                }
+            }
+            match closed_at {
+                None => {
+                    // Unmatched opening quote/paren at start of clause (e.g. `「因為山路濕滑，`).
+                    s += 1;
+                    continue;
+                }
+                Some(k) if k == e - 1 && e - s >= 2 => {
+                    // Outer matching quote/paren wrapper around the entire span.
+                    s += 1;
+                    e -= 1;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(open_ch) = close_bracket_partner(last) {
+            let mut depth = 0i32;
+            let mut opened_inside = false;
+            for k in (s..e).rev() {
+                if let Some(c) = char_at(text, tbl, k) {
+                    if c == last {
+                        depth += 1;
+                    } else if c == open_ch {
+                        depth -= 1;
+                        if depth == 0 {
+                            opened_inside = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !opened_inside {
+                // Unmatched closing quote/paren at end of clause (e.g. `所以我們慢點走。」`).
+                e -= 1;
+                continue;
+            }
+        }
+
+        if matches!(first, '"' | '\'') || matches!(last, '"' | '\'') {
+            let mut trimmed_sym = false;
+            for q in ['"', '\''] {
+                let count = (s..e).filter(|&k| char_at(text, tbl, k) == Some(q)).count();
+                if count == 1 && first == q {
+                    s += 1;
+                    trimmed_sym = true;
+                    break;
+                } else if count == 1 && last == q {
+                    e -= 1;
+                    trimmed_sym = true;
+                    break;
+                } else if count == 2 && first == q && last == q && e - s >= 2 {
+                    s += 1;
+                    e -= 1;
+                    trimmed_sym = true;
+                    break;
+                }
+            }
+            if trimmed_sym {
+                continue;
+            }
+        }
+
+        break;
+    }
+    (s, e)
+}
+
+fn clean_relation_arg_span(
+    chapter_text: Option<&str>,
+    char_table: Option<&[usize]>,
+    arg: Span,
+    connector: Span,
+    correlate: Option<Span>,
+) -> Span {
+    let Some((t, tbl)) = chapter_text.zip(char_table) else {
+        let mut s = arg.start_char;
+        let e = arg.end_char;
+        for marker in [Some(connector), correlate].into_iter().flatten() {
+            if marker.start_char == s && marker.end_char > s && marker.end_char < e {
+                s = marker.end_char;
+            }
+        }
+        return Span {
+            start_char: s,
+            end_char: e,
+        };
+    };
+
+    let (mut s, mut e) = trim_arg_bounds(t, tbl, arg.start_char, arg.end_char);
+    loop {
+        let mut stripped = false;
+        for marker in [Some(connector), correlate].into_iter().flatten() {
+            if marker.start_char == s && marker.end_char > s && marker.end_char < e {
+                let (ns, ne) = trim_arg_bounds(t, tbl, marker.end_char, e);
+                if ns < ne {
+                    s = ns;
+                    e = ne;
+                    stripped = true;
+                }
+            }
+        }
+        if !stripped {
+            break;
+        }
+    }
+
+    if s < e {
+        Span {
+            start_char: s,
+            end_char: e,
+        }
+    } else {
+        let (ts, te) = trim_arg_bounds(t, tbl, arg.start_char, arg.end_char);
+        if ts < te {
+            Span {
+                start_char: ts,
+                end_char: te,
+            }
+        } else {
+            arg
+        }
+    }
+}
+
 fn extract_timeline_cues(
     order: usize,
     title: &str,
@@ -1219,6 +2116,7 @@ fn extract_timeline_cues(
     source_start_char: usize,
     chapter_text: Option<&str>,
     doc: &Document,
+    include_bare_numbers: bool,
 ) -> Vec<TimelineCueRecord> {
     let char_table = chapter_text.map(char_to_byte_offsets);
     let text_for = |span: Span| -> Option<String> {
@@ -1233,6 +2131,9 @@ fn extract_timeline_cues(
 
     let mut cues = Vec::new();
     for ent in &doc.entities {
+        if ent.kind == EntityKind::Number && ent.unit.is_none() && !include_bare_numbers {
+            continue;
+        }
         let Some(kind_str) = entity_kind_snake_str(ent.kind) else {
             continue;
         };
@@ -1256,6 +2157,10 @@ fn extract_timeline_cues(
             correlate_text: None,
             arg1: None,
             arg2: None,
+            clean_arg1_span: None,
+            clean_arg2_span: None,
+            clean_arg1_text: None,
+            clean_arg2_text: None,
         });
     }
 
@@ -1274,6 +2179,20 @@ fn extract_timeline_cues(
             start_char,
             end_char,
         };
+        let clean_arg1 = clean_relation_arg_span(
+            chapter_text,
+            char_table.as_deref(),
+            rel.arg1,
+            rel.connector,
+            rel.correlate,
+        );
+        let clean_arg2 = clean_relation_arg_span(
+            chapter_text,
+            char_table.as_deref(),
+            rel.arg2,
+            rel.connector,
+            rel.correlate,
+        );
         cues.push(TimelineCueRecord {
             schema: CUE_SCHEMA.to_owned(),
             chapter: order,
@@ -1294,6 +2213,10 @@ fn extract_timeline_cues(
             correlate_text: rel.correlate.and_then(&text_for),
             arg1: Some(rel.arg1),
             arg2: Some(rel.arg2),
+            clean_arg1_span: Some(clean_arg1),
+            clean_arg2_span: Some(clean_arg2),
+            clean_arg1_text: text_for(clean_arg1),
+            clean_arg2_text: text_for(clean_arg2),
         });
     }
 
@@ -1321,6 +2244,38 @@ fn summarize_document(doc: &Document, timeline_cues: usize) -> ChapterStats {
         .filter(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
         .count();
     let decided_upos_tokens = doc.tokens.iter().filter(|t| t.upos.is_some()).count();
+
+    let sent_len = doc.segmentation.sentences.len();
+    let mut syntax_tok_set = HashSet::with_capacity(doc.syntax.len());
+    let mut sent_syntax_count = vec![0usize; sent_len];
+    let mut sent_root_count = vec![0usize; sent_len];
+    for st in &doc.syntax {
+        syntax_tok_set.insert(st.token);
+        if let Some(cnt) = sent_syntax_count.get_mut(st.sentence) {
+            *cnt += 1;
+        }
+        if st.head.is_none()
+            && let Some(rc) = sent_root_count.get_mut(st.sentence)
+        {
+            *rc += 1;
+        }
+    }
+    let zero_root_sentences = sent_syntax_count
+        .iter()
+        .zip(sent_root_count.iter())
+        .filter(|&(&sc, &rc)| sc > 0 && rc == 0)
+        .count();
+    let orphan_syntax_arcs = doc
+        .syntax
+        .iter()
+        .filter(|st| {
+            st.head.is_some_and(|h| {
+                !syntax_tok_set.contains(&h)
+                    || doc.tokens.get(h).map(|t| t.sentence) != Some(st.sentence)
+            })
+        })
+        .count();
+
     let mut unknown_by_layer_reason = BTreeMap::new();
     for u in &doc.unknown {
         let key = format!("{}:{}", u.layer, reason_snake_str(u.reason));
@@ -1330,16 +2285,14 @@ fn summarize_document(doc: &Document, timeline_cues: usize) -> ChapterStats {
     ChapterStats {
         text_chars: doc.text_chars,
         paragraphs: doc.segmentation.paragraphs.len(),
-        sentences: doc.segmentation.sentences.len(),
-        supported_sentences: doc
-            .segmentation
-            .sentences
-            .len()
-            .saturating_sub(unsupported_sents),
+        sentences: sent_len,
+        supported_sentences: sent_len.saturating_sub(unsupported_sents),
         clauses: doc.segmentation.clauses.len(),
         tokens: doc.tokens.len(),
         decided_upos_tokens,
         syntax_tokens: doc.syntax.len(),
+        zero_root_sentences,
+        orphan_syntax_arcs,
         entities: doc.entities.len(),
         relations: doc.relations.len(),
         timeline_cues,
@@ -1351,12 +2304,15 @@ fn chapter_rel_output_path(order: usize) -> String {
     format!("chapters/{order:04}.json")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn index_entry_matches_chapter(
     entry: &CompletedIndexEntry,
     ch: &InputChapter,
     expected_model_id: Option<&str>,
     expected_model_sha256: Option<&str>,
     expected_backend: &str,
+    expected_options_sha256: &str,
+    expected_include_bare_numbers: bool,
 ) -> bool {
     entry.schema == INDEX_SCHEMA
         && entry.order == ch.order
@@ -1368,6 +2324,8 @@ fn index_entry_matches_chapter(
         && entry.model_id.as_deref() == expected_model_id
         && entry.model_sha256.as_deref() == expected_model_sha256
         && entry.backend == expected_backend
+        && entry.options_sha256 == expected_options_sha256
+        && entry.include_bare_numbers == expected_include_bare_numbers
 }
 
 fn chapter_output_matches_chapter(
@@ -1376,6 +2334,7 @@ fn chapter_output_matches_chapter(
     expected_model_id: Option<&str>,
     expected_model_sha256: Option<&str>,
     expected_backend: &str,
+    expected_options: &Options,
 ) -> bool {
     out.schema == CHAPTER_SCHEMA
         && out.order == ch.order
@@ -1385,6 +2344,7 @@ fn chapter_output_matches_chapter(
         && out.source_span == ch.source_span
         && out.chapter_sha256 == ch.chapter_sha256
         && out.doc.text_sha256 == ch.chapter_sha256
+        && out.doc.options == *expected_options
         && out.model_id.as_deref() == expected_model_id
         && out.model_sha256.as_deref() == expected_model_sha256
         && out.backend == expected_backend
@@ -1420,6 +2380,15 @@ fn compute_chapter_outputs_sha256(entries: &[CompletedIndexEntry]) -> String {
         let _ = write!(&mut out, "{b:02x}");
     }
     out
+}
+
+fn build_doc_options(
+    names: Vec<String>,
+    _mask_editorial: bool,
+    _normalize_traditional: bool,
+    _lexicon: Vec<String>,
+) -> Options {
+    Options { names }
 }
 
 #[cfg(all(feature = "coreml", target_os = "macos"))]
@@ -1472,9 +2441,10 @@ fn run() -> Result<()> {
             .max(1),
     };
     let resume_enabled = !args.no_resume;
-    let doc_options = Options {
-        names: args.names.clone(),
-    };
+    let auto_lexicon_enabled = !args.no_auto_lexicon;
+    let mask_editorial = !args.no_editorial_mask;
+    let normalize_traditional = !args.no_normalize_traditional;
+    let include_bare_numbers = args.include_bare_numbers;
 
     // Verify model bytes ONCE up front when neural backend is active.
     let verified_opt: Option<Verified> = if backend_mode != BackendMode::None {
@@ -1504,6 +2474,40 @@ fn run() -> Result<()> {
     let index_path = args.out_dir.join("completed_index.jsonl");
     let cues_path = args.out_dir.join("entities_timeline_cues.jsonl");
     let receipt_path = args.out_dir.join("book_manifest_receipt.json");
+    let lexicon_path = args.out_dir.join("discovered_lexicon.json");
+
+    let discovered_artifact = if auto_lexicon_enabled {
+        let art = discover_corpus_lexicon(&chapters, args.auto_lexicon_max);
+        let mut lex_bytes = serde_json::to_vec_pretty(&art)?;
+        lex_bytes.push(b'\n');
+        atomic_write_bytes(&lexicon_path, &lex_bytes, "lexicon")?;
+        if art.discovered_count > 0 {
+            eprintln!(
+                "[lexicon] discovered {} cohesive corpus compounds across {} chapters ({} Han chars) in {:.1}ms",
+                art.discovered_count, art.total_chapters, art.total_han_chars, art.elapsed_ms
+            );
+        }
+        Some(art)
+    } else {
+        None
+    };
+
+    let discovered_lexicon_count = discovered_artifact
+        .as_ref()
+        .map_or(0, |a| a.discovered_count);
+    let merged_lexicon = merge_lexicon_terms(
+        &args.lexicon,
+        discovered_artifact
+            .as_ref()
+            .map_or(&[][..], |a| a.terms.as_slice()),
+    );
+    let doc_options = build_doc_options(
+        args.names.clone(),
+        mask_editorial,
+        normalize_traditional,
+        merged_lexicon,
+    );
+    let expected_options_sha256 = sha256_hex(&serde_json::to_vec(&doc_options)?);
 
     let total_chapters = chapters.len();
     let mut completed_slots: Vec<Option<CompletedIndexEntry>> = vec![None; total_chapters];
@@ -1532,6 +2536,8 @@ fn run() -> Result<()> {
                     expected_model_id.as_deref(),
                     expected_model_sha256.as_deref(),
                     backend_str,
+                    &expected_options_sha256,
+                    include_bare_numbers,
                 )
             {
                 completed_slots[idx] = Some(entry.clone());
@@ -1569,6 +2575,7 @@ fn run() -> Result<()> {
                                     expected_model_id.as_deref(),
                                     expected_model_sha256.as_deref(),
                                     backend_str,
+                                    &doc_options,
                                 ) {
                                     return None;
                                 }
@@ -1579,6 +2586,7 @@ fn run() -> Result<()> {
                                     ch.source_span.start_char,
                                     Some(&ch.text),
                                     &out.doc,
+                                    include_bare_numbers,
                                 );
                                 let stats = summarize_document(&out.doc, cues.len());
                                 let entry = CompletedIndexEntry {
@@ -1592,6 +2600,8 @@ fn run() -> Result<()> {
                                     model_id: out.model_id,
                                     model_sha256: out.model_sha256,
                                     backend: out.backend,
+                                    options_sha256: expected_options_sha256.clone(),
+                                    include_bare_numbers,
                                     output_file: rel_path,
                                     output_sha256: sha256_hex(&bytes),
                                     file_len: bytes.len() as u64,
@@ -1665,6 +2675,7 @@ fn run() -> Result<()> {
             for worker_id in 0..effective_workers {
                 let verified_ref = verified_opt.as_ref();
                 let doc_options_ref = &doc_options;
+                let expected_options_sha_ref = expected_options_sha256.as_str();
                 let expected_model_id_ref = expected_model_id.as_deref();
                 let expected_model_sha_ref = expected_model_sha256.as_deref();
                 let chapters_ref = &chapters;
@@ -1768,6 +2779,7 @@ fn run() -> Result<()> {
                                 ch.source_span.start_char,
                                 Some(&ch.text),
                                 &doc,
+                                include_bare_numbers,
                             );
                             let stats = summarize_document(&doc, cues.len());
 
@@ -1804,6 +2816,8 @@ fn run() -> Result<()> {
                                 model_id: expected_model_id_ref.map(str::to_owned),
                                 model_sha256: expected_model_sha_ref.map(str::to_owned),
                                 backend: backend_str.to_owned(),
+                                options_sha256: expected_options_sha_ref.to_owned(),
+                                include_bare_numbers,
                                 output_file: rel_path,
                                 output_sha256,
                                 file_len: json_bytes.len() as u64,
@@ -1881,25 +2895,32 @@ fn run() -> Result<()> {
         .collect::<Result<Vec<_>>>()?;
 
     let chapter_outputs_sha256 = compute_chapter_outputs_sha256(&ordered_entries);
+    let expected_total_timeline_cues: usize =
+        ordered_entries.iter().map(|e| e.stats.timeline_cues).sum();
+    let any_disk_recovered = !disk_check_indices.is_empty();
 
-    // Fast-path check for 100% resumed run where `entities_timeline_cues.jsonl` is already intact.
-    let reusable_cues_sha256: Option<String> =
-        if processed_chapters == 0 && cues_path.is_file() && receipt_path.is_file() {
-            let prev_receipt = fs::read(&receipt_path)
-                .ok()
-                .and_then(|b| serde_json::from_slice::<BookManifestReceipt>(&b).ok());
-            if let Some(prev) = prev_receipt
-                && prev.chapter_outputs_sha256 == chapter_outputs_sha256
-                && let Ok(cues_bytes) = fs::read(&cues_path)
-            {
-                let actual_cues_sha = sha256_hex(&cues_bytes);
-                (actual_cues_sha == prev.timeline_cues_sha256).then_some(actual_cues_sha)
-            } else {
-                None
-            }
+    // Fast-path check for 100% index-resumed run where `entities_timeline_cues.jsonl` is already intact.
+    let reusable_cues_sha256: Option<String> = if processed_chapters == 0
+        && !any_disk_recovered
+        && cues_path.is_file()
+        && receipt_path.is_file()
+    {
+        let prev_receipt = fs::read(&receipt_path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<BookManifestReceipt>(&b).ok());
+        if let Some(prev) = prev_receipt
+            && prev.chapter_outputs_sha256 == chapter_outputs_sha256
+            && prev.total_timeline_cues == expected_total_timeline_cues
+            && let Ok(cues_bytes) = fs::read(&cues_path)
+        {
+            let actual_cues_sha = sha256_hex(&cues_bytes);
+            (actual_cues_sha == prev.timeline_cues_sha256).then_some(actual_cues_sha)
         } else {
             None
-        };
+        }
+    } else {
+        None
+    };
 
     let timeline_cues_sha256 = if let Some(sha) = reusable_cues_sha256 {
         sha
@@ -1948,6 +2969,7 @@ fn run() -> Result<()> {
                                     ch.source_span.start_char,
                                     Some(&ch.text),
                                     &parsed.doc,
+                                    include_bare_numbers,
                                 ))
                             })();
                             match res {
@@ -1990,7 +3012,7 @@ fn run() -> Result<()> {
     };
 
     // Rewrite canonical `completed_index.jsonl` sorted strictly by `order`.
-    if processed_chapters > 0 || !index_path.is_file() {
+    if processed_chapters > 0 || any_disk_recovered || !index_path.is_file() {
         let mut idx_buf = Vec::new();
         for entry in &ordered_entries {
             serde_json::to_writer(&mut idx_buf, entry)?;
@@ -2008,6 +3030,8 @@ fn run() -> Result<()> {
     let mut total_tokens = 0usize;
     let mut decided_upos_tokens = 0usize;
     let mut syntax_tokens = 0usize;
+    let mut zero_root_sentences = 0usize;
+    let mut orphan_syntax_arcs = 0usize;
     let mut total_entities = 0usize;
     let mut total_relations = 0usize;
     let mut total_timeline_cues = 0usize;
@@ -2023,6 +3047,8 @@ fn run() -> Result<()> {
         total_tokens += st.tokens;
         decided_upos_tokens += st.decided_upos_tokens;
         syntax_tokens += st.syntax_tokens;
+        zero_root_sentences += st.zero_root_sentences;
+        orphan_syntax_arcs += st.orphan_syntax_arcs;
         total_entities += st.entities;
         total_relations += st.relations;
         total_timeline_cues += st.timeline_cues;
@@ -2068,6 +3094,8 @@ fn run() -> Result<()> {
         model_id: expected_model_id,
         model_sha256: expected_model_sha256,
         workers: effective_workers,
+        auto_lexicon_enabled,
+        discovered_lexicon_count,
         total_chapters,
         resumed_chapters,
         processed_chapters,
@@ -2081,6 +3109,8 @@ fn run() -> Result<()> {
         decided_upos_rate,
         syntax_tokens,
         syntax_token_coverage_rate,
+        zero_root_sentences,
+        orphan_syntax_arcs,
         total_entities,
         total_relations,
         total_timeline_cues,
@@ -2106,5 +3136,228 @@ fn main() {
     if let Err(err) = run() {
         eprintln!("nlp_novel_batch: {err:#}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use faberline_nlp::doc::{Score, SyntaxToken};
+
+    fn make_synthetic_chapter(order: usize, title: &str, body: &str) -> InputChapter {
+        let text = format!("{title}\n\n{body}\n");
+        let char_count = text.chars().count();
+        let byte_count = text.len();
+        let sha = sha256_hex(text.as_bytes());
+        InputChapter {
+            order,
+            title: title.to_owned(),
+            source_file: format!("{order:04}.txt"),
+            source_sha256: sha.clone(),
+            source_span: SourceSpan {
+                start_char: 0,
+                end_char: char_count,
+                start_byte: 0,
+                end_byte: byte_count,
+            },
+            chapter_sha256: sha,
+            text,
+        }
+    }
+
+    #[test]
+    fn statistical_lexicon_discovers_compounds_and_suppresses_bound_substrings() {
+        // Construct 4 synthetic chapters where:
+        // - `蒼雲鐵劍` (4-char synthetic artifact) occurs 20 times across 4 chapters in 6 distinct left/right contexts,
+        //   so bound 2/3-char substrings (`蒼雲`, `蒼雲鐵`, `雲鐵劍`) must be suppressed in favor of `蒼雲鐵劍`!
+        // - `沈星河` (3-char synthetic person name) occurs 20 times across 4 chapters in 6 distinct left/right contexts.
+        // - Editorial vote-plea lines containing repeated noise are skipped by boilerplate filtering.
+        let templates = [
+            "清晨，沈星河拔出蒼雲鐵劍守住石門。",
+            "黃昏時，老匠人擦拭蒼雲鐵劍遞給沈星河。",
+            "雷聲中，沈星河舉起蒼雲鐵劍劈開木樁。",
+            "院落外，眾學徒圍觀蒼雲鐵劍並向沈星河請教。",
+            "燈火下，沈星河收好蒼雲鐵劍走進書房。",
+        ];
+        let mut chapters = Vec::new();
+        for ch_idx in 1..=4 {
+            let mut body = String::new();
+            for tpl in &templates {
+                body.push_str(tpl);
+                body.push('\n');
+            }
+            // Add repeated editorial postscript line that must be ignored by `is_boilerplate_or_heading_line`.
+            for _ in 0..6 {
+                body.push_str("（月底最後一天求下月票與推薦票，紫電閣歡迎您！）\n");
+            }
+            chapters.push(make_synthetic_chapter(
+                ch_idx,
+                &format!("第{ch_idx}章 試劍演武{ch_idx}"),
+                &body,
+            ));
+        }
+
+        let artifact = discover_corpus_lexicon(&chapters, 100);
+        let terms: Vec<&str> = artifact.terms.iter().map(|t| t.term.as_str()).collect();
+        assert!(
+            terms.contains(&"蒼雲鐵劍"),
+            "expected maximal 4-char compound `蒼雲鐵劍`, got: {terms:?}"
+        );
+        assert!(
+            terms.contains(&"沈星河"),
+            "expected 3-char synthetic name `沈星河`, got: {terms:?}"
+        );
+        for sub in ["蒼雲", "雲鐵", "鐵劍", "蒼雲鐵", "雲鐵劍"] {
+            assert!(
+                !terms.contains(&sub),
+                "bound substring `{sub}` should be suppressed by `蒼雲鐵劍`, got: {terms:?}"
+            );
+        }
+        assert!(
+            !terms.contains(&"紫電閣"),
+            "editorial line term `紫電閣` should be skipped, got: {terms:?}"
+        );
+    }
+
+    #[test]
+    fn clean_relation_arg_strips_connectors_and_preserves_balanced_quotes() {
+        // Case 1: Dialogue split across clauses with unmatched outer quotes + paired connectors.
+        let t1 = "「因為山路濕滑，所以我們放慢腳步。」";
+        let tbl1 = char_to_byte_offsets(t1);
+        let c_arg1 = clean_relation_arg_span(
+            Some(t1),
+            Some(&tbl1),
+            Span {
+                start_char: 0,
+                end_char: 8,
+            },
+            Span {
+                start_char: 1,
+                end_char: 3,
+            },
+            Some(Span {
+                start_char: 8,
+                end_char: 10,
+            }),
+        );
+        let c_arg2 = clean_relation_arg_span(
+            Some(t1),
+            Some(&tbl1),
+            Span {
+                start_char: 8,
+                end_char: 18,
+            },
+            Span {
+                start_char: 1,
+                end_char: 3,
+            },
+            Some(Span {
+                start_char: 8,
+                end_char: 10,
+            }),
+        );
+        assert_eq!(slice_span(t1, &tbl1, c_arg1), Some("山路濕滑"));
+        assert_eq!(slice_span(t1, &tbl1, c_arg2), Some("我們放慢腳步"));
+
+        // Case 2: Balanced internal quotes (`「甲」與「乙」` and `拿起了「星盤」`) must NOT lose closing/opening quotes!
+        let t2 = "因為「甲」與「乙」就位，所以他拿起了「星盤」。";
+        let tbl2 = char_to_byte_offsets(t2);
+        let c2_arg1 = clean_relation_arg_span(
+            Some(t2),
+            Some(&tbl2),
+            Span {
+                start_char: 0,
+                end_char: 12,
+            },
+            Span {
+                start_char: 0,
+                end_char: 2,
+            },
+            Some(Span {
+                start_char: 12,
+                end_char: 14,
+            }),
+        );
+        let c2_arg2 = clean_relation_arg_span(
+            Some(t2),
+            Some(&tbl2),
+            Span {
+                start_char: 12,
+                end_char: 23,
+            },
+            Span {
+                start_char: 0,
+                end_char: 2,
+            },
+            Some(Span {
+                start_char: 12,
+                end_char: 14,
+            }),
+        );
+        assert_eq!(slice_span(t2, &tbl2, c2_arg1), Some("「甲」與「乙」就位"));
+        assert_eq!(slice_span(t2, &tbl2, c2_arg2), Some("他拿起了「星盤」"));
+    }
+
+    #[test]
+    fn timeline_cues_filter_bare_numbers_and_include_names_and_clean_args() {
+        let text = "林舟拿了兩個木盒，走了三公里。因為天色漸暗，所以他點亮油燈。";
+        let doc = analyze_document(
+            text,
+            &Options {
+                names: vec!["林舟".to_owned()],
+            },
+        );
+        let cues_filtered =
+            extract_timeline_cues(1, "第一章", "01.txt", 0, Some(text), &doc, false);
+        assert!(
+            !cues_filtered.iter().any(|c| c.kind == "number"),
+            "bare numbers should be filtered out by default: {cues_filtered:?}"
+        );
+        assert!(
+            cues_filtered
+                .iter()
+                .any(|c| c.kind == "name" && c.text.as_deref() == Some("林舟")),
+            "explicit Name entities should be emitted in timeline cues"
+        );
+        assert!(
+            cues_filtered
+                .iter()
+                .any(|c| c.kind == "quantity" && c.text.as_deref() == Some("三公里"))
+        );
+        let rel_cue = cues_filtered
+            .iter()
+            .find(|c| c.cue_type == "relation")
+            .expect("expected cause relation cue");
+        assert_eq!(rel_cue.clean_arg1_text.as_deref(), Some("天色漸暗"));
+        assert_eq!(rel_cue.clean_arg2_text.as_deref(), Some("他點亮油燈"));
+
+        let cues_with_bare =
+            extract_timeline_cues(1, "第一章", "01.txt", 0, Some(text), &doc, true);
+        assert!(
+            cues_with_bare
+                .iter()
+                .any(|c| c.kind == "number" && c.text.as_deref() == Some("兩"))
+        );
+    }
+
+    #[test]
+    fn summarize_document_counts_zero_root_and_orphan_syntax_arcs() {
+        let text = "微風吹過山谷。";
+        let mut doc = analyze_document(text, &Options::default());
+        assert_eq!(summarize_document(&doc, 0).zero_root_sentences, 0);
+        assert_eq!(summarize_document(&doc, 0).orphan_syntax_arcs, 0);
+
+        // Inject a synthetic broken syntax graph: token 0 depends on missing token 1 (no root, 1 orphan arc).
+        doc.syntax.push(SyntaxToken {
+            token: 0,
+            sentence: 0,
+            span: doc.tokens[0].span,
+            head: Some(1),
+            deprel: "nsubj".to_owned(),
+            score: Score(800),
+        });
+        let st = summarize_document(&doc, 0);
+        assert_eq!(st.zero_root_sentences, 1);
+        assert_eq!(st.orphan_syntax_arcs, 1);
     }
 }

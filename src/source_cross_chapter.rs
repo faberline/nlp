@@ -479,6 +479,57 @@ mod doc_pronoun_tests {
         "他說：「我們走。」她點頭。\n",
     ];
 
+    /// Fixed-seed generated lines (the allow-list alphabet, and the same with other chars and
+    /// paragraph indents mixed in): layer 2 pronouns must equal the generic tokenizer.
+    #[test]
+    fn generated_lines_give_the_generic_tokenizer_pronouns() {
+        use crate::analyze::doc_line_tests::{Rng, gen_allowed_line, gen_mixed_line};
+        let analyzer = Analyzer::new(Locale::ChineseTaiwan).expect("analyzer");
+        let candidates = CrossChapterCandidates::new(
+            Locale::ChineseTaiwan,
+            Lexicon::default(),
+            CrossChapterPolicy {
+                max_chapter_bytes: 1 << 20,
+                max_terms: 8,
+                max_term_bytes: 64,
+                history_distance: 4,
+                max_names_per_chapter: 8,
+                max_pronouns_per_chapter: 64,
+                max_pairs_per_pronoun: 8,
+                max_pairs_per_chapter: 64,
+            },
+        )
+        .expect("new");
+        let mut rng = Rng(0x5EED_2023);
+        let (mut differ, mut used) = (Vec::new(), 0);
+        for index in 0..20_000 {
+            let mut line = if index % 2 == 0 {
+                gen_allowed_line(&mut rng)
+            } else {
+                gen_mixed_line(&mut rng)
+            };
+            line.push('\n');
+            used += usize::from(crate::analyze::doc_applies(&line));
+            let old: Vec<_> = analyzer
+                .analyze(&line)
+                .into_iter()
+                .flat_map(|s| s.tokens)
+                .filter(|t| written_pronoun(t.text))
+                .map(|t| t.bytes)
+                .collect();
+            if candidates.line_pronouns(&analyzer, &line) != old {
+                differ.push(line);
+            }
+        }
+        assert!(used >= 5_000, "only {used} generated lines use layer 2");
+        assert!(
+            differ.is_empty(),
+            "{} lines differ, first {:?}",
+            differ.len(),
+            differ.first()
+        );
+    }
+
     #[test]
     fn layer_2_gives_the_generic_tokenizer_pronouns() {
         let lexicon = Lexicon::default();

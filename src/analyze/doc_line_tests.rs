@@ -121,19 +121,15 @@ fn known_differences_stay_on_the_icu_path() {
         "小甲讀了 `a。b` 這段，然後走了。\n",
         "第一章 開始\n",
         "- 項目一\n",
+        "天黑了。「回家吧」，小甲說。\n",
+        "小甲走了。、阿乙留下。\n",
+        "好？ ！\n",
     ] {
         assert!(super::doc_line(line, terms).is_none(), "{line:?}");
         assert_eq!(
-            doc.line_sentences(line)
-                .0
-                .iter()
-                .map(|s| (s.start, s.end))
-                .collect::<Vec<_>>(),
-            icu.icu_line(line)
-                .0
-                .iter()
-                .map(|s| (s.start, s.end))
-                .collect::<Vec<_>>(),
+            serde_json::to_string(&doc.analyze(line, "")).expect("json"),
+            serde_json::to_string(&icu.analyze(line, "")).expect("json"),
+            "the fallback must give the ICU analysis for {line:?}"
         );
         let view = crate::doc::line_view(line, terms);
         let layer1: Vec<_> = view.sentences.iter().map(|r| (r.start, r.end)).collect();
@@ -180,6 +176,25 @@ const REVIEW_INPUTS: &[&str] = &[
     "小甲走進木屋。阿乙留在港口。\n",
     "小甲說：「我們明天出發。」阿乙點頭。\n",
     "小甲 走進木屋，阿乙　留在港口。\n",
+    // Second review: a terminator run followed by a continuation, a terminator or an opening
+    // quote, and unbalanced quotes.
+    "「好。」，他說。\n",
+    "天黑了。「回家吧」，小甲說。\n",
+    "小甲笑了。「真的」阿乙說。\n",
+    "小甲走了。「好」\n",
+    "好！「劍」\n",
+    "小甲走了。，阿乙留下。\n",
+    "小甲走了。、阿乙留下。\n",
+    "好。：好\n",
+    "好。；好\n",
+    "好？ ！\n",
+    "在。 。\n",
+    "小甲。」「阿乙。\n",
+    "好。」「\n",
+    "「好。」，他說。",
+    "小甲走了。，阿乙留下。\r\n小甲走了。，阿乙留下。\r\n",
+    "小甲。」「阿乙。\n小甲。」「阿乙。\n",
+    "　　小甲走進木屋。阿乙留在港口。\n　　「走吧。」小甲說。\n",
 ];
 
 fn review_lexicon() -> Lexicon<'static> {
@@ -220,13 +235,18 @@ fn review_inputs_give_the_icu_analysis_and_hits() {
 }
 
 #[test]
-fn doc_applies_is_an_allow_list() {
+fn doc_applies_is_an_allow_list_with_a_context_rule() {
     for line in [
         "小甲走進木屋。\n",
         "小甲走進木屋。",
         "小甲 阿乙\n",
         "小甲　阿乙\n",
-        "「好。」『是。』，、；：！？\n",
+        "「好。」小甲『是。』阿乙，、；：「」\n",
+        "小甲走了。」阿乙留下。\n",
+        "小甲說：「走吧！」阿乙點頭。\n",
+        "小甲走了。 阿乙留下。\n",
+        "　小甲\n",
+        "　　小甲走進木屋。\n",
         "\n",
         "",
     ] {
@@ -251,6 +271,19 @@ fn doc_applies_is_an_allow_list() {
         " 小甲\n",
         "小甲 \n",
         "　\n",
+        "　　\n",
+        "　 小甲\n",
+        " 　小甲\n",
+        "「好。」，他說。\n",
+        "小甲走了。「好」\n",
+        "小甲走了。，阿乙留下。\n",
+        "好。：好\n",
+        "好。；好\n",
+        "好？ ！\n",
+        "在。 。\n",
+        "好。」「\n",
+        "好。」 」\n",
+        "好。』『好\n",
         "小甲\n\n",
         "小甲\n阿乙\n",
     ] {
@@ -275,4 +308,198 @@ fn allowed_plain_lines_use_the_doc_path_with_the_same_ranges() {
         assert_eq!(got, layer1, "{line:?}");
         assert_eq!(hits, icu.line_sentences(line).1, "{line:?}");
     }
+}
+
+/// A small fixed-seed generator (SplitMix64), so the differential runs are reproducible
+/// without a new dependency.
+pub(crate) struct Rng(pub(crate) u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+
+    fn pick<T: Copy>(&mut self, items: &[T]) -> T {
+        items[self.below(items.len())]
+    }
+}
+
+/// Han characters of the generated text: the lexicon names, pronouns and common words.
+const GEN_HAN: &[char] = &[
+    '小', '甲', '阿', '乙', '丙', '老', '王', '他', '她', '們', '說', '走', '了', '笑', '天', '黑',
+    '回', '家', '吧', '真', '的', '好', '在', '留', '下', '木', '劍', '信', '屋', '港', '口', '將',
+    '軍', '大', '哥', '台', '灣', '是', '不', '也', '來', '去', '問', '我', '你', '它',
+];
+/// The punctuation of the allow list.
+const GEN_PUNCT: &[char] = &[
+    '。', '！', '？', '，', '、', '；', '：', '「', '」', '『', '』',
+];
+/// Characters outside the allow list, for the mixed run.
+const GEN_OTHER: &[char] = &[
+    'a', 'B', '1', '.', '!', '?', ',', ' ', '\t', '…', '—', '《', '》', '（', '）', '😀', '“', '”',
+    '"', '-', '#', '`', '$', '[', ']', '｡', '．', '\u{3000}', '\u{2028}',
+];
+
+/// One line from the allow-list alphabet (Han, the listed punctuation, single spaces).
+pub(crate) fn gen_allowed_line(rng: &mut Rng) -> String {
+    let len = match rng.below(400) {
+        0 => 4_000,
+        1..=32 => 0,
+        _ => 1 + rng.below(30),
+    };
+    let mut line = String::new();
+    for _ in 0..len {
+        let ch = match rng.below(20) {
+            0..=10 => rng.pick(GEN_HAN),
+            11..=18 => rng.pick(GEN_PUNCT),
+            _ => rng.pick(&[' ', '\u{3000}']),
+        };
+        line.push(ch);
+    }
+    line
+}
+
+/// One line of the mixed run: an allow-list line, the same with other characters mixed in,
+/// or with a paragraph indent.
+pub(crate) fn gen_mixed_line(rng: &mut Rng) -> String {
+    let line = gen_allowed_line(rng);
+    match rng.below(4) {
+        0 => line,
+        1 => format!("\u{3000}\u{3000}{line}"),
+        2 => format!("{}{line}", rng.pick(&[" ", "\u{3000}", "　 ", "  "])),
+        _ => {
+            let mut out = String::new();
+            for ch in line.chars() {
+                if rng.below(8) == 0 {
+                    out.push(rng.pick(GEN_OTHER));
+                }
+                out.push(ch);
+            }
+            if rng.below(4) == 0 {
+                out.push(rng.pick(GEN_OTHER));
+            }
+            out
+        }
+    }
+}
+
+/// One chapter: 1 to 6 lines, LF or CRLF, empty lines, with or without a final line break.
+fn gen_chapter(rng: &mut Rng, line: fn(&mut Rng) -> String) -> String {
+    let newline = if rng.below(5) == 0 { "\r\n" } else { "\n" };
+    let count = 1 + rng.below(6);
+    let mut chapter = String::new();
+    for index in 0..count {
+        if index > 0 {
+            chapter.push_str(newline);
+        }
+        if rng.below(8) != 0 {
+            chapter.push_str(&line(rng));
+        }
+    }
+    if rng.below(3) != 0 {
+        chapter.push_str(newline);
+    }
+    chapter
+}
+
+/// The lexicon of the differential runs, with names that cross punctuation and spaces.
+fn differential_lexicon() -> Lexicon<'static> {
+    Lexicon {
+        actors: &[
+            ("小甲", "a"),
+            ("甲哥", "a"),
+            ("阿乙", "b"),
+            ("甲走", "c"),
+            ("老 王", "d"),
+            ("王", "e"),
+            ("小甲阿乙", "f"),
+            ("「小丙」", "g"),
+            ("說。小", "h"),
+            ("他", "he"),
+            ("台灣", "tw"),
+        ],
+        objects: &[("木劍", "sword"), ("信", "letter"), ("劍，", "comma")],
+        places: &["木屋", "港口", "屋港", "口小"],
+        ranks: &[("將軍", "general"), ("大將", "major"), ("軍阿", "odd")],
+        ..Lexicon::default()
+    }
+}
+
+/// Runs `count` generated chapters through both paths and returns the inputs whose full
+/// `Analysis` JSON (of `analyze` and `analyze_source_mentions`), line sentence ranges or term
+/// hits differ, and the number of lines that used the doc path.
+fn differential_run(
+    seed: u64,
+    count: usize,
+    line: fn(&mut Rng) -> String,
+) -> (Vec<String>, usize, usize) {
+    let lexicon = differential_lexicon();
+    let (doc, icu) = analyzers(&lexicon);
+    let terms = doc.doc_terms.as_ref().expect("terms");
+    let mut rng = Rng(seed);
+    let mut differ = Vec::new();
+    let (mut lines, mut used) = (0, 0);
+    for _ in 0..count {
+        let chapter = gen_chapter(&mut rng, line);
+        let mut same = serde_json::to_string(&doc.analyze(&chapter, "")).expect("json")
+            == serde_json::to_string(&icu.analyze(&chapter, "")).expect("json")
+            && serde_json::to_string(&doc.analyze_source_mentions(&chapter, "")).expect("json")
+                == serde_json::to_string(&icu.analyze_source_mentions(&chapter, "")).expect("json");
+        for line in chapter.split_inclusive('\n') {
+            lines += 1;
+            if let Some((sentences, hits)) = super::doc_line(line, terms) {
+                used += 1;
+                let (old, old_hits) = icu.icu_line(line);
+                let got: Vec<_> = sentences.iter().map(|s| (s.start, s.end)).collect();
+                let old: Vec<_> = old.iter().map(|s| (s.start, s.end)).collect();
+                same &= got == old && hits == old_hits;
+            }
+        }
+        if !same {
+            differ.push(chapter);
+        }
+    }
+    (differ, lines, used)
+}
+
+#[test]
+fn generated_allow_list_chapters_give_the_icu_analysis() {
+    let (differ, lines, used) = differential_run(0x5EED_0023, 20_001, gen_allowed_line);
+    eprintln!(
+        "allow-list run: {} differ, {used} of {lines} lines on the doc path",
+        differ.len()
+    );
+    for chapter in differ.iter().take(40) {
+        eprintln!("DIFF {chapter:?}");
+    }
+    assert!(
+        differ.is_empty(),
+        "{} of 20001 generated chapters differ",
+        differ.len()
+    );
+}
+
+#[test]
+fn generated_mixed_chapters_give_the_icu_analysis() {
+    let (differ, lines, used) = differential_run(0x5EED_1023, 10_000, gen_mixed_line);
+    eprintln!(
+        "mixed run: {} differ, {used} of {lines} lines on the doc path",
+        differ.len()
+    );
+    for chapter in differ.iter().take(40) {
+        eprintln!("DIFF {chapter:?}");
+    }
+    assert!(
+        differ.is_empty(),
+        "{} of 10000 generated chapters differ",
+        differ.len()
+    );
 }

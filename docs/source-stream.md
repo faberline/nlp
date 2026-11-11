@@ -191,7 +191,10 @@ event exists.
 
 For zh-TW chapters the stream reads sentences, actor name hits and written pronouns from the
 `nlp.doc.v1` layers, only for lines that pass an allow list: Han ideographs, `。！？，、；：「」『』`,
-a single inner space and a final newline. Any other line (ASCII letters, digits or punctuation,
+a single inner space, a U+3000 paragraph indent and a final newline. The line must also pass a
+context rule: each run of `。！？`, with the `」』` and spaces after it, is followed by a Han
+ideograph or by the end of the line (otherwise ICU and layer 1 end sentences at different
+places, for example in `「好。」，他說。`). Any other line (ASCII letters, digits or punctuation,
 `…`, other brackets, emoji, tabs, opaque spans) keeps the older splitter and tokenizer, so its
 records and ranges are those of the older path. The name terms are the lexicon actors, objects,
 ranks and places. Sentences and names come from the analyzer; written pronouns come from the

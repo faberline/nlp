@@ -1,4 +1,6 @@
-//! `analyze`, `timeline::build` and the layer 2 pronoun read use `nlp.doc.v1` for zh-TW.
+//! `NarrativeAnalyzer::analyze` and the layer 2 pronoun read use `nlp.doc.v1` for zh-TW, on
+//! the lines that pass `doc_applies`. `timeline::build` does not read the document; it is built
+//! here from analyzer events only to check that the doc path feeds it.
 //! Fixtures are short, neutral and self-written: novel, paper and casual style, each in zh-TW,
 //! English and mixed text, plus text in a language that layer 1 does not support.
 use faberline_nlp::{

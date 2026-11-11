@@ -695,19 +695,28 @@ For `Locale::ChineseTaiwan`, two consumers read the layers instead of their own 
   `NarrativeAnalyzer::new`.
 - `CrossChapterCandidates` (zh-TW) takes its pronoun tokens from layer 2.
 
-The output is meant not to change: the old path stays the reference. Both readers use the same
-allow list, `doc_applies`, line by line. A line takes the doc path only when every char is one
+The output must not change: the old path stays the reference. Both readers use the same
+check, `doc_applies`, line by line. A line takes the doc path only when every char is one
 of these:
 
 - a Han ideograph (U+4E00 to U+9FFF, U+3400 to U+4DBF);
 - one of `。！？，、；：「」『』`;
 - one ASCII space or U+3000 that is not next to another space and not first or last in the line;
+- a paragraph indent: U+3000 chars at the start of a line that has other text after them;
 - a final `\n`.
+
+and the line also passes a context rule. Layer 1 always ends a sentence after a run of
+`。！？`. ICU follows UAX 29 (SB8a, SB9 to SB11) and does not end it when the run, its closing
+`」』` and its spaces are followed by `，、；：`, another terminator or an opening `「『`
+(class Close). So every terminator run, with the `」』` and spaces after it, must be followed by
+a Han ideograph or by the end of the line. Example lines that keep the old path: `「好。」，他說。`,
+`天黑了。「回家吧」，小甲說。`, `好？ ！`, `小甲。」「阿乙。`. Unbalanced quotes need no rule of
+their own: every difference they caused was a terminator run before an opening quote.
 
 Every other line keeps the old path: ASCII letters, digits and punctuation (also `.`, `!`, `?`),
 `…`, other brackets and closers (`《》〈〉【】〔〕［］[]`), `｡`, `．`, emoji, tab, `\r`,
-U+2028, other scripts, a doubled or edge space. The reason is that layer 1 and the ICU segmenter
-cut such text differently, and that the name rule refuses a long ASCII-edged name before a
+U+2028, other scripts, a doubled or trailing space, a leading ASCII space. The reason is that
+layer 1 and the ICU segmenter cut such text differently, and that the name rule refuses a long ASCII-edged name before a
 shorter valid one. Per reader:
 
 - `NarrativeAnalyzer`: a line outside the allow list, or one with any opaque span, uses ICU
@@ -717,8 +726,12 @@ shorter valid one. Per reader:
   uses the generic tokenizer.
 
 Differential tests (`doc_line_tests`, `doc_pronoun_tests`) compare the doc path with the old
-path, including the inputs of the review of pull request 36. When one fails on an allowed char,
-the char leaves the allow list; no layer and no expected value changes.
+path, including the inputs of both reviews of pull request 36. Fixed-seed generated runs compare
+the full `Analysis` JSON of `analyze` and `analyze_source_mentions`, and the sentence ranges and
+term hits of each doc-path line: 20,001 chapters from the allowed alphabet and 10,000 mixed
+chapters (other chars, paragraph indents, CRLF, empty lines, no final newline, 4,000-char
+lines). A run of 20,000 generated lines compares the layer 2 pronouns. Each run must report zero
+differences. When one fails, the check gets stricter; no layer and no expected value changes.
 
 These stay on the old path too:
 

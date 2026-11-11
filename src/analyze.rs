@@ -6,7 +6,7 @@ use crate::text::{Analyzer, Locale, TokenKind};
 use crate::{Analysis, Event, Lexicon, Review, Span, TextSection, TextUnit};
 
 #[cfg(test)]
-mod doc_line_tests;
+pub(crate) mod doc_line_tests;
 mod linking;
 #[cfg(test)]
 mod object_coverage_tests;
@@ -2915,13 +2915,22 @@ impl Focus {
 /// True when the `nlp.doc.v1` readers may serve the line. This is an allow list of chars on
 /// which layer 1, layer 2 and the old segmenter agree. Every other line (an ASCII letter, digit
 /// or punctuation, `…`, other brackets and closers, emoji, a tab, `\r`, another script, a
-/// doubled or edge space) keeps the old ICU and tokenizer path. A char leaves the set when a
-/// differential test finds a line it breaks; a layer or an expected value never changes.
+/// doubled or trailing space, a leading ASCII space) keeps the old ICU and tokenizer path. The
+/// check gets stricter when a differential test finds a line it breaks; a layer or an expected
+/// value never changes.
 ///
 /// The set: Han ideographs; `。！？，、；：「」『』`; one ASCII space or U+3000 that is not next
-/// to another space and not first or last in the line; a final `\n`.
+/// to another space and not first or last in the line; a paragraph indent of U+3000 before
+/// other text; a final `\n`. A context rule (`terminators_end_sentences`) then refuses a line
+/// where a terminator run does not end a sentence for ICU. Fixed-seed generated differential
+/// tests (`doc_line_tests`, `doc_pronoun_tests`) compare the full output with the ICU path.
 pub(crate) fn doc_applies(line: &str) -> bool {
     let body = line.strip_suffix('\n').unwrap_or(line);
+    let indented = body.trim_start_matches('\u{3000}');
+    if indented.len() != body.len() && indented.is_empty() {
+        return false;
+    }
+    let body = indented;
     let mut previous_space = true; // a leading space is refused like a doubled one
     for ch in body.chars() {
         let is_space = matches!(ch, ' ' | '\u{3000}');
@@ -2946,7 +2955,31 @@ pub(crate) fn doc_applies(line: &str) -> bool {
         }
         previous_space = is_space;
     }
-    body.is_empty() || !previous_space
+    (body.is_empty() || !previous_space) && terminators_end_sentences(body)
+}
+
+/// The context rule of `doc_applies`. Layer 1 always ends a sentence after a run of `。！？`,
+/// but ICU (UAX 29 SB8a, SB9 to SB11) does not when the run, its closing `」』` and spaces are
+/// followed by `，、；：`, another terminator or an opening quote (class Close). So the line
+/// passes only when every such run is followed by a Han ideograph or by the end of the line.
+fn terminators_end_sentences(body: &str) -> bool {
+    let mut chars = body.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if !matches!(ch, '。' | '！' | '？') {
+            continue;
+        }
+        while chars.next_if(|c| matches!(c, '。' | '！' | '？')).is_some() {}
+        while chars.next_if(|c| matches!(c, '」' | '』')).is_some() {}
+        while chars.next_if(|c| matches!(c, ' ' | '\u{3000}')).is_some() {}
+        if chars.peek().is_some_and(|c| !is_han(*c)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_han(ch: char) -> bool {
+    matches!(ch, '\u{4E00}'..='\u{9FFF}' | '\u{3400}'..='\u{4DBF}')
 }
 
 /// The `nlp.doc.v1` path: layer 1 sentences and layer 3 names of one line. It returns `None`

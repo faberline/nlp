@@ -7,8 +7,8 @@ network.
 
 CLI: `nlp_doc` reads UTF-8 text from stdin and prints one JSON document plus a newline. With no
 flags it runs `analyze_document` (rules only, no model). With `--models <DIR>` and optional
-`--backend <coreml|onnx>` (defaulting to `coreml` on macOS when compiled in, otherwise `onnx`),
-it runs `analyze_document_with_model` to populate Layer 4 (`syntax`). On a read or model
+`--backend <coreml|coreml-fast|onnx>` (defaulting to `coreml` on macOS when compiled in, otherwise
+`onnx`), it runs `analyze_document_with_model` to populate Layer 4 (`syntax`). On a read or model
 integrity/runtime error, it prints `nlp_doc: <error>` to stderr and exits with 1.
 
 ## Schema
@@ -139,9 +139,11 @@ Blocks:
    text. A blank line before the closing `$$` also makes it normal text.
 3. Heading: the whole trimmed line is one of:
    - Markdown: 1 to 6 `#`, then a space or tab, then at least one non-space char.
-   - Chinese: `第`, then digits or any of `一二三四五六七八九十百零〇兩`, then one of `章節回卷篇部`,
-     then the end of the line, or whitespace / `：` / `:` / `、` and a title. The line is at most
-     40 chars and has none of `。！？`.
+   - Chinese: `第`, then digits or any of `一二三四五六七八九十百千萬万零〇兩两`, optional spaces, then
+     one of `章節回卷篇部`, then the end of the line, or whitespace / `：` / `:` / `、` and a title.
+     Punctuation-free web-novel header variants (`<numerals>章 <title>`, `<Prefix>\u{00a0}<Title>`,
+     `<Prefix> 第...章 <Title>`, and `第...卷...第...章...`) are also matched. The line is at most
+     50 chars and has none of `。！？`.
    - English: `chapter`, `part` or `section` (ASCII case-insensitive), one space, then one or
      more digits or `IVXLC`, then the end of the line, or one of `:` `.` `-` `—` and a title. The
      line is at most 60 chars.
@@ -280,18 +282,18 @@ follows). Multi-word English entries use exactly one space.
 
 | kind | connector sits in | zh | en |
 |---|---|---|---|
-| sequence | arg2 | 然後 接著 隨後 | then, afterwards, after that |
+| sequence | arg2 | 然後 然后 接著 接着 隨後 随后 | then, afterwards, after that |
 | cause (result) | arg2 | 所以 因此 | so, therefore, thus |
 | contrast | arg2 | 但是 然而 可是 但 | but, however |
-| parallel | arg2 | 另一方面 另外 此外 而且 並且 同樣 | also, moreover, furthermore, likewise, similarly, in addition |
-| cause (reason) | arg1 | 因為 (correlate 所以 因此 so therefore thus) | because (correlate 所以 因此 so therefore thus) |
-| condition | arg1 | 如果 假如 要是 若 (correlate 就 那麼 便 then) | if (correlate 就 那麼 便 then) |
-| sequence | arg1 | 先 (correlate 然後 接著 再 隨後) | none |
+| parallel | arg2 | 另一方面 另外 此外 而且 並且 并且 同樣 | also, moreover, furthermore, likewise, similarly, in addition |
+| cause (reason) | arg1 | 因為 因为 (correlate 所以 因此 so therefore thus) | because (correlate 所以 因此 so therefore thus) |
+| condition | arg1 | 如果 假如 要是 若是 若 (correlate 就 那麼 那么 便 then) | if (correlate 就 那麼 那么 便 then) |
+| sequence | arg1 | 先 (correlate 然後 然后 接著 接着 再 隨後 随后) | none |
 | parallel | arg1 | 一方面 (correlate 另一方面) | none |
 
-The correlate lists are shared by both languages. Every cause opener (`因為`, `because`) takes
-`所以 因此 so therefore thus`, and every condition opener (`如果 假如 要是 若`, `if`) takes
-`就 那麼 便 then`.
+The correlate lists are shared by both languages. Every cause opener (`因為`, `因为`, `because`) takes
+`所以 因此 so therefore thus`, and every condition opener (`如果 假如 要是 若是 若`, `if`) takes
+`就 那麼 那么 便 then`.
 
 Connectors of arg2 take arg1 from the clause before them (or the sentence before, when they
 start a sentence).
@@ -348,7 +350,7 @@ Special cases:
 A connector gives an `unknown` with `layer: "relations"`, `reason: "ambiguous"`, and the
 connector's span, and no relation, in these cases:
 
-- It has several readings: zh `同時`; en `while`, `since`.
+- It has several readings: zh `同時`, `同时`; en `while`, `since`.
 - Its argument is not clear:
   - A connector of arg2 that starts its sentence, when no sentence before it can be its `arg1`
     (the first sentence of a paragraph, or the first sentence after an unsupported sentence).
@@ -371,9 +373,8 @@ A new paragraph also breaks the sentence relation.
 - Only one unit before (or after) a connector is its argument. No implicit relations: a relation
   needs a connector.
 - No `雖然…但是` or `although` concession pair beyond the contrast of `但是`.
-- Simplified-only connector forms are not matched, such as `因为` for `因為`. Forms that are the
-  same in both scripts still match: `因为下雨，所以比赛取消了。` gives a cause relation for `所以`, and
-  no relation for `因为`. zh `又`, `而`, `並` alone are not connectors.
+- Less common Simplified-only connector forms outside the table above (such as `虽然` or `否则`)
+  are not matched. zh `又`, `而`, `並` alone are not connectors.
 - Argument spans are always clauses or sentences, never smaller.
 - A bare connector can leave an argument that is only the connector: `We stayed home, because.`
   (`arg1` is `because.`) and `We slept. So.` (`arg2` is `So.`). Such a relation is still
@@ -411,9 +412,9 @@ Values (`value` is omitted for kinds that have none):
 
 Scanners, run at each position of a supported sentence:
 
-- Relative dates: `今天 明天 昨天 後天 前天 今晚 昨晚 今年 明年 去年 這週 本週 上週 下週 這個月
-  上個月 下個月`, and `today tomorrow yesterday tonight`, and `last|this|next` followed by
-  `week|month|year` (ASCII case-insensitive, one space).
+- Relative dates: `今天 明天 昨天 後天 后天 前天 今晚 昨晚 今年 明年 去年 這週 这周 本週 本周 上週 上周
+  下週 下周 這個月 这个月 上個月 上个月 下個月 下个月`, and `today tomorrow yesterday tonight`, and
+  `last|this|next` followed by `week|month|year` (ASCII case-insensitive, one space).
 - Dates, all checked for a real calendar day (leap years included):
   - Chinese: `Y年M月D日` (or `號` for `日`), `Y年M月`, `M月D日` (or `號`), and `Y年` alone. `Y` is
     four ASCII or Chinese digits, or `民國N` (N+1911). Month 1 to 12 is needed. `M月` alone and
@@ -441,10 +442,10 @@ Scanners, run at each position of a supported sentence:
   ambiguous. An hour of 1 to 12 with no marker is ambiguous, so `3:30` alone is ambiguous. A bare
   `一點` with no marker and no `半` or `M分` is "a bit" (`他有一點累`), so it gives no time and no
   unknown.
-- Quantities: a number, then optionally one space, then a unit. Units such as `kg km 分鐘 天
-  days` need a space or none. `g m l` are units only when attached (`5m`, not `5 m`). A currency
-  prefix is `US$ NT$ $ ¥ € £`, and `百分之N` is a percent. A bare English `one` is not a
-  quantity.
+- Quantities: a number, then optionally one space, then a unit. Units such as `kg km 分鐘 分钟 小時
+  小时 個時辰 个时辰 時辰 时辰 盞茶 盏茶 天 個月 个月 丈 尺 寸 畝 亩 days` need a space or none. `g m l`
+  are units only when attached (`5m`, not `5 m`). A currency prefix is `US$ NT$ $ ¥ € £`, and
+  `百分之N` is a percent. A bare English `one` is not a quantity.
 - Numbers: ASCII digits with comma groups of exactly three digits and an optional decimal part.
   `萬 万` and `億 亿` multiply the number before them (`3萬`, `1.5億`). An ASCII number followed
   by Chinese numerals is read as `<number><chain>` where the chain ends in a multiplier: `5千元`
@@ -615,11 +616,20 @@ tract would panic. A `pad_id` outside the vocabulary is refused at load.
 
 ### Core ML backend
 
-Core ML loads only compiled models, from a file URL. So `load` writes the verified `.mlmodel` bytes
-to a private temporary directory (`tempfile`) and compiles them there with the synchronous
-`compileModelAtURL`. That call is deprecated, but it needs no run loop. The compiled model is loaded
-with `MLComputeUnitsCPUOnly`, and then the compiled copy is removed. The temporary directory that
-holds the `.mlmodel` file lives as long as the model. No GPU and no Neural Engine are used.
+Core ML loads only compiled models, from a file URL. So `load` / `load_with_units` writes the
+verified `.mlmodel` bytes to a private temporary directory (`tempfile`) and compiles them there with
+the synchronous `compileModelAtURL`. That call is deprecated, but it needs no run loop. The
+uncompiled `.mlmodel` temporary directory is dropped right after compilation, and the compiled
+`.mlmodelc` directory stays alive for the lifetime of the `CoremlModel` so lazy weight mmaps stay
+valid. Two compute modes are exposed:
+
+- `Backend::Coreml` (`--backend coreml`): loads with `MLComputeUnitsCPUOnly` for strict `< 1e-4`
+  cross-backend logit parity and byte-identical JSON determinism with `Backend::Onnx`.
+- `Backend::CoremlFast` (`--backend coreml-fast`): loads with `MLComputeUnitsAll` (Apple Silicon
+  CPU + GPU + Neural Engine) for high-throughput multi-worker corpus indexing (~1.7x single-worker
+  speedup, ~99.8% UPOS and head+deprel agreement with `CPUOnly`). Objective-C allocations in load
+  and inference are wrapped in `objc2::rc::autoreleasepool` so worker threads without an `NSRunLoop`
+  retain bounded memory across hundreds of thousands of predictions.
 
 The Core ML path takes the ids that the tokenizer gives, as the ONNX path does. After the model
 is loaded, `load` runs one sequence of `max_len` pad ids. A failure there is `Load`, with the
@@ -727,9 +737,20 @@ For each supported sentence, `SubwordTokenizer::encode` runs on `&text[byte_star
 `sentence.span`. The tokenizer prepends `[CLS]` at subword index `0` (`s_0 = 0`, empty span) and
 appends `[SEP]` at the end (empty span). Each Layer-2 token `u` (`1..=m`) maps to its first
 overlapping subword `s_u` (`1 <= s_u < subwords.ids.len()`) after adding `sentence.span.start_char`
-to the subword's scalar span. If `subwords.ids.len() > model.info().max_len` or any token has no
-overlapping subword, the sentence is skipped and recorded in `unknown` as
-`{"layer": "syntax", "span": sentence.span, "reason": "not_applicable"}`.
+to the subword's scalar span:
+
+- When `subwords.ids.len() > model.info().max_len`, the sentence is partitioned into contiguous
+  windows aligned to `segmentation.clauses` boundaries (greedily packing consecutive clauses up to
+  `max_len - 2` content subwords plus `[CLS]` and `[SEP]`, and splitting cleanly at token
+  boundaries if a single mega-clause still exceeds `max_len - 2`). Each window runs the model,
+  single-root Chu-Liu/Edmonds decoding, and contextual UPOS upgrade independently, producing an
+  acyclic UD forest across the sentence. Sentence-level `not_applicable` is emitted only when a
+  single token alone exceeds `max_len - 2` subwords (or no token in the sentence maps to any
+  subword).
+- When an individual control or replacement-character token (such as `U+007F` or `U+FFFD`)
+  normalizes to an empty subword span while sibling tokens in the sentence map normally, only that
+  unmapped token emits `{"layer": "syntax", "span": tok.span, "reason": "not_applicable"}`, and all
+  mapped tokens in the sentence are decoded normally.
 
 For a model with sequence cap `max_len` (`256` in `doc-syntax-v1`), `Model::run` returns a `[len, C]`
 tensor with `C = 17 + max_len + 148` (`421` when `max_len = 256`):

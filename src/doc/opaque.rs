@@ -155,29 +155,96 @@ fn markdown_heading(t: &[char]) -> bool {
         && t[hashes..].iter().any(|ch| !ch.is_whitespace())
 }
 
-/// `第` then a numeral, then one of 章節回卷篇部. The line is at most 40 chars with no sentence end.
-fn chinese_heading(t: &[char]) -> bool {
-    const NUMERALS: &str = "一二三四五六七八九十百零〇兩";
-    const UNITS: &str = "章節回卷篇部";
-    if t.len() > 40 || t.iter().any(|ch| "。！？".contains(*ch)) || t.first() != Some(&'第') {
+const ZH_HEADING_NUMERALS: &str = "一二三四五六七八九十百千萬万零〇兩两";
+const ZH_HEADING_UNITS: &str = "章節回卷篇部";
+
+fn zh_numeral_len(s: &[char]) -> usize {
+    s.iter()
+        .take_while(|ch| ch.is_ascii_digit() || ZH_HEADING_NUMERALS.contains(**ch))
+        .count()
+}
+
+fn chinese_di_heading(s: &[char], allow_tight_title: bool) -> bool {
+    if s.first() != Some(&'第') {
         return false;
     }
-    let numerals = t[1..]
+    let numerals = zh_numeral_len(&s[1..]);
+    if numerals == 0 {
+        return false;
+    }
+    let ws = s[1 + numerals..]
         .iter()
-        .take_while(|ch| ch.is_ascii_digit() || NUMERALS.contains(**ch))
+        .take_while(|ch| matches!(**ch, ' ' | '\t' | '\u{3000}' | '\u{00a0}'))
         .count();
-    let [unit, after @ ..] = &t[1 + numerals..] else {
+    let [unit, after @ ..] = &s[1 + numerals + ws..] else {
         return false;
     };
-    if numerals == 0 || !UNITS.contains(*unit) {
+    if !ZH_HEADING_UNITS.contains(*unit) {
         return false;
     }
     match after {
-        [] => true,
-        [sep, title @ ..] => {
-            (sep.is_whitespace() || matches!(*sep, '：' | ':' | '、')) && has_text(title)
+        [] => ws == 0,
+        [sep, title @ ..]
+            if (sep.is_whitespace() || matches!(*sep, '：' | ':' | '、')) && has_text(title) =>
+        {
+            true
+        }
+        _ => allow_tight_title && has_text(after),
+    }
+}
+
+fn bare_numeral_zhang_heading(s: &[char]) -> bool {
+    let numerals = zh_numeral_len(s);
+    numerals >= 2
+        && s.get(numerals) == Some(&'章')
+        && s.get(numerals + 1).is_some_and(|sep| sep.is_whitespace())
+        && has_text(&s[numerals + 2..])
+}
+
+/// `第` then a numeral, then one of 章節回卷篇部 (plus web-novel `<Prefix>\u{00a0}<Title>`,
+/// `<Prefix> 第...章`, `第...卷...第...章`, and `<numerals>章 <Title>`). At most 50 chars with no
+/// sentence end.
+fn chinese_heading(t: &[char]) -> bool {
+    if t.len() > 50 || t.iter().any(|ch| "。！？".contains(*ch)) {
+        return false;
+    }
+    if chinese_di_heading(t, false) {
+        return true;
+    }
+    if t.iter().any(|ch| "，；,;!?'\"「」『』“”‘’".contains(*ch)) {
+        return false;
+    }
+    if bare_numeral_zhang_heading(t) {
+        return true;
+    }
+    if let Some(nbsp_idx) = t.iter().position(|&ch| ch == '\u{00a0}')
+        && (1..=20).contains(&nbsp_idx)
+        && let Some(rs) = (nbsp_idx + 1..t.len()).find(|&i| !t[i].is_whitespace())
+    {
+        let rest = &t[rs..];
+        if chinese_di_heading(rest, true) || bare_numeral_zhang_heading(rest) {
+            return true;
         }
     }
+    if t.first() == Some(&'第') {
+        let n = zh_numeral_len(&t[1..]);
+        if n > 0 && t.get(1 + n) == Some(&'卷') {
+            for k in (2 + n)..t.len() {
+                if t[k] == '第' && chinese_di_heading(&t[k..], true) {
+                    return true;
+                }
+            }
+        }
+    }
+    for idx in 1..=t.len().saturating_sub(1).min(20) {
+        if t[idx] == '第' && t[idx - 1].is_whitespace() {
+            let allow_tight = t[..idx].contains(&'卷');
+            if chinese_di_heading(&t[idx..], allow_tight) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// `chapter`, `part` or `section`, one space, then digits or Roman numerals, then the end of the

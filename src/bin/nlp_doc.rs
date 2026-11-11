@@ -7,6 +7,7 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum BackendArg {
     Coreml,
+    CoremlFast,
     Onnx,
 }
 
@@ -14,6 +15,7 @@ impl From<BackendArg> for Backend {
     fn from(arg: BackendArg) -> Self {
         match arg {
             BackendArg::Coreml => Self::Coreml,
+            BackendArg::CoremlFast => Self::CoremlFast,
             BackendArg::Onnx => Self::Onnx,
         }
     }

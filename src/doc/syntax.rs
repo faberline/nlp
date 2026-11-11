@@ -426,7 +426,239 @@ struct PreparedSentence {
     sent_idx: usize,
     token_indices: Vec<usize>,
     subword_indices: Vec<usize>,
+    unmapped_token_indices: Vec<usize>,
     ids: Vec<i64>,
+}
+
+enum WindowFit {
+    Fits(PreparedSentence),
+    TooLong,
+    Unmappable,
+}
+
+fn partition_tokens_by_subwords(
+    doc: &Document,
+    token_indices: &[usize],
+    base_start_char: usize,
+    subwords: &Subwords,
+) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+    let mut mapped_tokens = Vec::with_capacity(token_indices.len());
+    let mut subword_indices = Vec::with_capacity(token_indices.len());
+    let mut unmapped_tokens = Vec::new();
+    for &tok_idx in token_indices {
+        let tok_span = doc.tokens[tok_idx].span;
+        // Subword 0 is reserved for [CLS] = UD root (`s_0 = 0`), so tokens map into `1..len`.
+        let found = subwords
+            .spans
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find_map(|(s_idx, sub)| {
+                if sub.start_char >= sub.end_char {
+                    return None;
+                }
+                let doc_start = base_start_char + sub.start_char;
+                let doc_end = base_start_char + sub.end_char;
+                (doc_start < tok_span.end_char && tok_span.start_char < doc_end).then_some(s_idx)
+            });
+        match found {
+            Some(s_idx) => {
+                mapped_tokens.push(tok_idx);
+                subword_indices.push(s_idx);
+            }
+            None => unmapped_tokens.push(tok_idx),
+        }
+    }
+    (mapped_tokens, subword_indices, unmapped_tokens)
+}
+
+fn clause_boundaries_for_sentence(
+    doc: &Document,
+    token_indices: &[usize],
+    clause_spans: &[Span],
+) -> Vec<usize> {
+    let m = token_indices.len();
+    if clause_spans.len() <= 1 {
+        return vec![0, m];
+    }
+    let mut boundaries = Vec::with_capacity(clause_spans.len() + 1);
+    boundaries.push(0);
+    let mut tok_pos = 0usize;
+    for next_clause in &clause_spans[1..] {
+        while tok_pos < m
+            && doc.tokens[token_indices[tok_pos]].span.start_char < next_clause.start_char
+        {
+            tok_pos += 1;
+        }
+        if let Some(&last) = boundaries.last()
+            && tok_pos > last
+            && tok_pos < m
+        {
+            boundaries.push(tok_pos);
+        }
+    }
+    if boundaries.last().copied().unwrap_or(0) < m {
+        boundaries.push(m);
+    }
+    boundaries
+}
+
+struct WindowCtx<'a, F> {
+    doc: &'a Document,
+    text: &'a str,
+    char_to_byte: &'a [usize],
+    sent_idx: usize,
+    max_len: usize,
+    encode: &'a F,
+}
+
+impl<F> WindowCtx<'_, F>
+where
+    F: Fn(&str) -> Result<Subwords, ModelError>,
+{
+    fn try_encode(&self, slice: &[usize]) -> Result<WindowFit, ModelError> {
+        let first_tok = slice[0];
+        let last_tok = *slice.last().expect("window slice is non-empty");
+        let win_start_char = self.doc.tokens[first_tok].span.start_char;
+        let win_end_char = self.doc.tokens[last_tok].span.end_char;
+        let Some(&byte_start) = self.char_to_byte.get(win_start_char) else {
+            return Err(ModelError::Run(format!(
+                "window start_char {win_start_char} outside text"
+            )));
+        };
+        let Some(&byte_end) = self.char_to_byte.get(win_end_char) else {
+            return Err(ModelError::Run(format!(
+                "window end_char {win_end_char} outside text"
+            )));
+        };
+        if byte_start > byte_end {
+            return Err(ModelError::Run(format!(
+                "window span {win_start_char}..{win_end_char} inverted"
+            )));
+        }
+        let win_sub = (self.encode)(&self.text[byte_start..byte_end])?;
+        if win_sub.ids.len() != win_sub.spans.len() {
+            return Err(ModelError::Run(
+                "subword ids and spans differ in length".to_owned(),
+            ));
+        }
+        if win_sub.ids.is_empty() {
+            return Ok(WindowFit::Unmappable);
+        }
+        if win_sub.ids.len() > self.max_len {
+            return Ok(WindowFit::TooLong);
+        }
+        let (token_indices, subword_indices, unmapped_token_indices) =
+            partition_tokens_by_subwords(self.doc, slice, win_start_char, &win_sub);
+        Ok(WindowFit::Fits(PreparedSentence {
+            sent_idx: self.sent_idx,
+            token_indices,
+            subword_indices,
+            unmapped_token_indices,
+            ids: win_sub.ids,
+        }))
+    }
+
+    /// Greedily packs as many consecutive `boundaries` segments starting at `start_b` as fit in
+    /// `max_len` subwords (`<= max_len - 2` content subwords plus `[CLS]` and `[SEP]`).
+    fn extend_boundary(
+        &self,
+        token_indices: &[usize],
+        boundaries: &[usize],
+        start_b: usize,
+    ) -> Result<Option<(usize, PreparedSentence)>, ModelError> {
+        let limit = boundaries.len() - 1;
+        let first_slice = &token_indices[boundaries[start_b]..boundaries[start_b + 1]];
+        let WindowFit::Fits(mut best_win) = self.try_encode(first_slice)? else {
+            return Ok(None);
+        };
+        let mut lo = start_b + 1;
+        if lo == limit {
+            return Ok(Some((lo, best_win)));
+        }
+
+        // Exponential (galloping) search followed by binary search to stay O(log K) on mega-clauses.
+        let mut step = 1usize;
+        let mut hi = limit;
+        let mut found_upper = false;
+        while lo < limit {
+            let probe = (lo + step).min(limit);
+            let slice = &token_indices[boundaries[start_b]..boundaries[probe]];
+            match self.try_encode(slice)? {
+                WindowFit::Fits(win) => {
+                    lo = probe;
+                    best_win = win;
+                    if lo == limit {
+                        return Ok(Some((lo, best_win)));
+                    }
+                    step = step.saturating_mul(2);
+                }
+                WindowFit::TooLong | WindowFit::Unmappable => {
+                    hi = probe;
+                    found_upper = true;
+                    break;
+                }
+            }
+        }
+
+        if found_upper {
+            while lo + 1 < hi {
+                let mid = lo + (hi - lo) / 2;
+                let slice = &token_indices[boundaries[start_b]..boundaries[mid]];
+                match self.try_encode(slice)? {
+                    WindowFit::Fits(win) => {
+                        lo = mid;
+                        best_win = win;
+                    }
+                    WindowFit::TooLong | WindowFit::Unmappable => {
+                        hi = mid;
+                    }
+                }
+            }
+        }
+
+        Ok(Some((lo, best_win)))
+    }
+
+    /// Partitions a sentence whose subwords exceed `max_len` into contiguous clause-aligned windows
+    /// (falling back to token boundaries inside any single mega-clause). Returns `Ok(None)` only
+    /// when a single token alone exceeds `max_len - 2` subwords or cannot map to any subword.
+    fn partition(
+        &self,
+        token_indices: &[usize],
+        clause_spans: &[Span],
+    ) -> Result<Option<Vec<PreparedSentence>>, ModelError> {
+        if self.max_len < 3 {
+            return Ok(None);
+        }
+        let clause_bounds = clause_boundaries_for_sentence(self.doc, token_indices, clause_spans);
+        let mut windows = Vec::new();
+        let mut b_idx = 0usize;
+        while b_idx + 1 < clause_bounds.len() {
+            if let Some((next_b, win)) =
+                self.extend_boundary(token_indices, &clause_bounds, b_idx)?
+            {
+                windows.push(win);
+                b_idx = next_b;
+            } else {
+                // Single mega-clause exceeds `max_len`: split cleanly at token boundaries.
+                let tok_bounds: Vec<usize> =
+                    (clause_bounds[b_idx]..=clause_bounds[b_idx + 1]).collect();
+                let mut t_idx = 0usize;
+                while t_idx + 1 < tok_bounds.len() {
+                    let Some((next_t, win)) =
+                        self.extend_boundary(token_indices, &tok_bounds, t_idx)?
+                    else {
+                        return Ok(None);
+                    };
+                    windows.push(win);
+                    t_idx = next_t;
+                }
+                b_idx += 1;
+            }
+        }
+        Ok(Some(windows))
+    }
 }
 
 /// Runs Layer 4 syntax decoding and contextual UPOS upgrade on an existing Layer 1–3/7 [`Document`]
@@ -451,6 +683,13 @@ where
             bucket.push(tok_idx);
         }
     }
+    let mut clauses_by_sentence: Vec<Vec<Span>> =
+        vec![Vec::new(); doc.segmentation.sentences.len()];
+    for clause in &doc.segmentation.clauses {
+        if let Some(bucket) = clauses_by_sentence.get_mut(clause.sentence) {
+            bucket.push(clause.span);
+        }
+    }
 
     let mut prepared = Vec::new();
     for (sent_idx, sentence) in doc.segmentation.sentences.iter().enumerate() {
@@ -458,6 +697,7 @@ where
             continue;
         }
         let token_indices = std::mem::take(&mut tokens_by_sentence[sent_idx]);
+        let clause_spans = std::mem::take(&mut clauses_by_sentence[sent_idx]);
         if token_indices.is_empty() {
             continue;
         }
@@ -486,7 +726,7 @@ where
                 "subword ids and spans differ in length".to_owned(),
             ));
         }
-        if subwords.ids.is_empty() || subwords.ids.len() > max_len {
+        if subwords.ids.is_empty() {
             doc.unknown.push(Unknown {
                 layer: "syntax".to_owned(),
                 span: sentence.span,
@@ -494,35 +734,31 @@ where
             });
             continue;
         }
-
-        let mut subword_indices = Vec::with_capacity(token_indices.len());
-        let mut all_mapped = true;
-        for &tok_idx in &token_indices {
-            let tok_span = doc.tokens[tok_idx].span;
-            // Subword 0 is reserved for [CLS] = UD root (`s_0 = 0`), so tokens map into `1..len`.
-            let found = subwords
-                .spans
-                .iter()
-                .enumerate()
-                .skip(1)
-                .find_map(|(s_idx, sub)| {
-                    if sub.start_char >= sub.end_char {
-                        return None;
-                    }
-                    let doc_start = sentence.span.start_char + sub.start_char;
-                    let doc_end = sentence.span.start_char + sub.end_char;
-                    (doc_start < tok_span.end_char && tok_span.start_char < doc_end)
-                        .then_some(s_idx)
-                });
-            match found {
-                Some(s_u) => subword_indices.push(s_u),
-                None => {
-                    all_mapped = false;
-                    break;
+        if subwords.ids.len() > max_len {
+            let ctx = WindowCtx {
+                doc,
+                text,
+                char_to_byte: &char_to_byte,
+                sent_idx,
+                max_len,
+                encode: &encode,
+            };
+            match ctx.partition(&token_indices, &clause_spans)? {
+                Some(windows) if windows.iter().any(|w| !w.token_indices.is_empty()) => {
+                    prepared.extend(windows);
                 }
+                _ => doc.unknown.push(Unknown {
+                    layer: "syntax".to_owned(),
+                    span: sentence.span,
+                    reason: Reason::NotApplicable,
+                }),
             }
+            continue;
         }
-        if !all_mapped {
+
+        let (mapped_tokens, subword_indices, unmapped_token_indices) =
+            partition_tokens_by_subwords(doc, &token_indices, sentence.span.start_char, &subwords);
+        if mapped_tokens.is_empty() {
             doc.unknown.push(Unknown {
                 layer: "syntax".to_owned(),
                 span: sentence.span,
@@ -533,8 +769,9 @@ where
 
         prepared.push(PreparedSentence {
             sent_idx,
-            token_indices,
+            token_indices: mapped_tokens,
             subword_indices,
+            unmapped_token_indices,
             ids: subwords.ids,
         });
     }
@@ -546,6 +783,16 @@ where
 
     // Run sentence by sentence (identical to batch in both backends, and allows isolating TooLong).
     for item in &prepared {
+        for &u_tok in &item.unmapped_token_indices {
+            doc.unknown.push(Unknown {
+                layer: "syntax".to_owned(),
+                span: doc.tokens[u_tok].span,
+                reason: Reason::NotApplicable,
+            });
+        }
+        if item.token_indices.is_empty() {
+            continue;
+        }
         let sentence_span = doc.segmentation.sentences[item.sent_idx].span;
         let output = match model.run(&Batch {
             ids: vec![item.ids.clone()],

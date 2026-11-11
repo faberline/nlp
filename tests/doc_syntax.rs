@@ -484,33 +484,50 @@ fn low_confidence_syntax_and_upos_emit_low_confidence_unknowns() {
 
 #[test]
 fn too_long_sentence_emits_not_applicable_and_keeps_short_sentence() {
-    let max_len = 8; // Very small cap so sentence 0 overflows while sentence 1 fits!
-    let model = SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
-        for s in 1..ids.len().saturating_sub(1) {
-            let row = &mut data[s * cols..(s + 1) * cols];
-            row[15] = 10.0; // Verb
-            if s == 1 {
-                row[17] = 12.0;
-            } else {
-                row[17 + 1] = 12.0;
+    let make_model = |max_len: usize| {
+        SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
+            for s in 1..ids.len().saturating_sub(1) {
+                let row = &mut data[s * cols..(s + 1) * cols];
+                row[15] = 10.0; // Verb
+                if s == 1 {
+                    row[17] = 12.0;
+                } else {
+                    row[17 + 1] = 12.0;
+                }
+                row[17 + max_len + 26] = 12.0; // "nsubj"
             }
-            row[17 + max_len + 26] = 12.0; // "nsubj"
-        }
-    });
+        })
+    };
 
     let text = "小甲今天早上走進木屋看書。好！";
+
+    // 1. With `max_len = 8` (`max_len - 2 = 6`), sentence 0 exceeds `max_len` as a whole (15
+    //    subwords > 8), but every token has <= 2 subwords (`<= 6`), so mega-clause token-boundary
+    //    windowing decodes all tokens cleanly with zero `NotApplicable` unknowns.
+    let mut windowed = analyze_document(text, &Options::default());
+    assert_eq!(windowed.segmentation.sentences.len(), 2);
+    annotate_with_encoder(&mut windowed, text, &make_model(8), char_subword_encode)
+        .expect("annotate windowed");
+    assert_eq!(windowed.syntax.len(), windowed.tokens.len());
+    assert!(windowed.tokens.iter().all(|t| t.upos.is_some()));
+    assert!(
+        !windowed
+            .unknown
+            .iter()
+            .any(|u| u.layer == "syntax" && u.reason == Reason::NotApplicable)
+    );
+
+    // 2. With `max_len = 3` (`max_len - 2 = 1`), sentence 0's 2-char token `"小甲"` alone exceeds
+    //    `max_len - 2`, emitting a single `NotApplicable` unknown on sentence 0 while sentence 1
+    //    (`"好！"`, 1-char tokens) still decodes via windowing!
     let mut doc = analyze_document(text, &Options::default());
     assert_eq!(doc.segmentation.sentences.len(), 2);
-
-    annotate_with_encoder(&mut doc, text, &model, char_subword_encode).expect("annotate");
-
-    // Sentence 0 exceeded max_len=8 -> single NotApplicable unknown over sentence 0's span.
+    annotate_with_encoder(&mut doc, text, &make_model(3), char_subword_encode).expect("annotate");
     assert!(doc.unknown.contains(&Unknown {
         layer: "syntax".to_owned(),
         span: doc.segmentation.sentences[0].span,
         reason: Reason::NotApplicable,
     }));
-    // Sentence 1 ("好！", 2 chars + [CLS] + [SEP] = 4 <= 8) succeeded!
     assert!(doc.syntax.iter().all(|s| s.sentence == 1));
     assert_eq!(doc.syntax.len(), 2);
 }

@@ -21,8 +21,8 @@ enum Role {
 }
 
 const CAUSE_RESULT: &[&str] = &["所以", "因此", "so", "therefore", "thus"];
-const COND_RESULT: &[&str] = &["就", "那麼", "便", "then"];
-const SEQ_RESULT: &[&str] = &["然後", "接著", "再", "隨後"];
+const COND_RESULT: &[&str] = &["就", "那麼", "那么", "便", "then"];
+const SEQ_RESULT: &[&str] = &["然後", "然后", "接著", "接着", "再", "隨後", "随后"];
 const PAR_RESULT: &[&str] = &["另一方面"];
 const SO_NOT: &[&str] = &[
     "far", "much", "many", "long", "as", "that", "good", "bad", "little", "few", "called", "on",
@@ -41,8 +41,11 @@ const CLOSING: &[char] = &[
 
 const ENTRIES: &[(&str, Role)] = &[
     ("然後", Back(K::Sequence)),
+    ("然后", Back(K::Sequence)),
     ("接著", Back(K::Sequence)),
+    ("接着", Back(K::Sequence)),
     ("隨後", Back(K::Sequence)),
+    ("随后", Back(K::Sequence)),
     ("then", Back(K::Sequence)),
     ("afterwards", Back(K::Sequence)),
     ("after that", Back(K::Sequence)),
@@ -62,6 +65,7 @@ const ENTRIES: &[(&str, Role)] = &[
     ("此外", Back(K::Parallel)),
     ("而且", Back(K::Parallel)),
     ("並且", Back(K::Parallel)),
+    ("并且", Back(K::Parallel)),
     ("同樣", Back(K::Parallel)),
     ("also", Back(K::Parallel)),
     ("moreover", Back(K::Parallel)),
@@ -70,15 +74,18 @@ const ENTRIES: &[(&str, Role)] = &[
     ("similarly", Back(K::Parallel)),
     ("in addition", Back(K::Parallel)),
     ("因為", Open(K::Cause, CAUSE_RESULT)),
+    ("因为", Open(K::Cause, CAUSE_RESULT)),
     ("because", Open(K::Cause, CAUSE_RESULT)),
     ("如果", Open(K::Condition, COND_RESULT)),
     ("假如", Open(K::Condition, COND_RESULT)),
     ("要是", Open(K::Condition, COND_RESULT)),
+    ("若是", Open(K::Condition, COND_RESULT)),
     ("若", Open(K::Condition, COND_RESULT)),
     ("if", Open(K::Condition, COND_RESULT)),
     ("先", Open(K::Sequence, SEQ_RESULT)),
     ("一方面", Open(K::Parallel, PAR_RESULT)),
     ("同時", Ambiguous),
+    ("同时", Ambiguous),
     ("while", Ambiguous),
     ("since", Ambiguous),
 ];

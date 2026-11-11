@@ -11,12 +11,13 @@ use std::cell::RefCell;
 use std::cmp::Reverse;
 
 const SENTINEL: char = '\u{0}';
-const MEASURE: &str = "個人位次件隻張本條台輛間場筆項回遍倍歲名所家句片顆枚篇部";
+const MEASURE: &str = "個人位次件隻張本條台輛間場筆項回遍倍歲名所家句片顆枚篇部个张条辆间场笔项岁颗層层頭头步把具柄株滴瓶粒塊块";
 const ZH_RELATIVE: &[&str] = &[
     "今天",
     "明天",
     "昨天",
     "後天",
+    "后天",
     "前天",
     "今晚",
     "昨晚",
@@ -24,12 +25,19 @@ const ZH_RELATIVE: &[&str] = &[
     "明年",
     "去年",
     "這週",
+    "这周",
     "本週",
+    "本周",
     "上週",
+    "上周",
     "下週",
+    "下周",
     "這個月",
+    "这个月",
     "上個月",
+    "上个月",
     "下個月",
+    "下个月",
 ];
 const EN_RELATIVE: &[&str] = &["today", "tomorrow", "yesterday", "tonight"];
 const MONTHS: [&str; 12] = [
@@ -89,10 +97,24 @@ const UNITS: &[(&str, bool)] = &[
     ("台幣", false),
     ("秒", false),
     ("分鐘", false),
+    ("分钟", false),
     ("小時", false),
+    ("小时", false),
+    ("個時辰", false),
+    ("个时辰", false),
+    ("時辰", false),
+    ("时辰", false),
+    ("盞茶", false),
+    ("盏茶", false),
     ("天", false),
     ("週", false),
     ("個月", false),
+    ("个月", false),
+    ("丈", false),
+    ("尺", false),
+    ("寸", false),
+    ("畝", false),
+    ("亩", false),
     ("%", false),
     ("kg", false),
     ("mg", false),

@@ -331,6 +331,57 @@ pub(super) fn extract(
     (entities, unknown)
 }
 
+/// The `name` rule alone, for callers that read only caller-supplied names. No other entity
+/// kind can take a name away from the caller. Build it once and reuse it for every line.
+pub(crate) struct NameRule(Option<AhoCorasick>);
+
+impl NameRule {
+    pub(crate) fn new(names: &[String]) -> Self {
+        let names: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|n| !n.is_empty() && !n.contains(['\n', SENTINEL]))
+            .collect();
+        if names.is_empty() {
+            return Self(None);
+        }
+        Self(Some(
+            AhoCorasick::builder()
+                .match_kind(MatchKind::LeftmostLongest)
+                .build(&names)
+                .expect("name patterns"),
+        ))
+    }
+}
+
+/// Name hits in `sentences`, the spans to scan.
+pub(super) fn name_spans(
+    c: &[char],
+    found: &[Found],
+    sentences: &[Span],
+    rule: &NameRule,
+) -> Vec<Span> {
+    let Some(ac) = &rule.0 else {
+        return Vec::new();
+    };
+    let mut t = c.to_vec();
+    for f in found.iter().filter(|f| !f.block) {
+        t[f.item.span.start_char..f.item.span.end_char].fill(SENTINEL);
+    }
+    let mut cands = Vec::new();
+    for (idx, span) in sentences.iter().enumerate() {
+        let x = Sent {
+            t: &t,
+            s: span.start_char,
+            e: span.end_char,
+            idx,
+            bad_dates: RefCell::new(Vec::new()),
+        };
+        names_in(ac, &x, &mut cands);
+    }
+    cands.into_iter().map(|cand| cand.span).collect()
+}
+
 /// Keeps the candidates that do not overlap an earlier kept one: first by start, then longer
 /// first, then by kind priority.
 fn resolve(mut cands: Vec<Cand>) -> Vec<Cand> {

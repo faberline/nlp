@@ -9,6 +9,7 @@ mod segment;
 mod token;
 
 use crate::Span;
+pub(crate) use entity::NameRule;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -308,4 +309,78 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         relations,
         unknown,
     }
+}
+
+/// Layers 1 and 3 over one line of text, in byte ranges of that line. The narrative code reads
+/// this instead of its own segmentation. `terms` are exact caller surfaces for the name rule.
+pub(crate) struct LineView {
+    /// Sentences, in order. Block opaque spans (heading, list item, fenced code, display
+    /// formula) belong to no sentence.
+    pub sentences: Vec<std::ops::Range<usize>>,
+    /// Name hits, in order of position.
+    pub names: Vec<std::ops::Range<usize>>,
+    /// True when the line holds an opaque span of any kind.
+    pub has_opaque: bool,
+}
+
+pub(crate) fn line_view(text: &str, terms: &entity::NameRule) -> LineView {
+    let c: Vec<char> = text.chars().collect();
+    let found = opaque::find(&c);
+    let m = opaque::mask(&c, &found);
+    let mut bytes = Vec::with_capacity(c.len() + 1);
+    let mut at = 0;
+    for ch in &c {
+        bytes.push(at);
+        at += ch.len_utf8();
+    }
+    bytes.push(at);
+    let range = |s: Span| bytes[s.start_char]..bytes[s.end_char];
+    let mut spans = Vec::new();
+    for paragraph in segment::paragraphs(&m) {
+        spans.extend(segment::sentences(&m, paragraph));
+    }
+    let names = entity::name_spans(&c, &found, &spans, terms)
+        .into_iter()
+        .map(range)
+        .collect();
+    LineView {
+        sentences: spans.into_iter().map(range).collect(),
+        names,
+        has_opaque: !found.is_empty(),
+    }
+}
+
+/// Layer 2 token ranges of one line, in bytes of that line. `None` when a sentence of the line
+/// has an unsupported language (layer 2 leaves it untokenized) or when the line holds any opaque
+/// span (heading, list item, code, formula, citation, URL, emoji): the caller keeps its own
+/// tokenizer.
+pub(crate) fn line_tokens(text: &str) -> Option<Vec<std::ops::Range<usize>>> {
+    let c: Vec<char> = text.chars().collect();
+    let found = opaque::find(&c);
+    if !found.is_empty() {
+        return None;
+    }
+    let m = opaque::mask(&c, &found);
+    let inline: Vec<(Span, OpaqueKind)> = Vec::new();
+    let mut bytes = Vec::with_capacity(c.len() + 1);
+    let mut at = 0;
+    for ch in &c {
+        bytes.push(at);
+        at += ch.len_utf8();
+    }
+    bytes.push(at);
+    let mut out = Vec::new();
+    for paragraph in segment::paragraphs(&m) {
+        for sentence in segment::sentences(&m, paragraph) {
+            if segment::lang(&c, sentence).1 {
+                return None;
+            }
+            out.extend(
+                token::tokenize(&c, sentence, &inline)
+                    .into_iter()
+                    .map(|p| bytes[p.span.start_char]..bytes[p.span.end_char]),
+            );
+        }
+    }
+    Some(out)
 }

@@ -1,2 +1,4 @@
 /target/
 training/.venv/
+training/out/
+training/models/

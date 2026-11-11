@@ -2,8 +2,8 @@
 //!
 //! A model lives in `<models_dir>/<dir>/` and is listed in `<models_dir>/manifest.json`.
 //! [`verify`] checks every listed file against its sha256 before any file is parsed. [`load`]
-//! verifies too, then loads the model. Without the `onnx` feature, [`load`] returns `NoBackend`
-//! at once, so a layer reports `unknown` with reason `no_model`.
+//! verifies too, then loads the model. Without a compiled backend feature, [`load`] returns
+//! `NoBackend` at once, so a layer reports `unknown` with reason `no_model`.
 
 #[cfg(all(feature = "coreml", target_os = "macos"))]
 mod coreml;
@@ -306,7 +306,7 @@ pub fn verify(models_dir: &Path, model_id: &str) -> Result<Verified, ModelError>
 }
 
 /// Whether `backend` is compiled into this build.
-fn compiled(backend: Backend) -> bool {
+pub(crate) fn compiled(backend: Backend) -> bool {
     match backend {
         Backend::Onnx => cfg!(feature = "onnx"),
         Backend::Coreml => cfg!(all(feature = "coreml", target_os = "macos")),
@@ -394,12 +394,12 @@ pub struct Subwords {
     pub spans: Vec<Span>,
 }
 
-#[cfg(feature = "onnx")]
+#[cfg(any(feature = "onnx", feature = "coreml"))]
 pub struct SubwordTokenizer {
     inner: tokenizers::Tokenizer,
 }
 
-#[cfg(feature = "onnx")]
+#[cfg(any(feature = "onnx", feature = "coreml"))]
 impl SubwordTokenizer {
     /// Parses the tokenizer from the bytes that `verify` checked.
     pub fn from_verified(verified: &Verified) -> Result<Self, ModelError> {
@@ -446,7 +446,7 @@ impl SubwordTokenizer {
 
 /// Maps each byte index to the index of the character that contains it. The index at
 /// `text.len()` is the character count.
-#[cfg(feature = "onnx")]
+#[cfg(any(feature = "onnx", feature = "coreml"))]
 fn char_index_table(text: &str) -> Vec<usize> {
     let mut table = vec![0; text.len() + 1];
     let mut index = 0;

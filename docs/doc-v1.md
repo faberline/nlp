@@ -5,8 +5,11 @@ language tag per span, the opaque spans (code, formula, heading, list item, cita
 emoji) that sentences never split, and the entities found by rules. It uses no model and no
 network.
 
-CLI: `nlp_doc` reads UTF-8 text from stdin and prints one JSON document plus a newline. On a
-read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and exits with 1.
+CLI: `nlp_doc` reads UTF-8 text from stdin and prints one JSON document plus a newline. With no
+flags it runs `analyze_document` (rules only, no model). With `--models <DIR>` and optional
+`--backend <coreml|onnx>` (defaulting to `coreml` on macOS when compiled in, otherwise `onnx`),
+it runs `analyze_document_with_model` to populate Layer 4 (`syntax`). On a read or model
+integrity/runtime error, it prints `nlp_doc: <error>` to stderr and exits with 1.
 
 ## Schema
 
@@ -24,6 +27,7 @@ read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and 
   },
   "tokens": [{"span": {...}, "lang": "en", "sentence": 0, "upos": "PRON"}],
   "entities": [{"kind": "date", "span": {...}, "sentence": 0, "value": "2026-11-10"}],
+  "syntax": [{"token": 0, "sentence": 0, "span": {...}, "head": null, "deprel": "root", "score": 0.94}],
   "relations": [{"kind": "sequence", "level": "clause", "connector": {...}, "arg1": {...}, "arg2": {...}}],
   "unknown": [{"layer": "segmentation", "span": {...}, "reason": "unsupported_language"}]
 }
@@ -33,12 +37,16 @@ read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and 
 - `lang` is one of `zh`, `en`, `mixed`, `und`.
 - `reason` is one of `no_model`, `ambiguous`, `low_confidence`, `unsupported_language`,
   `not_applicable`. Layer 1 produces `unsupported_language`. Layer 2 produces `no_model` and
-  `ambiguous`, with `layer: "pos"`. Layer 3 produces `ambiguous`, with `layer: "entities"`.
+  `ambiguous` (and `low_confidence` when a syntax model runs with UPOS confidence `< 0.50`),
+  with `layer: "pos"`. Layer 3 produces `ambiguous`, with `layer: "entities"`. Layer 4 produces
+  `no_model`, `low_confidence` and `not_applicable`, with `layer: "syntax"`.
 - `sentence.paragraph` indexes `paragraphs`; `clause.sentence` indexes `sentences`.
-  `entity.sentence` indexes `sentences`.
+  `entity.sentence` and `syntax.sentence` index `sentences`. `syntax.token` and `syntax.head`
+  index `tokens` (`head` is `null` for `"root"`).
 - All lists are sorted by start. `unknown` is sorted by span start, then end, then layer.
-- `entities` and `relations` are always present, `[]` when nothing is found. The order of
-  the lists is `segmentation`, `tokens`, `entities`, `relations`, `unknown`.
+- `entities` and `relations` are always present, `[]` when nothing is found. `syntax` is omitted
+  when empty (`analyze_document` never emits it). When present, the order of the lists is
+  `segmentation`, `tokens`, `entities`, `syntax`, `relations`, `unknown`.
 
 ## Offsets
 
@@ -579,19 +587,21 @@ pure Rust, under MIT or Apache-2.0, and needs no native download at build time. 
 were rejected for this layer. `ort` links or downloads the ONNX Runtime native library. `candle`
 has no ONNX loader that covers encoders reliably.
 
-`Backend::Coreml` runs on `objc2-core-ml` 0.3.2 (feature `coreml`, macOS only). The bindings crate is
-generated from the Apple headers and is maintained in the `objc2` project. Its licence is
-MIT OR Apache-2.0 OR Zlib, and so are `objc2` 0.6 and `objc2-foundation` 0.3. We write no FFI by
-hand. The framework calls are still `unsafe` in the bindings, and the few `unsafe` blocks in
+`Backend::Coreml` runs on `objc2-core-ml` 0.3.2 (feature `coreml`, macOS only, which also enables
+`tokenizers` so standalone `--features coreml` builds include `SubwordTokenizer` without `onnx`).
+The bindings crate is generated from the Apple headers and is maintained in the `objc2` project. Its
+licence is MIT OR Apache-2.0 OR Zlib, and so are `objc2` 0.6 and `objc2-foundation` 0.3. We write no
+FFI by hand. The framework calls are still `unsafe` in the bindings, and the few `unsafe` blocks in
 `src/doc/model/coreml.rs` say why each is sound. The three `objc2` crates are declared under
-`[target.'cfg(target_os = "macos")'.dependencies]`. On Linux the feature adds only `tempfile`, and
-no Core ML code is built. On Linux, or without the feature, `Backend::Coreml` returns `NoBackend`.
-The default `cargo test` never needs Core ML.
+`[target.'cfg(target_os = "macos")'.dependencies]`. On Linux the feature adds only `tokenizers` and
+`tempfile`, and no Core ML code is built. On Linux, or without the feature, `Backend::Coreml` returns
+`NoBackend`. The default `cargo test` never needs Core ML.
 
-Tokenization uses `tokenizers` 0.23.2 with its `fancy-regex` feature. `fancy-regex` is pure Rust, so
-no C source is built and no network is needed. The default `onig` feature is off, so `onig` is not
-in the dependency tree. Under `onnx`, `tokenizers` pulls in `rayon` transitively. This layer does not call it: `run` and
-`encode` stay sequential and start no thread pool.
+Tokenization uses `tokenizers` 0.23.2 with its `fancy-regex` feature (enabled by either `onnx` or
+`coreml`). `fancy-regex` is pure Rust, so no C source is built and no network is needed. The default
+`onig` feature is off, so `onig` is not in the dependency tree. `tokenizers` pulls in `rayon`
+transitively, and this layer does not call it: `run` and `encode` stay sequential and start no thread
+pool.
 
 ### Determinism
 
@@ -684,6 +694,62 @@ against it within 1e-5 and Core ML within 1e-4. The four files total 88,655 byte
 
 Real models are not in this repository. They will come as GitHub Release assets, pinned in the
 manifest by a script (a later issue).
+
+## Syntax (layer 4)
+
+`analyze_document_with_model(text, options, models_dir, backend)` runs Layers 1–3 and 7 first, then
+loads `SYNTAX_MODEL_ID` (`"doc-syntax-v1"`) on `backend` to decode Universal Dependencies v2 trees
+into `Document.syntax` and upgrade undecided Layer-2 `upos` tags. Callers that run many documents
+can verify and load the model once and call `analyze_document_with_loaded_model(text, options,
+model, tokenizer)` (or `doc::syntax::annotate`). Calling `analyze_document(text, options)` never
+runs a model and leaves `syntax` empty (omitted from JSON).
+
+### Subword alignment and packed `[len, 421]` output
+
+For each supported sentence, `SubwordTokenizer::encode` runs on `&text[byte_start..byte_end]` of
+`sentence.span`. The tokenizer prepends `[CLS]` at subword index `0` (`s_0 = 0`, empty span) and
+appends `[SEP]` at the end (empty span). Each Layer-2 token `u` (`1..=m`) maps to its first
+overlapping subword `s_u` (`1 <= s_u < subwords.ids.len()`) after adding `sentence.span.start_char`
+to the subword's scalar span. If `subwords.ids.len() > model.info().max_len` or any token has no
+overlapping subword, the sentence is skipped and recorded in `unknown` as
+`{"layer": "syntax", "span": sentence.span, "reason": "not_applicable"}`.
+
+For a model with sequence cap `max_len` (`256` in `doc-syntax-v1`), `Model::run` returns a `[len, C]`
+tensor with `C = 17 + max_len + 148` (`421` when `max_len = 256`):
+
+- `0..17`: 17 UPOS logits in `Upos` enum order (`ADJ`, `ADP`, `ADV`, `AUX`, `CCONJ`, `DET`, `INTJ`,
+  `NOUN`, `NUM`, `PART`, `PRON`, `PROPN`, `PUNCT`, `SCONJ`, `SYM`, `VERB`, `X`).
+- `17..17 + max_len`: raw biaffine arc logits. For dependent token `u` (`1..=m`) and candidate head
+  `v` (`0..=m`, with `0` = `[CLS]` root at `s_0 = 0`), the arc score is `row(s_u)[17 + s_v]`.
+- `17 + max_len..C` (`148` columns): `r_dep` (`37`), `r_head` (`37`), `r_bi_dep` (`37`), and
+  `r_bi_head` (`37`) for the 37 alphabetical UD v2 base relation names (`acl` through `xcomp`, with
+  `root` at index `34`). For `(dep = u, head = v)`,
+  `rel_logit[c] = r_dep[s_u][c] + r_head[s_v][c] + r_bi_dep[s_u][c] * r_bi_head[s_v][c]`.
+
+### Chu-Liu/Edmonds, confidence, and UPOS upgrade
+
+- **Single-root tree decoding**: `doc::syntax::chu_liu_edmonds` finds the exact maximum-weight
+  spanning arborescence over `0..=m` subject to node `0` having exactly one child. Every decoded
+  sentence is guaranteed to have strictly one `"root"` attachment (`head: None`), no self-loops,
+  and no cycles. When `v == 0`, `deprel` is forced to `"root"`; when `v > 0`, `deprel` is the
+  argmax over `c != 34` (ties go to the lowest index).
+- **Quantized confidence (`Score`)**: `p_arc = softmax(arc_scores_u_over_0..=m)[v]`,
+  `p_rel = 1.0` when `v == 0` else `softmax(rel_logits_excluding_34)[best_c]`, and
+  `conf = p_arc * p_rel`. `Score(u16)` stores `(conf.clamp(0.0, 1.0) * 1000.0).round() as u16` and
+  serializes as `(milli as f64) / 1000.0`, keeping `Document: Eq` and giving byte-identical JSON
+  across Core ML and ONNX.
+- **Thresholds and `unknown`**:
+  - When `score.milli() < 350` (`SYNTAX_THRESHOLD = 0.35`), the token is omitted from `syntax` and
+    emits `{"layer": "syntax", "span": tok.span, "reason": "low_confidence"}`. Otherwise a
+    `SyntaxToken` is emitted with 0-based `token` and `head` indices into `Document.tokens`.
+  - Tokens whose Layer-2 `upos` was already decided by rules or the lexicon keep their tag. Tokens
+    whose Layer-2 `upos` was `None` get the model's top UPOS tag (and drop their `"pos"` `unknown`
+    entry) when `upos_prob >= 0.50`; otherwise `upos` stays `None` and the token's `"pos"` `unknown`
+    reason becomes `low_confidence`.
+  - When `backend` is not compiled in, or `doc-syntax-v1` or its files are absent (`NoBackend`,
+    `UnknownModel`, `Missing`), each supported sentence emits
+    `{"layer": "syntax", "span": sentence.span, "reason": "no_model"}`. Integrity and runtime
+    errors (`HashMismatch`, `Manifest`, `Load`, `Run`) are returned to the caller.
 
 ## Readers of `nlp.doc.v1`
 

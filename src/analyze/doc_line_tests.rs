@@ -481,6 +481,10 @@ fn generated_allow_list_chapters_give_the_icu_analysis() {
         eprintln!("DIFF {chapter:?}");
     }
     assert!(
+        used >= 5_000,
+        "only {used} of {lines} generated lines use the doc path"
+    );
+    assert!(
         differ.is_empty(),
         "{} of 20001 generated chapters differ",
         differ.len()
@@ -497,6 +501,10 @@ fn generated_mixed_chapters_give_the_icu_analysis() {
     for chapter in differ.iter().take(40) {
         eprintln!("DIFF {chapter:?}");
     }
+    assert!(
+        used >= 5_000,
+        "only {used} of {lines} generated lines use the doc path"
+    );
     assert!(
         differ.is_empty(),
         "{} of 10000 generated chapters differ",

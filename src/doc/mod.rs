@@ -6,12 +6,18 @@ mod opaque;
 mod pos;
 mod relation;
 mod segment;
+pub mod syntax;
 mod token;
 
 use crate::Span;
 pub(crate) use entity::NameRule;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(any(feature = "onnx", feature = "coreml"))]
+pub use syntax::analyze_document_with_loaded_model;
+pub use syntax::{
+    DEPRELS, SYNTAX_MODEL_ID, SYNTAX_THRESHOLD, Score, SyntaxToken, analyze_document_with_model,
+};
 
 pub const SCHEMA: &str = "nlp.doc.v1";
 
@@ -190,8 +196,20 @@ pub struct Document {
     pub segmentation: Segmentation,
     pub tokens: Vec<Token>,
     pub entities: Vec<Entity>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub syntax: Vec<SyntaxToken>,
     pub relations: Vec<Relation>,
     pub unknown: Vec<Unknown>,
+}
+
+pub(crate) fn sort_unknown(unknown: &mut [Unknown]) {
+    unknown.sort_by(|a, b| {
+        (a.span.start_char, a.span.end_char, a.layer.as_str()).cmp(&(
+            b.span.start_char,
+            b.span.end_char,
+            b.layer.as_str(),
+        ))
+    });
 }
 
 pub fn analyze_document(text: &str, options: &Options) -> Document {
@@ -287,13 +305,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
     unknown.extend(entity_unknown);
     let (relations, relation_unknown) = relation::relations(&c, &seg);
     unknown.extend(relation_unknown);
-    unknown.sort_by(|a, b| {
-        (a.span.start_char, a.span.end_char, a.layer.as_str()).cmp(&(
-            b.span.start_char,
-            b.span.end_char,
-            b.layer.as_str(),
-        ))
-    });
+    sort_unknown(&mut unknown);
 
     Document {
         schema: SCHEMA.to_owned(),
@@ -306,6 +318,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         segmentation: seg,
         tokens,
         entities,
+        syntax: Vec::new(),
         relations,
         unknown,
     }

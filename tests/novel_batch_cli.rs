@@ -597,7 +597,7 @@ fn coreml_and_coreml_fast_backends_run_multiworker_and_invalidate_none_cache() {
         .unwrap();
     assert!(run_none.status.success());
 
-    // 2. Re-run on `out_fast_w4` with `--models` + `--backend coreml-fast --workers 4`: must re-process all 4 chapters!
+    // 2. Re-run on `out_fast_w4` with `--models` + `--backend coreml-fast --workers 2`: must re-process all 4 chapters!
     let run_fast_w4 = Command::new(bin_path())
         .args([
             "--bundles-dir",
@@ -609,7 +609,7 @@ fn coreml_and_coreml_fast_backends_run_multiworker_and_invalidate_none_cache() {
             "--backend",
             "coreml-fast",
             "--workers",
-            "4",
+            "2",
         ])
         .output()
         .unwrap();
@@ -651,6 +651,33 @@ fn coreml_and_coreml_fast_backends_run_multiworker_and_invalidate_none_cache() {
             .unwrap();
     assert_eq!(r_fast_resume["resumed_chapters"].as_u64(), Some(4));
     assert_eq!(r_fast_resume["processed_chapters"].as_u64(), Some(0));
+
+    // Verify `coreml-fast` multi-worker determinism (`--workers 4` == `--workers 1`).
+    let out_fast_w1 = tmp.path().join("out_fast_w1");
+    let run_fast_w1 = Command::new(bin_path())
+        .args([
+            "--bundles-dir",
+            bundles_dir.to_str().unwrap(),
+            "--out-dir",
+            out_fast_w1.to_str().unwrap(),
+            "--models",
+            models_dir.to_str().unwrap(),
+            "--backend",
+            "coreml-fast",
+            "--workers",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(run_fast_w1.status.success());
+    for order in 1..=4 {
+        let rel = format!("chapters/{order:04}.json");
+        assert_eq!(
+            fs::read(out_fast_w1.join(&rel)).unwrap(),
+            fs::read(out_fast_w4.join(&rel)).unwrap(),
+            "coreml-fast workers=1 vs workers=4 mismatch on {rel}"
+        );
+    }
 
     // 4. Verify `--backend coreml` multi-worker determinism (`--workers 4` == `--workers 1`) and valid UD graphs!
     let out_cpu_w1 = tmp.path().join("out_cpu_w1");

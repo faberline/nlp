@@ -61,8 +61,7 @@ impl BackendMode {
     #[cfg(any(feature = "onnx", feature = "coreml"))]
     fn to_doc_backend(self) -> Option<Backend> {
         match self {
-            // Once `swarm/doc-fixer` lands `Backend::CoremlFast`, switch this arm to `Backend::CoremlFast`.
-            Self::CoremlFast => Some(Backend::Coreml),
+            Self::CoremlFast => Some(Backend::CoremlFast),
             Self::Coreml => Some(Backend::Coreml),
             Self::Onnx => Some(Backend::Onnx),
             Self::None => None,
@@ -764,37 +763,36 @@ fn match_heading_candidate(
     // Form 4: English `Chapter <digits | roman | word> [delimiter subtitle]`
     if let Some(after_kw) = rest.get(7..)
         && rest[..7].eq_ignore_ascii_case("chapter")
+        && after_kw.chars().next().is_some_and(is_heading_ws)
     {
-        if after_kw.chars().next().is_some_and(is_heading_ws) {
-            let after_ws = after_kw.trim_start_matches(is_heading_ws);
-            let mut tok_end = 0usize;
-            for (b_idx, ch) in after_ws.char_indices() {
-                if ch.is_ascii_alphanumeric() || ch == '-' {
-                    tok_end = b_idx + ch.len_utf8();
-                } else {
-                    break;
-                }
+        let after_ws = after_kw.trim_start_matches(is_heading_ws);
+        let mut tok_end = 0usize;
+        for (b_idx, ch) in after_ws.char_indices() {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                tok_end = b_idx + ch.len_utf8();
+            } else {
+                break;
             }
-            if tok_end > 0 {
-                let tok = &after_ws[..tok_end];
-                let tail = &after_ws[tok_end..];
-                let valid_boundary = tail.is_empty()
-                    || tail.chars().next().is_some_and(|c| {
-                        is_heading_ws(c) || matches!(c, ':' | '.' | '-' | '—' | ')' | '(')
-                    });
-                let num = if tok.bytes().all(|b| b.is_ascii_digit()) {
-                    tok.parse::<usize>().ok()
-                } else {
-                    parse_english_word_number(tok).or_else(|| parse_roman_numeral(tok))
-                };
-                if valid_boundary && num.is_some() {
-                    return Some(DetectedHeading {
-                        title: full_title.to_owned(),
-                        number: num,
-                        norm_sub: normalize_subtitle(tail).to_ascii_lowercase(),
-                        is_prefixed_xa0,
-                    });
-                }
+        }
+        if tok_end > 0 {
+            let tok = &after_ws[..tok_end];
+            let tail = &after_ws[tok_end..];
+            let valid_boundary = tail.is_empty()
+                || tail.chars().next().is_some_and(|c| {
+                    is_heading_ws(c) || matches!(c, ':' | '.' | '-' | '—' | ')' | '(')
+                });
+            let num = if tok.bytes().all(|b| b.is_ascii_digit()) {
+                tok.parse::<usize>().ok()
+            } else {
+                parse_english_word_number(tok).or_else(|| parse_roman_numeral(tok))
+            };
+            if valid_boundary && num.is_some() {
+                return Some(DetectedHeading {
+                    title: full_title.to_owned(),
+                    number: num,
+                    norm_sub: normalize_subtitle(tail).to_ascii_lowercase(),
+                    is_prefixed_xa0,
+                });
             }
         }
     }
@@ -1642,6 +1640,11 @@ fn run() -> Result<()> {
     let mut newly_processed_sentences = 0usize;
 
     if !pending_indices.is_empty() {
+        if verified_opt.is_some() {
+            eprintln!(
+                "[init] initializing {effective_workers} independent {backend_str} worker instances for {processed_chapters} chapters..."
+            );
+        }
         let journal_file = OpenOptions::new()
             .create(true)
             .append(true)

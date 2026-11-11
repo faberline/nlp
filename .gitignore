@@ -1,4 +1,7 @@
 /target/
 training/.venv/
+training/.work/
 training/out/
 training/models/
+training/**/__pycache__/
+models/doc-syntax-v1/

@@ -241,6 +241,7 @@ impl<'a> CrossChapterCandidates<'a> {
     /// falls back to the generic tokenizer when the line has no layer 2 reading.
     fn line_pronouns(&self, tokenizer: &Analyzer, line: &str) -> Vec<Range<usize>> {
         if self.locale == Locale::ChineseTaiwan
+            && crate::analyze::doc_applies(line)
             && let Some(tokens) = crate::doc::line_tokens(line)
         {
             return tokens
@@ -468,6 +469,14 @@ mod doc_pronoun_tests {
         "他看了 https://example.org/a 然後她走了。\n",
         "一行沒有標點的文字\n",
         "\n",
+        "- 他走進木屋。\n",
+        "# 他走了\n",
+        "第一章 他們\n",
+        "1. 她走了。\n",
+        "把 `他` 換成 `她`。\n",
+        "$他$ 她\n",
+        "他走了。她留下。\n",
+        "他說：「我們走。」她點頭。\n",
     ];
 
     #[test]

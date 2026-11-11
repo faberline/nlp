@@ -190,6 +190,10 @@ event exists.
 ## Use of `nlp.doc.v1`
 
 For zh-TW chapters the stream reads sentences, actor name hits and written pronouns from the
-`nlp.doc.v1` layers. The records and ranges are the same as with the older splitter. Lines with
-`…`, an ASCII `.`, double spaces or opaque spans keep the older path. See `doc-v1.md`, section
+`nlp.doc.v1` layers, only for lines that pass an allow list: Han ideographs, `。！？，、；：「」『』`,
+a single inner space and a final newline. Any other line (ASCII letters, digits or punctuation,
+`…`, other brackets, emoji, tabs, opaque spans) keeps the older splitter and tokenizer, so its
+records and ranges are those of the older path. The name terms are the lexicon actors, objects,
+ranks and places. Sentences and names come from the analyzer; written pronouns come from the
+cross-chapter reader, which uses the same allow list. See `doc-v1.md`, section
 "Readers of `nlp.doc.v1`".

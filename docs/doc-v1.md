@@ -690,18 +690,35 @@ manifest by a script (a later issue).
 For `Locale::ChineseTaiwan`, two consumers read the layers instead of their own splitters.
 
 - `NarrativeAnalyzer` (used by `analyze` and the source stream) takes its sentences from layer 1
-  and its actor name hits from the layer 3 name rule. The terms are `TAIWAN_TERMS` plus the
-  caller actors, objects and places.
+  and its name hits from the layer 3 name rule. The terms are `TAIWAN_TERMS` plus the caller
+  actors, objects, `lexicon.ranks` and places. The name matcher is built once, in
+  `NarrativeAnalyzer::new`.
 - `CrossChapterCandidates` (zh-TW) takes its pronoun tokens from layer 2.
 
-The output does not change. A differential test compares the whole `Analysis` of the doc path
-with the old ICU path on neutral fixtures. A line stays on the old ICU and jieba path when layer 1
-and ICU cut it in different places. This is an open point for the owner, not a silent change.
-The cases are:
+The output is meant not to change: the old path stays the reference. Both readers use the same
+allow list, `doc_applies`, line by line. A line takes the doc path only when every char is one
+of these:
 
-- A line with `…`, an ASCII `.` or two adjacent spaces.
-- A line with any opaque span (code, formula, URL, citation, emoji, heading, list item).
-- A line in a language that layer 1 does not support (layer 2 only).
+- a Han ideograph (U+4E00 to U+9FFF, U+3400 to U+4DBF);
+- one of `。！？，、；：「」『』`;
+- one ASCII space or U+3000 that is not next to another space and not first or last in the line;
+- a final `\n`.
+
+Every other line keeps the old path: ASCII letters, digits and punctuation (also `.`, `!`, `?`),
+`…`, other brackets and closers (`《》〈〉【】〔〕［］[]`), `｡`, `．`, emoji, tab, `\r`,
+U+2028, other scripts, a doubled or edge space. The reason is that layer 1 and the ICU segmenter
+cut such text differently, and that the name rule refuses a long ASCII-edged name before a
+shorter valid one. Per reader:
+
+- `NarrativeAnalyzer`: a line outside the allow list, or one with any opaque span, uses ICU
+  sentences and `Term` tokens.
+- `CrossChapterCandidates`: a line outside the allow list, one with any opaque span (heading,
+  list item, code, formula, citation, URL), or one in a language that layer 2 does not support
+  uses the generic tokenizer.
+
+Differential tests (`doc_line_tests`, `doc_pronoun_tests`) compare the doc path with the old
+path, including the inputs of the review of pull request 36. When one fails on an allowed char,
+the char leaves the allow list; no layer and no expected value changes.
 
 These stay on the old path too:
 

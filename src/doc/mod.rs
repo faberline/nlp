@@ -9,6 +9,7 @@ mod segment;
 mod token;
 
 use crate::Span;
+pub(crate) use entity::NameRule;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -322,7 +323,7 @@ pub(crate) struct LineView {
     pub has_opaque: bool,
 }
 
-pub(crate) fn line_view(text: &str, terms: &[String]) -> LineView {
+pub(crate) fn line_view(text: &str, terms: &entity::NameRule) -> LineView {
     let c: Vec<char> = text.chars().collect();
     let found = opaque::find(&c);
     let m = opaque::mask(&c, &found);
@@ -350,16 +351,17 @@ pub(crate) fn line_view(text: &str, terms: &[String]) -> LineView {
 }
 
 /// Layer 2 token ranges of one line, in bytes of that line. `None` when a sentence of the line
-/// has an unsupported language: layer 2 leaves such a sentence untokenized.
+/// has an unsupported language (layer 2 leaves it untokenized) or when the line holds any opaque
+/// span (heading, list item, code, formula, citation, URL, emoji): the caller keeps its own
+/// tokenizer.
 pub(crate) fn line_tokens(text: &str) -> Option<Vec<std::ops::Range<usize>>> {
     let c: Vec<char> = text.chars().collect();
     let found = opaque::find(&c);
+    if !found.is_empty() {
+        return None;
+    }
     let m = opaque::mask(&c, &found);
-    let inline: Vec<(Span, OpaqueKind)> = found
-        .iter()
-        .filter(|f| !f.block && !matches!(f.item.kind, OpaqueKind::Heading | OpaqueKind::ListItem))
-        .map(|f| (f.item.span, f.item.kind))
-        .collect();
+    let inline: Vec<(Span, OpaqueKind)> = Vec::new();
     let mut bytes = Vec::with_capacity(c.len() + 1);
     let mut at = 0;
     for ch in &c {

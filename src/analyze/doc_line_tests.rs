@@ -155,3 +155,124 @@ fn only_the_zh_tw_locale_reads_doc_v1() {
         assert!(analyzer.doc_terms.is_none());
     }
 }
+
+/// Inputs from the review of pull request 36. Each one made the first doc path differ from ICU.
+const REVIEW_INPUTS: &[&str] = &[
+    "阿乙說好!小甲走進木屋。\n",
+    "小甲笑了!阿乙也笑了。\n",
+    "小甲!阿乙!\n",
+    "你好?小甲問。阿乙沒回答。\n",
+    "小甲問?阿乙答!\n",
+    "(小甲走進木屋!)阿乙留下。\n",
+    "我們看了《快跑！》這部電影。\n",
+    "小甲說：【走吧！】阿乙點頭。\n",
+    "小甲說：〈走吧！〉阿乙點頭。\n",
+    "小甲說：〔走吧！〕阿乙點頭。\n",
+    "小甲說：［走吧！］阿乙點頭。\n",
+    "小甲說：[走吧！]阿乙點頭。\n",
+    "小甲｡阿乙留下｡\n",
+    "小甲走了．阿乙留下。\n",
+    "小甲走了\u{2028}阿乙留下。\n",
+    "小甲走了。\r\n阿乙留下。\r\n",
+    "小甲\t阿乙\n",
+    "Alice Lees 走進木屋。\n",
+    "Lee Parkway 的小甲走進木屋。\n",
+    "小甲走進木屋。阿乙留在港口。\n",
+    "小甲說：「我們明天出發。」阿乙點頭。\n",
+    "小甲 走進木屋，阿乙　留在港口。\n",
+];
+
+fn review_lexicon() -> Lexicon<'static> {
+    Lexicon {
+        actors: &[
+            ("小甲", "a"),
+            ("阿乙", "b"),
+            ("Alice Lee", "c"),
+            ("Alice", "d"),
+            ("Lee", "e"),
+        ],
+        objects: &[("Lee Park", "park")],
+        places: PLACES,
+        ..Lexicon::default()
+    }
+}
+
+#[test]
+fn review_inputs_give_the_icu_analysis_and_hits() {
+    let lexicon = review_lexicon();
+    let (doc, icu) = analyzers(&lexicon);
+    for input in REVIEW_INPUTS {
+        let a = serde_json::to_string(&doc.analyze(input, "")).expect("json");
+        let b = serde_json::to_string(&icu.analyze(input, "")).expect("json");
+        assert_eq!(a, b, "analysis differs for {input:?}");
+        let a = serde_json::to_string(&doc.analyze_source_mentions(input, "")).expect("json");
+        let b = serde_json::to_string(&icu.analyze_source_mentions(input, "")).expect("json");
+        assert_eq!(a, b, "source mentions differ for {input:?}");
+        for line in input.split_inclusive('\n') {
+            let (ds, dh) = doc.line_sentences(line);
+            let (is, ih) = icu.line_sentences(line);
+            assert_eq!(dh, ih, "hits differ for {line:?}");
+            let ds: Vec<_> = ds.iter().map(|s| (s.start, s.end)).collect();
+            let is: Vec<_> = is.iter().map(|s| (s.start, s.end)).collect();
+            assert_eq!(ds, is, "sentences differ for {line:?}");
+        }
+    }
+}
+
+#[test]
+fn doc_applies_is_an_allow_list() {
+    for line in [
+        "小甲走進木屋。\n",
+        "小甲走進木屋。",
+        "小甲 阿乙\n",
+        "小甲　阿乙\n",
+        "「好。」『是。』，、；：！？\n",
+        "\n",
+        "",
+    ] {
+        assert!(super::doc_applies(line), "{line:?}");
+    }
+    for line in [
+        "a\n",
+        "小甲1\n",
+        "小甲!\n",
+        "小甲.\n",
+        "小甲…\n",
+        "《小甲》\n",
+        "【小甲】\n",
+        "小甲｡\n",
+        "小甲．\n",
+        "小甲\u{2028}\n",
+        "小甲\t阿乙\n",
+        "小甲。\r\n",
+        "小甲😀\n",
+        "小甲  阿乙\n",
+        "小甲 　阿乙\n",
+        " 小甲\n",
+        "小甲 \n",
+        "　\n",
+        "小甲\n\n",
+        "小甲\n阿乙\n",
+    ] {
+        assert!(!super::doc_applies(line), "{line:?}");
+    }
+}
+
+#[test]
+fn allowed_plain_lines_use_the_doc_path_with_the_same_ranges() {
+    let lexicon = review_lexicon();
+    let (doc, icu) = analyzers(&lexicon);
+    let terms = doc.doc_terms.as_ref().expect("terms");
+    for line in [
+        "小甲走進木屋。阿乙留在港口。\n",
+        "小甲說：「我們明天出發。」阿乙點頭。\n",
+        "小甲問：「你去哪裡？」阿乙沒有回答。\n",
+    ] {
+        let (sentences, hits) = super::doc_line(line, terms).expect("doc path");
+        let view = crate::doc::line_view(line, terms);
+        let layer1: Vec<_> = view.sentences.iter().map(|r| (r.start, r.end)).collect();
+        let got: Vec<_> = sentences.iter().map(|s| (s.start, s.end)).collect();
+        assert_eq!(got, layer1, "{line:?}");
+        assert_eq!(hits, icu.line_sentences(line).1, "{line:?}");
+    }
+}

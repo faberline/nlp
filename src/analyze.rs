@@ -2912,28 +2912,46 @@ impl Focus {
     }
 }
 
-/// The `nlp.doc.v1` path: layer 1 sentences and layer 3 names of one line.
+/// True when the `nlp.doc.v1` readers may serve the line. This is an allow list of chars on
+/// which layer 1, layer 2 and the old segmenter agree. Every other line (an ASCII letter, digit
+/// or punctuation, `…`, other brackets and closers, emoji, a tab, `\r`, another script, a
+/// doubled or edge space) keeps the old ICU and tokenizer path. A char leaves the set when a
+/// differential test finds a line it breaks; a layer or an expected value never changes.
 ///
-/// Open points, where layer 1 and the ICU segmenter cut differently. The caller keeps the old
-/// path for these lines, so the analysis does not change:
-///
-/// - `…`: layer 1 ends a sentence after it, ICU does not;
-/// - ASCII `.`: layer 1 treats abbreviations, `..` runs and `Mr.` by its own rules;
-/// - a run of two spaces: layer 1 ends a sentence there, ICU does not;
-/// - any opaque span (heading, list item, code, formula, citation, URL, emoji): layer 1 never
-///   cuts inside one and gives a heading or list line no sentence, ICU does the opposite.
-fn doc_applies(line: &str) -> bool {
-    let space = |ch: char| matches!(ch, ' ' | '\u{3000}');
-    !line.contains(['…', '.'])
-        && !line
-            .chars()
-            .zip(line.chars().skip(1))
-            .any(|(a, b)| space(a) && space(b))
+/// The set: Han ideographs; `。！？，、；：「」『』`; one ASCII space or U+3000 that is not next
+/// to another space and not first or last in the line; a final `\n`.
+pub(crate) fn doc_applies(line: &str) -> bool {
+    let body = line.strip_suffix('\n').unwrap_or(line);
+    let mut previous_space = true; // a leading space is refused like a doubled one
+    for ch in body.chars() {
+        let is_space = matches!(ch, ' ' | '\u{3000}');
+        let ok = match ch {
+            '\u{4E00}'..='\u{9FFF}'
+            | '\u{3400}'..='\u{4DBF}'
+            | '。'
+            | '！'
+            | '？'
+            | '，'
+            | '、'
+            | '；'
+            | '：'
+            | '「'
+            | '」'
+            | '『'
+            | '』' => true,
+            _ => is_space && !previous_space,
+        };
+        if !ok {
+            return false;
+        }
+        previous_space = is_space;
+    }
+    body.is_empty() || !previous_space
 }
 
 /// The `nlp.doc.v1` path: layer 1 sentences and layer 3 names of one line. It returns `None`
 /// for a line where the old path must stay (see `doc_applies`).
-fn doc_line<'a>(line: &'a str, terms: &[String]) -> Option<LineRead<'a>> {
+fn doc_line<'a>(line: &'a str, terms: &crate::doc::NameRule) -> Option<LineRead<'a>> {
     if !doc_applies(line) {
         return None;
     }
@@ -2967,7 +2985,7 @@ struct LineSentence<'a> {
 /// Reuse the same locale and work vocabulary across chapters.
 pub struct NarrativeAnalyzer<'lexicon> {
     /// Terms for the `nlp.doc.v1` name rule. `None` keeps the old ICU path (see `docs/doc-v1.md`).
-    doc_terms: Option<Vec<String>>,
+    doc_terms: Option<crate::doc::NameRule>,
     segmenter: Analyzer,
     lexicon: Lexicon<'lexicon>,
     actors: HashMap<&'lexicon str, usize>,
@@ -3004,11 +3022,12 @@ impl<'lexicon> NarrativeAnalyzer<'lexicon> {
             .collect();
         // Only the zh-TW locale has a layer in `nlp.doc.v1`; other locales stay on the ICU path.
         let doc_terms = (locale == Locale::ChineseTaiwan).then(|| {
-            crate::text::TAIWAN_TERMS
+            let names: Vec<String> = crate::text::TAIWAN_TERMS
                 .iter()
                 .chain(&terms)
                 .map(|term| (*term).to_owned())
-                .collect()
+                .collect();
+            crate::doc::NameRule::new(&names)
         });
         Ok(Self {
             doc_terms,

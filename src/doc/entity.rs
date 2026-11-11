@@ -332,25 +332,38 @@ pub(super) fn extract(
 }
 
 /// The `name` rule alone, for callers that read only caller-supplied names. No other entity
-/// kind can take a name away from the caller. `sentences` are the spans to scan.
+/// kind can take a name away from the caller. Build it once and reuse it for every line.
+pub(crate) struct NameRule(Option<AhoCorasick>);
+
+impl NameRule {
+    pub(crate) fn new(names: &[String]) -> Self {
+        let names: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|n| !n.is_empty() && !n.contains(['\n', SENTINEL]))
+            .collect();
+        if names.is_empty() {
+            return Self(None);
+        }
+        Self(Some(
+            AhoCorasick::builder()
+                .match_kind(MatchKind::LeftmostLongest)
+                .build(&names)
+                .expect("name patterns"),
+        ))
+    }
+}
+
+/// Name hits in `sentences`, the spans to scan.
 pub(super) fn name_spans(
     c: &[char],
     found: &[Found],
     sentences: &[Span],
-    names: &[String],
+    rule: &NameRule,
 ) -> Vec<Span> {
-    let names: Vec<&str> = names
-        .iter()
-        .map(String::as_str)
-        .filter(|n| !n.is_empty() && !n.contains(['\n', SENTINEL]))
-        .collect();
-    if names.is_empty() {
+    let Some(ac) = &rule.0 else {
         return Vec::new();
-    }
-    let ac = AhoCorasick::builder()
-        .match_kind(MatchKind::LeftmostLongest)
-        .build(&names)
-        .expect("name patterns");
+    };
     let mut t = c.to_vec();
     for f in found.iter().filter(|f| !f.block) {
         t[f.item.span.start_char..f.item.span.end_char].fill(SENTINEL);
@@ -364,7 +377,7 @@ pub(super) fn name_spans(
             idx,
             bad_dates: RefCell::new(Vec::new()),
         };
-        names_in(&ac, &x, &mut cands);
+        names_in(ac, &x, &mut cands);
     }
     cands.into_iter().map(|cand| cand.span).collect()
 }

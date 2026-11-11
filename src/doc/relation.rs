@@ -22,8 +22,22 @@ enum Role {
 
 const CAUSE_RESULT: &[&str] = &["所以", "因此", "so", "therefore", "thus"];
 const COND_RESULT: &[&str] = &["就", "那麼", "那么", "便", "then"];
-const SEQ_RESULT: &[&str] = &["然後", "然后", "接著", "接着", "再", "隨後", "随后"];
+const SEQ_RESULT: &[&str] = &[
+    "然後",
+    "然后",
+    "接著",
+    "接着",
+    "再",
+    "隨後",
+    "随后",
+    "隨即",
+    "随即",
+    "緊接著",
+    "紧接着",
+    "旋即",
+];
 const PAR_RESULT: &[&str] = &["另一方面"];
+const POST_SEQ_FRAMES: &[&str] = &["之後", "之后", "之際", "之际", "之時", "之时"];
 const SO_NOT: &[&str] = &[
     "far", "much", "many", "long", "as", "that", "good", "bad", "little", "few", "called", "on",
 ];
@@ -46,6 +60,11 @@ const ENTRIES: &[(&str, Role)] = &[
     ("接着", Back(K::Sequence)),
     ("隨後", Back(K::Sequence)),
     ("随后", Back(K::Sequence)),
+    ("隨即", Back(K::Sequence)),
+    ("随即", Back(K::Sequence)),
+    ("緊接著", Back(K::Sequence)),
+    ("紧接着", Back(K::Sequence)),
+    ("旋即", Back(K::Sequence)),
     ("then", Back(K::Sequence)),
     ("afterwards", Back(K::Sequence)),
     ("after that", Back(K::Sequence)),
@@ -57,10 +76,16 @@ const ENTRIES: &[(&str, Role)] = &[
     ("但是", Back(K::Contrast)),
     ("然而", Back(K::Contrast)),
     ("可是", Back(K::Contrast)),
+    ("不過", Back(K::Contrast)),
+    ("不过", Back(K::Contrast)),
     ("但", Back(K::Contrast)),
     ("however", Back(K::Contrast)),
     ("but", Back(K::Contrast)),
+    ("否則", Back(K::Condition)),
+    ("否则", Back(K::Condition)),
     ("另一方面", Back(K::Parallel)),
+    ("與此同時", Back(K::Parallel)),
+    ("与此同时", Back(K::Parallel)),
     ("另外", Back(K::Parallel)),
     ("此外", Back(K::Parallel)),
     ("而且", Back(K::Parallel)),
@@ -187,98 +212,120 @@ impl Pass<'_> {
                 continue;
             }
             let clause = self.clause(ci);
-            let Some((role, conn)) = connector(self.c, &self.seg.opaque, clause, sentence.end_char)
-            else {
-                continue;
-            };
             let next = ids.get(k + 1).copied();
-            let bare = is_bare(self.c, conn.end_char, clause.end_char);
-            match role {
-                Ambiguous => self.unknown(conn),
-                // `then` after an `if` clause is the correlate of that `if`, never a sequence.
-                Back(_)
-                    if k > 0
-                        && is_then(self.c, conn)
-                        && opens_if(
-                            self.c,
-                            &self.seg.opaque,
-                            self.clause(ids[k - 1]),
-                            sentence.end_char,
-                        ) => {}
-                Back(kind) if k == 0 => match prev {
-                    // `then` that starts a sentence after an `if` clause is that `if`'s correlate.
-                    Some(p) if is_then(self.c, conn) && self.last_opens_if(p) => {}
-                    Some(p) => {
-                        let a = self.seg.sentences[p].span;
-                        self.emit(kind, Se, conn, None, a, sentence);
-                    }
-                    None => self.unknown(conn),
-                },
-                Back(kind) if !bare => {
-                    let a = self.clause(ids[k - 1]);
-                    self.emit(kind, Cl, conn, None, a, clause);
-                }
-                Back(kind) => match next {
-                    Some(n) => {
-                        let (a, b) = (self.clause(ids[k - 1]), self.clause(n));
-                        self.emit(kind, Cl, conn, None, a, b);
-                    }
-                    None => self.unknown(conn),
-                },
-                Open(kind, results) => {
-                    if kind == K::Cause && (k > 0 || next.is_none()) {
-                        if k > 0 {
-                            let b = self.clause(ids[k - 1]);
-                            self.emit(kind, Cl, conn, None, clause, b);
-                        } else {
-                            match prev {
-                                Some(p) => {
-                                    let b = self.seg.sentences[p].span;
-                                    self.emit(kind, Se, conn, None, sentence, b);
-                                }
-                                None => self.unknown(conn),
-                            }
+            let initial = connector(self.c, &self.seg.opaque, clause, sentence.end_char);
+            if let Some((role, conn)) = initial {
+                let bare = is_bare(self.c, conn.end_char, clause.end_char);
+                match role {
+                    Ambiguous => self.unknown(conn),
+                    // `then` after an `if` clause is the correlate of that `if`, never a sequence.
+                    Back(_)
+                        if k > 0
+                            && is_then(self.c, conn)
+                            && opens_if(
+                                self.c,
+                                &self.seg.opaque,
+                                self.clause(ids[k - 1]),
+                                sentence.end_char,
+                            ) => {}
+                    Back(kind) if k == 0 => match prev {
+                        // `then` that starts a sentence after an `if` clause is that `if`'s correlate.
+                        Some(p) if is_then(self.c, conn) && self.last_opens_if(p) => {}
+                        Some(p) => {
+                            let a = self.seg.sentences[p].span;
+                            self.emit(kind, Se, conn, None, a, sentence);
                         }
-                        continue;
+                        None => self.unknown(conn),
+                    },
+                    Back(kind) if !bare => {
+                        let a = self.clause(ids[k - 1]);
+                        self.emit(kind, Cl, conn, None, a, clause);
                     }
-                    // Sequence and parallel openers stay silent unless their correlate follows.
-                    let silent = matches!(kind, K::Sequence | K::Parallel);
-                    let Some(n) = next.filter(|_| !bare) else {
-                        if !silent {
-                            self.unknown(conn);
+                    Back(kind) => match next {
+                        Some(n) => {
+                            let (a, b) = (self.clause(ids[k - 1]), self.clause(n));
+                            self.emit(kind, Cl, conn, None, a, b);
                         }
-                        continue;
-                    };
-                    let n_span = self.clause(n);
-                    let opaque = &self.seg.opaque;
-                    match correlate(self.c, opaque, n_span, sentence.end_char, results) {
-                        Some(cor) => {
-                            self.used[n] = true;
-                            // A bare correlate (`then,`) takes the clause after it as arg2.
-                            let arg2 = if is_bare(self.c, cor.end_char, n_span.end_char) {
-                                let after = ids.get(k + 2).copied().filter(|&n2| {
-                                    connector(self.c, opaque, self.clause(n2), sentence.end_char)
-                                        .is_none()
-                                });
-                                let Some(n2) = after else {
-                                    if !silent {
-                                        self.unknown(conn);
-                                    }
-                                    continue;
-                                };
-                                self.used[n2] = true;
-                                self.clause(n2)
+                        None => self.unknown(conn),
+                    },
+                    Open(kind, results) => {
+                        if kind == K::Cause && (k > 0 || next.is_none()) {
+                            if k > 0 {
+                                let b = self.clause(ids[k - 1]);
+                                self.emit(kind, Cl, conn, None, clause, b);
                             } else {
-                                n_span
-                            };
-                            self.emit(kind, Cl, conn, Some(cor), clause, arg2);
+                                match prev {
+                                    Some(p) => {
+                                        let b = self.seg.sentences[p].span;
+                                        self.emit(kind, Se, conn, None, sentence, b);
+                                    }
+                                    None => self.unknown(conn),
+                                }
+                            }
+                            continue;
                         }
-                        None if silent => {}
-                        None if connector(self.c, opaque, n_span, sentence.end_char).is_some() => {
-                            self.unknown(conn);
+                        // Sequence and parallel openers stay silent unless their correlate follows.
+                        let silent = matches!(kind, K::Sequence | K::Parallel);
+                        let Some(n) = next.filter(|_| !bare) else {
+                            if !silent {
+                                self.unknown(conn);
+                            }
+                            continue;
+                        };
+                        let n_span = self.clause(n);
+                        let opaque = &self.seg.opaque;
+                        match correlate(self.c, opaque, n_span, sentence.end_char, results) {
+                            Some(cor) => {
+                                self.used[n] = true;
+                                // A bare correlate (`then,`) takes the clause after it as arg2.
+                                let arg2 = if is_bare(self.c, cor.end_char, n_span.end_char) {
+                                    let after = ids.get(k + 2).copied().filter(|&n2| {
+                                        connector(
+                                            self.c,
+                                            opaque,
+                                            self.clause(n2),
+                                            sentence.end_char,
+                                        )
+                                        .is_none()
+                                    });
+                                    let Some(n2) = after else {
+                                        if !silent {
+                                            self.unknown(conn);
+                                        }
+                                        continue;
+                                    };
+                                    self.used[n2] = true;
+                                    self.clause(n2)
+                                } else {
+                                    n_span
+                                };
+                                self.emit(kind, Cl, conn, Some(cor), clause, arg2);
+                            }
+                            None if silent => {}
+                            None if connector(self.c, opaque, n_span, sentence.end_char)
+                                .is_some() =>
+                            {
+                                self.unknown(conn);
+                            }
+                            None => self.emit(kind, Cl, conn, None, clause, n_span),
                         }
-                        None => self.emit(kind, Cl, conn, None, clause, n_span),
+                        continue;
                     }
+                }
+            }
+
+            // Clause-end post-positional temporal frames (`…之後`, `…之際`, `…之時`).
+            if !matches!(initial, Some((Open(..) | Ambiguous, _)))
+                && let Some(n) = next
+                && !self.used[n]
+                && let Some(frame_conn) = post_temporal_frame(self.c, &self.seg.opaque, clause)
+            {
+                let n_span = self.clause(n);
+                let n_start = skip_opening(self.c, &self.seg.opaque, n_span);
+                if !is_bare(self.c, n_start, n_span.end_char)
+                    && connector(self.c, &self.seg.opaque, n_span, sentence.end_char).is_none()
+                {
+                    self.emit(K::Sequence, Cl, frame_conn, None, clause, n_span);
                 }
             }
         }
@@ -303,10 +350,21 @@ fn connector(
     let next = next_nonspace(c, end, sentence_end);
     let word = next_word(c, end, sentence_end);
     let at = |i: usize, set: &str| c.get(i).is_some_and(|ch| set.contains(*ch));
+    let starts_after = |from: usize, pat: &str| {
+        let n = pat.chars().count();
+        from + n <= sentence_end && pat.chars().eq(c[from..from + n].iter().copied())
+    };
     let role = match text {
         "但" if at(end, "願凡求見") => return None,
         "若" if at(end, "干無非是即") => return None,
         "先" if at(end, "生前後") => return None,
+        "不過" | "不过"
+            if ["如此", "爾爾", "尔尔"]
+                .iter()
+                .any(|p| starts_after(end, p)) =>
+        {
+            return None;
+        }
         "if" if word == "only" => return None,
         "however" if next != Some(',') => return None,
         "so" if SO_NOT.contains(&word.as_str()) => return None,
@@ -314,6 +372,35 @@ fn connector(
         _ => role,
     };
     Some((role, span))
+}
+
+/// A post-positional temporal frame (`之後`, `之后`, `之際`, `之际`, `之時`, `之时`) ending a clause
+/// whose trimmed content is at least 3 chars long (ignoring trailing quotes and closers).
+fn post_temporal_frame(c: &[char], opaque: &[Opaque], clause: Span) -> Option<Span> {
+    let start = skip_opening(c, opaque, clause);
+    let mut end = clause.end_char;
+    while end > start
+        && !hides(opaque, end - 1)
+        && (c[end - 1].is_whitespace() || CLOSING.contains(&c[end - 1]) || c[end - 1] == '\'')
+    {
+        end -= 1;
+    }
+    if end.saturating_sub(start) < 3 {
+        return None;
+    }
+    for &suffix in POST_SEQ_FRAMES {
+        let n = suffix.chars().count();
+        if end >= start + n
+            && suffix.chars().eq(c[end - n..end].iter().copied())
+            && (end - n..end).all(|idx| !hides(opaque, idx))
+        {
+            return Some(Span {
+                start_char: end - n,
+                end_char: end,
+            });
+        }
+    }
+    None
 }
 
 /// A correlate that starts the clause `clause`, if any. `so` counts only where it is a cause-result

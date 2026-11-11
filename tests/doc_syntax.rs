@@ -932,3 +932,477 @@ fn nlp_doc_cli_zero_flags_unchanged_and_model_flags_work() {
         2
     );
 }
+
+#[test]
+fn ws3_multi_subword_upos_mean_pooling_and_shenme_disambiguation() {
+    let max_len = 64;
+    // Subword 1 (`一`) strongly prefers `NUM` (index 8 = 7.0), while subwords 2..=3 (`會`, `兒`)
+    // strongly prefer `NOUN` (index 7 = 8.0). First-subword lookup would mis-tag `一會兒` as `NUM`,
+    // whereas arithmetic mean pooling across all overlapping subwords (`(7, 8, 8)`) selects `NOUN`!
+    let pooling_model = SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            if s == 1 {
+                row[8] = 7.0; // NUM on leading numeral character
+                row[7] = 1.0;
+            } else {
+                row[7] = 8.0; // NOUN on remaining characters
+            }
+            row[17] = if s == 1 { 10.0 } else { 0.0 };
+            row[17 + 1] = if s == 1 { 0.0 } else { 10.0 };
+            row[17 + max_len + 29] = 10.0; // "obl"
+        }
+    });
+
+    let opts: Options = serde_json::from_value(serde_json::json!({
+        "names": ["一會兒", "一時間", "一清二楚", "五顏六色"]
+    }))
+    .unwrap();
+    for phrase in ["一會兒。", "一時間。", "一清二楚。", "五顏六色。"] {
+        let mut doc = analyze_document(phrase, &opts);
+        assert_eq!(doc.tokens[0].upos, None);
+        annotate_with_encoder(&mut doc, phrase, &pooling_model, char_subword_encode)
+            .expect("mean-pooled UPOS annotation");
+        assert_eq!(
+            doc.tokens[0].upos,
+            Some(Upos::Noun),
+            "mean pooling across subwords should override leading numeral subword on {phrase}"
+        );
+    }
+
+    // `什麼` / `什么`: when Layer 2 leaves `upos == None` and the model predicts `PART` or `< 0.50`,
+    // upgrade to `DET` immediately before `NOUN`/`PROPN` in the same sentence, else `PRON`.
+    let shenme_model = SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            // Emit `PART` (index 9) on early subwords and `NOUN` (index 7) on later subwords (`書卷`/`地方`).
+            if s <= 4 {
+                row[9] = 8.0; // PART
+            } else {
+                row[7] = 8.0; // NOUN
+            }
+            if s == 1 {
+                row[17] = 10.0;
+            } else {
+                row[17 + 1] = 10.0;
+            }
+            row[17 + max_len + 28] = 10.0; // "obj"
+        }
+    });
+
+    let det_opts: Options = serde_json::from_value(serde_json::json!({
+        "names": ["什麼", "什么", "書卷", "地方"]
+    }))
+    .unwrap();
+
+    for (text, target, expected_upos) in [
+        ("他買了什麼書卷？", "什麼", Upos::Det),
+        ("去了什么地方？", "什么", Upos::Det),
+        ("你想說什麼？", "什麼", Upos::Pron),
+        ("他在看什么？", "什么", Upos::Pron),
+    ] {
+        let mut doc = analyze_document(text, &det_opts);
+        annotate_with_encoder(&mut doc, text, &shenme_model, char_subword_encode)
+            .expect("annotate shenme");
+        let tok = doc
+            .tokens
+            .iter()
+            .find(|t| {
+                let s: String = text
+                    .chars()
+                    .skip(t.span.start_char)
+                    .take(t.span.end_char - t.span.start_char)
+                    .collect();
+                s == target
+            })
+            .expect("target token present");
+        assert_eq!(tok.upos, Some(expected_upos), "failed on {text}");
+        assert!(
+            !doc.unknown
+                .iter()
+                .any(|u| u.layer == "pos" && u.span == tok.span),
+            "pos unknown should be cleared for {target} in {text}"
+        );
+    }
+}
+
+#[test]
+fn ws5_soft_clause_windowing_and_ancestor_tree_retention() {
+    use std::sync::Mutex;
+
+    // 1. Soft clause-group windowing: >= 4 clauses and > 64 tokens, even when subwords <= max_len (256).
+    let clauses = [
+        "清晨的薄霧籠罩著山谷裡的青石小徑與竹林木屋",
+        "旅人背起行囊推開木門沿著溪流緩緩向東邊行走",
+        "微風吹過樹梢帶來遠處渡口與村落的陣陣鐘聲",
+        "陽光穿過雲層照亮了河岸兩側整齊排列的石碑",
+        "他停下腳步在石橋邊取出地圖仔細核對沿途方向",
+        "隨後沿著寬闊的官道繼續前往山腳下的古老驛站。",
+    ];
+    let long_paratactic = clauses.join("，");
+    let mut doc = analyze_document(&long_paratactic, &Options::default());
+    assert_eq!(doc.segmentation.sentences.len(), 1);
+    assert!(doc.segmentation.clauses.len() >= 6);
+    assert!(
+        doc.tokens.len() > 64,
+        "expected > 64 tokens, got {}",
+        doc.tokens.len()
+    );
+    let full_subwords = char_subword_encode(&long_paratactic).unwrap();
+    assert!(
+        full_subwords.ids.len() < 256,
+        "subwords ({}) must be < 256 to exercise soft windowing",
+        full_subwords.ids.len()
+    );
+
+    let window_lengths: std::sync::Arc<Mutex<Vec<usize>>> =
+        std::sync::Arc::new(Mutex::new(Vec::new()));
+    let recorded = std::sync::Arc::clone(&window_lengths);
+    let max_len = 256;
+    let soft_model = SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
+        recorded.lock().unwrap().push(ids.len());
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            row[7] = 10.0; // NOUN
+            if s == 1 {
+                row[17] = 12.0; // window root -> [CLS]
+            } else {
+                row[17 + 1] = 12.0;
+            }
+            row[17 + max_len + 26] = 12.0; // "nsubj"
+        }
+    });
+
+    annotate_with_encoder(&mut doc, &long_paratactic, &soft_model, char_subword_encode)
+        .expect("soft windowed syntax");
+    let lengths = window_lengths.lock().unwrap().clone();
+    assert!(
+        lengths.len() >= 2,
+        "expected multiple soft clause windows, got {lengths:?}"
+    );
+    assert!(
+        lengths.iter().all(|&len| len <= 96),
+        "every soft window should respect <= 96 subword budget: {lengths:?}"
+    );
+    assert_eq!(doc.syntax.len(), doc.tokens.len());
+    let roots: Vec<_> = doc.syntax.iter().filter(|s| s.head.is_none()).collect();
+    assert_eq!(
+        roots.len(),
+        1,
+        "stitched sentence must have a single global root"
+    );
+    let root_tok = roots[0].token;
+    let parataxis_count = doc
+        .syntax
+        .iter()
+        .filter(|s| s.head == Some(root_tok) && s.deprel == "parataxis")
+        .count();
+    assert_eq!(parataxis_count, lengths.len() - 1);
+
+    // 2. Tree-consistent root & ancestor retention:
+    //    Sentence tokens: 4 single-char tokens ("甲 乙 丙 。" via lexicon/text).
+    //    - Token 0 (root): arc prob ~0.24 (< 0.35), rescued because child connects to it!
+    //    - Token 1 (parent A -> token 0): score ~0.25 (>= 0.20, < 0.35), rescued by token 2!
+    //    - Token 2 (child A -> token 1): score ~0.92 (>= 0.35), retains 2 -> 1 -> 0!
+    //    - Token 3 (parent B -> token 0): score ~0.12 (< 0.20), NOT rescued!
+    //    - Token 4 (child B -> token 3): score ~0.92 (>= 0.35), DROPPED because parent B < 0.20!
+    let tree_text = "甲 乙 丙 丁。";
+    let mut tree_doc = analyze_document(tree_text, &Options::default());
+    assert_eq!(tree_doc.tokens.len(), 5);
+    let tok_subs: Vec<usize> = {
+        let sub = char_subword_encode(tree_text).unwrap();
+        tree_doc
+            .tokens
+            .iter()
+            .map(|t| {
+                sub.spans
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .find_map(|(i, sp)| {
+                        (sp.start_char < t.span.end_char && t.span.start_char < sp.end_char)
+                            .then_some(i)
+                    })
+                    .unwrap()
+            })
+            .collect()
+    };
+
+    let m_max = 32;
+    let retention_model = SyntheticSyntaxModel::new(m_max, move |_ids, cols, data| {
+        let [s0, s1, s2, s3, s4] = [
+            tok_subs[0],
+            tok_subs[1],
+            tok_subs[2],
+            tok_subs[3],
+            tok_subs[4],
+        ];
+        // Token 0 (root): attaches to [CLS] (s=0) with moderate logit so p_arc ~ 0.26 (< 0.35).
+        {
+            let r1 = &mut data[s0 * cols..(s0 + 1) * cols];
+            r1[7] = 10.0;
+            r1[17] = 0.35; // exp(0.35) / (exp(0.35) + 4*1.0) = 1.419 / 5.419 = 0.262 -> Score(262)
+        }
+        // Token 1: attaches to Token 0 with p_arc * p_rel ~ 0.31 (>= 0.20, < 0.35).
+        {
+            let r2 = &mut data[s1 * cols..(s1 + 1) * cols];
+            r2[7] = 10.0;
+            r2[17] = -20.0;
+            r2[17 + s0] = 0.30;
+            r2[17 + m_max + 26] = 10.0;
+        }
+        // Token 2: attaches to Token 1 with high confidence ~ 0.99 (>= 0.35).
+        {
+            let r3 = &mut data[s2 * cols..(s2 + 1) * cols];
+            r3[7] = 10.0;
+            r3[17] = -20.0;
+            r3[17 + s1] = 12.0;
+            r3[17 + m_max + 28] = 12.0;
+        }
+        // Token 3: attaches to Token 0 with low structural arc confidence ~ 0.174 (< 0.20).
+        {
+            let r4 = &mut data[s3 * cols..(s3 + 1) * cols];
+            r4[7] = 10.0;
+            r4[17 + s0] = 0.05;
+        }
+        // Token 4: attaches to Token 3 with high confidence ~ 0.99 (>= 0.35), dropped via Token 3!
+        {
+            let r5 = &mut data[s4 * cols..(s4 + 1) * cols];
+            r5[7] = 10.0;
+            r5[17] = -20.0;
+            r5[17 + s3] = 12.0;
+            r5[17 + m_max + 32] = 12.0;
+        }
+    });
+
+    annotate_with_encoder(
+        &mut tree_doc,
+        tree_text,
+        &retention_model,
+        char_subword_encode,
+    )
+    .expect("retention syntax");
+
+    let surviving_tokens: Vec<usize> = tree_doc.syntax.iter().map(|s| s.token).collect();
+    assert_eq!(
+        surviving_tokens,
+        vec![0, 1, 2],
+        "root (0) and >=0.20 ancestor (1) must be retained for child (2), while broken branch (3, 4) drops"
+    );
+    assert_eq!(
+        tree_doc.syntax.iter().filter(|s| s.head.is_none()).count(),
+        1
+    );
+    for syn in &tree_doc.syntax {
+        if let Some(h) = syn.head {
+            assert!(
+                surviving_tokens.contains(&h),
+                "orphan head {h} in {:?}",
+                tree_doc.syntax
+            );
+        }
+    }
+    for dropped_tok in [3usize, 4usize] {
+        assert!(tree_doc.unknown.contains(&Unknown {
+            layer: "syntax".to_owned(),
+            span: tree_doc.tokens[dropped_tok].span,
+            reason: Reason::LowConfidence,
+        }));
+    }
+}
+
+#[cfg(any(feature = "onnx", feature = "coreml"))]
+#[test]
+fn ws3_ws5_real_model_gold_and_numeral_phrases_when_staged() {
+    let Some(models_dir) = std::env::var_os("NLP_SYNTAX_MODELS_DIR").map(PathBuf::from) else {
+        return;
+    };
+    if !models_dir.join(SYNTAX_MODEL_ID).is_dir() {
+        return;
+    }
+    let backend = if faberline_nlp::doc::model::compiled(Backend::Onnx) {
+        Backend::Onnx
+    } else if faberline_nlp::doc::model::compiled(Backend::Coreml) {
+        Backend::Coreml
+    } else {
+        return;
+    };
+
+    let verified = faberline_nlp::doc::model::verify(&models_dir, SYNTAX_MODEL_ID)
+        .expect("verify staged doc-syntax-v1");
+    let model =
+        faberline_nlp::doc::model::load_verified(&verified, backend).expect("load doc-syntax-v1");
+    let tokenizer = faberline_nlp::doc::model::SubwordTokenizer::from_verified(&verified)
+        .expect("load subword tokenizer");
+
+    // 1. Check multi-char numeral-prefix phrases and `什麼`/`什么` with real `doc-syntax-v1`.
+    let phrase_opts: Options = serde_json::from_value(serde_json::json!({
+        "names": ["一會兒", "一時間", "一清二楚", "五顏六色"]
+    }))
+    .unwrap();
+    for (sentence, target) in [
+        ("過了一會兒，門開了。", "一會兒"),
+        ("一時間眾人都沉默了。", "一時間"),
+        ("他看得一清二楚。", "一清二楚"),
+        ("花園裡開滿了五顏六色的花。", "五顏六色"),
+    ] {
+        let doc = faberline_nlp::doc::syntax::analyze_document_with_loaded_model(
+            sentence,
+            &phrase_opts,
+            &*model,
+            &tokenizer,
+        )
+        .expect("decode numeral-prefix sentence");
+        let tok = doc
+            .tokens
+            .iter()
+            .find(|t| {
+                let s: String = sentence
+                    .chars()
+                    .skip(t.span.start_char)
+                    .take(t.span.end_char - t.span.start_char)
+                    .collect();
+                s == target
+            })
+            .expect("target token found");
+        assert_ne!(
+            tok.upos,
+            Some(Upos::Num),
+            "{target:?} in {sentence:?} must not be mis-tagged NUM"
+        );
+    }
+
+    for (sentence, target, expected) in [
+        ("他買了什麼書？", "什麼", Upos::Det),
+        ("你想說什麼？", "什麼", Upos::Pron),
+        ("他买了什么书？", "什么", Upos::Det),
+        ("你想说什么？", "什么", Upos::Pron),
+    ] {
+        let doc = faberline_nlp::doc::syntax::analyze_document_with_loaded_model(
+            sentence,
+            &Options::default(),
+            &*model,
+            &tokenizer,
+        )
+        .expect("decode shenme sentence");
+        let tok = doc
+            .tokens
+            .iter()
+            .find(|t| {
+                let s: String = sentence
+                    .chars()
+                    .skip(t.span.start_char)
+                    .take(t.span.end_char - t.span.start_char)
+                    .collect();
+                s == target
+            })
+            .expect("shenme token found");
+        assert_eq!(tok.upos, Some(expected), "{sentence}");
+    }
+
+    // 2. Score all 300 items of `tests/data/gold_layers4_6_v1.jsonl`.
+    let gold_raw = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/gold_layers4_6_v1.jsonl"),
+    )
+    .expect("read gold_layers4_6_v1.jsonl");
+    let mut total_toks = 0usize;
+    let mut upos_ok = 0usize;
+    let mut uas_ok = 0usize;
+    let mut las_ok = 0usize;
+    let mut emitted_toks = 0usize;
+
+    for line in gold_raw.lines().filter(|l| !l.trim().is_empty()) {
+        let val: serde_json::Value = serde_json::from_str(line).unwrap();
+        let text = val["text"].as_str().unwrap();
+        let gold_upos: Vec<&str> = val["upos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        let gold_heads: Vec<usize> = val["heads"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_u64().unwrap() as usize)
+            .collect();
+        let gold_deprels: Vec<&str> = val["deprels"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+
+        let doc = faberline_nlp::doc::syntax::analyze_document_with_loaded_model(
+            text,
+            &Options::default(),
+            &*model,
+            &tokenizer,
+        )
+        .expect("decode gold item");
+        assert_eq!(doc.tokens.len(), gold_upos.len());
+
+        // Check sentence tree invariants on every sentence of every Gold item.
+        for s_idx in 0..doc.segmentation.sentences.len() {
+            let sent_syn: Vec<_> = doc.syntax.iter().filter(|s| s.sentence == s_idx).collect();
+            if !sent_syn.is_empty() {
+                assert_eq!(sent_syn.iter().filter(|s| s.head.is_none()).count(), 1);
+                for syn in &sent_syn {
+                    if let Some(h) = syn.head {
+                        assert!(sent_syn.iter().any(|p| p.token == h));
+                    }
+                }
+            }
+        }
+
+        // Convert `gold_heads` (1-based within each sentence or within item? Check `eval_gold.py` line 85: `0 if raw_head is None else int(raw_head) + 1`, so 1-based global within item!).
+        let mut pred_head_1based = vec![None; doc.tokens.len()];
+        let mut pred_deprel = vec![""; doc.tokens.len()];
+        for syn in &doc.syntax {
+            emitted_toks += 1;
+            pred_head_1based[syn.token] = Some(syn.head.map_or(0, |h| h + 1));
+            pred_deprel[syn.token] = syn.deprel.as_str();
+        }
+
+        for i in 0..doc.tokens.len() {
+            total_toks += 1;
+            let pred_u = doc.tokens[i].upos.map(|u| {
+                serde_json::to_value(u)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            });
+            if pred_u.as_deref() == Some(gold_upos[i]) {
+                upos_ok += 1;
+            }
+            if pred_head_1based[i] == Some(gold_heads[i]) {
+                uas_ok += 1;
+                if pred_deprel[i] == gold_deprels[i] {
+                    las_ok += 1;
+                }
+            }
+        }
+    }
+
+    let upos_acc = upos_ok as f64 / total_toks as f64;
+    let uas = uas_ok as f64 / total_toks as f64;
+    let las = las_ok as f64 / total_toks as f64;
+    let emitted_rate = emitted_toks as f64 / total_toks as f64;
+    assert!(
+        emitted_rate >= 0.9287,
+        "emitted_rate {emitted_rate:.4} regressed below Phase 1 baseline 0.9287"
+    );
+    assert!(
+        upos_acc >= 0.8883,
+        "UPOS {upos_acc:.4} regressed below Phase 1 baseline 0.8883"
+    );
+    assert!(
+        uas >= 0.7496,
+        "UAS {uas:.4} regressed below Phase 1 baseline 0.7496"
+    );
+    assert!(
+        las >= 0.6888,
+        "LAS {las:.4} regressed below Phase 1 baseline 0.6888"
+    );
+}

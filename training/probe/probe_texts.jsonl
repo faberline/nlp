@@ -1,0 +1,30 @@
+{"id": "p01", "genre": "novel", "lang": "zh", "text": "小林買了一本書。他在車上讀完了。"}
+{"id": "p02", "genre": "novel", "lang": "en", "text": "The old ferry left the harbor at dawn. It carried twelve crates of apples."}
+{"id": "p03", "genre": "novel", "lang": "mixed", "text": "阿杰收到一封 email。他馬上回覆了。"}
+{"id": "p04", "genre": "paper", "lang": "zh", "text": "本研究使用兩組資料。研究團隊從公開網站下載它們。"}
+{"id": "p05", "genre": "paper", "lang": "en", "text": "We measured the samples twice. Their mean weight was stable."}
+{"id": "p06", "genre": "paper", "lang": "mixed", "text": "我們寫了一個 Python 程式。它會自動計算平均值。"}
+{"id": "p07", "genre": "casual", "lang": "zh", "text": "妹妹借走我的雨傘。她說明天會還。"}
+{"id": "p08", "genre": "casual", "lang": "en", "text": "Sam texted me last night. He wants to borrow my bike."}
+{"id": "p09", "genre": "casual", "lang": "mixed", "text": "我剛下載這個 app。它的介面很乾淨。"}
+{"id": "p10", "genre": "paper", "lang": "en", "text": "The method requires no labeled data."}
+{"id": "p11", "genre": "novel", "lang": "zh", "text": "老師傅把最後一塊木板釘好。接著，他坐下來喝了一口茶。"}
+{"id": "p12", "genre": "novel", "lang": "zh", "text": "小貓躲在床底下。等到天黑，牠才慢慢爬出來。"}
+{"id": "p13", "genre": "novel", "lang": "zh", "text": "山腳下有一間紅色的小屋。"}
+{"id": "p14", "genre": "novel", "lang": "en", "text": "Nora found a brass key under the stairs. She did not know which door it opened."}
+{"id": "p15", "genre": "novel", "lang": "en", "text": "The lighthouse keeper wrote in his log every evening. Tonight he wrote only one line."}
+{"id": "p16", "genre": "novel", "lang": "en", "text": "A thin fog covered the valley before sunrise."}
+{"id": "p17", "genre": "novel", "lang": "mixed", "text": "阿芳訂了一張 train ticket。可是她把它忘在家裡了。"}
+{"id": "p18", "genre": "paper", "lang": "zh", "text": "實驗共招募三十名受試者。他們都完成了兩次測驗。"}
+{"id": "p19", "genre": "paper", "lang": "zh", "text": "表二列出各模型的錯誤率。其中，第三個模型最低。"}
+{"id": "p20", "genre": "paper", "lang": "zh", "text": "溫度每升高一度，反應速度約增加百分之五。"}
+{"id": "p21", "genre": "paper", "lang": "en", "text": "The second model uses fewer parameters. However, it trains twice as slowly."}
+{"id": "p22", "genre": "paper", "lang": "en", "text": "Each sample was weighed once. It was then stored at room temperature."}
+{"id": "p23", "genre": "paper", "lang": "mixed", "text": "我們把資料分成 training set 與 test set。後者只用於最後的評估。"}
+{"id": "p24", "genre": "casual", "lang": "zh", "text": "你看到我的鑰匙了嗎？我記得剛剛還放在桌上。"}
+{"id": "p25", "genre": "casual", "lang": "zh", "text": "樓下新開了一家麵店。聽說它的牛肉麵很有名。"}
+{"id": "p26", "genre": "casual", "lang": "zh", "text": "週末天氣好像會轉涼。"}
+{"id": "p27", "genre": "casual", "lang": "en", "text": "My neighbor fixed the gate this morning. It doesn't squeak anymore."}
+{"id": "p28", "genre": "casual", "lang": "en", "text": "Did you see the new bakery on the corner? I tried its bread today."}
+{"id": "p29", "genre": "casual", "lang": "en", "text": "The bus was late again today."}
+{"id": "p30", "genre": "casual", "lang": "mixed", "text": "我昨天試了那個 recipe。結果它比想像中簡單。"}

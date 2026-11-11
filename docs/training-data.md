@@ -18,9 +18,12 @@ model.
   rules stay: no Universal Dependencies treebank text (CC BY-SA; the label scheme is allowed),
   text only from public domain, CC0, CC BY or self-written sources, no model file and no corpus
   in git, content neutral.
-- Why the four local models are not used: on the 30-item probe none gave a usable dependency
-  tree (table below). Sonnet gave 30 of 30 structurally valid annotations on the same probe
-  (section Probe).
+- Why the four local models are not used: on the 30-item probe none gave a valid dependency
+  tree, even when rescored with the same rule as the Sonnet check (one root per sentence; table
+  below). The one tree that passed the original scorer was a flat star over a two-sentence
+  item. Sonnet gave 30 of 30 structurally valid annotations on the same probe (section Probe).
+  The two probes did not use identical tokens (see Limits), and validity is not accuracy, so
+  this is a statement about following the output format, not about label quality.
 - Sources chosen per cell:
 
 | genre | zh-TW / zh | en |
@@ -40,22 +43,37 @@ Max 64 GB, two runs each). The data below is copied from that session's `score.j
 `meta.json` files. Licence, `output_training` and disk size were not recorded in those files,
 so the table does not show them; they do not matter, because no local model is used.
 
-| model | params | labeler | valid_json | valid_tree | uas | las | frame_f1 | coref_f1 | sentences_per_hour | peak_memory_gb |
+| model | params | labeler | valid_json | valid_tree (1 root per item, original scorer) | valid_tree (1 root per sentence, rescored) | uas | las | frame_f1 | coref_f1 | sentences_per_hour | peak_memory_gb |
 |---|---|---|---|---|---|---|---|---|---|---|
-| mlx-community/Qwen3-14B-4bit | 14B | no | 0.956 | 0.000 | 0.000 | 0.000 | 0.689 | 0.684 | 160.7 | 8.77 |
-| mlx-community/Qwen3.5-9B-MLX-4bit | 9B | no | 0.900 | 0.033 | 0.000 | 0.000 | 0.432 | 0.529 | 150.4 | 5.81 |
-| mlx-community/Ministral-3-14B-Instruct-2512-4bit | 14B | no | 0.667 | 0.000 | 0.000 | 0.000 | 0.549 | 0.333 | 56.1 | 8.44 |
-| mlx-community/gemma-4-e4b-it-4bit | about 4B effective | no | 0.633 | 0.000 | 0.000 | 0.000 | 0.107 | 0.000 | 713.0 | 4.77 |
-| Claude Sonnet (`claude-sonnet-5-5`, this session) | not published | **yes** | 1.000 | 1.000 | not scored | not scored | not scored | not scored | not measured | not applicable |
+| mlx-community/Qwen3-14B-4bit | 14B | no | 0.956 | 0.000 | 0.000 | 0.000 | 0.000 | 0.689 | 0.684 | 160.7 | 8.77 |
+| mlx-community/Qwen3.5-9B-MLX-4bit | 9B | no | 0.900 | 0.033 | 0.000 | 0.000 | 0.000 | 0.432 | 0.529 | 150.4 | 5.81 |
+| mlx-community/Ministral-3-14B-Instruct-2512-4bit | 14B | no | 0.667 | 0.000 | 0.000 | 0.000 | 0.000 | 0.549 | 0.333 | 56.1 | 8.44 |
+| mlx-community/gemma-4-e4b-it-4bit | about 4B effective | no | 0.633 | 0.000 | 0.000 | 0.000 | 0.000 | 0.107 | 0.000 | 713.0 | 4.77 |
+| Claude Sonnet (`claude-sonnet-5-5`, this session) | not published | **yes** | 1.000 | not applicable | 1.000 | not scored | not scored | not scored | not scored | not measured | not applicable |
 
-- `valid_tree`: share of the 30 items whose dependency answer is a valid tree over the given
-  tokens. Local models: from the previous session's scorer (its tokens were hand-cut). Sonnet:
-  from `tests/training_data_probe.rs` on the tokens of the repo's layer 1 and 2 (see Probe).
+- `valid_tree` has two bases and they must not be compared across columns.
+  - *1 root per item* is the previous session's scorer (`tree_ok` in its `score.py`): the whole
+    item must have exactly one root. 24 of the 30 items have two or more sentences, so a
+    correct per-sentence analysis of those items fails this rule. The numbers 0.000 / 0.033 /
+    0.000 / 0.000 are copied from its `score.json` and are on hand-cut tokens.
+  - *1 root per sentence* is the rule of `tests/training_data_probe.rs` (Sonnet) and is also
+    what the `nlp.doc.v1` layer 4 needs. I rescored the existing raw answers of the four local
+    models (`run1.jsonl` and `run2.jsonl` of the previous session, not in git) with that rule,
+    sentences cut at `。 . ! ? ！ ？` in the hand-cut tokens, all other checks unchanged (length,
+    heads in range, no self-head, no cycle, UD labels, `root` iff head 0). Result: 0 of 30 for
+    every model in both runs. The one tree that passed the old scorer (Qwen3.5-9B, item p01)
+    attaches every token to token 1, and fails the new rule because p01 has two sentences. I did
+    not re-run any local model. The rescoring script is not in git because the raw answers are
+    not; the inputs are the previous session's files in worktree `nlp-off26`.
+  - Failures of the rescored answers (run 1): most answers have the wrong number of roots per
+    sentence; of those with the right root counts, the rest fail on a self-head, a root label
+    that disagrees with head 0, or a label outside the scheme (`dobj`, `poss`, `neg`,
+    `nmod:tmod`, `acomp`, `ROOT`). So the failure is not only the root-counting rule.
 - `uas`, `las`, `frame_f1`, `coref_f1` for the local models are on the 10 gold items of the
   previous session. Sonnet's annotations have no gold set to compare with (gold is issue #28),
   so they are `not scored`. Sonnet's 1.000 is validity, not accuracy.
 - Local models only differ in speed and in frames/coreference; the tree failure is common to all
-  four, and only one of 30 trees (Qwen3.5-9B, valid_tree 0.033) was valid.
+  four.
 - Not probed and not used: Llama 3.x and Gemma 3 (licence terms on trained derivatives), and
   models above about 10 GB at 4-bit. This was the previous session's judgement; the licence
   texts were not re-read in this session.
@@ -75,7 +93,7 @@ sentences release under CC0"; the Common Voice `server/data/en/` folder has a `L
 | novel | en | Project Gutenberg, English fiction whose authors died in or before 1975 | PD: US, published before 1931; Taiwan, Copyright Act Art. 30 (life + 50 years) | https://www.gutenberg.org/policy/license.html | filter `pg_catalog.csv` (author birth and death years are in the `Authors` field), then fetch plain text through the robot harvest endpoint (`/robot/harvest?filetypes[]=txt&langs[]=en`, wait 2 s between requests) or a mirror; strip the Gutenberg header and footer | 13,058 texts (of 24,039 English fiction texts, catalog of 2026-11-10) | none required once the Project Gutenberg name and licence text are removed |
 | novel | zh | Project Gutenberg, Chinese texts whose authors died in or before 1975 | PD: US, published before 1931; Taiwan, Copyright Act Art. 30 | https://www.gutenberg.org/policy/license.html | same as above with `langs[]=zh` | 208 texts (of 435 Chinese texts) | none required, as above |
 | paper | en | Europe PMC open-access articles with licence CC BY | CC BY 4.0 (some articles CC BY 2.0 or 3.0; keep the per-article licence) | https://creativecommons.org/licenses/by/4.0/legalcode | REST search `OPEN_ACCESS:y AND LICENSE:"cc by"`, then `/{PMCID}/fullTextXML` | 5,394,763 articles (search hit count) | per article: authors, title, journal, DOI, licence, and a note that the text was changed |
-| paper | zh | Directorate-General of Budget, Accounting and Statistics (DGBAS) overseas trip reports by civil servants | Taiwan official documents: not a subject of copyright (Copyright Act Art. 9); the index is under the Open Government Data License v1, compatible with CC BY 4.0 | https://data.gov.tw/license | download the index XML of https://data.gov.tw/dataset/10979, then each report PDF it links | 201 reports (index of 2026-05-03) | the index: the OGDL v1 attribution statement; skip quoted third-party material |
+| paper (weak fit) | zh | Directorate-General of Budget, Accounting and Statistics (DGBAS) overseas trip reports ("出國報告", dataset 行政院主計總處出國報告) by civil servants; official reports, not research papers | Taiwan official documents: not a subject of copyright (Copyright Act Art. 9); the index is under the Open Government Data License v1, compatible with CC BY 4.0 | https://data.gov.tw/license | download the XML of https://data.gov.tw/dataset/10979 (fields: link, summary, date, retention period, storage unit), then each linked PDF | the XML holds 201 records (read through a web fetch, not counted locally; about 175 link a PDF, 24 an HTML page, 1 a `.doc`); record dates 1989-06-01 to 2026-05-03; the dataset page shows a metadata update date of 2025-09-16 and "updated irregularly", so the XML may change; count unverified | the dataset: the OGDL v1 attribution statement (OGDL v1 clause 3.2 requires a visible attribution, otherwise the licence is void from the start); skip quoted third-party material |
 | paper | zh | Europe PMC open-access Chinese articles with licence CC BY | CC BY 4.0 | https://creativecommons.org/licenses/by/4.0/legalcode | REST search `LANG:"chi" AND OPEN_ACCESS:y AND LICENSE:"cc by"` | 4,191 articles; Simplified Chinese, so a backup only | per article, as for English |
 | casual | zh | moztw `cc0-sentences`, zh-TW folder, without `wikipedia.txt` and `gpt-4.txt` | CC0 1.0 | https://creativecommons.org/publicdomain/zero/1.0/legalcode | `git clone https://github.com/moztw/cc0-sentences` | 18 files, 591,021 bytes, 26,393 sentences (README, 2025-06-28) | none required |
 | casual | zh | Tatoeba, Mandarin sentences | CC BY 2.0 FR (a CC0 subset is marked per sentence) | https://creativecommons.org/licenses/by/2.0/fr/ | weekly export from https://tatoeba.org/en/downloads | 89,398 sentences, mixed Traditional and Simplified script | per sentence: contributor, sentence id and link |
@@ -101,6 +119,11 @@ Notes:
   text that Claude writes falls under the same ToS question as labels (see below), so no
   synthetic row is listed.
 - The DGBAS reports can quote third-party text; the fetch script must drop quoted blocks.
+  They are trip reports of civil servants (conference and study-visit reports), a formal
+  Traditional Chinese register but not research papers, so they only fill the `paper / zh`
+  cell weakly. No better open zh-TW paper source was found (see the rejected GRB and DOAJ rows).
+  The claim "Art. 9 covers them" (official documents compiled for public duty) is my reading of
+  the Copyright Act, not a legal conclusion.
 - `moztw/cc0-sentences` also holds chat lines from a community archive. The sentences have no
   topic filter here; neutrality is checked on the sample that is committed, not by a content rule.
 
@@ -117,26 +140,47 @@ Notes:
   `tokens`, `sentences` (token ranges), `heads` (1-based token ids, 0 = root of that sentence),
   `deprels` (the 37 UD relation names, no subtypes), `frames` (`predicate` and `args` with role
   ARG0, ARG1 or ARGM and a head token), `coref` (clusters of 1-based inclusive `[start, end]`
-  token ranges).
+  token ranges). An item may carry `flags` and a `note`; the only flag is `layer2_token_error`
+  (p17, see Findings): its frame and coref must not be used as training data.
 - Check: `tests/training_data_probe.rs` (`cargo test --test training_data_probe`). It tests valid
   JSON, token equality with the repo, one root per sentence, a head in the same sentence, no
   self-head, no cycle, labels in the scheme, `root` only on the root, frame and mention indexes
-  in range. Negative cases (a cycle, two roots, `nsubj:pass`, an out-of-range head, an unknown
-  role, a mention out of range) are rejected.
+  in range, frame arguments in the sentence of their predicate, and known flags. It also compares the
+  annotation's `sentences` ranges with the sentence numbers of `analyze_document`, and compares
+  the sha256 of both data files with fixed values written in the test. Negative cases (a cycle,
+  two roots, `nsubj:pass`, an out-of-range head, an unknown role, a mention out of range, an
+  argument in another sentence, an unknown flag) are rejected, and each test asserts the exact
+  error text, not only that an error happened.
 - **Result: 30 of 30 items valid, 0 invalid** (first run, no repair needed). Counts: 30 items,
   30 dependency trees valid, 0 invalid trees, 0 invalid frames, 0 invalid coreference clusters.
 - sha256 of `training/probe/probe_texts.jsonl`: 96e8a4e31daf36cb90024b619cf85fe1686f835f366b92b9a83b7742de5f6d0f
-- sha256 of `training/probe/annotations.jsonl`: 0bd254a454a019fbedf3f8e0fe0533f0d3e6144ea9c6d720eef97edb85b4c3f5
+- sha256 of `training/probe/annotations.jsonl`: 9c9c3bbe3e609e29126c0a0f9f4020051e5db61a278aa90ece677b86ac7e5ef7
 
 Findings from the annotation work:
 
 - Validity is not accuracy. The test cannot tell a wrong but well-formed head. Accuracy needs
   the gold set of #28.
 - Layer 2 zh tokens are sometimes not words: `他馬上`, `它會`, `裡了`, `記得剛`, `剛還`, `錯|誤率`,
-  `後|者`, `只用|於` merge or split words. The annotation gives such a token the relation of its
+  `後|者`, `只用|於`, `阿芳訂`, `我剛`, `很乾淨`, `新開`, `牛肉|麵` merge or split words
+  (`好像` in p26 is also a doubtful token; the reviewer listed it, and I did not re-check it). The annotation gives such a token the relation of its
   content part, so a model trained on these tokens learns the layer 2 errors. Issue #27 and the
   model issues should decide whether the training tokens are the layer 2 tokens as they are or
   corrected tokens.
+- p17 is the worst case. Layer 2 made `阿芳訂` one token, so the verb `訂` has no ARG0 frame
+  argument (the name is inside the verb token) and the coref mention `阿芳訂` spans a name and a
+  verb. I did not change layer 2 or the tokens. The item is flagged `layer2_token_error` with a
+  note, its dependency labels follow the token as given, and its frame and coref must not be
+  used for training. Other items with a bad token have a milder effect (the coref mention of p03
+  is `他馬上`, of p06 `它會`); they are not flagged.
+- Review of the first version (a second Sonnet session, all 30 items read, 14 zh, 11 en and 6
+  mixed checked sentence by sentence): head and label errors were found in none of the checked
+  sentences. About 9% of the frames (5 of about 58 predicates) were doubtful, mostly as a side
+  effect of the layer 2 tokens. That is an estimate of one reviewer, not a measured error rate.
+  Fixed after the review: p05 had no frame for `stable` (added: ARG1 `weight`); p26 had a frame
+  that made `週末` an ARGM of `轉涼` while the tree makes it an `nmod` of `天氣` (the frame now
+  has only ARG1 `天氣`, consistent with the tree). Known and left: p18 has `實驗` as ARG0 of
+  `招募` (the agent is the researchers, debatable); p08 has `me` of `texted me` as ARG1 (it is
+  the recipient; the role set has no recipient role).
 - Roles are ARG0, ARG1 and ARGM. Issue #14 lists agent, patient, target, time, place, manner
   and quantity; #28's annotation guide must map them.
 - Omitted subjects and objects (for example the missing object of `讀完了`) cannot be pointed at
@@ -201,7 +245,9 @@ model or prompt checks"; it needs the same change (Sonnet labels, a second Sonne
   format; it does not show accuracy. Accuracy comes from the gold set of #28.
 - The annotations are one annotator's choices (UD relations without subtypes; the `ba` marker
   as `case`, resultative verbs as `compound`). Other valid analyses exist.
-- The local model numbers are from the previous session's offline run and could not be re-run
+- The local model numbers are from the previous session's offline run and were not re-run
   here; the 30 items were re-tokenized by the repo rules, so the two probes are not identical
-  in tokens.
+  in tokens. The rescoring of their answers (section Labeling model) uses their hand-cut
+  tokens. The two valid_tree columns have different rules, and Sonnet's number is only on the
+  second basis.
 - Source sizes come from metadata of 2026-11-10 and change over time.

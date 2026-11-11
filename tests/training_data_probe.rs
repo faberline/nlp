@@ -10,6 +10,10 @@ use std::fs;
 const TEXTS: &str = "training/probe/probe_texts.jsonl";
 const ANNOTATIONS: &str = "training/probe/annotations.jsonl";
 const DOC: &str = "docs/training-data.md";
+/// Fixed expected hashes. Changing a data file means changing these and the hashes in the doc.
+const TEXTS_SHA: &str = "96e8a4e31daf36cb90024b619cf85fe1686f835f366b92b9a83b7742de5f6d0f";
+const ANNOTATIONS_SHA: &str = "9c9c3bbe3e609e29126c0a0f9f4020051e5db61a278aa90ece677b86ac7e5ef7";
+const FLAGS: &[&str] = &["layer2_token_error"];
 
 /// The 37 Universal Dependencies relation names (no subtypes).
 const DEPRELS: &[&str] = &[
@@ -139,15 +143,28 @@ fn check(a: &Value) -> Result<(), String> {
             }
         }
     }
+    if let Some(flags) = a.get("flags") {
+        for f in flags.as_array().ok_or("flags not a list")? {
+            if !FLAGS.contains(&f.as_str().unwrap_or("")) {
+                return Err(format!("unknown flag {f}"));
+            }
+        }
+    }
     for f in a["frames"].as_array().ok_or("frames missing")? {
         let p = f["predicate"].as_u64().unwrap_or(0) as usize;
         if p < 1 || p > n {
             return Err(format!("predicate {p} out of range"));
         }
+        let (sb, se) = *sents.iter().find(|(b, e)| p > *b && p <= *e).unwrap();
         for g in f["args"].as_array().ok_or("args missing")? {
             let h = g["head"].as_u64().unwrap_or(0) as usize;
             if h < 1 || h > n || h == p {
                 return Err(format!("argument head {h} invalid for predicate {p}"));
+            }
+            if h <= sb || h > se {
+                return Err(format!(
+                    "argument head {h} is not in the sentence of predicate {p}"
+                ));
             }
             if !ROLES.contains(&g["role"].as_str().unwrap_or("")) {
                 return Err("unknown role".into());
@@ -184,7 +201,7 @@ fn probe_annotations_are_valid_and_use_repo_tokens() {
     let anns = lines(ANNOTATIONS);
     assert_eq!(texts.len(), 30);
     assert_eq!(anns.len(), 30);
-    let mut valid = 0;
+    let mut failures: Vec<String> = Vec::new();
     for (t, a) in texts.iter().zip(&anns) {
         assert_eq!(t["id"], a["id"]);
         let text = t["text"].as_str().unwrap();
@@ -206,12 +223,42 @@ fn probe_annotations_are_valid_and_use_repo_tokens() {
             "{}: tokens differ from layer 1/2 output",
             t["id"]
         );
-        match check(a) {
-            Ok(()) => valid += 1,
-            Err(e) => panic!("{}: {e}", t["id"]),
+        // Sentence boundaries as token index ranges, from the repo's own sentence numbers.
+        let mut repo_sents: Vec<(usize, usize)> = Vec::new();
+        for (i, k) in doc.tokens.iter().enumerate() {
+            match repo_sents.last_mut() {
+                Some(last) if i > 0 && doc.tokens[i - 1].sentence == k.sentence => last.1 = i + 1,
+                _ => repo_sents.push((i, i + 1)),
+            }
+        }
+        let got_sents: Vec<(usize, usize)> = a["sentences"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| {
+                (
+                    s[0].as_u64().unwrap() as usize,
+                    s[1].as_u64().unwrap() as usize,
+                )
+            })
+            .collect();
+        assert_eq!(
+            repo_sents, got_sents,
+            "{}: sentence ranges differ from layer 1/2 output",
+            t["id"]
+        );
+        if let Err(e) = check(a) {
+            failures.push(format!("{}: {e}", t["id"]));
         }
     }
-    assert_eq!(valid, 30);
+    assert!(failures.is_empty(), "invalid annotations: {failures:?}");
+    // Exactly one item is flagged: p17, whose layer 2 token merges a name and a verb.
+    let flagged: Vec<&str> = anns
+        .iter()
+        .filter(|a| a.get("flags").is_some())
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(flagged, ["p17"]);
 }
 
 #[test]
@@ -242,14 +289,32 @@ fn checker_rejects_bad_annotations() {
     assert!(check(&bad_label).unwrap_err().contains("not in the scheme"));
     let mut bad_head = good.clone();
     bad_head["heads"][0] = serde_json::json!(99);
-    assert!(check(&bad_head).is_err());
+    assert_eq!(
+        check(&bad_head).unwrap_err(),
+        "token 1: head 99 outside the sentence"
+    );
     let mut bad_frame = good.clone();
     bad_frame["frames"] =
         serde_json::json!([{"predicate": 3, "args": [{"role": "ARG9", "head": 2}]}]);
-    assert!(check(&bad_frame).is_err());
+    assert_eq!(check(&bad_frame).unwrap_err(), "unknown role");
     let mut bad_coref = good;
     bad_coref["coref"] = serde_json::json!([[[1, 2], [6, 99]]]);
-    assert!(check(&bad_coref).is_err());
+    assert_eq!(
+        check(&bad_coref).unwrap_err(),
+        "mention [6,99] out of range"
+    );
+    // p05 has two sentences: an argument may not sit in the other sentence.
+    let mut cross = lines(ANNOTATIONS)[4].clone();
+    assert_eq!(check(&cross), Ok(()));
+    cross["frames"] = serde_json::json!([{"predicate": 2, "args": [{"role": "ARG0", "head": 9}]}]);
+    assert_eq!(
+        check(&cross).unwrap_err(),
+        "argument head 9 is not in the sentence of predicate 2"
+    );
+    let mut flag = lines(ANNOTATIONS)[16].clone();
+    assert_eq!(check(&flag), Ok(()));
+    flag["flags"] = serde_json::json!(["whatever"]);
+    assert!(check(&flag).unwrap_err().starts_with("unknown flag"));
 }
 
 #[test]
@@ -271,13 +336,16 @@ fn doc_records_decision_hashes_and_counts() {
         last = at;
     }
     assert!(doc.contains("Claude Sonnet"));
-    assert!(
-        doc.contains(&sha(TEXTS)),
-        "probe_texts.jsonl hash out of date"
+    assert_eq!(sha(TEXTS), TEXTS_SHA, "probe_texts.jsonl changed");
+    assert_eq!(
+        sha(ANNOTATIONS),
+        ANNOTATIONS_SHA,
+        "annotations.jsonl changed"
     );
+    assert!(doc.contains(TEXTS_SHA), "doc has an old texts hash");
     assert!(
-        doc.contains(&sha(ANNOTATIONS)),
-        "annotations.jsonl hash out of date"
+        doc.contains(ANNOTATIONS_SHA),
+        "doc has an old annotations hash"
     );
     assert!(doc.contains("30 of 30"), "validity count missing");
 }

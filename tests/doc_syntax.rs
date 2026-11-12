@@ -1300,6 +1300,93 @@ fn ws3_ws5_real_model_gold_and_numeral_phrases_when_staged() {
         assert_eq!(tok.upos, Some(expected), "{sentence}");
     }
 
+    // 1b. WS3-v3 & WS5-v3 real-model checks (`二話不說`/`一動不動`, disposal `將`, lexicon prior,
+    //     and multi-clause subordinate root guard).
+    let v3_opts: Options = serde_json::from_value(serde_json::json!({
+        "normalize_traditional": true,
+        "lexicon": ["二話不說", "二话不说", "一動不動", "一动不动", "玄冰玉匣", "段天涯"],
+        "names": ["段天涯"]
+    }))
+    .unwrap();
+    for (sentence, target) in [
+        ("老者二話不說，轉身走入石室。", "二話不說"),
+        ("青年二话不说，转身走入石室。", "二话不说"),
+        ("石像立在殿內，一動不動。", "一動不動"),
+        ("守卫站在门前，一动不动。", "一动不动"),
+    ] {
+        let doc = faberline_nlp::doc::syntax::analyze_document_with_loaded_model(
+            sentence, &v3_opts, &*model, &tokenizer,
+        )
+        .expect("decode v3 numeral idiom");
+        let tok = doc
+            .tokens
+            .iter()
+            .find(|t| {
+                sentence
+                    .chars()
+                    .skip(t.span.start_char)
+                    .take(t.span.end_char - t.span.start_char)
+                    .collect::<String>()
+                    == target
+            })
+            .expect("idiom token found");
+        assert!(
+            tok.upos.is_some() && tok.upos != Some(Upos::Num),
+            "{target:?} in {sentence:?} should be decided non-NUM, got {:?}",
+            tok.upos
+        );
+    }
+
+    {
+        let sentence = "段天涯將玄冰玉匣收起。";
+        let doc = faberline_nlp::doc::syntax::analyze_document_with_loaded_model(
+            sentence, &v3_opts, &*model, &tokenizer,
+        )
+        .expect("decode disposal + lexicon sentence");
+        let find_upos = |surface: &str| {
+            doc.tokens
+                .iter()
+                .find(|t| {
+                    sentence
+                        .chars()
+                        .skip(t.span.start_char)
+                        .take(t.span.end_char - t.span.start_char)
+                        .collect::<String>()
+                        == surface
+                })
+                .expect("token present")
+                .upos
+        };
+        assert_eq!(find_upos("段天涯"), Some(Upos::Propn));
+        assert_eq!(find_upos("將"), Some(Upos::Adp));
+        assert_eq!(find_upos("玄冰玉匣"), Some(Upos::Noun));
+    }
+
+    {
+        let multiclause = "雖然山路十分崎嶇，旅人還是推開了古老的木門。";
+        let doc = faberline_nlp::doc::syntax::analyze_document_with_loaded_model(
+            multiclause,
+            &v3_opts,
+            &*model,
+            &tokenizer,
+        )
+        .expect("decode multiclause sentence");
+        let root_syn = doc
+            .syntax
+            .iter()
+            .find(|s| s.head.is_none())
+            .expect("single root emitted");
+        let root_text: String = multiclause
+            .chars()
+            .skip(root_syn.span.start_char)
+            .take(root_syn.span.end_char - root_syn.span.start_char)
+            .collect();
+        assert_ne!(
+            root_text, "崎嶇",
+            "concessive subordinate predicate must not steal matrix root"
+        );
+    }
+
     // 2. Score all 300 items of `tests/data/gold_layers4_6_v1.jsonl`.
     let gold_raw = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/data/gold_layers4_6_v1.jsonl"),
@@ -1389,6 +1476,9 @@ fn ws3_ws5_real_model_gold_and_numeral_phrases_when_staged() {
     let uas = uas_ok as f64 / total_toks as f64;
     let las = las_ok as f64 / total_toks as f64;
     let emitted_rate = emitted_toks as f64 / total_toks as f64;
+    eprintln!(
+        "[gold_layers4_6_v1] backend={backend:?} total={total_toks} emitted={emitted_toks} ({emitted_rate:.4}) UPOS={upos_ok}/{total_toks} ({upos_acc:.4}) UAS={uas_ok}/{total_toks} ({uas:.4}) LAS={las_ok}/{total_toks} ({las:.4})"
+    );
     assert!(
         emitted_rate >= 0.9287,
         "emitted_rate {emitted_rate:.4} regressed below Phase 1 baseline 0.9287"
@@ -1404,5 +1494,440 @@ fn ws3_ws5_real_model_gold_and_numeral_phrases_when_staged() {
     assert!(
         las >= 0.6888,
         "LAS {las:.4} regressed below Phase 1 baseline 0.6888"
+    );
+}
+
+#[test]
+fn ws3_v3_scraper_infix_subword_cleaning_preserves_token_spans() {
+    use std::sync::Mutex;
+
+    let text = "那名少丅女向長堊老行禮後啟動傳丅送。";
+    let opts: Options = serde_json::from_value(serde_json::json!({
+        "normalize_traditional": true,
+        "lexicon": ["少丅女", "長堊老", "傳丅送"]
+    }))
+    .unwrap();
+    let mut doc = analyze_document(text, &opts);
+    let max_len = 64;
+    let model = SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            row[7] = 9.0; // NOUN
+            row[17] = if s == 1 { 10.0 } else { 0.0 };
+            row[17 + 1] = if s == 1 { 0.0 } else { 10.0 };
+            row[17 + max_len + 28] = 10.0;
+        }
+    });
+
+    let seen_inputs: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    annotate_with_encoder(&mut doc, text, &model, |slice| {
+        seen_inputs.lock().unwrap().push(slice.to_owned());
+        char_subword_encode(slice)
+    })
+    .expect("annotate scraper-infixed sentence");
+
+    let recorded = seen_inputs.lock().unwrap().clone();
+    assert_eq!(
+        recorded,
+        vec!["那名少女向長老行禮後啟動傳送。".to_owned()],
+        "encoder must see clean Han compounds without sandwiched scraper infixes"
+    );
+
+    // Every `Token.span` and `SyntaxToken.span` must remain exact on the original un-mutated text!
+    let slice_chars = |sp: Span| -> String {
+        text.chars()
+            .skip(sp.start_char)
+            .take(sp.end_char - sp.start_char)
+            .collect()
+    };
+    for expected_raw in ["少丅女", "長堊老", "傳丅送"] {
+        let tok_idx = doc
+            .tokens
+            .iter()
+            .position(|t| slice_chars(t.span) == expected_raw)
+            .unwrap_or_else(|| panic!("expected original span for {expected_raw}"));
+        let syn = doc
+            .syntax
+            .iter()
+            .find(|s| s.token == tok_idx)
+            .expect("infixed token mapped cleanly into syntax without unmapped unknown");
+        assert_eq!(slice_chars(syn.span), expected_raw);
+    }
+    assert!(
+        !doc.unknown
+            .iter()
+            .any(|u| u.layer == "syntax" && u.reason == Reason::NotApplicable),
+        "no token may become NotApplicable after infix stripping: {:?}",
+        doc.unknown
+    );
+
+    // When `normalize_traditional` is false, `encode` sees the raw text verbatim.
+    let raw_opts: Options = serde_json::from_value(serde_json::json!({
+        "normalize_traditional": false,
+        "lexicon": ["少丅女", "長堊老", "傳丅送"]
+    }))
+    .unwrap();
+    let mut raw_doc = analyze_document(text, &raw_opts);
+    let raw_seen: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    annotate_with_encoder(&mut raw_doc, text, &model, |slice| {
+        raw_seen.lock().unwrap().push(slice.to_owned());
+        char_subword_encode(slice)
+    })
+    .expect("annotate raw sentence");
+    assert_eq!(raw_seen.lock().unwrap().as_slice(), &[text.to_owned()]);
+}
+
+#[test]
+fn ws3_v3_disposal_coverb_jiang_lexicon_prior_and_four_char_idioms() {
+    let max_len = 64;
+
+    // 1. Disposal coverb `將`/`将` disambiguation + lexicon nominal/proper-noun prior.
+    let opts: Options = serde_json::from_value(serde_json::json!({
+        "normalize_traditional": true,
+        "lexicon": ["玄冰玉匣", "段天涯", "青石鎮", "一清二楚"],
+        "names": ["段天涯", "青石鎮"]
+    }))
+    .unwrap();
+
+    // Model mis-predicts `NOUN` on `將`, `VERB` on lexicon `玄冰玉匣`, `ADV` on `段天涯`, and
+    // `VERB` on real predicates (`收起`, `擊退`, `率領`, `前往`, `尋找`, `離開`).
+    let make_coverb_model = |text: &'static str, verbs: &'static [&'static str]| {
+        let sub = char_subword_encode(text).unwrap();
+        let verb_first_subs: Vec<usize> = verbs
+            .iter()
+            .filter_map(|v| {
+                let char_pos = text
+                    .char_indices()
+                    .enumerate()
+                    .find_map(|(ci, (bi, _))| text[bi..].starts_with(v).then_some(ci))?;
+                sub.spans.iter().enumerate().skip(1).find_map(|(si, sp)| {
+                    (sp.start_char <= char_pos && char_pos < sp.end_char).then_some(si)
+                })
+            })
+            .collect();
+        SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
+            for s in 1..ids.len().saturating_sub(1) {
+                let row = &mut data[s * cols..(s + 1) * cols];
+                if verb_first_subs.contains(&s) {
+                    row[15] = 9.0; // VERB
+                } else if s == 1 {
+                    row[2] = 9.0; // ADV (tests `段天涯` lexicon+names -> PROPN override)
+                } else {
+                    row[7] = 9.0; // NOUN (default on `將` and nominals)
+                }
+                row[17] = if s == 1 { 10.0 } else { 0.0 };
+                row[17 + 1] = if s == 1 { 0.0 } else { 10.0 };
+                row[17 + max_len + 28] = 10.0;
+            }
+        })
+    };
+
+    {
+        let s1 = "段天涯將玄冰玉匣收起。";
+        let mut d1 = analyze_document(s1, &opts);
+        // Force model to predict `VERB` on `玄冰玉匣` too so we verify `VERB -> NOUN` lexicon override!
+        let m1 = make_coverb_model(s1, &["玄冰玉匣", "收起"]);
+        annotate_with_encoder(&mut d1, s1, &m1, char_subword_encode).unwrap();
+        let upos_of = |w: &str| {
+            d1.tokens
+                .iter()
+                .find(|t| {
+                    s1.chars()
+                        .skip(t.span.start_char)
+                        .take(t.span.end_char - t.span.start_char)
+                        .collect::<String>()
+                        == w
+                })
+                .unwrap()
+                .upos
+        };
+        assert_eq!(upos_of("段天涯"), Some(Upos::Propn));
+        assert_eq!(upos_of("將"), Some(Upos::Adp));
+        assert_eq!(upos_of("玄冰玉匣"), Some(Upos::Noun));
+        assert_eq!(upos_of("收起"), Some(Upos::Verb));
+    }
+
+    {
+        let s2 = "青年将那名老者擊退。";
+        let mut d2 = analyze_document(s2, &opts);
+        let m2 = make_coverb_model(s2, &["擊退"]);
+        annotate_with_encoder(&mut d2, s2, &m2, char_subword_encode).unwrap();
+        let jiang = d2
+            .tokens
+            .iter()
+            .find(|t| {
+                s2.chars()
+                    .skip(t.span.start_char)
+                    .take(t.span.end_char - t.span.start_char)
+                    .collect::<String>()
+                    == "将"
+            })
+            .unwrap();
+        assert_eq!(jiang.upos, Some(Upos::Adp));
+    }
+
+    // Negative guards on `將`: noun `"猛將"` (`Preceded by 猛`) and future adverb `"將前往"` / `"將要"` must NOT become `ADP`.
+    for (neg_text, verbs) in [
+        ("兩員猛將率領眾人出城。", &["率領", "出城"][..]),
+        ("青年將前往青石鎮尋找線索。", &["前往", "尋找"][..]),
+        ("青年將要離開山谷。", &["離開"][..]),
+    ] {
+        let mut dn = analyze_document(neg_text, &opts);
+        let mn = make_coverb_model(neg_text, verbs);
+        annotate_with_encoder(&mut dn, neg_text, &mn, char_subword_encode).unwrap();
+        for tok in &dn.tokens {
+            let surface: String = neg_text
+                .chars()
+                .skip(tok.span.start_char)
+                .take(tok.span.end_char - tok.span.start_char)
+                .collect();
+            if surface == "將" {
+                assert_ne!(
+                    tok.upos,
+                    Some(Upos::Adp),
+                    "`將` must not become ADP in {neg_text}"
+                );
+            }
+        }
+    }
+
+    // 2. Diluted 4-char numeral idioms (`二話不說`, `一動不動`, `四面八方`, `一般無二`, `一五一十`).
+    //    Simulate heterogeneous per-character subword peaks (`NUM`, `NOUN`, `ADV`, `VERB`) whose
+    //    arithmetic mean softmax is ~0.24 (< 0.50 `UPOS_THRESHOLD`).
+    let idiom_opts: Options = serde_json::from_value(serde_json::json!({
+        "lexicon": ["二話不說", "一動不動", "四面八方", "一般無二", "一五一十"]
+    }))
+    .unwrap();
+    let diluted_model = SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
+        let cycle = [8usize, 7, 2, 15]; // NUM, NOUN, ADV, VERB -> diluted arithmetic mean!
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            if s <= 4 {
+                row[cycle[(s - 1) % 4]] = 5.0;
+            } else {
+                row[15] = 9.0; // VERB on following clause predicate
+            }
+            row[17] = if s == 1 { 10.0 } else { 0.0 };
+            row[17 + 1] = if s == 1 { 0.0 } else { 10.0 };
+            row[17 + max_len + 2] = 10.0;
+        }
+    });
+
+    for (sent, target, expected) in [
+        ("二話不說，轉身離去。", "二話不說", Upos::Adv),
+        ("一動不動。", "一動不動", Upos::Verb),
+        ("四面八方。", "四面八方", Upos::Noun),
+        ("一般無二。", "一般無二", Upos::Adj),
+        ("一五一十，告知眾人。", "一五一十", Upos::Adv),
+    ] {
+        let mut di = analyze_document(sent, &idiom_opts);
+        annotate_with_encoder(&mut di, sent, &diluted_model, char_subword_encode).unwrap();
+        let tok = &di.tokens[0];
+        let surface: String = sent
+            .chars()
+            .skip(tok.span.start_char)
+            .take(tok.span.end_char - tok.span.start_char)
+            .collect();
+        assert_eq!(surface, target);
+        assert_eq!(tok.upos, Some(expected), "failed idiom recovery on {sent}");
+        assert!(
+            !di.unknown
+                .iter()
+                .any(|u| u.layer == "pos" && u.span == tok.span),
+            "pos unknown should be cleared on {target}"
+        );
+    }
+}
+
+#[test]
+fn ws5_v3_multiclause_root_penalty_and_clause_local_argument_guard() {
+    let max_len = 64;
+
+    // 1. Subordinate clause (`雖然...`), trailing temporal (`...之後`), prenominal relative
+    //    (`擊退的對手`), and non-predicative (`終於`) root-stealing guard.
+    let s_root = "雖然山路崎嶇，旅人終於擊敗了剛才擊退的對手。";
+    let opts: Options = serde_json::from_value(serde_json::json!({
+        "normalize_traditional": true,
+        "lexicon": ["山路", "崎嶇", "旅人", "終於", "擊敗", "剛才", "擊退", "對手"]
+    }))
+    .unwrap();
+    let mut doc_root = analyze_document(s_root, &opts);
+    let sub_root = char_subword_encode(s_root).unwrap();
+    let first_sub_of = |word: &str, text: &str, sub: &Subwords| -> usize {
+        let char_pos = text
+            .char_indices()
+            .enumerate()
+            .find_map(|(ci, (bi, _))| text[bi..].starts_with(word).then_some(ci))
+            .unwrap();
+        sub.spans
+            .iter()
+            .enumerate()
+            .skip(1)
+            .find_map(|(si, sp)| {
+                (sp.start_char <= char_pos && char_pos < sp.end_char).then_some(si)
+            })
+            .unwrap()
+    };
+    let s_qiqu = first_sub_of("崎嶇", s_root, &sub_root);
+    let s_zhongyu = first_sub_of("終於", s_root, &sub_root);
+    let s_jibai = first_sub_of("擊敗", s_root, &sub_root);
+    let s_jitui = first_sub_of("擊退", s_root, &sub_root);
+
+    let root_model = SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            if s == s_qiqu {
+                row[0] = 9.0; // ADJ inside concessive `雖然` clause
+                row[17] = 4.2; // raw root logit higher than `擊敗` (3.0), but penalized by -2.5 -> 1.7!
+                row[17 + s_jibai] = 3.5;
+            } else if s == s_zhongyu {
+                row[2] = 9.0; // ADV (`終於`)
+                row[17] = 4.5; // raw root logit 4.5, penalized by -2.5 -> 2.0!
+                row[17 + s_jibai] = 3.5;
+            } else if s == s_jitui {
+                row[15] = 9.0; // VERB immediately before `的對手` (prenominal relative clause)
+                row[17] = 4.3; // raw root logit 4.3, penalized by -2.5 -> 1.8!
+                row[17 + s_jibai] = 3.5;
+            } else if s == s_jibai {
+                row[15] = 9.0; // Main-clause matrix VERB `擊敗`
+                row[17] = 3.0; // Wins cleanly (`3.0 > 2.0, 1.8, 1.7`)!
+            } else {
+                row[7] = 9.0; // NOUN
+                row[17 + s_jibai] = 8.0;
+            }
+            row[17 + max_len + 1] = 9.0; // "advcl"
+        }
+    });
+
+    annotate_with_encoder(&mut doc_root, s_root, &root_model, char_subword_encode).unwrap();
+    let root_syn = doc_root
+        .syntax
+        .iter()
+        .find(|s| s.head.is_none())
+        .expect("single matrix root");
+    let root_surface: String = s_root
+        .chars()
+        .skip(root_syn.span.start_char)
+        .take(root_syn.span.end_char - root_syn.span.start_char)
+        .collect();
+    assert_eq!(
+        root_surface, "擊敗",
+        "matrix verb `擊敗` must beat subordinate `崎嶇`, adverb `終於`, and relative `擊退`"
+    );
+
+    // 2. Clause-local re-attachment (`prob >= 0.22`) and cross-clause `< 0.35` fallback relabeling
+    //    (`obj -> dep` on nominals, `compound -> parataxis` on predicates), preserving tree invariants.
+    let s_flow = "老者取出木盒，少年收好信件，守衛推開鐵門。";
+    let flow_opts: Options = serde_json::from_value(serde_json::json!({
+        "normalize_traditional": true,
+        "lexicon": ["老者", "取出", "木盒", "少年", "收好", "信件", "守衛", "推開", "鐵門"]
+    }))
+    .unwrap();
+    let mut doc_flow = analyze_document(s_flow, &flow_opts);
+    let sub_flow = char_subword_encode(s_flow).unwrap();
+    let s_laozhe = first_sub_of("老者", s_flow, &sub_flow);
+    let s_quchu = first_sub_of("取出", s_flow, &sub_flow);
+    let s_muhe = first_sub_of("木盒", s_flow, &sub_flow);
+    let s_shaonian = first_sub_of("少年", s_flow, &sub_flow);
+    let s_shouhao = first_sub_of("收好", s_flow, &sub_flow);
+    let s_xinjian = first_sub_of("信件", s_flow, &sub_flow);
+    let s_tuikai = first_sub_of("推開", s_flow, &sub_flow);
+
+    let flow_model = SyntheticSyntaxModel::new(max_len, move |ids, cols, data| {
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            row[17] = -20.0;
+            if s == s_tuikai {
+                row[15] = 10.0; // VERB (matrix root in Clause 2)
+                row[17] = 12.0;
+            } else if s == s_quchu {
+                row[15] = 10.0; // VERB in Clause 0 (emitted with high confidence -> `推開`)
+                row[17 + s_tuikai] = 10.0;
+                row[17 + max_len + 31] = 10.0; // "parataxis"
+            } else if s == s_muhe {
+                // `木盒` in Clause 0: Chu-Liu/Edmonds initially picks `推開` (Clause 2) with
+                // low confidence ~0.31 (< 0.35), while local Clause-0 verb `取出` has ~0.27 (>= 0.22)!
+                // Plus high-confidence child `老者 -> 木盒` rescues `木盒` via ancestor closure!
+                row[7] = 10.0; // NOUN
+                row[17 + s_tuikai] = 1.65;
+                row[17 + s_quchu] = 1.50;
+                row[17 + max_len + 28] = 10.0; // "obj"
+            } else if s == s_laozhe {
+                row[7] = 10.0; // High-confidence child of `木盒` so `木盒` is retained via closure
+                row[17 + s_muhe] = 12.0;
+                row[17 + max_len + 25] = 10.0; // "nmod"
+            } else if s == s_shouhao {
+                // `收好` (VERB in Clause 1): low-confidence (< 0.35) cross-clause `"compound"` -> `推開`,
+                // rescued by `信件`/`少年`; must be relabeled `"compound" -> "parataxis"`!
+                row[15] = 10.0; // VERB
+                row[17 + s_tuikai] = 1.55;
+                row[17 + max_len + 10] = 10.0; // "compound"
+            } else if s == s_xinjian {
+                // `信件` (NOUN in Clause 1): low-confidence (< 0.35) cross-clause `"obj"` -> `推開`
+                // AND local `收好` prob < 0.22 (-5.0); rescued by `少年 -> 信件`; must become `"dep"`!
+                row[7] = 10.0; // NOUN
+                row[17 + s_tuikai] = 1.55;
+                row[17 + s_shouhao] = -5.0;
+                row[17 + max_len + 28] = 10.0; // "obj"
+            } else if s == s_shaonian {
+                // High-confidence child of `信件` AND we also attach `鐵門` etc. to `推開`.
+                row[7] = 10.0;
+                row[17 + s_xinjian] = 12.0;
+                row[17 + max_len + 25] = 10.0;
+            } else {
+                // Remaining tokens (e.g. `守衛` -> `收好` high conf to retain `收好`, `鐵門`/punct -> `推開`).
+                row[7] = 10.0;
+                if s == first_sub_of("守衛", s_flow, &sub_flow) {
+                    row[17 + s_shouhao] = 12.0;
+                } else {
+                    row[17 + s_tuikai] = 12.0;
+                }
+                row[17 + max_len + 28] = 10.0;
+            }
+        }
+    });
+
+    annotate_with_encoder(&mut doc_flow, s_flow, &flow_model, char_subword_encode).unwrap();
+    let tok_idx_of = |w: &str| -> usize {
+        doc_flow
+            .tokens
+            .iter()
+            .position(|t| {
+                s_flow
+                    .chars()
+                    .skip(t.span.start_char)
+                    .take(t.span.end_char - t.span.start_char)
+                    .collect::<String>()
+                    == w
+            })
+            .unwrap()
+    };
+    let syn_of = |w: &str| -> &SyntaxToken {
+        let ti = tok_idx_of(w);
+        doc_flow.syntax.iter().find(|s| s.token == ti).unwrap()
+    };
+
+    // `木盒` re-attached locally to Clause-0 verb `取出` (`prob >= 0.22`)!
+    assert_eq!(
+        syn_of("木盒").head,
+        Some(tok_idx_of("取出")),
+        "`木盒` should re-attach locally to `取出` in Clause 0"
+    );
+    assert_eq!(syn_of("木盒").deprel, "obj");
+
+    // `信件` (`< 0.35` cross-clause nominal without `>= 0.22` local verb) relabeled `"obj" -> "dep"`!
+    assert_eq!(syn_of("信件").head, Some(tok_idx_of("推開")));
+    assert_eq!(
+        syn_of("信件").deprel,
+        "dep",
+        "cross-clause <0.35 nominal closure arc must not keep `obj`"
+    );
+
+    // `收好` (`< 0.35` cross-clause VERB) relabeled `"compound" -> "parataxis"`!
+    assert_eq!(syn_of("收好").head, Some(tok_idx_of("推開")));
+    assert_eq!(
+        syn_of("收好").deprel,
+        "parataxis",
+        "cross-clause <0.35 verb closure arc must become `parataxis`"
     );
 }

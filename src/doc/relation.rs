@@ -34,10 +34,53 @@ const SEQ_RESULT: &[&str] = &[
     "随即",
     "緊接著",
     "紧接着",
+    "緊接着",
+    "紧接著",
     "旋即",
 ];
 const PAR_RESULT: &[&str] = &["另一方面"];
 const POST_SEQ_FRAMES: &[&str] = &["之後", "之后", "之際", "之际", "之時", "之时"];
+const KINSHIP_AFTER_STEMS: &[&str] = &["故人", "高人", "仙人", "名門", "名门", "將門", "将门"];
+const SPATIAL_AFTER_VERBS: &[&str] = &[
+    "出現在",
+    "出现在",
+    "跟在",
+    "落在",
+    "站在",
+    "排在",
+    "躲在",
+    "藏在",
+    "懸在",
+    "悬在",
+    "立在",
+    "立於",
+    "立于",
+    "位於",
+    "位于",
+];
+const TEMPORAL_TAIL_WORDS: &[&str] = &[
+    "片刻",
+    "半晌",
+    "良久",
+    "許久",
+    "许久",
+    "頃刻",
+    "顷刻",
+    "一會兒",
+    "一会儿",
+    "時辰",
+    "时辰",
+    "工夫",
+    "功夫",
+    "分鐘",
+    "分钟",
+    "小時",
+    "小时",
+    "數息",
+    "数息",
+    "幾息",
+    "几息",
+];
 const SO_NOT: &[&str] = &[
     "far", "much", "many", "long", "as", "that", "good", "bad", "little", "few", "called", "on",
 ];
@@ -64,6 +107,8 @@ const ENTRIES: &[(&str, Role)] = &[
     ("随即", Back(K::Sequence)),
     ("緊接著", Back(K::Sequence)),
     ("紧接着", Back(K::Sequence)),
+    ("緊接着", Back(K::Sequence)),
+    ("紧接著", Back(K::Sequence)),
     ("旋即", Back(K::Sequence)),
     ("then", Back(K::Sequence)),
     ("afterwards", Back(K::Sequence)),
@@ -86,6 +131,20 @@ const ENTRIES: &[(&str, Role)] = &[
     ("另一方面", Back(K::Parallel)),
     ("與此同時", Back(K::Parallel)),
     ("与此同时", Back(K::Parallel)),
+    ("与此同時", Back(K::Parallel)),
+    ("與此同时", Back(K::Parallel)),
+    ("而與此同時", Back(K::Parallel)),
+    ("而与此同时", Back(K::Parallel)),
+    ("而与此同時", Back(K::Parallel)),
+    ("而與此同时", Back(K::Parallel)),
+    ("幾乎與此同時", Back(K::Parallel)),
+    ("几乎与此同时", Back(K::Parallel)),
+    ("幾乎与此同時", Back(K::Parallel)),
+    ("几乎與此同時", Back(K::Parallel)),
+    ("就在與此同時", Back(K::Parallel)),
+    ("就在与此同时", Back(K::Parallel)),
+    ("就在与此同時", Back(K::Parallel)),
+    ("就在與此同时", Back(K::Parallel)),
     ("另外", Back(K::Parallel)),
     ("此外", Back(K::Parallel)),
     ("而且", Back(K::Parallel)),
@@ -394,6 +453,9 @@ fn post_temporal_frame(c: &[char], opaque: &[Opaque], clause: Span) -> Option<Sp
             && suffix.chars().eq(c[end - n..end].iter().copied())
             && (end - n..end).all(|idx| !hides(opaque, idx))
         {
+            if matches!(suffix, "之後" | "之后") && is_non_temporal_after(&c[start..end - n]) {
+                return None;
+            }
             return Some(Span {
                 start_char: end - n,
                 end_char: end,
@@ -401,6 +463,49 @@ fn post_temporal_frame(c: &[char], opaque: &[Opaque], clause: Span) -> Option<Sp
         }
     }
     None
+}
+
+fn chars_ends_with(slice: &[char], pat: &str) -> bool {
+    let n = pat.chars().count();
+    slice.len() >= n && pat.chars().eq(slice[slice.len() - n..].iter().copied())
+}
+
+fn rfind_chars(slice: &[char], pat: &str) -> Option<usize> {
+    let pat_len = pat.chars().count();
+    if slice.len() < pat_len {
+        return None;
+    }
+    (0..=slice.len() - pat_len)
+        .rev()
+        .find(|&i| pat.chars().eq(slice[i..i + pat_len].iter().copied()))
+        .map(|i| i + pat_len)
+}
+
+/// Suppresses kinship (`故人之後` = descendant) and spatial (`站在石門之後` = behind) senses of
+/// clause-final `之後` / `之后`.
+fn is_non_temporal_after(stem: &[char]) -> bool {
+    for &kin in KINSHIP_AFTER_STEMS {
+        if chars_ends_with(stem, kin) {
+            let kin_len = kin.chars().count();
+            let prev = stem.len().checked_sub(kin_len + 1).map(|i| stem[i]);
+            if !matches!(prev, Some('到' | '過' | '过' | '了' | '完')) {
+                return true;
+            }
+        }
+    }
+    let mut latest_verb_end: Option<usize> = None;
+    for &verb in SPATIAL_AFTER_VERBS {
+        if let Some(v_end) = rfind_chars(stem, verb) {
+            latest_verb_end = Some(latest_verb_end.map_or(v_end, |cur| cur.max(v_end)));
+        }
+    }
+    if let Some(v_end) = latest_verb_end {
+        let tail = &stem[v_end..];
+        if !tail.is_empty() && !TEMPORAL_TAIL_WORDS.iter().any(|w| chars_ends_with(tail, w)) {
+            return true;
+        }
+    }
+    false
 }
 
 /// A correlate that starts the clause `clause`, if any. `so` counts only where it is a cause-result

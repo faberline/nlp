@@ -6,9 +6,11 @@ use crate::Span;
 use crate::doc::model::{Backend, SubwordTokenizer};
 use crate::doc::model::{Batch, Model, ModelError, Subwords, no_model_unknown};
 use crate::doc::{
-    Document, EntityKind, Options, Reason, Unknown, Upos, analyze_document, sort_unknown,
+    Document, EntityKind, Lang, Options, Reason, Unknown, Upos, analyze_document, sort_unknown,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Cow;
+use std::collections::HashSet;
 #[cfg(any(feature = "onnx", feature = "coreml"))]
 use std::path::Path;
 
@@ -31,11 +33,27 @@ pub const SOFT_WINDOW_MAX_LEN: usize = 96;
 /// Minimum UPOS probability (`0.50`) required to upgrade an undecided Layer-2 token's `upos`.
 pub const UPOS_THRESHOLD: f64 = 0.50;
 
+/// Index of `"dep"` inside [`DEPRELS`].
+const DEP_DEPREL_INDEX: usize = 14;
+
 /// Index of `"parataxis"` inside [`DEPRELS`].
 const PARATAXIS_DEPREL_INDEX: usize = 31;
 
 /// Index of `"root"` inside [`DEPRELS`].
 pub const ROOT_DEPREL_INDEX: usize = 34;
+
+/// Calibrated logit penalty subtracted from `0 -> tok` (`root`) for non-predicative tokens,
+/// prenominal `…的 + NP` relative predicates, and non-final subordinate clauses in multi-clause
+/// Chinese sentences when at least one viable main-clause predicate exists.
+const ROOT_PENALTY_LOGIT: f32 = 2.5;
+
+/// Minimum local head probability (`0.22`) to re-attach a low-confidence (`< 0.35`) cross-clause
+/// closure token onto an emitted `VERB`/`ADJ` predicate within its own clause.
+const LOCAL_REATTACH_MIN_PROB: f64 = 0.22;
+
+/// Scraper anti-censorship radical/stroke infixes stripped from temporary subword/UPOS strings
+/// when `options.normalize_traditional` is enabled (without altering `Token.span`).
+const SCRAPER_INFIX_CHARS: [char; 5] = ['丅', '丵', '灬', '堊', '冇'];
 
 /// Exact 17 Universal POS tags in `Upos` enum order (`0..17` of the packed output tensor).
 pub const UPOS_TAGS: [Upos; 17] = [
@@ -443,6 +461,7 @@ struct PreparedWindow {
 
 struct PreparedSentence {
     sent_idx: usize,
+    clause_spans: Vec<Span>,
     windows: Vec<PreparedWindow>,
 }
 
@@ -450,6 +469,109 @@ enum WindowFit {
     Fits(PreparedWindow),
     TooLong,
     Unmappable,
+}
+
+fn is_scraper_infix_char(ch: char) -> bool {
+    SCRAPER_INFIX_CHARS.contains(&ch)
+}
+
+fn is_clean_han(ch: char) -> bool {
+    super::segment::is_han(ch) && !is_scraper_infix_char(ch)
+}
+
+fn clean_token_surface(tok_str: &str, normalize_traditional: bool) -> Cow<'_, str> {
+    if !normalize_traditional || !tok_str.chars().any(is_scraper_infix_char) {
+        return Cow::Borrowed(tok_str);
+    }
+    let chars: Vec<char> = tok_str.chars().collect();
+    if chars.len() < 3 {
+        return Cow::Borrowed(tok_str);
+    }
+    let mut out = String::with_capacity(tok_str.len());
+    let mut stripped = false;
+    for i in 0..chars.len() {
+        if i > 0
+            && i + 1 < chars.len()
+            && is_scraper_infix_char(chars[i])
+            && is_clean_han(chars[i - 1])
+            && is_clean_han(chars[i + 1])
+        {
+            stripped = true;
+            continue;
+        }
+        out.push(chars[i]);
+    }
+    if stripped {
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(tok_str)
+    }
+}
+
+/// Encodes `raw` (starting at document char `base_start_char`) with `encode`, stripping single
+/// scraper anti-censorship infixes (`丅`, `丵`, `灬`, `堊`, `冇`) sandwiched between Han chars
+/// inside multi-char tokens when `doc.options.normalize_traditional` is true, and remapping
+/// returned subword spans back to `raw`-relative char offsets so `Token.span` alignment stays
+/// exact.
+fn encode_slice_clean<F>(
+    doc: &Document,
+    raw: &str,
+    base_start_char: usize,
+    token_indices: &[usize],
+    encode: &F,
+) -> Result<Subwords, ModelError>
+where
+    F: Fn(&str) -> Result<Subwords, ModelError>,
+{
+    if !doc.options.normalize_traditional || !raw.chars().any(is_scraper_infix_char) {
+        return encode(raw);
+    }
+    let chars: Vec<char> = raw.chars().collect();
+    let mut strip = vec![false; chars.len()];
+    let mut any_strip = false;
+    for &tok_idx in token_indices {
+        let ts = doc.tokens[tok_idx].span;
+        if ts.end_char.saturating_sub(ts.start_char) < 3 || ts.start_char < base_start_char {
+            continue;
+        }
+        let rel_s = ts.start_char - base_start_char;
+        let rel_e = (ts.end_char - base_start_char).min(chars.len());
+        if rel_s + 2 >= rel_e {
+            continue;
+        }
+        for k in (rel_s + 1)..(rel_e - 1) {
+            if is_scraper_infix_char(chars[k])
+                && is_clean_han(chars[k - 1])
+                && is_clean_han(chars[k + 1])
+            {
+                strip[k] = true;
+                any_strip = true;
+            }
+        }
+    }
+    if !any_strip {
+        return encode(raw);
+    }
+    let mut clean_str = String::with_capacity(raw.len());
+    let mut orig_pos = Vec::with_capacity(chars.len());
+    for (k, &ch) in chars.iter().enumerate() {
+        if !strip[k] {
+            clean_str.push(ch);
+            orig_pos.push(k);
+        }
+    }
+    let mut sub = encode(&clean_str)?;
+    for sp in &mut sub.spans {
+        if sp.start_char < sp.end_char && sp.end_char <= orig_pos.len() {
+            sp.start_char = orig_pos[sp.start_char];
+            sp.end_char = orig_pos[sp.end_char - 1] + 1;
+        } else if sp.start_char == sp.end_char && sp.start_char > 0 {
+            let mapped = orig_pos.get(sp.start_char).copied().unwrap_or(chars.len());
+            sp.start_char = mapped;
+            sp.end_char = mapped;
+        }
+    }
+    Ok(sub)
 }
 
 fn partition_tokens_by_subwords(
@@ -552,7 +674,13 @@ where
                 "window span {win_start_char}..{win_end_char} inverted"
             )));
         }
-        let win_sub = (self.encode)(&self.text[byte_start..byte_end])?;
+        let win_sub = encode_slice_clean(
+            self.doc,
+            &self.text[byte_start..byte_end],
+            win_start_char,
+            slice,
+            self.encode,
+        )?;
         if win_sub.ids.len() != win_sub.spans.len() {
             return Err(ModelError::Run(
                 "subword ids and spans differ in length".to_owned(),
@@ -712,6 +840,12 @@ fn should_mean_pool_upos(doc: &Document, tok_span: Span, tok_str: &str) -> bool 
     }) {
         return false;
     }
+    if matches!(
+        tok_str,
+        "一五一十" | "三三兩兩" | "三三两两" | "千千萬萬" | "千千万万"
+    ) {
+        return true;
+    }
     let rest = tok_str.trim_start_matches(is_zh_numeral_char);
     let rest = rest
         .strip_prefix('個')
@@ -770,6 +904,560 @@ fn mean_upos_logits(
         *dst = (sum * inv_n) as f32;
     }
     out
+}
+
+fn token_str<'a>(text: &'a str, char_to_byte: &[usize], span: Span) -> &'a str {
+    char_to_byte
+        .get(span.start_char)
+        .zip(char_to_byte.get(span.end_char))
+        .filter(|&(bs, be)| bs <= be)
+        .map_or("", |(&bs, &be)| &text[bs..be])
+}
+
+fn clause_index_for_span(clause_spans: &[Span], span: Span) -> usize {
+    if clause_spans.len() <= 1 {
+        return 0;
+    }
+    clause_spans
+        .partition_point(|cl| cl.start_char <= span.start_char)
+        .saturating_sub(1)
+}
+
+fn clear_pos_unknown(doc: &mut Document, span: Span) {
+    doc.unknown
+        .retain(|u| !(u.layer == "pos" && u.span == span));
+}
+
+fn sentence_has_following_predicate(doc: &Document, tok_idx: usize, sent_idx: usize) -> bool {
+    let mut k = tok_idx + 1;
+    while let Some(t) = doc.tokens.get(k) {
+        if t.sentence != sent_idx {
+            break;
+        }
+        if matches!(t.upos, Some(Upos::Verb | Upos::Adj)) {
+            return true;
+        }
+        k += 1;
+    }
+    false
+}
+
+fn clause_has_following_de_or_predicate(
+    doc: &Document,
+    tok_idx: usize,
+    sent_idx: usize,
+    char_to_byte: &[usize],
+    text: &str,
+) -> bool {
+    let mut k = tok_idx + 1;
+    while let Some(t) = doc.tokens.get(k) {
+        if t.sentence != sent_idx || t.upos == Some(Upos::Punct) {
+            break;
+        }
+        let s = token_str(text, char_to_byte, t.span);
+        if k == tok_idx + 1 && matches!(s, "地" | "的") {
+            return true;
+        }
+        if matches!(t.upos, Some(Upos::Verb | Upos::Adj)) {
+            return true;
+        }
+        k += 1;
+    }
+    false
+}
+
+/// Resolves 4-character numeral-initial idioms (`二話不說`, `一動不動`, `四面八方`, `一般無二`,
+/// `一五一十`, etc.) whose heterogeneous subwords otherwise dilute arithmetic-mean softmax below
+/// [`UPOS_THRESHOLD`] (`0.50`) or leave all-numeral idioms on `Upos::Num`.
+fn fallback_four_char_numeral_idiom(
+    doc: &Document,
+    tok_idx: usize,
+    sent_idx: usize,
+    char_to_byte: &[usize],
+    text: &str,
+    clean_tok: &str,
+    upos_logits: &[f32; 17],
+) -> Option<Upos> {
+    match clean_tok {
+        "四面八方" | "五湖四海" | "三頭六臂" | "三头六臂" | "千軍萬馬" | "千军万马" =>
+        {
+            return Some(Upos::Noun);
+        }
+        "一般無二" | "一般无二" | "一模一樣" | "一模一样" | "一乾二淨" | "一干二净"
+        | "一干二凈" | "五顏六色" | "五颜六色" | "亂七八糟" | "乱七八糟" | "七零八落" =>
+        {
+            return Some(Upos::Adj);
+        }
+        "一五一十" | "三三兩兩" | "三三两两" | "一時半刻" | "一时半刻" => {
+            return Some(Upos::Adv);
+        }
+        "二話不說" | "二话不说" => {
+            return Some(
+                if sentence_has_following_predicate(doc, tok_idx, sent_idx) {
+                    Upos::Adv
+                } else {
+                    Upos::Verb
+                },
+            );
+        }
+        "一動不動" | "一动不动" | "一聲不吭" | "一声不吭" | "一言不發" | "一言不发" =>
+        {
+            return Some(
+                if clause_has_following_de_or_predicate(doc, tok_idx, sent_idx, char_to_byte, text)
+                {
+                    Upos::Adv
+                } else {
+                    Upos::Verb
+                },
+            );
+        }
+        _ => {}
+    }
+
+    // Generic non-`NUM` open-class recovery for any other 4-char `should_mean_pool_upos` idiom.
+    let mut non_num = [0.0f32; 16];
+    let mut dst = 0usize;
+    for (idx, &val) in upos_logits.iter().enumerate() {
+        if UPOS_TAGS[idx] != Upos::Num {
+            non_num[dst] = val;
+            dst += 1;
+        }
+    }
+    let open_candidates = [0usize, 2, 7, 15]; // Adj, Adv, Noun, Verb
+    let mut best_open = open_candidates[0];
+    for &cand in &open_candidates[1..] {
+        if upos_logits[cand] > upos_logits[best_open] {
+            best_open = cand;
+        }
+    }
+    let non_num_idx = if best_open < 8 {
+        best_open
+    } else {
+        best_open - 1
+    };
+    (softmax_prob(&non_num, non_num_idx) >= 0.35).then_some(UPOS_TAGS[best_open])
+}
+
+fn has_non_nominal_lexicon_shape(clean_tok: &str) -> bool {
+    let chars: Vec<char> = clean_tok.chars().collect();
+    if chars
+        .iter()
+        .any(|&c| matches!(c, '不' | '無' | '无' | '沒' | '没' | '勿' | '莫'))
+    {
+        return true;
+    }
+    if chars.len() >= 3
+        && (chars[0] == chars[1] || chars[chars.len() - 2] == chars[chars.len() - 1])
+    {
+        return true;
+    }
+    for suffix in [
+        "起來", "起来", "出來", "出来", "出去", "進去", "进去", "進來", "进来", "下去", "下來",
+        "下来", "過來", "过来", "過去", "过去", "開來", "开来", "不得", "不了", "不住",
+    ] {
+        if clean_tok.ends_with(suffix) {
+            return true;
+        }
+    }
+    chars
+        .last()
+        .is_some_and(|&ch| matches!(ch, '然' | '地' | '著' | '着' | '了' | '過' | '过'))
+}
+
+fn is_disposal_coverb_context(
+    doc: &Document,
+    tok_idx: usize,
+    sent_idx: usize,
+    clause_spans: &[Span],
+    char_to_byte: &[usize],
+    text: &str,
+) -> bool {
+    let my_clause = clause_index_for_span(clause_spans, doc.tokens[tok_idx].span);
+    if tok_idx > 0 {
+        let prev = &doc.tokens[tok_idx - 1];
+        if prev.sentence == sent_idx
+            && prev.upos != Some(Upos::Punct)
+            && clause_index_for_span(clause_spans, prev.span) == my_clause
+        {
+            let prev_str = clean_token_surface(
+                token_str(text, char_to_byte, prev.span),
+                doc.options.normalize_traditional,
+            );
+            if prev_str.chars().last().is_some_and(|ch| {
+                matches!(
+                    ch,
+                    '一' | '兩'
+                        | '两'
+                        | '三'
+                        | '四'
+                        | '五'
+                        | '六'
+                        | '七'
+                        | '八'
+                        | '九'
+                        | '十'
+                        | '百'
+                        | '千'
+                        | '數'
+                        | '数'
+                        | '幾'
+                        | '几'
+                        | '眾'
+                        | '众'
+                        | '諸'
+                        | '诸'
+                        | '名'
+                        | '員'
+                        | '员'
+                        | '位'
+                        | '個'
+                        | '个'
+                        | '大'
+                        | '老'
+                        | '小'
+                        | '神'
+                        | '魔'
+                        | '古'
+                        | '悍'
+                        | '猛'
+                        | '勇'
+                        | '主'
+                        | '副'
+                        | '守'
+                        | '敵'
+                        | '敌'
+                        | '敗'
+                        | '败'
+                        | '女'
+                )
+            }) {
+                return false;
+            }
+        }
+    }
+
+    let Some(next1) = doc.tokens.get(tok_idx + 1) else {
+        return false;
+    };
+    if next1.sentence != sent_idx
+        || next1.upos == Some(Upos::Punct)
+        || clause_index_for_span(clause_spans, next1.span) != my_clause
+    {
+        return false;
+    }
+    let next1_str = clean_token_surface(
+        token_str(text, char_to_byte, next1.span),
+        doc.options.normalize_traditional,
+    );
+    for blocked in [
+        "軍", "军", "領", "领", "帥", "帅", "要", "近", "來", "来", "會", "会", "士", "令", "官",
+        "校", "門", "门", "就", "至", "及",
+    ] {
+        if next1_str.starts_with(blocked) {
+            return false;
+        }
+    }
+    if matches!(
+        next1.upos,
+        Some(Upos::Aux | Upos::Adp | Upos::Adv | Upos::Cconj | Upos::Sconj | Upos::Part)
+    ) {
+        return false;
+    }
+
+    // If `tok + 1` is `VERB`, only allow when it is a prenominal relative modifier (`將擊敗的對手擒住`).
+    let mut min_np_offset = 1usize;
+    if next1.upos == Some(Upos::Verb) {
+        let mut rel_de_offset = None;
+        for d in 2..=3 {
+            let Some(cand) = doc.tokens.get(tok_idx + d) else {
+                break;
+            };
+            if cand.sentence != sent_idx
+                || cand.upos == Some(Upos::Punct)
+                || clause_index_for_span(clause_spans, cand.span) != my_clause
+            {
+                break;
+            }
+            if token_str(text, char_to_byte, cand.span) == "的" {
+                rel_de_offset = Some(d);
+                break;
+            }
+        }
+        let Some(de_off) = rel_de_offset else {
+            return false;
+        };
+        min_np_offset = de_off + 1;
+    }
+
+    let mut found_np_at: Option<usize> = None;
+    for d in 1..=6 {
+        let Some(t) = doc.tokens.get(tok_idx + d) else {
+            break;
+        };
+        if t.sentence != sent_idx
+            || t.upos == Some(Upos::Punct)
+            || clause_index_for_span(clause_spans, t.span) != my_clause
+        {
+            break;
+        }
+        if found_np_at.is_none() {
+            if d >= min_np_offset
+                && matches!(
+                    t.upos,
+                    Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Det)
+                )
+            {
+                found_np_at = Some(d);
+            }
+        } else if matches!(t.upos, Some(Upos::Verb | Upos::Adj)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn detect_subordinate_non_final_clauses(
+    doc: &Document,
+    sent_tokens: &[usize],
+    clause_spans: &[Span],
+    char_to_byte: &[usize],
+    text: &str,
+) -> Vec<bool> {
+    let num_clauses = clause_spans.len();
+    let mut sub = vec![false; num_clauses];
+    if num_clauses < 2 {
+        return sub;
+    }
+    let mut clause_non_punct: Vec<Vec<usize>> = vec![Vec::new(); num_clauses];
+    for &tok_idx in sent_tokens {
+        if doc.tokens[tok_idx].upos == Some(Upos::Punct) {
+            continue;
+        }
+        let c_idx = clause_index_for_span(clause_spans, doc.tokens[tok_idx].span);
+        if let Some(bucket) = clause_non_punct.get_mut(c_idx) {
+            bucket.push(tok_idx);
+        }
+    }
+
+    const LEADING_SUBORDINATORS: &[&str] = &[
+        "雖然", "虽然", "儘管", "尽管", "即使", "縱然", "纵然", "哪怕", "如果", "若是", "倘若",
+        "要是", "假如", "一旦", "別看", "别看", "既然", "無論", "无论", "不管",
+    ];
+    const TRAILING_FRAMES: &[&str] = &["之際", "之际", "之時", "之时", "的時候", "的时候"];
+    const CIRCUM_OPENERS: &[&str] = &["當", "当", "在", "自從", "自从"];
+    const CIRCUM_CLOSERS: &[&str] = &[
+        "時",
+        "时",
+        "後",
+        "后",
+        "之後",
+        "之后",
+        "之際",
+        "之际",
+        "之時",
+        "之时",
+        "的時候",
+        "的时候",
+    ];
+    const KINSHIP_AFTER: &[&str] = &[
+        "故人之後",
+        "故人之后",
+        "高人之後",
+        "高人之后",
+        "仙人之後",
+        "仙人之后",
+        "名門之後",
+        "名门之后",
+        "將門之後",
+        "将门之后",
+    ];
+
+    for c_idx in 0..(num_clauses - 1) {
+        let toks = &clause_non_punct[c_idx];
+        let has_leading = toks.iter().take(3).any(|&ti| {
+            let s = clean_token_surface(
+                token_str(text, char_to_byte, doc.tokens[ti].span),
+                doc.options.normalize_traditional,
+            );
+            LEADING_SUBORDINATORS.contains(&s.as_ref())
+        });
+        if has_leading {
+            sub[c_idx] = true;
+            continue;
+        }
+
+        let raw_cl = token_str(text, char_to_byte, clause_spans[c_idx]);
+        let trimmed = raw_cl.trim_end_matches(|ch: char| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '。' | '！'
+                        | '？'
+                        | '，'
+                        | '；'
+                        | '：'
+                        | '」'
+                        | '』'
+                        | '”'
+                        | '’'
+                        | '）'
+                        | ')'
+                        | '"'
+                        | '\''
+                )
+        });
+        if trimmed.chars().count() >= 3 {
+            if TRAILING_FRAMES.iter().any(|f| trimmed.ends_with(f)) {
+                sub[c_idx] = true;
+                continue;
+            }
+            if (trimmed.ends_with("之後") || trimmed.ends_with("之后"))
+                && !KINSHIP_AFTER.iter().any(|k| trimmed.ends_with(k))
+            {
+                sub[c_idx] = true;
+                continue;
+            }
+            let has_circum_open = toks.iter().take(2).any(|&ti| {
+                let s = clean_token_surface(
+                    token_str(text, char_to_byte, doc.tokens[ti].span),
+                    doc.options.normalize_traditional,
+                );
+                CIRCUM_OPENERS.contains(&s.as_ref())
+            });
+            if has_circum_open && CIRCUM_CLOSERS.iter().any(|f| trimmed.ends_with(f)) {
+                sub[c_idx] = true;
+            }
+        }
+    }
+    sub
+}
+
+fn is_non_predicative_token(doc: &Document, tok_idx: usize, clean_tok: &str) -> bool {
+    matches!(
+        doc.tokens[tok_idx].upos,
+        Some(
+            Upos::Adp
+                | Upos::Cconj
+                | Upos::Sconj
+                | Upos::Part
+                | Upos::Det
+                | Upos::Punct
+                | Upos::Adv
+                | Upos::Num
+        )
+    ) || matches!(clean_tok, "終於" | "终于" | "除了" | "直到")
+}
+
+fn is_prenominal_rel_pred(
+    doc: &Document,
+    tok_idx: usize,
+    sent_idx: usize,
+    c_idx: usize,
+    clause_spans: &[Span],
+    char_to_byte: &[usize],
+    text: &str,
+) -> bool {
+    if !matches!(doc.tokens[tok_idx].upos, Some(Upos::Verb | Upos::Adj)) {
+        return false;
+    }
+    let Some(t1) = doc.tokens.get(tok_idx + 1) else {
+        return false;
+    };
+    if t1.sentence != sent_idx
+        || t1.upos == Some(Upos::Punct)
+        || clause_index_for_span(clause_spans, t1.span) != c_idx
+    {
+        return false;
+    }
+    let s1 = token_str(text, char_to_byte, t1.span);
+    let de_idx = if s1 == "的" {
+        tok_idx + 1
+    } else if matches!(s1, "了" | "過" | "过" | "著" | "着")
+        && let Some(t2) = doc.tokens.get(tok_idx + 2)
+        && t2.sentence == sent_idx
+        && clause_index_for_span(clause_spans, t2.span) == c_idx
+        && token_str(text, char_to_byte, t2.span) == "的"
+    {
+        tok_idx + 2
+    } else {
+        return false;
+    };
+
+    for d in 1..=3 {
+        let Some(tn) = doc.tokens.get(de_idx + d) else {
+            break;
+        };
+        if tn.sentence != sent_idx
+            || tn.upos == Some(Upos::Punct)
+            || clause_index_for_span(clause_spans, tn.span) != c_idx
+        {
+            break;
+        }
+        let sn = token_str(text, char_to_byte, tn.span);
+        if matches!(sn, "是" | "有") || tn.upos == Some(Upos::Verb) {
+            break;
+        }
+        if matches!(tn.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn compute_biaffine_deprel_and_score(
+    data: &[f32],
+    expected_cols: usize,
+    rel_offset: usize,
+    s_u: usize,
+    s_v: usize,
+    p_arc: f64,
+) -> (usize, Score) {
+    let r_u = &data[s_u * expected_cols..(s_u + 1) * expected_cols];
+    let r_v = &data[s_v * expected_cols..(s_v + 1) * expected_cols];
+    let r_dep = &r_u[rel_offset..rel_offset + 37];
+    let r_head = &r_v[rel_offset + 37..rel_offset + 74];
+    let r_bi_dep = &r_u[rel_offset + 74..rel_offset + 111];
+    let r_bi_head = &r_v[rel_offset + 111..rel_offset + 148];
+
+    let mut rel_logits = [0.0f32; 37];
+    for (c, slot) in rel_logits.iter_mut().enumerate() {
+        *slot = r_dep[c] + r_head[c] + r_bi_dep[c] * r_bi_head[c];
+    }
+    let best_c = argmax_non_root_deprel(&rel_logits);
+
+    let mut non_root = [0.0f32; 36];
+    let mut dst = 0;
+    for (c, &val) in rel_logits.iter().enumerate() {
+        if c != ROOT_DEPREL_INDEX {
+            non_root[dst] = val;
+            dst += 1;
+        }
+    }
+    let chosen_non_root = if best_c < ROOT_DEPREL_INDEX {
+        best_c
+    } else {
+        best_c - 1
+    };
+    let p_rel = softmax_prob(&non_root, chosen_non_root);
+    (best_c, Score::from_confidence(p_arc * p_rel))
+}
+
+fn is_ancestor_of(
+    candidate_anc: usize,
+    mut node: usize,
+    head_pos: &[Option<usize>],
+    limit: usize,
+) -> bool {
+    for _ in 0..=limit {
+        if node == candidate_anc {
+            return true;
+        }
+        match head_pos[node] {
+            Some(p) => node = p,
+            None => return false,
+        }
+    }
+    true
 }
 
 fn verify_sentence_tree_invariants(emitted: &[SyntaxToken]) {
@@ -871,7 +1559,13 @@ where
             )));
         }
         let sentence_str = &text[byte_start..byte_end];
-        let subwords = encode(sentence_str)?;
+        let subwords = encode_slice_clean(
+            doc,
+            sentence_str,
+            sentence.span.start_char,
+            &token_indices,
+            &encode,
+        )?;
         if subwords.ids.len() != subwords.spans.len() {
             return Err(ModelError::Run(
                 "subword ids and spans differ in length".to_owned(),
@@ -906,7 +1600,11 @@ where
             };
             match ctx.partition(&token_indices, &clause_spans)? {
                 Some(windows) if windows.iter().any(|w| !w.token_indices.is_empty()) => {
-                    prepared.push(PreparedSentence { sent_idx, windows });
+                    prepared.push(PreparedSentence {
+                        sent_idx,
+                        clause_spans,
+                        windows,
+                    });
                 }
                 _ => doc.unknown.push(Unknown {
                     layer: "syntax".to_owned(),
@@ -930,6 +1628,7 @@ where
 
         prepared.push(PreparedSentence {
             sent_idx,
+            clause_spans,
             windows: vec![PreparedWindow {
                 token_indices: mapped_tokens,
                 subword_spans,
@@ -943,6 +1642,24 @@ where
         sort_unknown(&mut doc.unknown);
         return Ok(());
     }
+
+    let lexicon_set: HashSet<String> = doc
+        .options
+        .lexicon
+        .iter()
+        .filter(|w| w.chars().count() >= 3)
+        .map(|w| clean_token_surface(w, doc.options.normalize_traditional).into_owned())
+        .collect();
+    let names_set: HashSet<String> = if lexicon_set.is_empty() {
+        HashSet::new()
+    } else {
+        doc.options
+            .names
+            .iter()
+            .filter(|w| w.chars().count() >= 2)
+            .map(|w| clean_token_surface(w, doc.options.normalize_traditional).into_owned())
+            .collect()
+    };
 
     // Run sentence by sentence (identical to batch in both backends, and allows isolating TooLong).
     for item in &prepared {
@@ -1005,30 +1722,40 @@ where
 
         // 1. Contextual UPOS upgrade via multi-subword arithmetic mean pooling.
         let mut undecided_before = Vec::new();
+        let mut diluted_idioms = Vec::new();
         for &(win, ref tensor) in &window_tensors {
             for (&tok_idx, s_span) in win.token_indices.iter().zip(&win.subword_spans) {
                 if doc.tokens[tok_idx].upos.is_none() {
                     undecided_before.push(tok_idx);
                     let tok_span = doc.tokens[tok_idx].span;
-                    let tok_str = char_to_byte
-                        .get(tok_span.start_char)
-                        .zip(char_to_byte.get(tok_span.end_char))
-                        .filter(|&(bs, be)| bs <= be)
-                        .map_or("", |(&bs, &be)| &text[bs..be]);
+                    let raw_tok = token_str(text, &char_to_byte, tok_span);
+                    let clean_tok = clean_token_surface(raw_tok, doc.options.normalize_traditional);
                     let upos_logits = mean_upos_logits(
                         doc,
                         &tensor.data,
                         expected_cols,
                         s_span,
                         tok_span,
-                        tok_str,
+                        &clean_tok,
                     );
                     let best_upos = argmax_slice(&upos_logits);
                     let upos_prob = softmax_prob(&upos_logits, best_upos);
+                    let is_four_char_idiom = clean_tok.chars().count() == 4
+                        && should_mean_pool_upos(doc, tok_span, &clean_tok);
+                    if is_four_char_idiom
+                        && (upos_prob < UPOS_THRESHOLD || UPOS_TAGS[best_upos] == Upos::Num)
+                    {
+                        let has_confident_subword = s_span.iter().any(|&s_idx| {
+                            let r = &tensor.data[s_idx * expected_cols..s_idx * expected_cols + 17];
+                            softmax_prob(r, argmax_slice(r)) >= 0.35
+                        });
+                        if has_confident_subword {
+                            diluted_idioms.push((tok_idx, clean_tok.into_owned(), upos_logits));
+                        }
+                    }
                     if upos_prob >= UPOS_THRESHOLD {
                         doc.tokens[tok_idx].upos = Some(UPOS_TAGS[best_upos]);
-                        doc.unknown
-                            .retain(|u| !(u.layer == "pos" && u.span == tok_span));
+                        clear_pos_unknown(doc, tok_span);
                     } else if let Some(existing) = doc
                         .unknown
                         .iter_mut()
@@ -1042,24 +1769,44 @@ where
                             reason: Reason::LowConfidence,
                         });
                     }
+                } else if doc.tokens[tok_idx].upos == Some(Upos::Num) {
+                    let tok_span = doc.tokens[tok_idx].span;
+                    let raw_tok = token_str(text, &char_to_byte, tok_span);
+                    let clean_tok = clean_token_surface(raw_tok, doc.options.normalize_traditional);
+                    if matches!(clean_tok.as_ref(), "一五一十" | "三三兩兩" | "三三两两")
+                    {
+                        doc.tokens[tok_idx].upos = Some(Upos::Adv);
+                    }
                 }
             }
         }
 
-        // Deterministic disambiguation for `什麼`/`什么` when Layer 2 left `upos == None` and the
-        // model predicted `PART` or fell below `UPOS_THRESHOLD`.
-        for tok_idx in undecided_before {
+        // 1a. Recover diluted 4-character numeral idioms (`二話不說`, `一動不動`, `四面八方`, etc.)
+        //     after neighboring tokens in the sentence have received their model UPOS.
+        for (tok_idx, clean_tok, upos_logits) in diluted_idioms {
+            if let Some(recovered) = fallback_four_char_numeral_idiom(
+                doc,
+                tok_idx,
+                item.sent_idx,
+                &char_to_byte,
+                text,
+                &clean_tok,
+                &upos_logits,
+            ) {
+                let tok_span = doc.tokens[tok_idx].span;
+                doc.tokens[tok_idx].upos = Some(recovered);
+                clear_pos_unknown(doc, tok_span);
+            }
+        }
+
+        // 1b. Deterministic disambiguation for `什麼`/`什么` when Layer 2 left `upos == None` and the
+        //     model predicted `PART` or fell below `UPOS_THRESHOLD`.
+        for &tok_idx in &undecided_before {
             if !matches!(doc.tokens[tok_idx].upos, None | Some(Upos::Part)) {
                 continue;
             }
             let tok_span = doc.tokens[tok_idx].span;
-            let Some(&b_start) = char_to_byte.get(tok_span.start_char) else {
-                continue;
-            };
-            let Some(&b_end) = char_to_byte.get(tok_span.end_char) else {
-                continue;
-            };
-            if b_start <= b_end && matches!(&text[b_start..b_end], "什麼" | "什么") {
+            if matches!(token_str(text, &char_to_byte, tok_span), "什麼" | "什么") {
                 let followed_by_nominal = doc.tokens.get(tok_idx + 1).is_some_and(|next| {
                     next.sentence == item.sent_idx
                         && matches!(next.upos, Some(Upos::Noun | Upos::Propn))
@@ -1069,27 +1816,129 @@ where
                 } else {
                     Upos::Pron
                 });
-                doc.unknown
-                    .retain(|u| !(u.layer == "pos" && u.span == tok_span));
+                clear_pos_unknown(doc, tok_span);
             }
         }
 
-        // 2. Decode each window with Chu-Liu/Edmonds and stitch window `k >= 1` local roots to
-        //    window `0`'s root with `deprel = "parataxis"`.
+        // 1c. Lexicon compound nominal prior (`>= 3` Han chars in `doc.options.lexicon`).
+        if !lexicon_set.is_empty() {
+            for &tok_idx in &undecided_before {
+                let tok_span = doc.tokens[tok_idx].span;
+                let raw_tok = token_str(text, &char_to_byte, tok_span);
+                let clean_tok = clean_token_surface(raw_tok, doc.options.normalize_traditional);
+                let is_propn =
+                    names_set.contains(raw_tok) || names_set.contains(clean_tok.as_ref());
+                let override_eligible = if is_propn {
+                    matches!(
+                        doc.tokens[tok_idx].upos,
+                        None | Some(
+                            Upos::Noun
+                                | Upos::Adj
+                                | Upos::Verb
+                                | Upos::Adp
+                                | Upos::Adv
+                                | Upos::Sconj
+                                | Upos::Part
+                        )
+                    )
+                } else {
+                    matches!(
+                        doc.tokens[tok_idx].upos,
+                        None | Some(
+                            Upos::Adj
+                                | Upos::Verb
+                                | Upos::Adp
+                                | Upos::Adv
+                                | Upos::Sconj
+                                | Upos::Part
+                        )
+                    )
+                };
+                let followed_by_adverbial_de = doc.tokens.get(tok_idx + 1).is_some_and(|next| {
+                    next.sentence == item.sent_idx
+                        && token_str(text, &char_to_byte, next.span) == "地"
+                });
+                if override_eligible
+                    && !followed_by_adverbial_de
+                    && clean_tok.chars().count() >= 3
+                    && clean_tok.chars().all(is_clean_han)
+                    && !clean_tok.chars().next().is_some_and(is_zh_numeral_char)
+                    && (is_propn || !has_non_nominal_lexicon_shape(&clean_tok))
+                    && (lexicon_set.contains(raw_tok) || lexicon_set.contains(clean_tok.as_ref()))
+                {
+                    doc.tokens[tok_idx].upos =
+                        Some(if is_propn { Upos::Propn } else { Upos::Noun });
+                    clear_pos_unknown(doc, tok_span);
+                }
+            }
+        }
+
+        // 1d. Disposal coverb `將` / `将` -> `ADP` disambiguation (`normalize_traditional == true`).
+        if doc.options.normalize_traditional {
+            for &tok_idx in &undecided_before {
+                if !matches!(
+                    doc.tokens[tok_idx].upos,
+                    None | Some(Upos::Noun | Upos::Verb | Upos::Propn | Upos::Adv | Upos::Sconj)
+                ) {
+                    continue;
+                }
+                let tok_span = doc.tokens[tok_idx].span;
+                if matches!(token_str(text, &char_to_byte, tok_span), "將" | "将")
+                    && is_disposal_coverb_context(
+                        doc,
+                        tok_idx,
+                        item.sent_idx,
+                        &item.clause_spans,
+                        &char_to_byte,
+                        text,
+                    )
+                {
+                    doc.tokens[tok_idx].upos = Some(Upos::Adp);
+                    clear_pos_unknown(doc, tok_span);
+                }
+            }
+        }
+
+        // 2. Decode each window with Chu-Liu/Edmonds (with multi-clause Chinese root-stealing
+        //    penalties when a viable main-clause predicate exists) and stitch multi-window local
+        //    roots with `deprel = "parataxis"`.
         let total_tokens: usize = window_tensors
             .iter()
             .map(|(w, _)| w.token_indices.len())
             .sum();
+        let all_sent_tokens: Vec<usize> = window_tensors
+            .iter()
+            .flat_map(|(w, _)| w.token_indices.iter().copied())
+            .collect();
+        let is_zh_multiclause = item.clause_spans.len() >= 2
+            && doc.segmentation.sentences[item.sent_idx].lang != Lang::En;
+        let subordinate_clauses = if is_zh_multiclause {
+            detect_subordinate_non_final_clauses(
+                doc,
+                &all_sent_tokens,
+                &item.clause_spans,
+                &char_to_byte,
+                text,
+            )
+        } else {
+            Vec::new()
+        };
+
         let mut sent_tokens = Vec::with_capacity(total_tokens);
+        let mut clause_pos = Vec::with_capacity(total_tokens);
+        let mut win_of_pos = Vec::with_capacity(total_tokens);
+        let mut local_in_win = Vec::with_capacity(total_tokens);
+        let mut win_arc_matrices: Vec<Vec<Vec<f32>>> = Vec::with_capacity(window_tensors.len());
         let mut head_pos: Vec<Option<usize>> = Vec::with_capacity(total_tokens);
         let mut deprel_indices = Vec::with_capacity(total_tokens);
         let mut scores = Vec::with_capacity(total_tokens);
         let mut ancestor_ok = Vec::with_capacity(total_tokens);
         let mut global_root_pos: Option<usize> = None;
+        let mut global_root_was_penalized = false;
         let rel_offset = 17 + max_len;
         let ancestor_cap = f64::from(ANCESTOR_MIN_MILLI) / 1000.0;
 
-        for (win, tensor) in &window_tensors {
+        for (w_idx, (win, tensor)) in window_tensors.iter().enumerate() {
             let row = |s: usize| &tensor.data[s * expected_cols..(s + 1) * expected_cols];
             let m = win.token_indices.len();
             let base_pos = sent_tokens.len();
@@ -1107,7 +1956,45 @@ where
                 arc_scores.push(scores_u);
             }
 
-            let heads = chu_liu_edmonds(&arc_scores);
+            let mut penalized = vec![false; m];
+            let mut viable_main = vec![false; m];
+            if is_zh_multiclause {
+                for (u_zero, &tok_idx) in win.token_indices.iter().enumerate() {
+                    let c_idx = clause_index_for_span(&item.clause_spans, doc.tokens[tok_idx].span);
+                    let clean_tok = clean_token_surface(
+                        token_str(text, &char_to_byte, doc.tokens[tok_idx].span),
+                        doc.options.normalize_traditional,
+                    );
+                    let non_pred = is_non_predicative_token(doc, tok_idx, &clean_tok);
+                    let rel_pred = is_prenominal_rel_pred(
+                        doc,
+                        tok_idx,
+                        item.sent_idx,
+                        c_idx,
+                        &item.clause_spans,
+                        &char_to_byte,
+                        text,
+                    );
+                    let sub_cl = subordinate_clauses.get(c_idx).copied().unwrap_or(false);
+                    penalized[u_zero] = non_pred || rel_pred || sub_cl;
+                    viable_main[u_zero] =
+                        matches!(doc.tokens[tok_idx].upos, Some(Upos::Verb | Upos::Adj))
+                            && !penalized[u_zero];
+                }
+            }
+            let win_has_viable = viable_main.iter().any(|&v| v);
+            let heads = if is_zh_multiclause && win_has_viable && penalized.iter().any(|&p| p) {
+                let mut decode_scores = arc_scores.clone();
+                for (u_zero, &is_pen) in penalized.iter().enumerate() {
+                    if is_pen {
+                        decode_scores[u_zero][0] -= ROOT_PENALTY_LOGIT;
+                    }
+                }
+                chu_liu_edmonds(&decode_scores)
+            } else {
+                chu_liu_edmonds(&arc_scores)
+            };
+
             for (u_zero, (&tok_idx, s_span)) in
                 win.token_indices.iter().zip(&win.subword_spans).enumerate()
             {
@@ -1120,50 +2007,56 @@ where
                 ancestor_ok.push(p_best_arc >= min_ancestor_arc);
 
                 if v == 0 {
+                    let cur_pos = base_pos + u_zero;
                     if let Some(r0) = global_root_pos {
-                        head_pos.push(Some(r0));
-                        deprel_indices.push(PARATAXIS_DEPREL_INDEX);
+                        if global_root_was_penalized && viable_main[u_zero] {
+                            // Window 0's local root came from a subordinate/non-predicative clause;
+                            // promote this window's viable main predicate to global sentence root.
+                            head_pos[r0] = Some(cur_pos);
+                            deprel_indices[r0] = PARATAXIS_DEPREL_INDEX;
+                            for prev_h in &mut head_pos[..base_pos] {
+                                if *prev_h == Some(r0) {
+                                    *prev_h = Some(cur_pos);
+                                }
+                            }
+                            global_root_pos = Some(cur_pos);
+                            global_root_was_penalized = false;
+                            head_pos.push(None);
+                            deprel_indices.push(ROOT_DEPREL_INDEX);
+                        } else {
+                            head_pos.push(Some(r0));
+                            deprel_indices.push(PARATAXIS_DEPREL_INDEX);
+                        }
                     } else {
-                        global_root_pos = Some(base_pos + u_zero);
+                        global_root_pos = Some(cur_pos);
+                        global_root_was_penalized = is_zh_multiclause && penalized[u_zero];
                         head_pos.push(None);
                         deprel_indices.push(ROOT_DEPREL_INDEX);
                     }
                     scores.push(arc_score);
                 } else {
                     let s_v = win.subword_spans[v - 1][0];
-                    let r_u = row(s_u);
-                    let r_v = row(s_v);
-                    let r_dep = &r_u[rel_offset..rel_offset + 37];
-                    let r_head = &r_v[rel_offset + 37..rel_offset + 74];
-                    let r_bi_dep = &r_u[rel_offset + 74..rel_offset + 111];
-                    let r_bi_head = &r_v[rel_offset + 111..rel_offset + 148];
-
-                    let mut rel_logits = [0.0f32; 37];
-                    for (c, slot) in rel_logits.iter_mut().enumerate() {
-                        *slot = r_dep[c] + r_head[c] + r_bi_dep[c] * r_bi_head[c];
-                    }
-                    let best_c = argmax_non_root_deprel(&rel_logits);
-
-                    let mut non_root = [0.0f32; 36];
-                    let mut dst = 0;
-                    for (c, &val) in rel_logits.iter().enumerate() {
-                        if c != ROOT_DEPREL_INDEX {
-                            non_root[dst] = val;
-                            dst += 1;
-                        }
-                    }
-                    let chosen_non_root = if best_c < ROOT_DEPREL_INDEX {
-                        best_c
-                    } else {
-                        best_c - 1
-                    };
-                    let p_rel = softmax_prob(&non_root, chosen_non_root);
+                    let (best_c, combined_score) = compute_biaffine_deprel_and_score(
+                        &tensor.data,
+                        expected_cols,
+                        rel_offset,
+                        s_u,
+                        s_v,
+                        p_arc,
+                    );
                     head_pos.push(Some(base_pos + (v - 1)));
                     deprel_indices.push(best_c);
-                    scores.push(Score::from_confidence(p_arc * p_rel));
+                    scores.push(combined_score);
                 }
                 sent_tokens.push(tok_idx);
+                clause_pos.push(clause_index_for_span(
+                    &item.clause_spans,
+                    doc.tokens[tok_idx].span,
+                ));
+                win_of_pos.push(w_idx);
+                local_in_win.push(u_zero);
             }
+            win_arc_matrices.push(arc_scores);
         }
 
         // 3. Tree-consistent root & ancestor retention (0 zero-root sentences, 0 orphan arcs).
@@ -1195,6 +2088,115 @@ where
             if connected {
                 for node in path {
                     retained[node] = true;
+                }
+            }
+        }
+
+        // 4. WS5-v3 Clause-local argument guard for low-confidence (`< 0.35`) cross-clause
+        //    closure arcs: prefer a retained local `VERB`/`ADJ` predicate (`prob >= 0.22`,
+        //    cycle-free) within the same clause, and relabel remaining `< 0.35` cross-clause core
+        //    argument bridges to `"parataxis"` (predicates) or `"dep"` (nominals/adjuncts).
+        if is_zh_multiclause {
+            let mut clause_has_pred = vec![false; item.clause_spans.len()];
+            for u in 0..n {
+                if matches!(
+                    doc.tokens[sent_tokens[u]].upos,
+                    Some(Upos::Verb | Upos::Adj)
+                ) && let Some(slot) = clause_has_pred.get_mut(clause_pos[u])
+                {
+                    *slot = true;
+                }
+            }
+
+            for u in 0..n {
+                if !retained[u] || u == r_pos || scores[u].milli() >= SYNTAX_THRESHOLD_MILLI {
+                    continue;
+                }
+                if doc.tokens[sent_tokens[u]].upos == Some(Upos::Punct) {
+                    continue;
+                }
+                let Some(cur_h) = head_pos[u] else {
+                    continue;
+                };
+                if clause_pos[u] == clause_pos[cur_h] {
+                    continue;
+                }
+
+                // Step A: Try cycle-free re-attachment to an emitted `VERB`/`ADJ` in the same clause.
+                let w_idx = win_of_pos[u];
+                let u_loc = local_in_win[u];
+                let mut best_local: Option<(usize, f64)> = None;
+                for cand_p in 0..n {
+                    if cand_p == u
+                        || !retained[cand_p]
+                        || clause_pos[cand_p] != clause_pos[u]
+                        || win_of_pos[cand_p] != w_idx
+                        || !matches!(
+                            doc.tokens[sent_tokens[cand_p]].upos,
+                            Some(Upos::Verb | Upos::Adj)
+                        )
+                    {
+                        continue;
+                    }
+                    if is_ancestor_of(u, cand_p, &head_pos, n) {
+                        continue;
+                    }
+                    let p_loc = local_in_win[cand_p];
+                    let p_prob = softmax_prob(&win_arc_matrices[w_idx][u_loc], p_loc + 1);
+                    if p_prob >= LOCAL_REATTACH_MIN_PROB
+                        && best_local.is_none_or(|(_, best_p)| p_prob > best_p)
+                    {
+                        best_local = Some((cand_p, p_prob));
+                    }
+                }
+
+                if let Some((local_p, p_prob)) = best_local {
+                    let (win, tensor) = &window_tensors[w_idx];
+                    let s_u = win.subword_spans[u_loc][0];
+                    let s_v = win.subword_spans[local_in_win[local_p]][0];
+                    let (best_c, new_sc) = compute_biaffine_deprel_and_score(
+                        &tensor.data,
+                        expected_cols,
+                        rel_offset,
+                        s_u,
+                        s_v,
+                        p_prob,
+                    );
+                    head_pos[u] = Some(local_p);
+                    deprel_indices[u] = best_c;
+                    scores[u] = new_sc;
+                    continue;
+                }
+
+                // Step B: Relabel cross-clause `< 0.35` closure arcs so they never hallucinate
+                // long-distance core agency (`nsubj`/`obj`/`iobj`/`obl`).
+                let c_u = clause_pos[u];
+                let c_h = clause_pos[cur_h];
+                if clause_has_pred.get(c_u).copied().unwrap_or(false)
+                    || c_u.abs_diff(c_h) >= 2
+                    || u.abs_diff(cur_h) > 6
+                {
+                    let cur_rel = DEPRELS[deprel_indices[u]];
+                    if matches!(
+                        doc.tokens[sent_tokens[u]].upos,
+                        Some(Upos::Verb | Upos::Adj)
+                    ) {
+                        if matches!(
+                            cur_rel,
+                            "nsubj"
+                                | "obj"
+                                | "iobj"
+                                | "obl"
+                                | "csubj"
+                                | "compound"
+                                | "nmod"
+                                | "amod"
+                        ) {
+                            deprel_indices[u] = PARATAXIS_DEPREL_INDEX;
+                        }
+                    } else if matches!(cur_rel, "nsubj" | "obj" | "iobj" | "obl" | "csubj") {
+                        deprel_indices[u] = DEP_DEPREL_INDEX;
+                    }
                 }
             }
         }

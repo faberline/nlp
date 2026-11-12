@@ -1097,3 +1097,157 @@ fn six_workstreams_end_to_end_cli_synthetic() {
             && c["clean_arg1_text"].as_str() == Some("整理好行裝")
     }));
 }
+
+#[test]
+fn v3_lexicon_pruning_and_clean_relation_cue_invariants_cli() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundles_dir = tmp.path().join("bundles");
+    let out_dir = tmp.path().join("out_v3");
+    fs::create_dir_all(&bundles_dir).unwrap();
+
+    let mut bundle = String::new();
+    for ch in 1..=4 {
+        bundle.push_str(&format!("第{ch}章 邊塞札記{ch}\n\n"));
+
+        // Mid-frequency true proper names (`12` occurrences across 4 chapters) + 4-char artifact:
+        bundle.push_str("清晨，張鐵柱捧起寒星古鏡走進石殿，段天涯站在石門外遠眺。\n");
+        bundle.push_str("正午時，老匠人向張鐵柱借來寒星古鏡查驗，眾人隨段天涯巡視營地。\n");
+        if ch < 4 {
+            bundle.push_str("夜色裡，張鐵柱收好寒星古鏡返回木屋，守衛替段天涯點燃篝火。\n");
+        } else {
+            bundle.push_str("風雪中，張鐵柱擦拭寒星古鏡放入木匣，學徒請段天涯講解劍譜。\n");
+        }
+
+        // Classifier+noun (`株仙草`, `顆寶珠`), left-straddling (`衫老者`, `期修士`, `色光焰`),
+        // right-straddling (`青色劍`, `銀色符`, `烏冠老`), and scraper infixes (`少丅女`, `長堊老`):
+        bundle
+            .push_str("竹簍裡放著三株仙草備用，石桌上擺著一顆寶珠照明，廣場上青衫老者緩步登台。\n");
+        bundle
+            .push_str("藥圃中長出五株仙草搖曳，錦囊內收好數顆寶珠生輝，閣樓前青衫老者負手佇立。\n");
+        bundle
+            .push_str("木盒內裝滿幾株仙草清香，掌心裡托起那顆寶珠微熱，庭院外白衫老者撫鬚微笑。\n");
+        bundle
+            .push_str("石台上擺開這株仙草晾曬，玉盤中滾動兩顆寶珠清脆，走廊邊白衫老者推門而入。\n");
+
+        bundle
+            .push_str("大殿內初期修士閉目養神，半空中藍色光焰驟然暴漲，雲層下青色劍光破空疾掠。\n");
+        bundle
+            .push_str("石室裡初期修士凝神靜氣，山谷間藍色光焰隨風搖晃，山巔處青色劍光橫掃巨石。\n");
+        bundle
+            .push_str("竹林內中期修士演練劍術，水面上紫色光焰緩緩升騰，峽谷裡青色劍氣縱橫交錯。\n");
+        bundle
+            .push_str("山門前中期修士拱手行禮，祭壇旁紫色光焰漸漸熄滅，密林間青色劍氣劈開迷霧。\n");
+
+        bundle
+            .push_str("石壁上銀色符文閃爍不停，高台旁烏冠老者沉聲開口，松樹下灰衣老者閉目傾聽。\n");
+        bundle
+            .push_str("陣盤內銀色符文流轉不息，涼亭內烏冠老者拂袖落座，火堆邊灰衣老者添柴取暖。\n");
+        bundle
+            .push_str("玉簡上銀色符印悄然浮現，石階上烏冠老叟拄杖慢行，溪水畔灰衣老叟垂釣不語。\n");
+        bundle
+            .push_str("銅鏡背銀色符印漸次亮起，書院前烏冠老叟抬頭望天，渡口處灰衣老叟解纜撐船。\n");
+
+        bundle.push_str("樹蔭下少丅女採摘野果，石亭裡長堊老翻閱古籍。\n");
+        bundle.push_str("小溪邊少丅女提籃浣紗，書閣內長堊老講解經義。\n");
+        bundle.push_str("花叢間少丅女追逐彩蝶，大堂上長堊老主持議事。\n");
+        bundle.push_str("石橋頭少丅女揮手道別，庭院裡長堊老品茗論道。\n");
+
+        // Degenerate trailing-ellipsis & standalone-connector relations + valid lexical relation:
+        bundle.push_str("“似乎整座石橋都沒入了河水之中，並且……”\n");
+        bundle.push_str("快把木門關緊，否則……\n");
+        bundle.push_str("我們必須在天亮前出發。否則。\n");
+        bundle.push_str("「……，但是眾人已經抵達山谷。」\n");
+        bundle.push_str("因為山路濕滑，所以商隊放慢了腳步。\n");
+        bundle.push_str("一一小說 ddyueshu 最新全本 瀏覽貼子 轉貼次數\n\n\n");
+    }
+    fs::write(bundles_dir.join("01.txt"), bundle.as_bytes()).unwrap();
+
+    let out = Command::new(bin_path())
+        .args([
+            "--bundles-dir",
+            bundles_dir.to_str().unwrap(),
+            "--out-dir",
+            out_dir.to_str().unwrap(),
+            "--backend",
+            "none",
+            "--workers",
+            "2",
+        ])
+        .output()
+        .expect("run v3 cli test");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let lex_json: Value =
+        serde_json::from_slice(&fs::read(out_dir.join("discovered_lexicon.json")).unwrap())
+            .unwrap();
+    let terms: Vec<&str> = lex_json["terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v["term"].as_str())
+        .collect();
+
+    for kept in ["張鐵柱", "段天涯", "寒星古鏡"] {
+        assert!(
+            terms.contains(&kept),
+            "expected `{kept}` in discovered lexicon, got: {terms:?}"
+        );
+    }
+    for pruned in [
+        "株仙草",
+        "顆寶珠",
+        "衫老者",
+        "期修士",
+        "色光焰",
+        "青色劍",
+        "銀色符",
+        "烏冠老",
+        "少丅女",
+        "長堊老",
+    ] {
+        assert!(
+            !terms.contains(&pruned),
+            "expected false merge `{pruned}` to be pruned, got: {terms:?}"
+        );
+    }
+
+    let cues: Vec<Value> = fs::read_to_string(out_dir.join("entities_timeline_cues.jsonl"))
+        .unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let rel_cues: Vec<&Value> = cues
+        .iter()
+        .filter(|c| c["cue_type"].as_str() == Some("relation"))
+        .collect();
+    // Exactly 1 valid relation (`因為山路濕滑，所以商隊放慢了腳步。`) per chapter across 4 chapters = 4 cues!
+    assert_eq!(rel_cues.len(), 4, "rel_cues={rel_cues:?}");
+
+    let spans_overlap = |a: &Value, b: &Value| -> bool {
+        let a0 = a["start_char"].as_u64().unwrap();
+        let a1 = a["end_char"].as_u64().unwrap();
+        let b0 = b["start_char"].as_u64().unwrap();
+        let b1 = b["end_char"].as_u64().unwrap();
+        a0 < b1 && b0 < a1
+    };
+    for cue in &rel_cues {
+        let conn = &cue["connector"];
+        let c1 = &cue["clean_arg1_span"];
+        let c2 = &cue["clean_arg2_span"];
+        assert!(!spans_overlap(c1, conn) && !spans_overlap(c2, conn));
+        if !cue["correlate"].is_null() {
+            assert!(!spans_overlap(c1, &cue["correlate"]) && !spans_overlap(c2, &cue["correlate"]));
+        }
+        let t1 = cue["clean_arg1_text"].as_str().unwrap_or("");
+        let t2 = cue["clean_arg2_text"].as_str().unwrap_or("");
+        assert!(t1.chars().any(char::is_alphanumeric));
+        assert!(t2.chars().any(char::is_alphanumeric));
+        assert_eq!(t1, "山路濕滑");
+        assert_eq!(t2, "商隊放慢了腳步");
+    }
+}

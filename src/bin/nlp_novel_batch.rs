@@ -1359,6 +1359,77 @@ fn is_trailing_stop_char(ch: char) -> bool {
     TRAIL.contains(ch)
 }
 
+/// Scraper anti-censorship radical/stroke infix chars and non-standard CJK radical blocks.
+fn is_scraper_infix_or_radical_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '丅' | '丵' | '灬' | '堊' | '冇' | '吖'
+            | '\u{2e80}'..='\u{2fdf}'
+            | '\u{3100}'..='\u{31ff}'
+    )
+}
+
+/// Generic book-scraper metadata compounds that must never enter `discovered_lexicon.json`.
+fn is_blocked_meta_compound(term: &str) -> bool {
+    const META_COMPOUNDS: &[&str] = &[
+        "電子書",
+        "电子书",
+        "小說網",
+        "小说网",
+        "推薦票",
+        "推荐票",
+        "月票榜",
+        "月票",
+        "加入書架",
+        "加入书架",
+        "最新全本",
+        "瀏覽貼子",
+        "浏览贴子",
+        "轉貼次數",
+        "转贴次数",
+    ];
+    META_COMPOUNDS.iter().any(|bad| term.contains(bad))
+}
+
+/// Generic Chinese classifiers and measure characters (`CLF_CHARS`).
+fn is_classifier_char(ch: char) -> bool {
+    const CLF_CHARS: &str = "株具批塊块個个隻只條条道件座名位顆颗滴根片波張张層层頭头步把柄瓶粒雙双套陣阵番團团口尊盞盏頂顶面枚頁页卷篇部幅封本冊册輛辆種种樣样次趟下點点段截節节集朵縷缕絲丝股";
+    CLF_CHARS.contains(ch)
+}
+
+/// Unambiguous non-surname measure characters that never initiate genuine `>= 3`-char proper names.
+fn is_unambiguous_classifier_char(ch: char) -> bool {
+    const UNAMBIG_CLF_CHARS: &str =
+        "株具批塊块個个隻只條条顆颗滴根片波層层輛辆枚盞盏瓶粒套朵縷缕絲丝";
+    UNAMBIG_CLF_CHARS.contains(ch)
+}
+
+/// Numerals, quantifiers, and demonstratives whose left-context presence signals a classifier phrase.
+fn is_num_or_dem_left_char(ch: char) -> bool {
+    const NUM_DEM_CHARS: &str = "一二三四五六七八九十百千萬万億亿零〇兩两幾几數数半每這这那某各何餘余壹貳贰參叁肆伍陸陆柒捌玖拾佰仟";
+    NUM_DEM_CHARS.contains(ch)
+}
+
+/// Speech/perception verbs and prepositions exempted from left-boundary 2-gram straddle counts.
+fn is_left_straddle_exempt_char(ch: char) -> bool {
+    "於于以按依順顺沿隨随趁除沖衝離离距說说道看見见想聽听知覺觉感問问答笑哭喊叫喝罵骂嘆叹哼去來来"
+        .contains(ch)
+}
+
+/// Postpositions, speech verbs, and directionals exempted from right-boundary 2-gram straddle counts.
+fn is_right_straddle_exempt_char(ch: char) -> bool {
+    "於于以之其此說说道看見见想聽听知覺觉感問问答笑哭喊叫喝罵骂嘆叹哼去來来上下前後后裡里裏內内外中間间旁側侧"
+        .contains(ch)
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
+}
+
 fn is_boilerplate_or_heading_line(line: &str) -> bool {
     let trimmed = line.trim_matches(is_heading_ws);
     if trimmed.is_empty()
@@ -1407,15 +1478,58 @@ fn is_boilerplate_or_heading_line(line: &str) -> bool {
         "最新章節",
         "最新章节",
         "更新快",
-        "www.",
-        "http",
-        ".com",
-        ".net",
+        "一一小說",
+        "一一小说",
+        "全本小說吧",
+        "全本小说吧",
+        "在線書吧",
+        "在线书吧",
+        "看書窩",
+        "看书窝",
+        "56小說",
+        "56小说",
+        "書家文學",
+        "书家文学",
+        "回味書庫",
+        "回味书库",
+        "理想文學",
+        "理想文学",
+        "云軒閣",
+        "云轩阁",
+        "雲軒閣",
+        "七星閣",
+        "七星阁",
+        "搜/搜/9/9/9",
+        "最新全本",
+        "瀏覽貼子",
+        "浏览贴子",
+        "轉貼次數",
+        "转贴次数",
+        "閱讀提示",
+        "阅读提示",
+        "下載電子書",
+        "下载电子书",
         "┏",
         "┗",
         "┃",
     ];
-    CUES.iter().any(|cue| trimmed.contains(cue))
+    if CUES.iter().any(|cue| trimmed.contains(cue)) {
+        return true;
+    }
+    const ASCII_CUES: &[&[u8]] = &[
+        b"ddyueshu",
+        b"soso999",
+        b"3qzw",
+        b"qixingge",
+        b"qbxs8",
+        b"www.",
+        b"http",
+        b".com",
+        b".net",
+    ];
+    ASCII_CUES
+        .iter()
+        .any(|cue| contains_ascii_case_insensitive(trimmed, cue))
 }
 
 #[derive(Clone, Copy, Default)]
@@ -1473,14 +1587,18 @@ fn unpack_u16_gram_string(key: u128) -> String {
 /// Pure statistical two-pass discovery of recurring multi-character compounds and proper names
 /// (`2..=5` BMP Han scalars) across the input chapters, using Apriori frequent-bigram pruning,
 /// internal split-point PMI / Normalized PMI, left/right Accessor Variety & branching entropy,
+/// classifier + noun statistical pruning, bidirectional cohesive boundary-straddling rejection,
 /// chapter burstiness, closed-class boundary filtering, and superstring dominance suppression.
 fn discover_corpus_lexicon(
     chapters: &[InputChapter],
     max_terms: usize,
 ) -> DiscoveredLexiconArtifact {
-    const MIN_FREQ: u32 = 15;
+    const MIN_BIGRAM_FREQ: u32 = 10;
+    const MIN_FREQ_DEFAULT: u32 = 15;
+    const MIN_FREQ_PROPER: u32 = 10;
     const MIN_CHAP_DF: u32 = 3;
-    const MIN_AV: usize = 4;
+    const MIN_AV_DEFAULT: usize = 4;
+    const MIN_AV_HIGH_PMI_PROPER: usize = 3;
     const MAX_SAMPLE_CTX: u32 = 512;
 
     let t0 = Instant::now();
@@ -1489,16 +1607,31 @@ fn discover_corpus_lexicon(
     let mut lead_ok = vec![false; 65536];
     let mut trail_ok = vec![false; 65536];
     let mut medial_glue = vec![false; 65536];
+    let mut clf_char = vec![false; 65536];
+    let mut unambig_clf_char = vec![false; 65536];
+    let mut num_dem_left_char = vec![false; 65536];
+    let mut left_straddle_exempt = vec![false; 65536];
+    let mut right_straddle_exempt = vec![false; 65536];
+    for slot in &mut num_dem_left_char[1025..=2048] {
+        *slot = true;
+    }
     for cp in 0u32..65536 {
-        if let Some(ch) = char::from_u32(cp)
-            && is_bmp_han(ch)
-            && !is_internal_stop_char(ch)
-        {
+        if let Some(ch) = char::from_u32(cp) {
             let idx = cp as usize;
-            han_ok[idx] = true;
-            lead_ok[idx] = !is_leading_stop_char(ch);
-            trail_ok[idx] = !is_trailing_stop_char(ch);
-            medial_glue[idx] = is_medial_phrase_glue(ch);
+            if is_num_or_dem_left_char(ch) {
+                num_dem_left_char[idx] = true;
+            }
+            if is_bmp_han(ch) && !is_internal_stop_char(ch) && !is_scraper_infix_or_radical_char(ch)
+            {
+                han_ok[idx] = true;
+                lead_ok[idx] = !is_leading_stop_char(ch);
+                trail_ok[idx] = !is_trailing_stop_char(ch);
+                medial_glue[idx] = is_medial_phrase_glue(ch);
+                clf_char[idx] = is_classifier_char(ch);
+                unambig_clf_char[idx] = is_unambiguous_classifier_char(ch);
+                left_straddle_exempt[idx] = is_left_straddle_exempt_char(ch);
+                right_straddle_exempt[idx] = is_right_straddle_exempt_char(ch);
+            }
         }
     }
 
@@ -1509,6 +1642,7 @@ fn discover_corpus_lexicon(
     bigram_freq.reserve(chapters.len().saturating_mul(64).min(262_144));
     let mut total_han_chars = 0u64;
     let mut boundary_counter: u16 = 1;
+    let mut digit_boundary_counter: u16 = 0;
 
     for ch_item in chapters {
         let mut cur_chap: Vec<u16> = Vec::with_capacity(ch_item.text.len() / 3 + 16);
@@ -1533,6 +1667,9 @@ fn discover_corpus_lexicon(
                         *bigram_freq.entry(bg).or_insert(0) += 1;
                     }
                     cur_chap.push(u);
+                } else if ch.is_ascii_digit() || matches!(ch, '０'..='９' | '〇') {
+                    digit_boundary_counter = (digit_boundary_counter % 1024) + 1;
+                    cur_chap.push(1024 + digit_boundary_counter);
                 } else {
                     boundary_counter = (boundary_counter % 1024) + 1;
                     cur_chap.push(boundary_counter);
@@ -1544,7 +1681,7 @@ fn discover_corpus_lexicon(
 
     if max_terms == 0
         || chapters.len() < MIN_CHAP_DF as usize
-        || total_han_chars < u64::from(MIN_FREQ)
+        || total_han_chars < u64::from(MIN_FREQ_PROPER)
     {
         return DiscoveredLexiconArtifact {
             schema: LEXICON_SCHEMA.to_owned(),
@@ -1557,7 +1694,7 @@ fn discover_corpus_lexicon(
         };
     }
 
-    bigram_freq.retain(|_, &mut f| f >= MIN_FREQ);
+    bigram_freq.retain(|_, &mut f| f >= MIN_BIGRAM_FREQ);
 
     // Pass 2a: Count `2..=5`-grams whose every adjacent bigram is frequent.
     let mut cands: FastMap<u128, LexCountStat> = FastMap::default();
@@ -1593,7 +1730,7 @@ fn discover_corpus_lexicon(
         }
     }
 
-    // Filter by frequency, chapter dispersion, stop boundaries, and internal split-point PMI/NPMI.
+    // Filter by frequency, chapter dispersion, stop/straddle boundaries, and internal split-point PMI/NPMI.
     let total_n = total_han_chars as f64;
     let sub_freq = |slice: &[u16]| -> u32 {
         match slice.len() {
@@ -1614,10 +1751,15 @@ fn discover_corpus_lexicon(
     let mut active_prefix_mask: FastMap<u32, u8> = FastMap::default();
 
     for (&key, &st) in &cands {
-        if st.freq < MIN_FREQ || st.chap_df < MIN_CHAP_DF {
+        let len = ((key >> 96) & 0xff) as usize;
+        let min_freq_for_len = if (3..=4).contains(&len) {
+            MIN_FREQ_PROPER
+        } else {
+            MIN_FREQ_DEFAULT
+        };
+        if st.freq < min_freq_for_len || st.chap_df < MIN_CHAP_DF {
             continue;
         }
-        let len = ((key >> 96) & 0xff) as usize;
         let mut u16s = [0u16; 5];
         for (idx, slot) in u16s.iter_mut().enumerate().take(len) {
             *slot = ((key >> (idx * 16)) & 0xffff) as u16;
@@ -1625,6 +1767,40 @@ fn discover_corpus_lexicon(
         let word = &u16s[..len];
         if !lead_ok[word[0] as usize] || !trail_ok[word[len - 1] as usize] {
             continue;
+        }
+        // Reject leaked tight headings (`章...` with `len >= 4`) and bound head prefixes (`衫/袍/色/期/階`).
+        if len >= 4 && word[0] == '章' as u16 {
+            continue;
+        }
+        if len >= 3
+            && matches!(
+                char::from_u32(u32::from(word[0])),
+                Some('衫' | '袍' | '色' | '期' | '階' | '阶')
+            )
+        {
+            continue;
+        }
+        // Reject 3-char `X之Y` fragments, `[Color/Grade Modifier + 1-char Noun]`, and `雙頭X`/`雙首X` straddlers
+        // (keeping genuine 4-char `AB之C` and `雙頭...` compounds intact).
+        if len == 3 {
+            if word[1] == '之' as u16 {
+                continue;
+            }
+            if matches!(
+                char::from_u32(u32::from(word[1])),
+                Some('色' | '階' | '阶' | '品' | '級' | '级')
+            ) {
+                continue;
+            }
+            if matches!(
+                (
+                    char::from_u32(u32::from(word[0])),
+                    char::from_u32(u32::from(word[1]))
+                ),
+                (Some('雙' | '双'), Some('頭' | '头' | '首'))
+            ) {
+                continue;
+            }
         }
         // Reject AA, ABB, and AABB reduplications.
         if (len == 2 && word[0] == word[1])
@@ -1724,28 +1900,113 @@ fn discover_corpus_lexicon(
 
     let mut prelim: Vec<ScoredCandidate> = Vec::with_capacity(ctx_targets.len());
     for (key, (st, min_pmi, min_npmi, pair)) in ctx_targets {
+        let len = ((key >> 96) & 0xff) as usize;
+        let high_pmi_proper = len >= 3 && min_pmi >= 5.5;
+        let min_av = if high_pmi_proper {
+            MIN_AV_HIGH_PMI_PROPER
+        } else {
+            MIN_AV_DEFAULT
+        };
+        let min_entropy = if high_pmi_proper { 0.85 } else { 1.1 };
+
         let (left_av, left_h, left_max_p) = entropy_and_av(&pair.left, pair.sampled);
         let (right_av, right_h, right_max_p) = entropy_and_av(&pair.right, pair.sampled);
-        if left_av < MIN_AV || right_av < MIN_AV {
+        if left_av < min_av || right_av < min_av {
             continue;
         }
-        if left_h < 1.1 || right_h < 1.1 || left_max_p > 0.72 || right_max_p > 0.72 {
+        if left_h < min_entropy || right_h < min_entropy || left_max_p > 0.72 || right_max_p > 0.72
+        {
             continue;
         }
-        let len = ((key >> 96) & 0xff) as usize;
         let burstiness = f64::from(st.freq) / f64::from(st.chap_df.max(1));
         let min_burst = match len {
             2 => 2.15,
+            3 | 4 if high_pmi_proper => 1.20,
             3 | 4 => 1.30,
             _ => 1.25,
         };
         if burstiness < min_burst {
             continue;
         }
+
         let mut u16s = Vec::with_capacity(len);
         for idx in 0..len {
             u16s.push(((key >> (idx * 16)) & 0xffff) as u16);
         }
+
+        if len >= 3 {
+            let total_ctx = f64::from(pair.sampled.max(1));
+
+            // 1. Statistical Classifier + Noun rejection (`株仙草`, `顆寶珠`, `張符籙` vs surname `張鐵柱`, `段天涯`).
+            if clf_char[u16s[0] as usize] {
+                let num_dem_left: u32 = pair
+                    .left
+                    .iter()
+                    .filter(|&(&lc, _)| num_dem_left_char[lc as usize])
+                    .map(|(_, &cnt)| cnt)
+                    .sum();
+                let num_dem_left_ratio = f64::from(num_dem_left) / total_ctx;
+                let suffix_freq = sub_freq(&u16s[1..]);
+                if num_dem_left_ratio >= 0.20
+                    || (unambig_clf_char[u16s[0] as usize] && suffix_freq >= st.freq)
+                {
+                    continue;
+                }
+            }
+
+            // 2. Bidirectional cohesive boundary-straddling rejection (`>= 35%` straddle through cohesive 2-grams).
+            let w_first = u16s[0];
+            let mut straddle_left = 0u32;
+            for (&lc, &cnt) in &pair.left {
+                if lc >= 0x3000
+                    && han_ok[lc as usize]
+                    && !left_straddle_exempt[lc as usize]
+                    && let Some(&bg_f) =
+                        bigram_freq.get(&((u32::from(lc) << 16) | u32::from(w_first)))
+                    && bg_f >= MIN_BIGRAM_FREQ
+                {
+                    let pmi = (f64::from(bg_f) * total_n
+                        / (f64::from(unigram_freq[lc as usize].max(1))
+                            * f64::from(unigram_freq[w_first as usize].max(1))))
+                    .ln();
+                    if pmi >= 3.5 {
+                        straddle_left += cnt;
+                    }
+                }
+            }
+            if f64::from(straddle_left) / total_ctx >= 0.35 {
+                continue;
+            }
+
+            let w_last = u16s[len - 1];
+            let mut straddle_right = 0u32;
+            for (&rc, &cnt) in &pair.right {
+                if rc >= 0x3000
+                    && han_ok[rc as usize]
+                    && !right_straddle_exempt[rc as usize]
+                    && let Some(&bg_f) =
+                        bigram_freq.get(&((u32::from(w_last) << 16) | u32::from(rc)))
+                    && bg_f >= MIN_BIGRAM_FREQ
+                {
+                    let pmi = (f64::from(bg_f) * total_n
+                        / (f64::from(unigram_freq[w_last as usize].max(1))
+                            * f64::from(unigram_freq[rc as usize].max(1))))
+                    .ln();
+                    if pmi >= 3.5 {
+                        straddle_right += cnt;
+                    }
+                }
+            }
+            if f64::from(straddle_right) / total_ctx >= 0.35 {
+                continue;
+            }
+        }
+
+        let term = unpack_u16_gram_string(key);
+        if is_blocked_meta_compound(&term) {
+            continue;
+        }
+
         let min_h = left_h.min(right_h);
         let score = 12.0 * min_npmi
             + 1.1 * min_h
@@ -1753,7 +2014,7 @@ fn discover_corpus_lexicon(
             + 1.8 * burstiness.ln()
             + 0.8 * ((len - 2) as f64);
         prelim.push(ScoredCandidate {
-            term: unpack_u16_gram_string(key),
+            term,
             u16s,
             freq: st.freq,
             chap_df: st.chap_df,
@@ -1931,6 +2192,10 @@ fn open_bracket_partner(ch: char) -> Option<char> {
         '‘' => Some('’'),
         '（' => Some('）'),
         '(' => Some(')'),
+        '[' => Some(']'),
+        '【' => Some('】'),
+        '《' => Some('》'),
+        '〈' => Some('〉'),
         _ => None,
     }
 }
@@ -1943,6 +2208,10 @@ fn close_bracket_partner(ch: char) -> Option<char> {
         '’' => Some('‘'),
         '）' => Some('（'),
         ')' => Some('('),
+        ']' => Some('['),
+        '】' => Some('【'),
+        '》' => Some('《'),
+        '〉' => Some('〈'),
         _ => None,
     }
 }
@@ -2052,46 +2321,73 @@ fn trim_arg_bounds(text: &str, tbl: &[usize], mut s: usize, mut e: usize) -> (us
     (s, e)
 }
 
+fn spans_overlap(a: Span, b: Span) -> bool {
+    a.start_char < b.end_char && b.start_char < a.end_char
+}
+
+fn range_has_lexical_char(text: &str, tbl: &[usize], s: usize, e: usize) -> bool {
+    slice_span(
+        text,
+        tbl,
+        Span {
+            start_char: s,
+            end_char: e,
+        },
+    )
+    .is_some_and(|sub| sub.chars().any(char::is_alphanumeric))
+}
+
 fn clean_relation_arg_span(
     chapter_text: Option<&str>,
     char_table: Option<&[usize]>,
     arg: Span,
     connector: Span,
     correlate: Option<Span>,
-) -> Span {
+) -> Option<Span> {
     let Some((t, tbl)) = chapter_text.zip(char_table) else {
         let mut s = arg.start_char;
         let mut e = arg.end_char;
         for marker in [Some(connector), correlate].into_iter().flatten() {
-            if marker.start_char == s && marker.end_char > s && marker.end_char < e {
+            if marker.start_char == s && marker.end_char > s && marker.end_char <= e {
                 s = marker.end_char;
-            } else if marker.end_char == e && marker.start_char > s && marker.start_char < e {
+            } else if marker.end_char == e && marker.start_char >= s && marker.start_char < e {
                 e = marker.start_char;
             }
         }
-        return Span {
+        if s >= e {
+            return None;
+        }
+        let cleaned = Span {
             start_char: s,
             end_char: e,
         };
+        if spans_overlap(cleaned, connector)
+            || correlate.is_some_and(|corr| spans_overlap(cleaned, corr))
+        {
+            return None;
+        }
+        return Some(cleaned);
     };
 
     let (mut s, mut e) = trim_arg_bounds(t, tbl, arg.start_char, arg.end_char);
-    loop {
+    while s < e {
         let mut stripped = false;
         for marker in [Some(connector), correlate].into_iter().flatten() {
-            if marker.start_char == s && marker.end_char > s && marker.end_char < e {
-                let (ns, ne) = trim_arg_bounds(t, tbl, marker.end_char, e);
-                if ns < ne {
+            if marker.start_char >= s && marker.end_char <= e && marker.start_char < marker.end_char
+            {
+                if marker.start_char == s || !range_has_lexical_char(t, tbl, s, marker.start_char) {
+                    let (ns, ne) = trim_arg_bounds(t, tbl, marker.end_char, e);
                     s = ns;
                     e = ne;
                     stripped = true;
+                    break;
                 }
-            } else if marker.end_char == e && marker.start_char > s && marker.start_char < e {
-                let (ns, ne) = trim_arg_bounds(t, tbl, s, marker.start_char);
-                if ns < ne {
+                if marker.end_char == e || !range_has_lexical_char(t, tbl, marker.end_char, e) {
+                    let (ns, ne) = trim_arg_bounds(t, tbl, s, marker.start_char);
                     s = ns;
                     e = ne;
                     stripped = true;
+                    break;
                 }
             }
         }
@@ -2100,22 +2396,20 @@ fn clean_relation_arg_span(
         }
     }
 
-    if s < e {
-        Span {
-            start_char: s,
-            end_char: e,
-        }
-    } else {
-        let (ts, te) = trim_arg_bounds(t, tbl, arg.start_char, arg.end_char);
-        if ts < te {
-            Span {
-                start_char: ts,
-                end_char: te,
-            }
-        } else {
-            arg
-        }
+    if s >= e || s < arg.start_char || e > arg.end_char {
+        return None;
     }
+    let cleaned = Span {
+        start_char: s,
+        end_char: e,
+    };
+    if spans_overlap(cleaned, connector)
+        || correlate.is_some_and(|corr| spans_overlap(cleaned, corr))
+        || !range_has_lexical_char(t, tbl, s, e)
+    {
+        return None;
+    }
+    Some(cleaned)
 }
 
 fn extract_timeline_cues(
@@ -2188,20 +2482,43 @@ fn extract_timeline_cues(
             start_char,
             end_char,
         };
-        let clean_arg1 = clean_relation_arg_span(
-            chapter_text,
-            char_table.as_deref(),
-            rel.arg1,
-            rel.connector,
-            rel.correlate,
-        );
-        let clean_arg2 = clean_relation_arg_span(
-            chapter_text,
-            char_table.as_deref(),
-            rel.arg2,
-            rel.connector,
-            rel.correlate,
-        );
+        let (Some(clean_arg1), Some(clean_arg2)) = (
+            clean_relation_arg_span(
+                chapter_text,
+                char_table.as_deref(),
+                rel.arg1,
+                rel.connector,
+                rel.correlate,
+            ),
+            clean_relation_arg_span(
+                chapter_text,
+                char_table.as_deref(),
+                rel.arg2,
+                rel.connector,
+                rel.correlate,
+            ),
+        ) else {
+            continue;
+        };
+        let clean_arg1_text = text_for(clean_arg1);
+        let clean_arg2_text = text_for(clean_arg2);
+        if chapter_text.is_some()
+            && (!clean_arg1_text
+                .as_deref()
+                .is_some_and(|s| s.chars().any(char::is_alphanumeric))
+                || !clean_arg2_text
+                    .as_deref()
+                    .is_some_and(|s| s.chars().any(char::is_alphanumeric)))
+        {
+            continue;
+        }
+        debug_assert!(!spans_overlap(clean_arg1, rel.connector));
+        debug_assert!(!spans_overlap(clean_arg2, rel.connector));
+        if let Some(corr) = rel.correlate {
+            debug_assert!(!spans_overlap(clean_arg1, corr));
+            debug_assert!(!spans_overlap(clean_arg2, corr));
+        }
+
         cues.push(TimelineCueRecord {
             schema: CUE_SCHEMA.to_owned(),
             chapter: order,
@@ -2224,8 +2541,8 @@ fn extract_timeline_cues(
             arg2: Some(rel.arg2),
             clean_arg1_span: Some(clean_arg1),
             clean_arg2_span: Some(clean_arg2),
-            clean_arg1_text: text_for(clean_arg1),
-            clean_arg2_text: text_for(clean_arg2),
+            clean_arg1_text,
+            clean_arg2_text,
         });
     }
 
@@ -3270,8 +3587,14 @@ mod tests {
                 end_char: 10,
             }),
         );
-        assert_eq!(slice_span(t1, &tbl1, c_arg1), Some("山路濕滑"));
-        assert_eq!(slice_span(t1, &tbl1, c_arg2), Some("我們放慢腳步"));
+        assert_eq!(
+            c_arg1.and_then(|sp| slice_span(t1, &tbl1, sp)),
+            Some("山路濕滑")
+        );
+        assert_eq!(
+            c_arg2.and_then(|sp| slice_span(t1, &tbl1, sp)),
+            Some("我們放慢腳步")
+        );
 
         // Case 2: Balanced internal quotes (`「甲」與「乙」` and `拿起了「星盤」`) must NOT lose closing/opening quotes!
         let t2 = "因為「甲」與「乙」就位，所以他拿起了「星盤」。";
@@ -3308,8 +3631,255 @@ mod tests {
                 end_char: 14,
             }),
         );
-        assert_eq!(slice_span(t2, &tbl2, c2_arg1), Some("「甲」與「乙」就位"));
-        assert_eq!(slice_span(t2, &tbl2, c2_arg2), Some("他拿起了「星盤」"));
+        assert_eq!(
+            c2_arg1.and_then(|sp| slice_span(t2, &tbl2, sp)),
+            Some("「甲」與「乙」就位")
+        );
+        assert_eq!(
+            c2_arg2.and_then(|sp| slice_span(t2, &tbl2, sp)),
+            Some("他拿起了「星盤」")
+        );
+
+        // Case 3: Degenerate connector + trailing ellipsis/quote (`並且……”`) yields `None` instead of overlapping `connector`.
+        let t3 = "“似乎整座石橋都沒入了河水之中，並且……”";
+        let tbl3 = char_to_byte_offsets(t3);
+        let c3_arg2 = clean_relation_arg_span(
+            Some(t3),
+            Some(&tbl3),
+            Span {
+                start_char: 16,
+                end_char: 21,
+            },
+            Span {
+                start_char: 16,
+                end_char: 18,
+            },
+            None,
+        );
+        assert_eq!(c3_arg2, None);
+    }
+
+    #[test]
+    fn lexicon_prunes_classifiers_straddlers_and_scraper_infixes_while_keeping_mid_freq_names() {
+        let mut chapters = Vec::new();
+        for ch_idx in 1..=4 {
+            let mut body = String::new();
+
+            // 1. Mid-frequency true proper names & 4-char compounds (`11..12` occurrences across 4 chapters):
+            // - `張鐵柱` (`freq=12`, starts with `'張'` in `CLF_CHARS`, `num_dem_left_ratio = 0`)
+            // - `段天涯` (`freq=12`, starts with `'段'` in `CLF_CHARS`, `num_dem_left_ratio = 0`)
+            // - `顧裴軒` (`freq=11`, `right_av = 3` at `min_pmi >= 5.5`)
+            // - `玄霜古鏡` (`freq=12`, 4-char artifact)
+            // - `蒼穹之塔` (`freq=12`, 4-char `AB之C` proper noun; 3-char `穹之塔` must be rejected)
+            body.push_str("清晨，張鐵柱捧起玄霜古鏡踏入石殿，段天涯仰望蒼穹之塔思索良久。\n");
+            body.push_str(
+                "正午時，老匠人向張鐵柱借來玄霜古鏡查驗，眾人隨段天涯繞過蒼穹之塔前行。\n",
+            );
+            if ch_idx < 4 {
+                body.push_str(
+                    "夜幕下，張鐵柱擦拭玄霜古鏡交還書房，守衛替段天涯開啟蒼穹之塔大門。\n",
+                );
+            } else {
+                body.push_str(
+                    "雷雨裡，張鐵柱收好玄霜古鏡離開廣場，學徒請段天涯繪製蒼穹之塔圖譜。\n",
+                );
+            }
+
+            body.push_str("山道旁，顧裴軒揮劍斬斷枯枝。\n");
+            body.push_str("溪橋邊，獵戶向顧裴軒駐足拱手。\n");
+            if ch_idx < 4 {
+                body.push_str("松林外，顧裴軒盤膝靜坐調息。\n");
+            }
+
+            // 2. Classifier + Noun false merges (`freq=16` across 4 diverse contexts):
+            // `株仙草`, `顆寶珠`, and `'張'`-headed `張符紙` (`num_dem_left_ratio = 1.0 >= 0.20`).
+            body.push_str(
+                "木盒裡放著三株仙草備用，石桌上擺著一顆寶珠照明，袖袋內藏著三張符紙防身。\n",
+            );
+            body.push_str(
+                "藥圃中長出五株仙草搖曳，錦囊內收好數顆寶珠生輝，書案上壓著五張符紙待乾。\n",
+            );
+            body.push_str(
+                "竹簍內裝滿幾株仙草清香，掌心裡托起那顆寶珠微熱，暗格裡留著幾張符紙封存。\n",
+            );
+            body.push_str(
+                "石台上擺開這株仙草晾曬，玉盤中滾動兩顆寶珠清脆，指縫間夾著這張符紙凝神。\n",
+            );
+
+            // 3. Left-boundary straddlers (`衫老者`, `期修士`, `色光焰`, statistical `甲傀儡`, 3-char `鷹之羽`):
+            body.push_str(
+                "廣場上青衫老者緩步登台，大殿內初期修士閉目養神，半空中藍色光焰驟然暴漲。\n",
+            );
+            body.push_str(
+                "閣樓前青衫老者負手佇立，石室裡初期修士凝神靜氣，山谷間藍色光焰隨風搖晃。\n",
+            );
+            body.push_str(
+                "庭院外白衫老者撫鬚微笑，竹林內中期修士演練劍術，水面上紫色光焰緩緩升騰。\n",
+            );
+            body.push_str(
+                "走廊邊白衫老者推門而入，山門前中期修士拱手行禮，祭壇旁紫色光焰漸漸熄滅。\n",
+            );
+            body.push_str("校場中青衫青年拔刀演武，城門外白衫青年策馬疾馳。\n");
+            body.push_str(
+                "甬道口鐵甲傀儡舉盾攔路，城牆上鐵甲武士吹響號角，石匣裡蒼鷹之羽泛起微光。\n",
+            );
+            body.push_str(
+                "密室中鐵甲傀儡邁步逼近，箭塔下鐵甲武士列隊巡視，木盤內蒼鷹之羽輕輕顫動。\n",
+            );
+            body.push_str(
+                "石門前銅甲傀儡揮拳砸地，營帳外銅甲武士擦拭長槍，錦盒中銀鷹之羽靜靜躺著。\n",
+            );
+            body.push_str(
+                "高台下銅甲傀儡轉身退後，山道上銅甲武士護送車隊，石案上銀鷹之羽散發寒意。\n",
+            );
+
+            // 4. Right-boundary straddlers (`青色劍`, `銀色符`, statistical `烏冠老`, `雙頭巨`):
+            body.push_str(
+                "雲層下青色劍光破空疾掠，石壁上銀色符文閃爍不停，林間雙頭巨蟒吐信盤踞。\n",
+            );
+            body.push_str(
+                "山巔處青色劍光橫掃巨石，陣盤內銀色符文流轉不息，潭邊雙頭巨蟒翻湧水花。\n",
+            );
+            body.push_str(
+                "峽谷裡青色劍氣縱橫交錯，玉簡上銀色符印悄然浮現，岩洞內雙頭巨狼低聲咆哮。\n",
+            );
+            body.push_str(
+                "密林間青色劍氣劈開迷霧，銅鏡背銀色符印漸次亮起，荒原上雙頭巨狼疾奔追逐。\n",
+            );
+            body.push_str("高台旁烏冠老者沉聲開口，松樹下灰衣老者閉目傾聽。\n");
+            body.push_str("涼亭內烏冠老者拂袖落座，火堆邊灰衣老者添柴取暖。\n");
+            body.push_str("石階上烏冠老叟拄杖慢行，溪水畔灰衣老叟垂釣不語。\n");
+            body.push_str("書院前烏冠老叟抬頭望天，渡口處灰衣老叟解纜撐船。\n");
+
+            // 5. Scraper anti-censorship infixes, metadata compounds, leaked tight heading, & pirate footers:
+            body.push_str("樹蔭下少丅女採摘野果，石亭裡長堊老翻閱古籍，陣台上傳灬送光芒閃動。\n");
+            body.push_str("小溪邊少丅女提籃浣紗，書閣內長堊老講解經義，廣場中傳灬送符陣開啟。\n");
+            body.push_str("花叢間少丅女追逐彩蝶，大堂上長堊老主持議事，山腰處傳灬送石門緊閉。\n");
+            body.push_str("石橋頭少丅女揮手道別，庭院裡長堊老品茗論道，地宮內傳灬送通道幽深。\n");
+            body.push_str("櫃台前電子書整齊排列，榜單上月票榜每日刷新，卷軸記章荒原古堡舊事。\n");
+            body.push_str("書架旁電子書分類歸檔，公告欄月票榜張貼醒目，殘碑刻章荒原古堡傳聞。\n");
+            body.push_str("桌案上電子書隨手翻開，石牌處月票榜重新統計，古籍載章荒原古堡來歷。\n");
+            body.push_str("窗台邊電子書靜靜擱置，木牌上月票榜墨跡未乾，手札寫章荒原古堡興衰。\n");
+
+            // Pirate domain/footer boilerplate lines (must never feed n-gram counts):
+            body.push_str(
+                "一一小說 ddyueshu 最新全本，星辰書院整理發佈，瀏覽貼子與轉貼次數統計。\n",
+            );
+            body.push_str("七星閣 qiXingge 全本小說吧，星辰書院火熱連載中，看書窩同步更新。\n");
+            body.push_str("云軒閣 3qzw SOSO999，星辰書院誠意出品，56小說與書家文學轉載。\n");
+            body.push_str("回味書庫 qbxs8 理想文學，星辰書院獨家校對，在線書吧歡迎閱讀。\n");
+
+            chapters.push(make_synthetic_chapter(
+                ch_idx,
+                &format!("第{ch_idx}章 試煉紀要{ch_idx}"),
+                &body,
+            ));
+        }
+
+        let artifact = discover_corpus_lexicon(&chapters, 200);
+        let terms: Vec<&str> = artifact.terms.iter().map(|t| t.term.as_str()).collect();
+
+        for expected in ["張鐵柱", "段天涯", "顧裴軒", "玄霜古鏡", "蒼穹之塔"] {
+            assert!(
+                terms.contains(&expected),
+                "expected mid-frequency proper compound `{expected}` to be discovered, got: {terms:?}"
+            );
+        }
+
+        for rejected in [
+            // Classifier + noun phrases
+            "株仙草",
+            "顆寶珠",
+            "張符紙",
+            // Left-straddling 3-grams
+            "衫老者",
+            "期修士",
+            "色光焰",
+            "甲傀儡",
+            "鷹之羽",
+            "穹之塔",
+            // Right-straddling 3-grams
+            "青色劍",
+            "銀色符",
+            "烏冠老",
+            "雙頭巨",
+            // Scraper infixes, metadata, leaked tight heading, & pirate footer terms
+            "少丅女",
+            "長堊老",
+            "傳灬送",
+            "電子書",
+            "月票榜",
+            "章荒原古堡",
+            "星辰書院",
+        ] {
+            assert!(
+                !terms.contains(&rejected),
+                "false merge `{rejected}` must be pruned, got: {terms:?}"
+            );
+        }
+        assert!(
+            !terms
+                .iter()
+                .any(|t| t.chars().any(is_scraper_infix_or_radical_char)),
+            "no discovered term may contain scraper infix/radical chars: {terms:?}"
+        );
+    }
+
+    #[test]
+    fn degenerate_and_overlapping_relation_cues_are_dropped_with_zero_connector_overlap() {
+        let text = concat!(
+            "“似乎整座石橋都沒入了河水之中，並且……”\n",
+            "“似乎整座石桥都没入了河水之中，并且……”\n",
+            "快把木門關緊，否則……\n",
+            "快把木門關緊，否則，……\n",
+            "我們必須在天亮前撤離。否則。\n",
+            "「……，但是眾人已經抵達山谷。」\n",
+            "因為山路濕滑，所以眾人放慢腳步。整理好行裝之後，隊伍繼續向北前行。\n"
+        );
+        let doc = analyze_document(text, &Options::default());
+        assert!(
+            doc.relations.len() >= 6,
+            "Layer 7 Document.relations must remain untouched for receipt compatibility, got {}",
+            doc.relations.len()
+        );
+
+        let cues = extract_timeline_cues(1, "第一章", "01.txt", 0, Some(text), &doc, false);
+        let rel_cues: Vec<&TimelineCueRecord> =
+            cues.iter().filter(|c| c.cue_type == "relation").collect();
+        assert_eq!(
+            rel_cues.len(),
+            2,
+            "only the 2 valid lexical relations should be emitted, got: {rel_cues:?}"
+        );
+
+        for cue in &rel_cues {
+            let conn = cue.connector.expect("connector span");
+            let c1 = cue.clean_arg1_span.expect("clean_arg1_span");
+            let c2 = cue.clean_arg2_span.expect("clean_arg2_span");
+            assert!(
+                !spans_overlap(c1, conn) && !spans_overlap(c2, conn),
+                "clean_arg span overlapped connector: {cue:?}"
+            );
+            if let Some(corr) = cue.correlate {
+                assert!(
+                    !spans_overlap(c1, corr) && !spans_overlap(c2, corr),
+                    "clean_arg span overlapped correlate: {cue:?}"
+                );
+            }
+            let t1 = cue.clean_arg1_text.as_deref().unwrap_or("");
+            let t2 = cue.clean_arg2_text.as_deref().unwrap_or("");
+            assert!(
+                t1.chars().any(char::is_alphanumeric) && t2.chars().any(char::is_alphanumeric),
+                "clean_arg_text lacked lexical characters: {cue:?}"
+            );
+        }
+        assert_eq!(rel_cues[0].clean_arg1_text.as_deref(), Some("山路濕滑"));
+        assert_eq!(rel_cues[0].clean_arg2_text.as_deref(), Some("眾人放慢腳步"));
+        assert_eq!(rel_cues[1].clean_arg1_text.as_deref(), Some("整理好行裝"));
+        assert_eq!(
+            rel_cues[1].clean_arg2_text.as_deref(),
+            Some("隊伍繼續向北前行")
+        );
     }
 
     #[test]

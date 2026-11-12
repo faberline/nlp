@@ -145,9 +145,10 @@ Blocks:
    - Markdown: 1 to 6 `#`, then a space or tab, then at least one non-space char.
    - Chinese: `第`, then digits or any of `一二三四五六七八九十百千萬万零〇兩两`, optional spaces, then
      one of `章節回卷篇部`, then the end of the line, or whitespace / `：` / `:` / `、` and a title.
-     Punctuation-free web-novel header variants (`<numerals>章 <title>`, `<Prefix>\u{00a0}<Title>`,
-     `<Prefix> 第...章 <Title>`, `VIP第...卷...`, concatenated `[正文]第...卷...第...章...`, and
-     standalone missing-`章` `第<numerals>=2> <short_title>`) are also matched. The line is at most
+     Punctuation-free web-novel header variants (`<numerals>章 <title>`, tight `第<numerals>章<title>`,
+     `<Prefix>\u{00a0}<Title>`, `<Prefix> 第...章 <Title>`, `»»»` / `·` prefixed volume/chapter headers,
+     `VIP第...卷...`, concatenated `[正文]第...卷...第...章...`, and standalone missing-`章`
+     `第<numerals>=2> <short_title>`) are also matched. The line is at most
      60 chars and has none of `。！？`.
    - English: `chapter`, `part` or `section` (ASCII case-insensitive), one space, then one or
      more digits or `IVXLC`, then the end of the line, or one of `:` `.` `-` `—` and a title. The
@@ -159,7 +160,7 @@ Blocks:
    - By default, ASCII/Unicode box-drawing banner blocks (`┏━...┗━` / `┌─...└─`) and standalone
      raw/unclosed HTML tag lines (`<P`, `<p>`, `</p>`, `<br>`, `<br/>`) are masked as block spans.
    - When `options.mask_editorial` is `true`, standalone/parenthetical web-novel editorial
-     postscripts (vote/update pleas, bookshelf/scraper footer lines, and `>= 4` parenthesized
+     postscripts (vote/update pleas, bookshelf/pirate scraper footer lines, and `>= 4` parenthesized
      tag-list lines) are also masked as block spans while keeping exact original scalar offsets.
 
 Inline spans are found left to right in a line. At each position the kinds are tried in this
@@ -167,10 +168,14 @@ order, and a match continues after its span:
 
 1. Code / inline noise: a run of N backticks, then the next run of exactly N backticks on the same
    line, with at least one char between (without that closing run, the whole backtick run is plain
-   text); plus raw/unclosed inline HTML tags (`<P`, `<p>`, `<br/>`), raw/corrupted HTML entities
-   (`&qut;`, `&quot;`, `&nbsp;`, `&amp;`, `&lt;`, `&gt;`), Unicode Private Use Area runs
-   (`U+E000..=U+F8FF`), and — when `options.mask_editorial` is `true` — inline scraper tags such as
-   `/首/發` and `(..#..#..)`.
+   text); plus raw/unclosed inline HTML/SGML tags (`<P`, `</P`, `<p>`, `</p>`, `<br/>`, `<!go`,
+   `<!over`), raw/corrupted HTML entities (`&qut;`, `&quot;`, `&nbsp;`, `&amp;`, `&lt;`, `&gt;`),
+   Unicode Private Use Area runs (`U+E000..=U+F8FF`), and — when `options.mask_editorial` is
+   `true` — inline scraper tags and mixed-bracket/trailing editorial postscripts (`/首/發`,
+   `(..#..#..)`, `(…求月票…）`). When `options.mask_editorial` is `true`, inline HTML/entity/PUA
+   and editorial noise spans are masked silently to spaces (`silent_noise`) so they do not emit
+   spurious `X` tokens while standard backtick `code`, `url`, `citation`, `formula`, and `emoji`
+   inline spans still emit one token each.
 2. URL: starts with `http://`, `https://` or `www.` (scheme ASCII case-insensitive). It goes on
    over ASCII graphic chars, stopping at whitespace and at `<`, `>` and `"`. Trailing
    `.,;:!?)]}'` are dropped. At least one char must follow the scheme.
@@ -210,17 +215,20 @@ rule or word decides it. Tokens never cross a sentence boundary, and no token is
 
 Each sentence is split by these rules, in order:
 
-1. Every opaque span inside the sentence is one token. Block spans are never tokens.
+1. Every non-silent opaque span inside the sentence is one token. Block spans (and `silent_noise`
+   inline spans under `options.mask_editorial`) are never tokens.
 2. Han runs (maximal runs of the Han set) are matched against the Taiwan term list
    (`臺灣`, `資料庫`, `記憶體` and so on) plus pure-Han entries of `options.lexicon` and
    `options.names`, longest match first. The text between matches is segmented by `doc_jieba()`
    (jieba with HMM plus classical self-pronouns and generic genre nouns such as `在下`, `妾身`,
-   `老夫`, `貧道`, `本座`, `儲物袋`, `築基丹`). When `options.normalize_traditional` is `true`,
-   unmatched Han slices are projected 1-to-1 through `t2s` to Simplified characters for dictionary
-   lookup, sliced back by exact scalar index onto the original text, and passed through the
-   coverb/demonstrative de-gluing guard (splitting false single-char coverb/demonstrative HMM
-   merges such as `將X`, `當X`, `對此`, `這XXX` while keeping lexicalized compounds such as `將軍`,
-   `當時`, `對方`, `那天`).
+   `老夫`, `老身`, `貧道`, `本座`, `儲物袋`, `築基丹`). When `options.normalize_traditional` is
+   `true`, unmatched Han slices are projected through `t2s` to Simplified characters for dictionary
+   lookup (skipping a single scraper anti-censorship infix in `['丅', '丵', '灬', '堊', '冇']` when
+   sandwiched between two Han chars so `少丅女` / `長堊老` stays one contiguous original-text span
+   with zero offset drift), sliced back by exact scalar index onto the original text, and passed
+   through the coverb/pronoun/postposition de-gluing guard (splitting false HMM merges such as
+   `將X`, `當X`, `對此`, `這XXX`, `其+V`, and `中+V` while keeping lexicalized compounds such as
+   `將軍`, `當時`, `對方`, `那天`, `其中`, `中期`).
 3. All other runs use Unicode word boundaries (UAX 29). Then:
    a. English clitics split off: `n't` (`didn't` gives `did`, `n't`; `can't` gives `ca`,
       `n't`), and `'s`, `'ll`, `'re`, `'ve`, `'m`, `'d`.
@@ -364,9 +372,11 @@ Special cases:
   not a connector.
 - Post-positional Chinese temporal frames: an unconsumed clause of at least 3 trimmed scalars whose
   trimmed end matches `之後`, `之后`, `之際`, `之际`, `之時` or `之时` (ignoring trailing quotes and
-  closers), followed by a non-conflicting clause in the same sentence, emits a clause-level
-  `sequence` relation (`arg1` = the temporal frame clause, `arg2` = the following clause,
-  `connector` = the clause-end postposition span).
+  closers, and excluding kinship compounds such as `故人之後`/`名門之後` and spatial locatives such
+  as `出現在…之後`/`站在…之後`), followed by a non-conflicting clause in the same sentence, emits a
+  clause-level `sequence` relation (`arg1` = the temporal frame clause, `arg2` = the following
+  clause, `connector` = the clause-end postposition span). Sentence-initial `與此同時`/`与此同时`
+  likewise pairs with the preceding supported sentence as a sentence-level `parallel` relation.
 - `however` counts only when `,` follows it (`However,`), not in `However hard he tried`.
 - `so` is not a connector before `far much many long as that good bad little few called on`.
   `So,` (a comma follows) gives an `unknown` and no relation.
@@ -444,12 +454,16 @@ Scanners, run at each position of a supported sentence:
 
 - Relative dates: `今天 明天 昨天 後天 后天 前天 今晚 昨晚 今年 明年 去年 這週 这周 本週 本周 上週 上周
   下週 下周 這個月 这个月 上個月 上个月 下個月 下个月`, narrative moment/interval cues (`片刻 片刻後 片刻后
-  頃刻 頃刻間 顷刻 顷刻间 剎那 剎那間 刹那 刹那间 轉眼 轉眼間 转眼 转眼间 眨眼 眨眼間 眨眼间 瞬息 瞬息間
-  瞬息间 彈指間 弹指间 良久 許久 许久 半晌 一會兒 一会儿`), Chinese relative duration anchors formed by a
+  頃刻 頃刻間 顷刻 顷刻间 剎那 剎那間 刹那 刹那间 轉眼 轉眼間 转眼 转眼间 眨眼間 眨眼间 眨眼之間 眨眼之间
+  眨眼工夫 眨眼功夫 瞬息 瞬息間 瞬息间 彈指間 弹指间 良久 許久 许久 半晌 一會兒 一会儿`; bare literal
+  `眨眼` is excluded), Chinese relative duration anchors formed by a
   Chinese duration quantity followed by `前 後 后 內 内 間 间 以來 以来 之後 之后 之前 之內 之内 之間
   之间` (`四年后`, `數日之後`, `半個時辰後`; `在 … 內/間` stays a `quantity`), and `today tomorrow
   yesterday tonight`, and `last|this|next` followed by `week|month|year` (ASCII case-insensitive,
-  one space).
+  one space). When `options.normalize_traditional` is `true`, `quantity`, `relative_date`, `date`,
+  and `time` candidates whose start or end cuts strictly inside a non-temporal Layer-1 token are
+  rejected, and adjacent two-digit ascending Chinese approximations in `quantity` (`三四日`,
+  `七八丈`) normalize to range values (`"3-4"`, `"7-8"`).
 - Dates, all checked for a real calendar day (leap years included):
   - Chinese: `Y年M月D日` (or `號` for `日`), `Y年M月`, `M月D日` (or `號`), and `Y年` alone. `Y` is
     four ASCII or Chinese digits, or `民國N` (N+1911). Month 1 to 12 is needed. `M月` alone and
@@ -815,10 +829,12 @@ tensor with `C = 17 + max_len + 148` (`421` when `max_len = 256`):
 ### Chu-Liu/Edmonds, confidence, and UPOS upgrade
 
 - **Single-root tree decoding**: `doc::syntax::chu_liu_edmonds` finds the exact maximum-weight
-  spanning arborescence over `0..=m` subject to node `0` having exactly one child. Every decoded
-  sentence is guaranteed to have strictly one `"root"` attachment (`head: None`), no self-loops,
-  and no cycles. When `v == 0`, `deprel` is forced to `"root"`; when `v > 0`, `deprel` is the
-  argmax over `c != 34` (ties go to the lowest index).
+  spanning arborescence over `0..=m` subject to node `0` having exactly one child (with calibrated
+  `0 -> tok` root penalties on non-predicative UPOS tokens, prenominal `…的` modifiers, and
+  subordinate clauses in multi-clause Chinese sentences when a viable main-clause predicate exists).
+  Every decoded sentence is guaranteed to have strictly one `"root"` attachment (`head: None`), no
+  self-loops, and no cycles. When `v == 0`, `deprel` is forced to `"root"`; when `v > 0`, `deprel`
+  is the argmax over `c != 34` (ties go to the lowest index).
 - **Quantized confidence (`Score`)**: `p_arc = softmax(arc_scores_u_over_0..=m)[v]`,
   `p_rel = 1.0` when `v == 0` else `softmax(rel_logits_excluding_34)[best_c]`, and
   `conf = p_arc * p_rel`. `Score(u16)` stores `(conf.clamp(0.0, 1.0) * 1000.0).round() as u16` and
@@ -829,17 +845,22 @@ tensor with `C = 17 + max_len + 148` (`421` when `max_len = 256`):
     tree-consistent root and ancestor retention: a high-confidence dependent is retained when every
     intermediate ancestor up to the sentence's global root clears the minimum structural arc floor,
     and every retained token's ancestor chain (including the sentence's single global root) is
-    retained alongside it. Every non-empty `syntax` slice for a sentence therefore has **zero**
-    zero-root sentences (strictly one `head: None, deprel: "root"`) and **zero** orphan syntax arcs
-    (every `head: Some(h)` resolves to an emitted `SyntaxToken` in the same sentence). Omitted
-    tokens emit `{"layer": "syntax", "span": tok.span, "reason": "low_confidence"}`.
+    retained alongside it (preferring clause-local predicates or `parataxis`/`dep` bridge labels
+    over cross-clause core argument labels when a `< 0.35` closure arc crosses clauses). Every
+    non-empty `syntax` slice for a sentence therefore has **zero** zero-root sentences (strictly one
+    `head: None, deprel: "root"`) and **zero** orphan syntax arcs (every `head: Some(h)` resolves to
+    an emitted `SyntaxToken` in the same sentence). Omitted tokens emit
+    `{"layer": "syntax", "span": tok.span, "reason": "low_confidence"}`.
   - Tokens whose Layer-2 `upos` was already decided by rules or the lexicon keep their tag. Tokens
     whose Layer-2 `upos` was `None` get the model's top UPOS tag (and drop their `"pos"` `unknown`
-    entry) when `upos_prob >= 0.50` (using arithmetic mean-pooling across overlapping subwords for
-    multi-character Chinese numeral-initial lexical phrases and idioms such as `一會兒`, `一時間`,
-    `一清二楚`, `五顏六色` so numeral subword #0 does not bias them toward `NUM`, plus deterministic
-    contextual `什麼`/`什么` disambiguation to `DET` before a same-sentence `NOUN`/`PROPN` else `PRON`);
-    otherwise `upos` stays `None` and the token's `"pos"` `unknown` reason becomes `low_confidence`.
+    entry) when `upos_prob >= 0.50` (stripping scraper anti-censorship infixes during subword
+    lookup under `normalize_traditional`, using arithmetic mean-pooling across overlapping subwords
+    for multi-character Chinese numeral-initial lexical phrases and idioms such as `一會兒`, `一時間`,
+    `一清二楚`, `二話不說`, `一動不動`, `五顏六色` so numeral subword #0 does not bias them toward `NUM`,
+    disambiguating disposal coverb `將`/`将` to `ADP`, applying a nominal prior for `>= 3`-char
+    `options.lexicon` compounds, and disambiguating `什麼`/`什么` to `DET` before a same-sentence
+    `NOUN`/`PROPN` else `PRON`); otherwise `upos` stays `None` and the token's `"pos"` `unknown`
+    reason becomes `low_confidence`.
   - When `backend` is not compiled in, or `doc-syntax-v1` or its files are absent (`NoBackend`,
     `UnknownModel`, `Missing`), each supported sentence emits
     `{"layer": "syntax", "span": sentence.span, "reason": "no_model"}`. Integrity and runtime
@@ -853,13 +874,18 @@ chapter manifest:
 - **Defaults**: enables `Options { mask_editorial: true, normalize_traditional: true, lexicon, .. }`
   and pure-statistical two-pass corpus compound discovery (`--auto-lexicon`, opt-out
   `--no-auto-lexicon`), scanning frequent high-PMI / high-accessor-variety 2–5 character Han
-  compounds across chapters into `Options.lexicon` and writing `<out_dir>/discovered_lexicon.json`
-  (`schema: "nlp.novel_discovered_lexicon.v1"`).
+  compounds across chapters (`MIN_FREQ = 10` for 3–4 char proper names and `15` otherwise,
+  `MIN_CHAP_DF = 3`, `MIN_AV = 3` at `min_pmi >= 5.5` else `4`) while pruning scraper anti-censorship
+  infixes/metadata, numeral/demonstrative-preceded classifier+noun phrases (`CLF_CHARS`), and
+  bidirectional cohesive boundary-straddling 3+-grams (`>= 35%` left/right cohesive 2-gram straddle
+  ratio), writing `<out_dir>/discovered_lexicon.json` (`schema: "nlp.novel_discovered_lexicon.v1"`).
 - **High-signal `entities_timeline_cues.jsonl`**: filters unitless `EntityKind::Number`
   (`unit.is_none()`) by default (`--include-bare-numbers` to opt in), emits `name` entities when
   `--name` is supplied, and enriches `relation` cues with `clean_arg1_span`, `clean_arg2_span`,
-  `clean_arg1_text`, and `clean_arg2_text` (stripping leading connector/correlate spans and
-  boundary punctuation while preserving balanced quote/bracket pairs).
+  `clean_arg1_text`, and `clean_arg2_text` (stripping leading/trailing connector and correlate
+  spans and boundary punctuation while preserving balanced quote/bracket pairs, and omitting
+  degenerate relation cues whose cleaned arguments lack lexical characters or overlap
+  `connector`/`correlate` while leaving `Document.relations` intact).
 - **Receipt structural counters**: `book_manifest_receipt.json` records `auto_lexicon_enabled`,
   `discovered_lexicon_count`, `zero_root_sentences`, and `orphan_syntax_arcs` alongside token,
   UPOS, syntax, entity, relation, and SHA-256 provenance metrics.

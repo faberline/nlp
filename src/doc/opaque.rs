@@ -10,6 +10,8 @@ pub(super) struct Found {
     pub item: Opaque,
     /// Block spans cover whole lines. Inline spans stay inside one line.
     pub block: bool,
+    /// Inline scraper/editorial/HTML/PUA noise suppressed when `mask_editorial` is enabled.
+    pub silent_noise: bool,
 }
 
 pub(super) fn find(c: &[char]) -> Vec<Found> {
@@ -44,6 +46,7 @@ pub(super) fn find_with_options(c: &[char], mask_editorial: bool) -> Vec<Found> 
                         },
                     },
                     block: true,
+                    silent_noise: false,
                 });
                 li = next;
             }
@@ -56,8 +59,10 @@ pub(super) fn find_with_options(c: &[char], mask_editorial: bool) -> Vec<Found> 
     out
 }
 
-/// Blank the block spans, and replace every other opaque char with `x`. An emoji run that ends a
-/// sentence keeps a `!` as its last char, so the sentence still ends there.
+/// Blank the block spans, mask `silent_noise` spans with non-breaking whitespace so noise-only
+/// stretches are trimmed without triggering intra-line double-space sentence splits, and replace
+/// every other inline opaque char with `x`. An emoji run that ends a sentence keeps a `!` as its
+/// last char, so the sentence still ends there.
 pub(super) fn mask(c: &[char], found: &[Found]) -> Vec<char> {
     let mut m = c.to_vec();
     for f in found {
@@ -69,6 +74,12 @@ pub(super) fn mask(c: &[char], found: &[Found]) -> Vec<char> {
             for ch in &mut m[s..e] {
                 if *ch != '\n' {
                     *ch = ' ';
+                }
+            }
+        } else if f.silent_noise {
+            for ch in &mut m[s..e] {
+                if *ch != '\n' {
+                    *ch = '\u{00a0}';
                 }
             }
         } else {
@@ -229,6 +240,10 @@ fn heading_ws_len(s: &[char]) -> usize {
         .count()
 }
 
+fn is_heading_sep(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '：' | ':' | '、' | '·' | '‧' | '»')
+}
+
 fn chinese_di_heading(s: &[char], allow_tight_title: bool) -> bool {
     if s.first() != Some(&'第') {
         return false;
@@ -246,21 +261,80 @@ fn chinese_di_heading(s: &[char], allow_tight_title: bool) -> bool {
     }
     match after {
         [] => ws == 0,
-        [sep, title @ ..]
-            if (sep.is_whitespace() || matches!(*sep, '：' | ':' | '、')) && has_text(title) =>
-        {
-            true
-        }
+        [sep, title @ ..] if is_heading_sep(*sep) && has_non_decor_text(title) => true,
         _ => allow_tight_title && has_text(after),
     }
+}
+
+/// Standalone `第<zh_or_ascii_num>章<2..14 Han/punct title>` with zero whitespace after `章`,
+/// total length `<= 30`, and a prose-continuation guard so phrases like `第三章的內容` stay prose.
+fn tight_standalone_zhang_heading(s: &[char]) -> bool {
+    if s.len() > 30 || s.first() != Some(&'第') {
+        return false;
+    }
+    let numerals = zh_numeral_len(&s[1..]);
+    if numerals == 0 || s.get(1 + numerals) != Some(&'章') {
+        return false;
+    }
+    let title = &s[2 + numerals..];
+    if !(2..=14).contains(&title.len()) || title[0].is_whitespace() {
+        return false;
+    }
+    if matches!(
+        title[0],
+        '的' | '之'
+            | '了'
+            | '是'
+            | '在'
+            | '有'
+            | '中'
+            | '裡'
+            | '里'
+            | '內'
+            | '内'
+            | '講'
+            | '讲'
+            | '說'
+            | '说'
+            | '討'
+            | '讨'
+            | '介'
+            | '論'
+            | '论'
+    ) {
+        return false;
+    }
+    title.iter().any(|&ch| is_han(ch))
+        && title.iter().all(|&ch| {
+            is_han(ch)
+                || ch.is_ascii_alphanumeric()
+                || matches!(
+                    ch,
+                    '（' | '）' | '(' | ')' | '、' | '·' | '‧' | '—' | '-' | '《' | '》'
+                )
+        })
+}
+
+fn has_non_decor_text(chars: &[char]) -> bool {
+    chars
+        .iter()
+        .any(|ch| !ch.is_whitespace() && !matches!(*ch, '·' | '‧' | '»'))
+}
+
+fn trim_heading_decor(chars: &[char]) -> &[char] {
+    let start = chars
+        .iter()
+        .position(|ch| !ch.is_whitespace() && !matches!(*ch, '»' | '·' | '‧'))
+        .unwrap_or(chars.len());
+    trim(&chars[start..])
 }
 
 fn bare_numeral_zhang_heading(s: &[char]) -> bool {
     let numerals = zh_numeral_len(s);
     numerals >= 2
         && s.get(numerals) == Some(&'章')
-        && s.get(numerals + 1).is_some_and(|sep| sep.is_whitespace())
-        && has_text(&s[numerals + 2..])
+        && s.get(numerals + 1).is_some_and(|sep| is_heading_sep(*sep))
+        && has_non_decor_text(&s[numerals + 2..])
 }
 
 /// Standalone `第<zh_numerals><ws><short_title>` where `numerals >= 2` and `short_title` is
@@ -308,7 +382,9 @@ fn volume_then_chapter(s: &[char]) -> bool {
 }
 
 fn prefixed_chinese_heading(rest: &[char]) -> bool {
+    let rest = trim_heading_decor(rest);
     chinese_di_heading(rest, true)
+        || tight_standalone_zhang_heading(rest)
         || volume_then_chapter(rest)
         || bare_numeral_zhang_heading(rest)
         || missing_unit_di_heading(rest)
@@ -316,8 +392,8 @@ fn prefixed_chinese_heading(rest: &[char]) -> bool {
 
 /// `第` then a numeral, then one of 章節回卷篇部 (plus web-novel `VIP第...卷...`,
 /// `正文第...卷...第...章...`, `<Prefix>\u{00a0}<Title>`, `<Prefix> 第...章`, `第...卷...第...章`,
-/// `<numerals>章 <Title>`, and `第<numerals>=2> <short_title>`). At most 60 chars with no
-/// sentence end.
+/// `<numerals>章 <Title>`, `第<numerals>=2> <short_title>`, tight `第<num>章<title>`, and `»»»`/`·`
+/// heading separators). At most 60 chars with no sentence end.
 fn chinese_heading(t: &[char]) -> bool {
     if t.len() > 60 || t.iter().any(|ch| "。！？".contains(*ch)) {
         return false;
@@ -328,7 +404,14 @@ fn chinese_heading(t: &[char]) -> bool {
     if t.iter().any(|ch| "，；,;!?'\"「」『』“”‘’".contains(*ch)) {
         return false;
     }
-    if bare_numeral_zhang_heading(t) || missing_unit_di_heading(t) || volume_then_chapter(t) {
+    if tight_standalone_zhang_heading(t)
+        || bare_numeral_zhang_heading(t)
+        || missing_unit_di_heading(t)
+        || volume_then_chapter(t)
+    {
+        return true;
+    }
+    if matches!(t.first(), Some('»' | '·' | '‧')) && prefixed_chinese_heading(t) {
         return true;
     }
     if starts_with_ci(t, 0, t.len(), "vip") && prefixed_chinese_heading(trim(&t[3..])) {
@@ -344,10 +427,14 @@ fn chinese_heading(t: &[char]) -> bool {
     {
         return true;
     }
-    for idx in 1..=t.len().saturating_sub(1).min(24) {
-        if t[idx] == '第' && t[idx - 1].is_whitespace() {
-            let allow_tight = t[..idx].contains(&'卷');
-            if chinese_di_heading(&t[idx..], allow_tight)
+    for idx in 1..=t.len().saturating_sub(1).min(30) {
+        if t[idx] == '第' && (t[idx - 1].is_whitespace() || matches!(t[idx - 1], '»' | '·' | '‧'))
+        {
+            let has_vol_or_decor = t[..idx]
+                .iter()
+                .any(|&ch| matches!(ch, '卷' | '»' | '·' | '‧'));
+            if chinese_di_heading(&t[idx..], has_vol_or_decor)
+                || (has_vol_or_decor && tight_standalone_zhang_heading(&t[idx..]))
                 || volume_then_chapter(&t[idx..])
                 || missing_unit_di_heading(&t[idx..])
             {
@@ -425,7 +512,7 @@ fn is_raw_noise_only_line(
             .or_else(|| pua_run(c, i, le))
             .or_else(|| {
                 if mask_editorial {
-                    editorial_inline_at(c, i, le)
+                    editorial_inline_at(c, i, ls, le)
                 } else {
                     None
                 }
@@ -443,14 +530,29 @@ fn is_raw_noise_only_line(
 
 const EDITORIAL_CUES: &[&str] = &[
     "月票",
+    "雙倍月票",
+    "双倍月票",
     "推薦票",
     "推荐票",
+    "求月票",
+    "求票",
+    "求下票",
     "第一更",
     "第二更",
     "第三更",
     "第四更",
     "第五更",
     "加更",
+    "碼字",
+    "码字",
+    "今天只能一更",
+    "今日只能一更",
+    "不得不向大家請假",
+    "不得不向大家请假",
+    "如果您喜歡這部作品",
+    "如果您喜欢这部作品",
+    "請為作者",
+    "请为作者",
     "待續",
     "待续",
     "加入書架",
@@ -471,7 +573,73 @@ const EDITORIAL_CUES: &[&str] = &[
     "請別忘本書",
     "请别忘本书",
     "鼎立支持",
-    "求下票",
+];
+
+const SCRAPER_BOILERPLATE_CUES: &[&str] = &[
+    "一一小說",
+    "一一小说",
+    "全本小說吧",
+    "全本小说吧",
+    "在線書吧",
+    "在线书吧",
+    "看書窩",
+    "看书窝",
+    "56小說",
+    "56小说",
+    "書家文學",
+    "书家文学",
+    "回味書庫",
+    "回味书库",
+    "理想文學",
+    "理想文学",
+    "云軒閣",
+    "云轩阁",
+    "雲軒閣",
+    "七星閣",
+    "七星阁",
+    "搜/搜/9/9/9",
+    "最新全本：",
+    "最新全本:",
+    "閱讀提示",
+    "阅读提示",
+    "瀏覽貼子",
+    "浏览贴子",
+    "轉貼次數",
+    "转贴次数",
+    "按左右鍵快速翻到上下章節",
+    "按左右键快速翻到上下章节",
+    "724小時不間斷更新",
+    "724小时不间断更新",
+    "手機,電腦.還可以下載電子書",
+    "手机,电脑.还可以下载电子书",
+    "還可以下載電子書",
+    "还可以下载电子书",
+    "热门小说标签",
+    "熱門小說標簽",
+    "熱門小說標籤",
+    "熱門作品推薦",
+    "热门作品推荐",
+    "其他書友吐血推薦",
+    "其他书友吐血推荐",
+    "本周:",
+    "本周：",
+    "本週:",
+    "本週：",
+];
+
+const SCRAPER_ASCII_CUES: &[&str] = &["ddyueshu", "soso999", "3qzw", "qixingge", "qbxs8"];
+
+const UNBRACKETED_POSTSCRIPT_STARTERS: &[&str] = &[
+    "如果您喜歡這部作品",
+    "如果您喜欢这部作品",
+    "另外雙倍月票",
+    "另外双倍月票",
+    "另外，雙倍月票",
+    "另外，双倍月票",
+    "今天只能一更",
+    "今日只能一更",
+    "不得不向大家請假",
+    "不得不向大家请假",
 ];
 
 fn contains_substr(chars: &[char], pat: &str) -> bool {
@@ -479,9 +647,58 @@ fn contains_substr(chars: &[char], pat: &str) -> bool {
     !p.is_empty() && chars.windows(p.len()).any(|w| w == p.as_slice())
 }
 
+fn contains_substr_ci(chars: &[char], pat: &str) -> bool {
+    let n = pat.len();
+    n > 0
+        && chars.windows(n).any(|w| {
+            w.iter()
+                .zip(pat.chars())
+                .all(|(ch, p)| ch.to_ascii_lowercase() == p)
+        })
+}
+
+fn contains_scraper_boilerplate(chars: &[char]) -> bool {
+    SCRAPER_BOILERPLATE_CUES
+        .iter()
+        .any(|cue| contains_substr(chars, cue))
+        || SCRAPER_ASCII_CUES
+            .iter()
+            .any(|cue| contains_substr_ci(chars, cue))
+}
+
+fn contains_bracketed_update_cue(chars: &[char]) -> bool {
+    if contains_substr(chars, "請假")
+        || contains_substr(chars, "请假")
+        || contains_substr(chars, "兩更")
+        || contains_substr(chars, "两更")
+    {
+        return true;
+    }
+    for (idx, w) in chars.windows(2).enumerate() {
+        if w == ['一', '更'] {
+            let next = chars.get(idx + 2).copied();
+            if !matches!(next, Some('天' | '時' | '时')) {
+                return true;
+            }
+        }
+        if w == ['三', '更'] {
+            let next = chars.get(idx + 2).copied();
+            if !matches!(next, Some('半' | '天' | '時' | '时' | '夜')) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 fn contains_any_editorial_cue(chars: &[char], include_baodi: bool) -> bool {
     EDITORIAL_CUES.iter().any(|cue| contains_substr(chars, cue))
+        || contains_scraper_boilerplate(chars)
         || (include_baodi && contains_substr(chars, "保底"))
+}
+
+fn contains_inline_editorial_cue(chars: &[char]) -> bool {
+    contains_any_editorial_cue(chars, true) || contains_bracketed_update_cue(chars)
 }
 
 fn multi_paren_tag_list_line(t: &[char]) -> bool {
@@ -515,18 +732,40 @@ fn multi_paren_tag_list_line(t: &[char]) -> bool {
     groups >= 4
 }
 
-fn strip_inline_parens(t: &[char]) -> Vec<char> {
+fn strip_inline_parens_and_postscripts(t: &[char]) -> Vec<char> {
     let mut out = Vec::with_capacity(t.len());
     let mut i = 0;
     while i < t.len() {
         if matches!(t[i], '(' | '（') {
             let mut j = i + 1;
-            while j < t.len() && !matches!(t[j], '(' | '（' | ')' | '）') {
+            let mut depth = 1usize;
+            while j < t.len() && depth > 0 {
+                if matches!(t[j], '(' | '（') {
+                    depth += 1;
+                } else if matches!(t[j], ')' | '）') {
+                    depth -= 1;
+                }
                 j += 1;
             }
-            if j < t.len() && matches!(t[j], ')' | '）') {
-                i = j + 1;
+            if depth == 0 {
+                i = j;
                 continue;
+            }
+        }
+        // If an unbracketed postscript starts after an earlier sentence on the same line, strip it
+        // here so `is_editorial_block_line` does not blank the preceding story sentence; `inline`
+        // will mask only the trailing postscript span.
+        if i > 0 && matches!(t[i - 1], '。' | '！' | '？' | '!' | '?') && t.len() - i <= 240 {
+            let start = if matches!(t[i], '，' | ',') {
+                i + 1
+            } else {
+                i
+            };
+            if UNBRACKETED_POSTSCRIPT_STARTERS
+                .iter()
+                .any(|pat| matches_chars_at(t, start, t.len(), pat))
+            {
+                break;
             }
         }
         out.push(t[i]);
@@ -539,23 +778,36 @@ fn is_editorial_block_line(t: &[char]) -> bool {
     if multi_paren_tag_list_line(t) {
         return true;
     }
-    if matches!(t.first(), Some('(' | '（' | '【' | '[')) && contains_any_editorial_cue(t, true) {
+    if t.len() <= 400 && contains_scraper_boilerplate(t) {
+        return true;
+    }
+    if matches!(t.first(), Some('(' | '（' | '【' | '[')) && contains_inline_editorial_cue(t) {
         let stripped_end = t
             .iter()
             .rposition(|ch| !matches!(*ch, '！' | '!' | '。' | '.' | '~' | '～'))
             .map_or(0, |idx| idx + 1);
         let closed = stripped_end > 1 && matches!(t[stripped_end - 1], ')' | '）' | '】' | ']');
-        let unclosed = !t[1..]
-            .iter()
-            .any(|ch| matches!(*ch, ')' | '）' | '】' | ']'));
-        if closed || unclosed {
+        let mut depth = 1usize;
+        let mut closed_early = false;
+        for &ch in &t[1..stripped_end.max(1)] {
+            if matches!(ch, '(' | '（' | '【' | '[') {
+                depth += 1;
+            } else if matches!(ch, ')' | '）' | '】' | ']') {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    closed_early = true;
+                    break;
+                }
+            }
+        }
+        if closed || !closed_early {
             return true;
         }
     }
     if t.len() > 300 || t.iter().any(|ch| "「」『』“”\"'".contains(*ch)) {
         return false;
     }
-    let outside = strip_inline_parens(t);
+    let outside = strip_inline_parens_and_postscripts(t);
     let periods = outside.iter().filter(|&&ch| ch == '。').count();
     if contains_any_editorial_cue(&outside, false) {
         return periods <= 2;
@@ -568,7 +820,7 @@ fn inline(c: &[char], ls: usize, le: usize, mask_editorial: bool, out: &mut Vec<
     let mut i = ls;
     while i < le {
         match inline_at(c, i, ls, le, mask_editorial) {
-            Some((kind, end)) => {
+            Some((kind, end, is_noise_source)) => {
                 out.push(Found {
                     item: Opaque {
                         kind,
@@ -578,6 +830,7 @@ fn inline(c: &[char], ls: usize, le: usize, mask_editorial: bool, out: &mut Vec<
                         },
                     },
                     block: false,
+                    silent_noise: mask_editorial && is_noise_source,
                 });
                 i = end;
             }
@@ -594,57 +847,144 @@ fn inline_at(
     ls: usize,
     le: usize,
     mask_editorial: bool,
-) -> Option<(OpaqueKind, usize)> {
+) -> Option<(OpaqueKind, usize, bool)> {
     if c[i] == '`' {
-        return code_span(c, i, le).map(|end| (OpaqueKind::Code, end));
+        return code_span(c, i, le).map(|end| (OpaqueKind::Code, end, false));
     }
     url(c, i, le)
-        .map(|end| (OpaqueKind::Url, end))
-        .or_else(|| raw_html_tag(c, i, ls, le).map(|end| (OpaqueKind::Code, end)))
-        .or_else(|| html_entity(c, i, le).map(|end| (OpaqueKind::Code, end)))
-        .or_else(|| pua_run(c, i, le).map(|end| (OpaqueKind::Code, end)))
+        .map(|end| (OpaqueKind::Url, end, false))
+        .or_else(|| raw_html_tag(c, i, ls, le).map(|end| (OpaqueKind::Code, end, true)))
+        .or_else(|| html_entity(c, i, le).map(|end| (OpaqueKind::Code, end, true)))
+        .or_else(|| pua_run(c, i, le).map(|end| (OpaqueKind::Code, end, true)))
         .or_else(|| {
             if mask_editorial {
-                editorial_inline_at(c, i, le).map(|end| (OpaqueKind::Code, end))
+                editorial_inline_at(c, i, ls, le).map(|end| (OpaqueKind::Code, end, true))
             } else {
                 None
             }
         })
-        .or_else(|| citation(c, i, le).map(|end| (OpaqueKind::Citation, end)))
-        .or_else(|| inline_formula(c, i, le).map(|end| (OpaqueKind::Formula, end)))
-        .or_else(|| emoji(c, i, le).map(|end| (OpaqueKind::Emoji, end)))
+        .or_else(|| citation(c, i, le).map(|end| (OpaqueKind::Citation, end, false)))
+        .or_else(|| inline_formula(c, i, le).map(|end| (OpaqueKind::Formula, end, false)))
+        .or_else(|| emoji(c, i, le).map(|end| (OpaqueKind::Emoji, end, false)))
 }
 
-/// Raw/unclosed HTML tags (`<P`, `<p>`, `</p>`, `<br>`, `<br/>`, `<br />` case-insensitive).
+/// Raw/unclosed HTML tags (`<P`, `</P`, `<p>`, `</p>`, `<br>`, `<br/>`, `<!go`, `<!over`,
+/// `<quot;0" cellpadding=...>`, etc., case-insensitive).
 fn raw_html_tag(c: &[char], i: usize, ls: usize, le: usize) -> Option<usize> {
     if c[i] != '<' {
         return None;
     }
-    for closed in ["</p>", "<p>", "<br/>", "<br />", "<br>"] {
+    for closed in [
+        "</p>", "<p>", "<br/>", "<br />", "<br>", "</div>", "<div>", "</span>", "<span>",
+        "</table>", "<table>", "</tr>", "<tr>", "</td>", "<td>", "</font>", "<font>", "<hr/>",
+        "<hr />", "<hr>",
+    ] {
         if starts_with_ci(c, i, le, closed) {
             return Some(i + closed.len());
         }
     }
-    // Standalone or line-start unclosed `<P` / `<p` followed by whitespace, line end, or Han.
+    // Single-line HTML comment `<!-- ... -->`.
+    if starts_with_ci(c, i, le, "<!--")
+        && let Some(rel) = c[i + 4..le].windows(3).position(|w| w == ['-', '-', '>'])
+    {
+        return Some(i + 4 + rel + 3);
+    }
+    // Unclosed or closed SGML scraper markers (`<!go`, `<!go>`, `<!over`, `<!over>`).
+    for sgml in ["<!over", "<!go"] {
+        if starts_with_ci(c, i, le, sgml) {
+            let end = i + sgml.len();
+            if end < le && c[end] == '>' {
+                return Some(end + 1);
+            }
+            if end == le || !c[end].is_ascii_alphabetic() {
+                return Some(end);
+            }
+        }
+    }
+    // Closing HTML tag `</` + 1..=12 ASCII letters, with optional closing `>` when bounded by
+    // whitespace, line end, CJK, or non-alphanumeric punctuation (`</P`, `</p`, `</div`, etc.).
+    if i + 2 < le && c[i + 1] == '/' && c[i + 2].is_ascii_alphabetic() {
+        let letters = (i + 2..le.min(i + 15))
+            .take_while(|&k| c[k].is_ascii_alphabetic())
+            .count();
+        if (1..=12).contains(&letters) {
+            let end = i + 2 + letters;
+            if end < le && c[end] == '>' {
+                return Some(end + 1);
+            }
+            if end == le
+                || c[end].is_whitespace()
+                || is_han(c[end])
+                || !c[end].is_ascii_alphanumeric()
+            {
+                return Some(end);
+            }
+        }
+    }
+    // Truncated HTML attribute fragments (`<quot;0" cellpadding=...>`) or closed HTML tags with
+    // `attr=...` attributes (`<table border="0" ...>`, `<font color="...">`, `<a href="...">`).
+    let scan_limit = le.min(i + 160);
+    if let Some(rel_gt) = (i + 2..scan_limit)
+        .take_while(|&k| c[k] != '<')
+        .find(|&k| c[k] == '>')
+    {
+        if starts_with_ci(c, i, le, "<quot;") {
+            return Some(rel_gt + 1);
+        }
+        let tag_letters = (i + 1..rel_gt)
+            .take_while(|&k| c[k].is_ascii_alphabetic())
+            .count();
+        if (1..=10).contains(&tag_letters)
+            && i + 1 + tag_letters < rel_gt
+            && c[i + 1 + tag_letters].is_ascii_whitespace()
+            && c[i + 1 + tag_letters..rel_gt].contains(&'=')
+        {
+            return Some(rel_gt + 1);
+        }
+    }
+    // Standalone or boundary unclosed `<P` / `<p` followed by whitespace, line end, or Han.
     if starts_with_ci(c, i, le, "<p") {
-        let at_start_or_ws = i == ls || c[i - 1].is_whitespace();
+        let at_boundary = i == ls || !c[i - 1].is_ascii_alphanumeric();
         let end = i + 2;
         let valid_after = end == le || c[end].is_whitespace() || is_han(c[end]);
-        if at_start_or_ws && valid_after {
+        if at_boundary && valid_after {
             return Some(end);
         }
     }
     None
 }
 
-/// Corrupted or raw HTML entities (`&qut;`, `&quot;`, `&nbsp;`, `&amp;`, `&lt;`, `&gt;`).
+/// Corrupted or raw HTML entities (`&qut;`, `&quot;`, `&nbsp;`, `&amp;`, `&lt;`, `&gt;`, etc.).
 fn html_entity(c: &[char], i: usize, le: usize) -> Option<usize> {
     if c[i] != '&' {
         return None;
     }
-    for ent in ["&qut;", "&quot;", "&nbsp;", "&amp;", "&lt;", "&gt;"] {
+    for ent in [
+        "&qut;", "&qu0t;", "&qout;", "&quot;", "&nbsp;", "&nbps;", "&amp;", "&lt;", "&gt;",
+        "&apos;", "&ldquo;", "&rdquo;", "&lsquo;", "&rsquo;", "&hellip;", "&mdash;", "&ndash;",
+    ] {
         if starts_with_ci(c, i, le, ent) {
             return Some(i + ent.len());
+        }
+    }
+    // Numeric character entity `&#1234;` or `&#x1A2F;`.
+    if i + 3 < le && c[i + 1] == '#' {
+        let (hex, d_start) = if matches!(c[i + 2], 'x' | 'X') {
+            (true, i + 3)
+        } else {
+            (false, i + 2)
+        };
+        let digits = (d_start..le.min(d_start + 7))
+            .take_while(|&k| {
+                if hex {
+                    c[k].is_ascii_hexdigit()
+                } else {
+                    c[k].is_ascii_digit()
+                }
+            })
+            .count();
+        if (1..=6).contains(&digits) && d_start + digits < le && c[d_start + digits] == ';' {
+            return Some(d_start + digits + 1);
         }
     }
     None
@@ -675,8 +1015,14 @@ fn is_pua(ch: char) -> bool {
     matches!(ch, '\u{E000}'..='\u{F8FF}')
 }
 
-/// Opt-in inline scraper/editorial tags (`/首/發`, `(..#..#..)`, and short inline `(待續)` notes).
-fn editorial_inline_at(c: &[char], i: usize, le: usize) -> Option<usize> {
+fn matches_chars_at(c: &[char], i: usize, le: usize, pat: &str) -> bool {
+    let n = pat.chars().count();
+    i + n <= le && c[i..i + n].iter().copied().eq(pat.chars())
+}
+
+/// Opt-in inline scraper/editorial tags (`/首/發`, `(..#..#..)`, mixed-bracket `(…）` / `（…)`
+/// notes with nested parens, and trailing unbracketed postscripts).
+fn editorial_inline_at(c: &[char], i: usize, ls: usize, le: usize) -> Option<usize> {
     if i + 4 <= le
         && c[i] == '/'
         && c[i + 1] == '首'
@@ -691,19 +1037,71 @@ fn editorial_inline_at(c: &[char], i: usize, le: usize) -> Option<usize> {
         return Some(end);
     }
     if matches!(c[i], '(' | '（') {
+        let limit = le.min(i + 182);
         let mut j = i + 1;
-        while j < le.min(i + 62) && !matches!(c[j], '(' | '（' | ')' | '）') {
+        let mut depth = 1usize;
+        let mut saw_nested_open = false;
+        while j < limit {
+            if matches!(c[j], '(' | '（') {
+                depth += 1;
+                saw_nested_open = true;
+            } else if matches!(c[j], ')' | '）') {
+                depth -= 1;
+                if depth == 0 {
+                    let inner = &c[i + 1..j];
+                    let hashes = inner.iter().filter(|&&ch| ch == '#').count();
+                    if !inner.is_empty()
+                        && inner.len() <= 180
+                        && (hashes >= 2 || contains_inline_editorial_cue(inner))
+                    {
+                        return Some(j + 1);
+                    }
+                    break;
+                }
+            }
             j += 1;
         }
-        if j < le && matches!(c[j], ')' | '）') {
-            let inner = &c[i + 1..j];
-            let hashes = inner.iter().filter(|&&ch| ch == '#').count();
-            if !inner.is_empty()
-                && inner.len() <= 60
-                && (hashes >= 2 || contains_any_editorial_cue(inner, true))
-            {
-                return Some(j + 1);
+        // Unclosed trailing editorial parenthesis running to the end of the line.
+        if depth > 0 && !saw_nested_open && j == le && le > i + 1 && le - (i + 1) <= 180 {
+            let inner = &c[i + 1..le];
+            if contains_inline_editorial_cue(inner) {
+                return Some(le);
             }
+        }
+    }
+    // Trailing unbracketed sentence-end postscripts (including an optional orphaned comma right
+    // after sentence-final punctuation, e.g. `。，如果您喜歡這部作品...`).
+    let at_postscript_boundary = i == ls
+        || matches!(
+            c[i - 1],
+            '。' | '！'
+                | '？'
+                | '!'
+                | '?'
+                | '”'
+                | '」'
+                | '』'
+                | '"'
+                | ' '
+                | '\t'
+                | '\u{3000}'
+                | '，'
+                | ','
+        );
+    if at_postscript_boundary && le - i <= 240 {
+        let start = if matches!(c[i], '，' | ',')
+            && i > ls
+            && matches!(c[i - 1], '。' | '！' | '？' | '!' | '?')
+        {
+            i + 1
+        } else {
+            i
+        };
+        if UNBRACKETED_POSTSCRIPT_STARTERS
+            .iter()
+            .any(|pat| matches_chars_at(c, start, le, pat))
+        {
+            return Some(le);
         }
     }
     None

@@ -244,8 +244,17 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
     let mut tokens = Vec::new();
     let inline: Vec<(Span, OpaqueKind)> = found
         .iter()
-        .filter(|f| !f.block && !matches!(f.item.kind, OpaqueKind::Heading | OpaqueKind::ListItem))
+        .filter(|f| {
+            !f.block
+                && !f.silent_noise
+                && !matches!(f.item.kind, OpaqueKind::Heading | OpaqueKind::ListItem)
+        })
         .map(|f| (f.item.span, f.item.kind))
+        .collect();
+    let silent: Vec<Span> = found
+        .iter()
+        .filter(|f| !f.block && f.silent_noise)
+        .map(|f| f.item.span)
         .collect();
     // Supported sentences only, as (sentence index, span). Unsupported text gets no entities.
     let mut scanned = Vec::new();
@@ -287,7 +296,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
             if unsupported {
                 continue;
             }
-            for piece in token::tokenize_with_matcher(&c, span, &inline, &token_matcher) {
+            for piece in token::tokenize_with_matcher(&c, span, &inline, &silent, &token_matcher) {
                 let text: String = c[piece.span.start_char..piece.span.end_char]
                     .iter()
                     .collect();
@@ -318,7 +327,14 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         }
     }
 
-    let (entities, entity_unknown) = entity::extract(&c, &found, &scanned, &options.names);
+    let (entities, entity_unknown) = entity::extract(
+        &c,
+        &found,
+        &scanned,
+        &tokens,
+        &options.names,
+        options.normalize_traditional,
+    );
     unknown.extend(entity_unknown);
     let (relations, relation_unknown) = relation::relations(&c, &seg);
     unknown.extend(relation_unknown);

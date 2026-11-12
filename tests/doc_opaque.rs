@@ -671,17 +671,31 @@ fn opt_in_editorial_masking_preserves_char_offsets() {
         owned(&[
             "旅人推開石門，走入幽靜的庭院。",
             "老者收起木匣/首/發，緩步走下石階(ab#cd#ef)。",
-            "（未完待續）",
         ])
     );
+    let masked_toks: Vec<String> = masked_doc
+        .tokens
+        .iter()
+        .map(|t| slice(&text, t.span))
+        .collect();
+    for suppressed in ["/首/發", "(ab#cd#ef)", "（未完待續）"] {
+        assert!(
+            !masked_toks.iter().any(|t| t == suppressed),
+            "silent noise span {suppressed:?} must not emit tokens: {masked_toks:?}"
+        );
+    }
     // Verify exact char offsets and block-vs-inline invariants on the masked document.
     let chars: Vec<char> = text.chars().collect();
-    let whole_line = |s: Span| {
-        (s.start_char == 0 || chars[s.start_char - 1] == '\n')
-            && (s.end_char == chars.len() || chars[s.end_char] == '\n')
+    let whole_line_or_trailing_note = |s: Span| {
+        let whole = (s.start_char == 0 || chars[s.start_char - 1] == '\n')
+            && (s.end_char == chars.len() || chars[s.end_char] == '\n');
+        let trailing_after_sent = s.start_char > 0
+            && chars[s.start_char - 1] == '。'
+            && (s.end_char == chars.len() || chars[s.end_char] == '\n');
+        whole || trailing_after_sent
     };
     for o in &masked_doc.segmentation.opaque {
-        if whole_line(o.span) {
+        if whole_line_or_trailing_note(o.span) {
             for s in &masked_doc.segmentation.sentences {
                 assert!(
                     s.span.end_char <= o.span.start_char || o.span.end_char <= s.span.start_char
@@ -698,5 +712,139 @@ fn opt_in_editorial_masking_preserves_char_offsets() {
         assert!(tok.span.end_char <= masked_doc.text_chars);
         let s = slice(&text, tok.span);
         assert!(!s.is_empty());
+    }
+}
+
+#[test]
+fn ws1_v3_unclosed_html_sgml_boilerplate_tight_headings_and_silent_noise() {
+    let opts = Options {
+        mask_editorial: true,
+        ..Options::default()
+    };
+
+    // 1. Unclosed closing tags `</P`, `</p`, SGML `<!go`/`<!over`, truncated `<quot;0" cellpadding=...>`,
+    //    and malformed `&qut;` / `&qu0t;` / `&nbps;`.
+    let html_noise = concat!(
+        "<!go\n\n",
+        "<quot;0\" cellpadding=\"0\" cellspacing=\"0\">\n\n",
+        "<P青衫老者推門而入，&qut;諸位請坐&qu0t;&nbps;。</P\n\n",
+        "眾人點頭致意。</p\n\n",
+        "<!over\n"
+    );
+    let doc_html = analyze_document(html_noise, &opts);
+    assert_eq!(
+        sentence_texts(html_noise, &doc_html),
+        owned(&[
+            "青衫老者推門而入，&qut;諸位請坐&qu0t;&nbps;。",
+            "眾人點頭致意。"
+        ])
+    );
+    let html_toks: Vec<String> = doc_html
+        .tokens
+        .iter()
+        .map(|t| slice(html_noise, t.span))
+        .collect();
+    for noise in [
+        "<P", "</P", "</p", "<!go", "<!over", "&qut;", "&qu0t;", "&nbps;",
+    ] {
+        assert!(
+            !html_toks.iter().any(|t| t.contains(noise)),
+            "noise {noise:?} leaked into tokens: {html_toks:?}"
+        );
+    }
+
+    // 2. Mixed brackets, nested parens, night-watch `三更` preservation, and unbracketed postscripts.
+    let postscripts = [
+        "王天明收起木劍，在(三更半夜)悄然離去。(今天碼字太慢，明天兩更補上）",
+        "沈星河走入青雲門石殿。（今日請假一天，明日三更送到)",
+        "白衣老者合上古籍。(，如果您喜歡這部作品，歡迎您來書站（example）投推薦票、雙倍月票，請為作者加油！)",
+        "山風吹過松林。如果您喜歡這部作品，請投月票與求票支持。",
+        "溪水潺潺流淌。另外雙倍月票期間求推薦票！",
+        "石門緩緩落下。今天只能一更，明日再補。",
+        "爐火漸漸熄滅。不得不向大家請假一日。",
+    ]
+    .join("\n\n");
+    let doc_post = analyze_document(&postscripts, &opts);
+    assert_eq!(
+        sentence_texts(&postscripts, &doc_post),
+        owned(&[
+            "王天明收起木劍，在(三更半夜)悄然離去。",
+            "沈星河走入青雲門石殿。",
+            "白衣老者合上古籍。",
+            "山風吹過松林。",
+            "溪水潺潺流淌。",
+            "石門緩緩落下。",
+            "爐火漸漸熄滅。",
+        ])
+    );
+
+    // 3. Pirate/scraper block boilerplate lines.
+    let boiler_lines = [
+        "一一小說 www.example.org 最新章節",
+        "全本小說吧 724小時不間斷更新",
+        "在線書吧 看書窩 56小說 書家文學 回味書庫 理想文學 云軒閣 七星閣",
+        "ddyueshu SOSO999 搜/搜/9/9/9 3qzw qiXingge qbxs8",
+        "最新全本：青石古道紀行",
+        "閱讀提示：按左右鍵快速翻到上下章節",
+        "瀏覽貼子 128 轉貼次數 4",
+        "手機,電腦.還可以下載電子書",
+        "熱門小說標簽 熱門作品推薦 其他書友吐血推薦 本周:古道行",
+        "真正的小說正文只有這一句。",
+    ]
+    .join("\n\n");
+    let doc_boiler = analyze_document(&boiler_lines, &opts);
+    assert_eq!(
+        sentence_texts(&boiler_lines, &doc_boiler),
+        owned(&["真正的小說正文只有這一句。"])
+    );
+
+    // 4. Tight standalone headings and `»»»` / `·` separators, keeping `第三章的內容` as prose.
+    let tight_headings = [
+        "第一百二十章青石古道",
+        "第35章古道夜行",
+        "»»» 第八卷 第一百二十章 山雨欲來",
+        "·第一百二十章·松林夜話",
+        "正文句子在此。",
+    ]
+    .join("\n\n");
+    let doc_head = analyze(&tight_headings);
+    let heads: Vec<String> = doc_head
+        .segmentation
+        .opaque
+        .iter()
+        .filter(|o| o.kind == OpaqueKind::Heading)
+        .map(|o| slice(&tight_headings, o.span))
+        .collect();
+    assert_eq!(
+        heads,
+        owned(&[
+            "第一百二十章青石古道",
+            "第35章古道夜行",
+            "»»» 第八卷 第一百二十章 山雨欲來",
+            "·第一百二十章·松林夜話",
+        ])
+    );
+    assert!(analyze("第三章的內容").segmentation.opaque.is_empty());
+
+    // 5. Standard inline opaque kinds (`code_span`, `url`, `citation`, `inline_formula`, `emoji`)
+    //    must NEVER be marked `silent_noise` even when `mask_editorial: true`.
+    let keep_inline = "請看 `let x = 1` 與 https://example.com [1, 2] 及 $x+1$ 好嗎😋";
+    let doc_keep = analyze_document(keep_inline, &opts);
+    let keep_toks: Vec<String> = doc_keep
+        .tokens
+        .iter()
+        .map(|t| slice(keep_inline, t.span))
+        .collect();
+    for must_keep in [
+        "`let x = 1`",
+        "https://example.com",
+        "[1, 2]",
+        "$x+1$",
+        "😋",
+    ] {
+        assert!(
+            keep_toks.iter().any(|t| t == must_keep),
+            "non-noise inline span {must_keep:?} must remain a token: {keep_toks:?}"
+        );
     }
 }

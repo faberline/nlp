@@ -64,16 +64,16 @@ const ZH_DECIDED: &[(Upos, &str)] = &[
     (Upos::Part, "的 了 嗎 吗 吧 呢 啊 啦 喔 哦 呀"),
     (
         Upos::Adp,
-        "把 被 從 从 對於 对于 關於 关于 為了 为了 按照 根據 根据",
+        "把 被 從 从 對於 对于 關於 关于 為了 为了 按照 根據 根据 除了",
     ),
     (Upos::Cconj, "並且 并且 而且 或者 或 但是 然而 可是"),
     (
         Upos::Sconj,
-        "因為 因为 如果 假如 雖然 虽然 即使 儘管 尽管 除非 只要 既然",
+        "因為 因为 如果 假如 雖然 虽然 即使 儘管 尽管 除非 只要 既然 一旦",
     ),
     (
         Upos::Adv,
-        "不 很 也 都 就 才 只 已經 已经 曾經 曾经 非常 太 更 最 十分 常常 一直 剛 剛剛 刚刚 馬上 马上 又 再",
+        "不 很 也 都 就 才 只 已經 已经 曾經 曾经 非常 太 更 最 十分 常常 一直 剛 剛剛 刚刚 馬上 马上 又 再 終於 终于 一齊 一齐",
     ),
     (Upos::Aux, "能 可以 應該 应该 必須 必须 能夠 能够"),
     (Upos::Verb, "有"),
@@ -128,15 +128,23 @@ pub(super) fn tag(text: &str, lang: Lang, opaque: Option<OpaqueKind>) -> Tag {
     if is_number(&chars) {
         return Tag::Decided(Upos::Num);
     }
-    let key = match lang {
+    let en_key;
+    let zh_key;
+    let key: &str = match lang {
         // A curly apostrophe in a clitic looks up as the straight one.
-        Lang::En => text.to_lowercase().replace('\u{2019}', "'"),
-        Lang::Zh => text.to_owned(),
+        Lang::En => {
+            en_key = text.to_lowercase().replace('\u{2019}', "'");
+            en_key.as_str()
+        }
+        Lang::Zh => {
+            zh_key = super::token::strip_scraper_infix(text);
+            zh_key.as_ref()
+        }
         Lang::Mixed | Lang::Und => return Tag::Missing,
     };
-    if let Some(&upos) = decided().get(key.as_str()) {
+    if let Some(&upos) = decided().get(key) {
         Tag::Decided(upos)
-    } else if ambiguous().contains(key.as_str()) {
+    } else if ambiguous().contains(key) {
         Tag::Ambiguous
     } else {
         Tag::Missing

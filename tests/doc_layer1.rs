@@ -440,3 +440,51 @@ fn options_serde_backwards_compatibility() {
     );
     assert_eq!(serde_json::from_value::<Options>(val).unwrap(), full);
 }
+
+#[test]
+fn ws1_ws2_v3_silent_noise_and_infix_zero_offset_drift() {
+    let text = concat!(
+        "第一百零八章古道夜行\n\n",
+        "<P那名少丅女與長堊老走上傳丅送台，&qut;需丅要護住肉冇身離開大灬陸，免遭妖獸吞灬噬&qut;。（第一更求月票)</P\n\n",
+        "<!over\n"
+    );
+    let opts = Options {
+        mask_editorial: true,
+        normalize_traditional: true,
+        ..Options::default()
+    };
+    let doc = analyze_document(text, &opts);
+    let seg = &doc.segmentation;
+    for s in seg
+        .paragraphs
+        .iter()
+        .map(|p| p.span)
+        .chain(seg.sentences.iter().map(|s| s.span))
+        .chain(seg.clauses.iter().map(|c| c.span))
+        .chain(seg.opaque.iter().map(|o| o.span))
+    {
+        assert!(s.start_char < s.end_char && s.end_char <= doc.text_chars);
+    }
+    assert_eq!(doc.segmentation.sentences.len(), 1);
+    for tok in &doc.tokens {
+        assert!(tok.span.start_char < tok.span.end_char);
+        assert!(tok.span.end_char <= doc.text_chars);
+        let sent = doc.segmentation.sentences[tok.sentence].span;
+        assert!(sent.start_char <= tok.span.start_char && tok.span.end_char <= sent.end_char);
+    }
+    let surfaces: Vec<String> = doc.tokens.iter().map(|t| slice(text, t.span)).collect();
+    for word in [
+        "少丅女",
+        "長堊老",
+        "傳丅送",
+        "需丅要",
+        "肉冇身",
+        "大灬陸",
+        "吞灬噬",
+    ] {
+        assert!(
+            surfaces.iter().any(|s| s == word),
+            "expected contiguous original-offset token {word:?} in {surfaces:?}"
+        );
+    }
+}

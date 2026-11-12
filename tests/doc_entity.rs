@@ -1139,16 +1139,19 @@ fn ws4_relative_duration_anchors_and_moment_cues() {
 
     assert_eq!(
         ents(
-            "轉眼、轉眼間、转眼、转眼间、眨眼、眨眼間、眨眼间、瞬息、瞬息間、瞬息间、彈指間、弹指间。"
+            "轉眼、轉眼間、转眼、转眼间、眨眼間、眨眼间、眨眼工夫、眨眼功夫、眨眼之間、眨眼之间、瞬息、瞬息間、瞬息间、彈指間、弹指间。"
         ),
         vec![
             rd("轉眼"),
             rd("轉眼間"),
             rd("转眼"),
             rd("转眼间"),
-            rd("眨眼"),
             rd("眨眼間"),
             rd("眨眼间"),
+            rd("眨眼工夫"),
+            rd("眨眼功夫"),
+            rd("眨眼之間"),
+            rd("眨眼之间"),
             rd("瞬息"),
             rd("瞬息間"),
             rd("瞬息间"),
@@ -1156,6 +1159,7 @@ fn ws4_relative_duration_anchors_and_moment_cues() {
             rd("弹指间"),
         ]
     );
+    assert_eq!(ents("青衫老者眨了眨眼，沒有說話。"), vec![]);
 
     assert_eq!(
         ents("良久、許久、许久、半晌、一會兒、一会儿。"),
@@ -1166,6 +1170,68 @@ fn ws4_relative_duration_anchors_and_moment_cues() {
             rd("半晌"),
             rd("一會兒"),
             rd("一会儿"),
+        ]
+    );
+}
+
+#[test]
+fn ws4_v3_token_boundary_alignment_guard_and_ascending_approx_ranges() {
+    let opts = Options {
+        normalize_traditional: true,
+        lexicon: vec!["萬天星".to_owned(), "玄剎".to_owned()],
+        ..Options::default()
+    };
+
+    // 1. False-positive candidates cutting inside proper names, idioms, or lexical compounds
+    //    must be rejected under `normalize_traditional: true` + context guards.
+    let false_pos_text = concat!(
+        "萬天星與萬天星光映照石殿，玄剎那道霞光在半天空中化作九天神雷落向九天之上，",
+        "這真是千載難逢的機緣，眾人退避三尺，以後天氣轉涼，迎來晴朗的一天。"
+    );
+    let doc_fp = analyze_document(false_pos_text, &opts);
+    let fp_ents: Vec<(EntityKind, String)> = doc_fp
+        .entities
+        .iter()
+        .map(|e| (e.kind, slice(false_pos_text, e.span)))
+        .collect();
+    assert_eq!(
+        fp_ents,
+        vec![],
+        "expected zero false-positive entities on lexical/idiom compounds, got {fp_ents:?}"
+    );
+
+    // 2. Legitimate quantities, relative dates, and composite temporal tokens still pass 100%.
+    let valid_text = "王天明在山谷等了半天，三天後又走了半個時辰，苦修三天三夜並採下三株仙草。";
+    let doc_valid = analyze_document(valid_text, &opts);
+    for e in &doc_valid.entities {
+        assert!(e.span.start_char < e.span.end_char && e.span.end_char <= doc_valid.text_chars);
+    }
+    assert_eq!(
+        rows(valid_text, &doc_valid),
+        vec![
+            qty("半天", "0.5", "天"),
+            r("三天後"),
+            qty("半個時辰", "0.5", "個時辰"),
+            qty("三天", "3", "天"),
+            qty("三夜", "3", "夜"),
+            n("三", "3"),
+        ]
+    );
+
+    // 3. Two-digit ascending Chinese approximations normalize to `"a-b"` ranges in `Quantity`.
+    let approx_text = "石劍長一二尺、寬二三寸，隊伍行了三四日、越過四五丈溪流、挖出五六寸木盒、停留六七天、退開七八丈、歷時八九年。";
+    let doc_approx = analyze_document(approx_text, &opts);
+    assert_eq!(
+        rows(approx_text, &doc_approx),
+        vec![
+            qty("一二尺", "1-2", "尺"),
+            qty("二三寸", "2-3", "寸"),
+            qty("三四日", "3-4", "日"),
+            qty("四五丈", "4-5", "丈"),
+            qty("五六寸", "5-6", "寸"),
+            qty("六七天", "6-7", "天"),
+            qty("七八丈", "7-8", "丈"),
+            qty("八九年", "8-9", "年"),
         ]
     );
 }

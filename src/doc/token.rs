@@ -1,6 +1,7 @@
 //! Layer 2 tokenization of `nlp.doc.v1`. Tokens stay inside one sentence, and an opaque span
 //! inside a sentence is always exactly one token. See `docs/doc-v1.md`.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -584,10 +585,76 @@ const LEXICALIZED_PREFIX_WORDS: &[&str] = &[
     "此起彼落",
     "此情此景",
     "此消彼长",
+    // 其 (2-char lexicalized words preserved from `其 + verb` de-gluing)
+    "其实",
+    "其中",
+    "其他",
+    "其它",
+    "其次",
+    "其余",
+    "期间",
+    "期待",
+    "其间",
+    "其后",
+    "其前",
+    "其内",
+    "其外",
+    "其上",
+    "其下",
+    "其旁",
+    "其人",
+    "其一",
+    "其二",
+    "其三",
+    "其四",
+    "其五",
+    "其时",
+    "其事",
 ];
 
 /// Classifiers/measure/time suffixes allowed in 2-char `这<X>` / `那<X>` determiner tokens.
 const DEMONSTRATIVE_CLASSIFIERS: &str = "个些种样么里儿边处时刻天日年夜晩晚次回趟阵番下点段截节集章卷篇部本册页封张幅件套双只条根枝枚颗粒块片滴团股道缕丝声句口盏壶杯碗盘锅瓶盒箱袋匹头峰座栋间家户门派宗路队群批帮伙类等项笔份场出幕台辆艘架尊具把柄支管面方位名般一";
+
+/// Second characters in false 2-char `中 + <verb/prep/noun-frag>` merges under `normalize_traditional`.
+const ZHONG_SPLIT_SECONDS: &str =
+    "探方专專狂激射闪閃现現出飞飛落起看望凝露显顯带帶夹夾含透传傳响響变动變動转轉朝向往对對为為";
+
+/// Rare radical/stroke infixes inserted between two Han chars by pirate anti-censorship scrapers.
+pub(crate) fn is_scraper_infix(ch: char) -> bool {
+    matches!(ch, '丅' | '丵' | '灬' | '堊' | '冇')
+}
+
+/// Strip single scraper anti-censorship infixes (`丅`, `丵`, `灬`, `堊`, `冇`) strictly sandwiched
+/// between two non-infix Han characters, returning a zero-allocation `Cow::Borrowed` fast path
+/// whenever no sandwiched infix is present.
+pub(crate) fn strip_scraper_infix(s: &str) -> Cow<'_, str> {
+    if s.len() < 9 || !s.chars().any(is_scraper_infix) {
+        return Cow::Borrowed(s);
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut changed = false;
+    for i in 0..chars.len() {
+        let ch = chars[i];
+        let sandwiched = i > 0
+            && i + 1 < chars.len()
+            && is_scraper_infix(ch)
+            && is_han(chars[i - 1])
+            && !is_scraper_infix(chars[i - 1])
+            && is_han(chars[i + 1])
+            && !is_scraper_infix(chars[i + 1]);
+        if sandwiched {
+            changed = true;
+        } else {
+            out.push(ch);
+        }
+    }
+    if changed {
+        Cow::Owned(out)
+    } else {
+        Cow::Borrowed(s)
+    }
+}
 
 /// The Han set of `nlp.doc.v1` tokens: CJK ideographs, compatibility ideographs, 々 and 〇.
 /// Layer 1 keeps its own set (`segment::is_han`).
@@ -757,22 +824,40 @@ impl TokenMatcher {
 
 /// Split one sentence into tokens with default options.
 pub(super) fn tokenize(c: &[char], sentence: Span, inline: &[(Span, OpaqueKind)]) -> Vec<Piece> {
-    tokenize_with_matcher(c, sentence, inline, &TokenMatcher::default_matcher())
+    tokenize_with_matcher(c, sentence, inline, &[], &TokenMatcher::default_matcher())
 }
 
-/// Split one sentence into tokens using caller `TokenMatcher`. `inline` holds the opaque spans
-/// of the text; each one inside the sentence becomes a single piece, and the text between them
-/// is split by rule.
+/// Split one sentence into tokens using caller `TokenMatcher`. `inline` holds the visible inline
+/// opaque spans of the text (each one inside the sentence becomes a single piece), `silent` holds
+/// suppressed inline noise spans that must be skipped without emitting a piece, and the text
+/// between them is split by rule.
 pub(super) fn tokenize_with_matcher(
     c: &[char],
     sentence: Span,
     inline: &[(Span, OpaqueKind)],
+    silent: &[Span],
     matcher: &TokenMatcher,
 ) -> Vec<Piece> {
-    let mut inside: Vec<(Span, OpaqueKind)> = inline
+    let mut inside: Vec<(Span, Option<OpaqueKind>)> = inline
         .iter()
         .copied()
         .filter(|(s, _)| s.start_char >= sentence.start_char && s.end_char <= sentence.end_char)
+        .map(|(s, k)| (s, Some(k)))
+        .chain(
+            silent
+                .iter()
+                .copied()
+                .filter(|s| s.start_char < sentence.end_char && sentence.start_char < s.end_char)
+                .map(|s| {
+                    (
+                        Span {
+                            start_char: s.start_char.max(sentence.start_char),
+                            end_char: s.end_char.min(sentence.end_char),
+                        },
+                        None,
+                    )
+                }),
+        )
         .collect();
     inside.sort_by_key(|(s, _)| s.start_char);
     let mut out = Vec::new();
@@ -782,10 +867,12 @@ pub(super) fn tokenize_with_matcher(
             continue;
         }
         text_pieces(c, cursor, span.start_char, matcher, &mut out);
-        out.push(Piece {
-            span,
-            opaque: Some(kind),
-        });
+        if let Some(kind) = kind {
+            out.push(Piece {
+                span,
+                opaque: Some(kind),
+            });
+        }
         cursor = span.end_char;
     }
     text_pieces(c, cursor, sentence.end_char, matcher, &mut out);
@@ -866,13 +953,28 @@ fn han_words(text: &str, base: usize, matcher: &TokenMatcher, out: &mut Vec<(usi
         return;
     }
 
-    let mut orig_bytes = Vec::with_capacity(text.len() / 3 + 2);
-    let mut simp = String::with_capacity(text.len());
-    for (b, ch) in text.char_indices() {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let m_len = chars.len();
+    let mut orig_bytes = Vec::with_capacity(m_len + 1);
+    for &(b, _) in &chars {
         orig_bytes.push(b);
-        simp.push(t2s::to_simplified_char(ch));
     }
     orig_bytes.push(text.len());
+
+    let mut proj_orig = Vec::with_capacity(m_len);
+    let mut simp = String::with_capacity(text.len());
+    for i in 0..m_len {
+        let ch = chars[i].1;
+        let skip = i > 0
+            && i + 1 < m_len
+            && is_scraper_infix(ch)
+            && !is_scraper_infix(chars[i - 1].1)
+            && !is_scraper_infix(chars[i + 1].1);
+        if !skip {
+            proj_orig.push(i);
+            simp.push(t2s::to_simplified_char(ch));
+        }
+    }
 
     if let Some(simp_ac) = &matcher.simp_extra {
         let mut simp_byte_to_char = vec![0usize; simp.len() + 1];
@@ -888,24 +990,58 @@ fn han_words(text: &str, base: usize, matcher: &TokenMatcher, out: &mut Vec<(usi
             emit_jieba_deglued(
                 &simp[at..m.start()],
                 simp_byte_to_char[at],
+                &proj_orig,
                 &orig_bytes,
                 base,
                 out,
             );
             let cs = simp_byte_to_char[m.start()];
             let ce = simp_byte_to_char[m.end()];
-            out.push((base + orig_bytes[cs], base + orig_bytes[ce]));
+            emit_projected_span(cs, ce, &proj_orig, &orig_bytes, base, out);
             at = m.end();
         }
-        emit_jieba_deglued(&simp[at..], simp_byte_to_char[at], &orig_bytes, base, out);
+        emit_jieba_deglued(
+            &simp[at..],
+            simp_byte_to_char[at],
+            &proj_orig,
+            &orig_bytes,
+            base,
+            out,
+        );
     } else {
-        emit_jieba_deglued(&simp, 0, &orig_bytes, base, out);
+        emit_jieba_deglued(&simp, 0, &proj_orig, &orig_bytes, base, out);
+    }
+}
+
+/// Emit the original byte range corresponding to projected char interval `[ps..pe)`, plus any
+/// orphaned infix char that sat directly between `pe - 1` and `pe`, guaranteeing a zero-drift
+/// contiguous byte partition of `text`.
+fn emit_projected_span(
+    ps: usize,
+    pe: usize,
+    proj_orig: &[usize],
+    orig_bytes: &[usize],
+    base: usize,
+    out: &mut Vec<(usize, usize)>,
+) {
+    if ps >= pe {
+        return;
+    }
+    let orig_start = proj_orig[ps];
+    let orig_end = proj_orig[pe - 1] + 1;
+    out.push((base + orig_bytes[orig_start], base + orig_bytes[orig_end]));
+    if pe < proj_orig.len() && orig_end < proj_orig[pe] {
+        out.push((
+            base + orig_bytes[orig_end],
+            base + orig_bytes[proj_orig[pe]],
+        ));
     }
 }
 
 fn emit_jieba_deglued(
     simp_slice: &str,
     char_offset: usize,
+    proj_orig: &[usize],
     orig_bytes: &[usize],
     base: usize,
     out: &mut Vec<(usize, usize)>,
@@ -919,13 +1055,24 @@ fn emit_jieba_deglued(
         let w_chars = w.chars().count();
         if should_split_coverb_or_dem(w, w_chars) {
             let first_len = w.chars().next().expect("w_chars >= 2").len_utf8();
-            out.push((base + orig_bytes[cur_char], base + orig_bytes[cur_char + 1]));
-            emit_jieba_deglued(&w[first_len..], cur_char + 1, orig_bytes, base, out);
+            emit_projected_span(cur_char, cur_char + 1, proj_orig, orig_bytes, base, out);
+            emit_jieba_deglued(
+                &w[first_len..],
+                cur_char + 1,
+                proj_orig,
+                orig_bytes,
+                base,
+                out,
+            );
         } else {
-            out.push((
-                base + orig_bytes[cur_char],
-                base + orig_bytes[cur_char + w_chars],
-            ));
+            emit_projected_span(
+                cur_char,
+                cur_char + w_chars,
+                proj_orig,
+                orig_bytes,
+                base,
+                out,
+            );
         }
         cur_char += w_chars;
     }
@@ -939,6 +1086,15 @@ fn should_split_coverb_or_dem(w: &str, w_chars: usize) -> bool {
     let Some(c0) = chars.next() else {
         return false;
     };
+    if c0 == '其' {
+        return w_chars == 2 && !lexicalized_prefix_set().contains(w);
+    }
+    if c0 == '中' {
+        return w_chars == 2
+            && chars
+                .next()
+                .is_some_and(|c1| ZHONG_SPLIT_SECONDS.contains(c1));
+    }
     let is_prefix = matches!(
         c0,
         '将' | '把'

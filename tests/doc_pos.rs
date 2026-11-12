@@ -1,5 +1,5 @@
 use faberline_nlp::Span;
-use faberline_nlp::doc::{Document, Lang, Options, Reason, analyze_document};
+use faberline_nlp::doc::{Document, Lang, Options, Reason, Upos, analyze_document};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -1003,4 +1003,125 @@ fn normalize_traditional_t2s_degluing_and_lexicon() {
     assert!(toks3.contains(&"將".to_owned()));
     assert!(toks3.contains(&"其".to_owned()));
     assert!(toks3.contains(&"儲物袋".to_owned()));
+}
+
+#[test]
+fn ws2_ws3_v3_infix_projection_degluing_and_decided_lexicon() {
+    let opts = Options {
+        normalize_traditional: true,
+        ..Options::default()
+    };
+
+    // 1. Scraper anti-censorship infix projection + POS lookup via `strip_scraper_infix`.
+    let t_infix = "那名少丅女與長堊老終丅於一丅齊走入傳丅送陣，一丅旦啟程便需丅要護住肉冇身離開大灬陸，免被吞灬噬，老堊身也沒丅有多言。";
+    let doc_infix = analyze_document(t_infix, &opts);
+    for tok in &doc_infix.tokens {
+        assert!(
+            tok.span.start_char < tok.span.end_char && tok.span.end_char <= doc_infix.text_chars
+        );
+    }
+    let toks_infix: Vec<(String, Option<Upos>)> = doc_infix
+        .tokens
+        .iter()
+        .map(|t| (slice(t_infix, t.span), t.upos))
+        .collect();
+    for expected in [
+        "少丅女",
+        "長堊老",
+        "終丅於",
+        "一丅齊",
+        "傳丅送",
+        "一丅旦",
+        "需丅要",
+        "肉冇身",
+        "大灬陸",
+        "吞灬噬",
+        "老堊身",
+        "沒丅有",
+    ] {
+        assert!(
+            toks_infix.iter().any(|(s, _)| s == expected),
+            "expected infix-projected token {expected:?} in {toks_infix:?}"
+        );
+    }
+    let find_upos = |surf: &str| {
+        toks_infix
+            .iter()
+            .find(|(s, _)| s == surf)
+            .unwrap_or_else(|| panic!("missing {surf}"))
+            .1
+    };
+    assert_eq!(find_upos("終丅於"), Some(Upos::Adv));
+    assert_eq!(find_upos("一丅齊"), Some(Upos::Adv));
+    assert_eq!(find_upos("一丅旦"), Some(Upos::Sconj));
+    assert_eq!(find_upos("老堊身"), Some(Upos::Pron));
+    let meiyou_span = doc_infix
+        .tokens
+        .iter()
+        .find(|t| slice(t_infix, t.span) == "沒丅有")
+        .unwrap()
+        .span;
+    assert_eq!(pos_reason(&doc_infix, meiyou_span), Some(Reason::Ambiguous));
+
+    // 2. `其 + verb` and `中 + verb/prep` de-gluing vs lexicalized whitelists.
+    let t_deglue = concat!(
+        "青衫老者將其放下、將其收起、將其滅去、將其斬斷、將其拿住、將其吞下。",
+        "其實其中其他同伴與其它修士其次將其餘木盒在期間期待地放回其間。",
+        "他從袋中探出手，在山谷中方才停步，心中狂喜，目中激射精光，在石室中專心打坐，於陣中為眾人護法。",
+        "中國中間的中心石台有中年旅人中途拿出中品丹藥，在中期與中階修士於中央中原會合，未曾中毒、中計或中斷，保持中等與中立的中樞秩序。"
+    );
+    let doc_deglue = analyze_document(t_deglue, &opts);
+    for tok in &doc_deglue.tokens {
+        assert!(
+            tok.span.start_char < tok.span.end_char && tok.span.end_char <= doc_deglue.text_chars
+        );
+    }
+    let surf_deglue: Vec<String> = doc_deglue
+        .tokens
+        .iter()
+        .map(|t| slice(t_deglue, t.span))
+        .collect();
+    for forbidden in [
+        "其放", "其收", "其滅", "其斬", "其拿", "其吞", "中探", "中方", "中狂", "中激", "中專",
+        "中為",
+    ] {
+        assert!(
+            !surf_deglue.iter().any(|s| s == forbidden),
+            "false merge {forbidden:?} must be split: {surf_deglue:?}"
+        );
+    }
+    for preserved in [
+        "其實", "其中", "其他", "其它", "其次", "其餘", "期間", "期待", "其間", "中國", "中間",
+        "中心", "中年", "中途", "中品", "中期", "中階", "中央", "中原", "中毒", "中計", "中斷",
+        "中等", "中立", "中樞",
+    ] {
+        assert!(
+            surf_deglue.iter().any(|s| s == preserved),
+            "lexicalized word {preserved:?} must stay intact: {surf_deglue:?}"
+        );
+    }
+
+    // 3. New `ZH_DECIDED` closed-class words (`終於`/`终于`, `一旦`, `一齊`/`一齐`, `除了`, `老身`).
+    let decided_sent = "除了老身之外，眾人終於與终于一齊和一齐退後，一旦石門開啟便進入。";
+    let doc_dec = analyze_document(decided_sent, &opts);
+    for tok in &doc_dec.tokens {
+        assert!(tok.span.start_char < tok.span.end_char && tok.span.end_char <= doc_dec.text_chars);
+    }
+    check_invariants("除了老身之外，众人终于一齐退后，一旦石门开启便进入。");
+    for (word, expected_upos) in [
+        ("除了", Upos::Adp),
+        ("老身", Upos::Pron),
+        ("終於", Upos::Adv),
+        ("终于", Upos::Adv),
+        ("一齊", Upos::Adv),
+        ("一齐", Upos::Adv),
+        ("一旦", Upos::Sconj),
+    ] {
+        let tok = doc_dec
+            .tokens
+            .iter()
+            .find(|t| slice(decided_sent, t.span) == word)
+            .unwrap_or_else(|| panic!("missing token {word}"));
+        assert_eq!(tok.upos, Some(expected_upos), "{word} upos mismatch");
+    }
 }

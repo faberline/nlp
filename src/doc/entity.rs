@@ -4,7 +4,7 @@
 //! char that no rule matches, so no candidate can start or end inside one.
 
 use super::opaque::Found;
-use super::{Entity, EntityKind, OpaqueKind, Reason, Unknown};
+use super::{Entity, EntityKind, OpaqueKind, Reason, Token, Unknown};
 use crate::Span;
 use aho_corasick::{AhoCorasick, MatchKind};
 use std::cell::RefCell;
@@ -53,8 +53,11 @@ const ZH_RELATIVE: &[&str] = &[
     "轉眼",
     "转眼间",
     "转眼",
+    "眨眼之間",
+    "眨眼之间",
+    "眨眼工夫",
+    "眨眼功夫",
     "眨眼間",
-    "眨眼",
     "眨眼间",
     "瞬息間",
     "瞬息",
@@ -305,7 +308,9 @@ pub(super) fn extract(
     c: &[char],
     found: &[Found],
     sentences: &[(usize, Span)],
+    tokens: &[Token],
     names: &[String],
+    normalize_traditional: bool,
 ) -> (Vec<Entity>, Vec<Unknown>) {
     let mut t = c.to_vec();
     for f in found.iter().filter(|f| !f.block) {
@@ -323,7 +328,16 @@ pub(super) fn extract(
             .expect("name patterns")
     });
     let mut cands = Vec::new();
+    let mut tok_cursor = 0usize;
     for &(idx, span) in sentences {
+        while tok_cursor < tokens.len() && tokens[tok_cursor].sentence < idx {
+            tok_cursor += 1;
+        }
+        let tok_start = tok_cursor;
+        while tok_cursor < tokens.len() && tokens[tok_cursor].sentence == idx {
+            tok_cursor += 1;
+        }
+        let sent_tokens = &tokens[tok_start..tok_cursor];
         let x = Sent {
             t: &t,
             s: span.start_char,
@@ -342,22 +356,50 @@ pub(super) fn extract(
             }
         }
         let bad = x.bad_dates.take();
-        cands.retain(|c| {
-            let hit = |&(s, e): &(usize, usize)| c.span.start_char < e && s < c.span.end_char;
+        cands.retain(|cand| {
+            let hit = |&(s, e): &(usize, usize)| cand.span.start_char < e && s < cand.span.end_char;
             // Inside an invalid full date, no date and no undecided candidate inside it (such as
             // `2/30`) is read, and its digits stay numbers. A date that overlaps the bad date is
             // dropped. An undecided candidate is dropped only when it lies fully inside the bad
             // date, so `9:45` before `Jan 2027` stays an unknown.
-            let inside = |&(s, e): &(usize, usize)| s <= c.span.start_char && c.span.end_char <= e;
-            let dated = match c.kind {
+            let inside =
+                |&(s, e): &(usize, usize)| s <= cand.span.start_char && cand.span.end_char <= e;
+            let dated = match cand.kind {
                 Some(EntityKind::Date | EntityKind::RelativeDate) => bad.iter().any(hit),
-                Some(EntityKind::Quantity) if matches!(c.unit.as_deref(), Some("年" | "日")) => {
+                Some(EntityKind::Quantity) if matches!(cand.unit.as_deref(), Some("年" | "日")) => {
                     bad.iter().any(hit)
                 }
                 None => bad.iter().any(inside),
                 Some(_) => false,
             };
-            !(dead.iter().any(hit) || dated)
+            if dead.iter().any(hit) || dated {
+                return false;
+            }
+            if cand.sentence == idx
+                && matches!(
+                    cand.kind,
+                    Some(
+                        EntityKind::Quantity
+                            | EntityKind::RelativeDate
+                            | EntityKind::Date
+                            | EntityKind::Time
+                    )
+                )
+            {
+                if violates_surface_context_guard(
+                    &t,
+                    x.s,
+                    x.e,
+                    cand.span.start_char,
+                    cand.span.end_char,
+                ) {
+                    return false;
+                }
+                if normalize_traditional && cuts_non_temporal_token(c, sent_tokens, cand.span) {
+                    return false;
+                }
+            }
+            true
         });
         emails(&x, &mut cands);
         if let Some(ac) = &ac {
@@ -952,13 +994,116 @@ fn quantity_at(x: &Sent, i: usize) -> Option<Cand> {
     if bare_wan && unit.is_ascii() {
         return None;
     }
+    let value = zh_ascending_approx_range(&t[i..num.end])
+        .map(str::to_owned)
+        .unwrap_or(num.value);
     Some(x.cand(
         i,
         uend,
         Some(EntityKind::Quantity),
-        Some(num.value),
+        Some(value),
         Some(unit.to_owned()),
     ))
+}
+
+/// Two-digit ascending Chinese approximations (`一二`..`八九`) before a quantity unit normalize to
+/// `"1-2"`..`"8-9"` rather than concatenating into `"12"`..`"89"`.
+fn zh_ascending_approx_range(run: &[char]) -> Option<&'static str> {
+    match run {
+        ['一', '二'] => Some("1-2"),
+        ['二', '三'] => Some("2-3"),
+        ['三', '四'] => Some("3-4"),
+        ['四', '五'] => Some("4-5"),
+        ['五', '六'] => Some("5-6"),
+        ['六', '七'] => Some("6-7"),
+        ['七', '八'] => Some("7-8"),
+        ['八', '九'] => Some("8-9"),
+        _ => None,
+    }
+}
+
+/// Explicit surface context guards for non-temporal/non-quantity compounds (`半天空`,
+/// `九天神/玄/之/上`, `萬天` before `明/星/空`, and indefinite `...的一天`).
+fn violates_surface_context_guard(
+    t: &[char],
+    sent_s: usize,
+    sent_e: usize,
+    s: usize,
+    e: usize,
+) -> bool {
+    let surf = &t[s..e];
+    if surf == ['半', '天'] && e < sent_e && t[e] == '空' {
+        return true;
+    }
+    if surf == ['九', '天'] && e < sent_e && matches!(t[e], '神' | '玄' | '之' | '上' | '落' | '外')
+    {
+        return true;
+    }
+    if matches!(surf, ['萬' | '万', '天'])
+        && e < sent_e
+        && matches!(t[e], '明' | '星' | '空' | '神' | '玄')
+    {
+        return true;
+    }
+    if surf == ['一', '天'] && s > sent_s && t[s - 1] == '的' {
+        return true;
+    }
+    if s >= sent_s + 2
+        && matches!(
+            (&t[s - 2..s], surf),
+            (['退', '避'] | ['垂', '涎'], ['三', '尺']) | (['火', '冒'], ['三', '丈'])
+        )
+    {
+        return true;
+    }
+    if matches!(surf, ['五', '尺'] | ['七', '尺'])
+        && e + 2 <= sent_e
+        && matches!(&t[e..e + 2], ['之', '軀'] | ['之', '躯'])
+    {
+        return true;
+    }
+    false
+}
+
+const COMPOSITE_NUM_CHARS: &str = "〇零一二三四五六七八九十百千萬万億亿兩两半數数幾几";
+const COMPOSITE_ALLOWED_CHARS: &str = "〇零一二三四五六七八九十百千萬万億亿兩两半數数幾几餘余多個个年月日號号天夜更週周時时辰刻鐘钟盞盏茶炷柱香甲子載载分秒丈尺寸畝亩公斤克里毫米升元台幣美元後后前內内間间之久左右開开外整足約约";
+
+/// True when a token's surface is itself a composite numeral/unit/temporal compound (`三天三夜`,
+/// `十丈開外`, `數月之久`, `2026年度`), so an entity boundary inside it is legitimate.
+fn is_composite_num_unit_token(tok_chars: &[char]) -> bool {
+    if tok_chars.is_empty() {
+        return false;
+    }
+    if tok_chars == ['年', '度'] {
+        return true;
+    }
+    let has_num = tok_chars
+        .iter()
+        .any(|&ch| ch.is_ascii_digit() || COMPOSITE_NUM_CHARS.contains(ch));
+    if !has_num {
+        return false;
+    }
+    tok_chars.iter().all(|&ch| {
+        ch.is_ascii_digit()
+            || matches!(ch, '.' | ',' | ':' | '/' | '-' | '%' | '$')
+            || super::token::is_scraper_infix(ch)
+            || COMPOSITE_ALLOWED_CHARS.contains(ch)
+    })
+}
+
+/// True when `span.start_char` or `span.end_char` cuts strictly inside the interior of a Layer-1
+/// token whose surface is not a composite numeral/quantity/temporal expression.
+fn cuts_non_temporal_token(c_orig: &[char], sent_tokens: &[Token], span: Span) -> bool {
+    for tok in sent_tokens {
+        let ts = tok.span.start_char;
+        let te = tok.span.end_char;
+        let cuts_start = ts < span.start_char && span.start_char < te;
+        let cuts_end = ts < span.end_char && span.end_char < te;
+        if (cuts_start || cuts_end) && !is_composite_num_unit_token(&c_orig[ts..te]) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Cardinal number for quantities: standard `number_at`, plus standalone `萬`/`万` (`10000`) when

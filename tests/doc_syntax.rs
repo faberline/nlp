@@ -686,9 +686,20 @@ fn zh_cn_mainland_tokens_upgrade_contextual_upos_and_decode_syntax() {
 
 #[test]
 fn analyze_document_with_model_reports_no_model_and_propagates_integrity_errors() {
-    let models_dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/models"));
+    let repo_models = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/models"));
+    let unstage_tmp = tempfile::tempdir().unwrap();
+    let models_dir = if repo_models.join("doc-syntax-v1").exists() {
+        std::fs::copy(
+            repo_models.join("manifest.json"),
+            unstage_tmp.path().join("manifest.json"),
+        )
+        .unwrap();
+        unstage_tmp.path().to_path_buf()
+    } else {
+        repo_models
+    };
     let text = "小甲走進木屋。We measured the data.\n\n안녕하세요.";
-    // `models/` has `test-tiny`, not `doc-syntax-v1` (or `NoBackend` without backend feature).
+    // Without gitignored `models/doc-syntax-v1/` weights, `manifest.json` cleanly maps to `no_model`.
     for backend in [Backend::Onnx, Backend::Coreml] {
         let doc =
             analyze_document_with_model(text, &Options::default(), &models_dir, backend).unwrap();

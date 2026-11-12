@@ -181,21 +181,37 @@ fn coreml_fast_backend_compiled_and_cli_accepted() {
         );
     }
 
-    // `models/` in git holds only `test-tiny`, so `doc-syntax-v1` cleanly reports `no_model`
-    // while validating `--backend coreml-fast` CLI flag parsing.
+    // Validate missing `doc-syntax-v1` weights cleanly degrade to `no_model` (even when
+    // `models/doc-syntax-v1` is staged locally for benchmarks), and also validate staged run.
+    let unstage_tmp = tempfile::tempdir().unwrap();
+    std::fs::copy(
+        repo_models.join("manifest.json"),
+        unstage_tmp.path().join("manifest.json"),
+    )
+    .expect("copy manifest");
     let doc = analyze_document_with_model(
         "小甲走進木屋。",
         &Options::default(),
-        &repo_models,
+        unstage_tmp.path(),
         Backend::CoremlFast,
     )
-    .expect("missing doc-syntax-v1 degrades to no_model");
+    .expect("missing doc-syntax-v1 weights degrade to no_model");
     assert!(doc.syntax.is_empty());
     assert!(
         doc.unknown
             .iter()
             .any(|u| u.layer == "syntax" && u.reason == Reason::NoModel)
     );
+    if compiled(Backend::CoremlFast) && repo_models.join("doc-syntax-v1").exists() {
+        let staged_doc = analyze_document_with_model(
+            "小甲走進木屋。",
+            &Options::default(),
+            &repo_models,
+            Backend::CoremlFast,
+        )
+        .expect("staged doc-syntax-v1 runs on CoremlFast");
+        assert!(!staged_doc.syntax.is_empty());
+    }
 
     let bin = env!("CARGO_BIN_EXE_nlp_doc");
     let mut child = Command::new(bin)

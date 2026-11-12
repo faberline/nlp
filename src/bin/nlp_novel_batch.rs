@@ -1363,7 +1363,7 @@ fn is_trailing_stop_char(ch: char) -> bool {
 fn is_scraper_infix_or_radical_char(ch: char) -> bool {
     matches!(
         ch,
-        '丅' | '丵' | '灬' | '堊' | '冇' | '吖'
+        '丅' | '丵' | '灬' | '堊' | '冇' | '吖' | '囗'
             | '\u{2e80}'..='\u{2fdf}'
             | '\u{3100}'..='\u{31ff}'
     )
@@ -1393,14 +1393,14 @@ fn is_blocked_meta_compound(term: &str) -> bool {
 
 /// Generic Chinese classifiers and measure characters (`CLF_CHARS`).
 fn is_classifier_char(ch: char) -> bool {
-    const CLF_CHARS: &str = "株具批塊块個个隻只條条道件座名位顆颗滴根片波張张層层頭头步把柄瓶粒雙双套陣阵番團团口尊盞盏頂顶面枚頁页卷篇部幅封本冊册輛辆種种樣样次趟下點点段截節节集朵縷缕絲丝股";
+    const CLF_CHARS: &str = "株具批塊块個个隻只條条道件座名位顆颗滴根片波張张層层頭头步把柄瓶粒雙双套陣阵番團团口尊盞盏頂顶面枚頁页卷篇部幅封本冊册輛辆種种樣样次趟下點点段截節节集朵縷缕絲丝股戶户扇筆笔";
     CLF_CHARS.contains(ch)
 }
 
 /// Unambiguous non-surname measure characters that never initiate genuine `>= 3`-char proper names.
 fn is_unambiguous_classifier_char(ch: char) -> bool {
     const UNAMBIG_CLF_CHARS: &str =
-        "株具批塊块個个隻只條条顆颗滴根片波層层輛辆枚盞盏瓶粒套朵縷缕絲丝";
+        "株具批塊块個个隻只條条顆颗滴根片波層层輛辆枚盞盏瓶粒套朵縷缕絲丝戶户扇筆笔";
     UNAMBIG_CLF_CHARS.contains(ch)
 }
 
@@ -1430,11 +1430,51 @@ fn contains_ascii_case_insensitive(haystack: &str, needle: &[u8]) -> bool {
             .any(|w| w.eq_ignore_ascii_case(needle))
 }
 
+fn is_standalone_zh_volume_banner(trimmed: &str) -> bool {
+    if trimmed.chars().count() > 40
+        || trimmed.contains('。')
+        || trimmed.contains('，')
+        || trimmed.contains('！')
+        || trimmed.contains('？')
+        || trimmed.contains('；')
+    {
+        return false;
+    }
+    let Some(after_di) = trimmed.strip_prefix('第') else {
+        return false;
+    };
+    let after_di = after_di.trim_start_matches(is_heading_ws);
+    let mut num_end = 0usize;
+    let mut num_chars = 0usize;
+    for (b_idx, ch) in after_di.char_indices() {
+        if is_strict_zh_or_ascii_numeral_char(ch) {
+            num_chars += 1;
+            num_end = b_idx + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if num_chars == 0 || num_chars > 10 {
+        return false;
+    }
+    let rem = &after_di[num_end..];
+    let Some(marker) = rem.chars().next() else {
+        return false;
+    };
+    if !matches!(marker, '卷' | '部' | '集' | '篇') {
+        return false;
+    }
+    let tail = &rem[marker.len_utf8()..];
+    tail.is_empty() || tail.chars().next().is_some_and(is_heading_ws)
+}
+
 fn is_boilerplate_or_heading_line(line: &str) -> bool {
     let trimmed = line.trim_matches(is_heading_ws);
     if trimmed.is_empty()
         || trimmed.contains('\u{00a0}')
         || detect_chapter_heading(trimmed).is_some()
+        || is_standalone_zh_volume_banner(trimmed)
+        || strip_optional_zh_volume_prefix(trimmed) != trimmed
     {
         return true;
     }
@@ -1775,7 +1815,7 @@ fn discover_corpus_lexicon(
         if len >= 3
             && matches!(
                 char::from_u32(u32::from(word[0])),
-                Some('衫' | '袍' | '色' | '期' | '階' | '阶')
+                Some('衫' | '袍' | '色' | '期' | '階' | '阶' | '系')
             )
         {
             continue;
@@ -1954,13 +1994,16 @@ fn discover_corpus_lexicon(
                 }
             }
 
-            // 2. Bidirectional cohesive boundary-straddling rejection (`>= 35%` straddle through cohesive 2-grams).
+            // 2. Bidirectional cohesive boundary-straddling rejection (`>= 35%` at PMI >= 3.5,
+            //    or `>= 55%` across moderately cohesive modifiers/heads at PMI >= 2.7).
             let w_first = u16s[0];
             let mut straddle_left = 0u32;
+            let mut straddle_left_mod = 0u32;
             for (&lc, &cnt) in &pair.left {
                 if lc >= 0x3000
                     && han_ok[lc as usize]
                     && !left_straddle_exempt[lc as usize]
+                    && !clf_char[lc as usize]
                     && let Some(&bg_f) =
                         bigram_freq.get(&((u32::from(lc) << 16) | u32::from(w_first)))
                     && bg_f >= MIN_BIGRAM_FREQ
@@ -1972,33 +2015,50 @@ fn discover_corpus_lexicon(
                     if pmi >= 3.5 {
                         straddle_left += cnt;
                     }
+                    if pmi >= 2.7 {
+                        straddle_left_mod += cnt;
+                    }
                 }
             }
-            if f64::from(straddle_left) / total_ctx >= 0.35 {
+            if f64::from(straddle_left) / total_ctx >= 0.35
+                || f64::from(straddle_left_mod) / total_ctx >= 0.55
+            {
                 continue;
             }
 
             let w_last = u16s[len - 1];
-            let mut straddle_right = 0u32;
-            for (&rc, &cnt) in &pair.right {
-                if rc >= 0x3000
-                    && han_ok[rc as usize]
-                    && !right_straddle_exempt[rc as usize]
-                    && let Some(&bg_f) =
-                        bigram_freq.get(&((u32::from(w_last) << 16) | u32::from(rc)))
-                    && bg_f >= MIN_BIGRAM_FREQ
-                {
-                    let pmi = (f64::from(bg_f) * total_n
-                        / (f64::from(unigram_freq[w_last as usize].max(1))
-                            * f64::from(unigram_freq[rc as usize].max(1))))
-                    .ln();
-                    if pmi >= 3.5 {
-                        straddle_right += cnt;
+            let is_stage_or_grade_suffix = matches!(
+                char::from_u32(u32::from(w_last)),
+                Some('期' | '階' | '阶' | '級' | '级' | '品')
+            );
+            if !is_stage_or_grade_suffix {
+                let mut straddle_right = 0u32;
+                let mut straddle_right_mod = 0u32;
+                for (&rc, &cnt) in &pair.right {
+                    if rc >= 0x3000
+                        && han_ok[rc as usize]
+                        && !right_straddle_exempt[rc as usize]
+                        && let Some(&bg_f) =
+                            bigram_freq.get(&((u32::from(w_last) << 16) | u32::from(rc)))
+                        && bg_f >= MIN_BIGRAM_FREQ
+                    {
+                        let pmi = (f64::from(bg_f) * total_n
+                            / (f64::from(unigram_freq[w_last as usize].max(1))
+                                * f64::from(unigram_freq[rc as usize].max(1))))
+                        .ln();
+                        if pmi >= 3.5 {
+                            straddle_right += cnt;
+                        }
+                        if pmi >= 2.7 {
+                            straddle_right_mod += cnt;
+                        }
                     }
                 }
-            }
-            if f64::from(straddle_right) / total_ctx >= 0.35 {
-                continue;
+                if f64::from(straddle_right) / total_ctx >= 0.35
+                    || f64::from(straddle_right_mod) / total_ctx >= 0.55
+                {
+                    continue;
+                }
             }
         }
 

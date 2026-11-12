@@ -1048,3 +1048,289 @@ fn ws3_pooling_and_ws5_soft_windowing_and_tree_retention_synthetic() {
         }
     }
 }
+
+#[test]
+fn phase4_v3_end_to_end_ws1_to_ws6_synthetic() {
+    // End-to-end synthetic chapter exercising Phase 4 (`v3`) WS1–WS6 together:
+    // - WS1-v3: tight heading `第一千零八章古道試煉`, unclosed `</P` & `<!go`, mixed-bracket editorial
+    //   postscript `(月底最後一更，求下月票支持！）`, and pirate footer line (`silent_noise` emits 0 `Upos::X`
+    //   tokens and 0 intra-line double-space splits; night-watch `三更半夜` stays normal prose).
+    // - WS2-v3: scraper infixes `少丅女` & `長堊老` stay intact 3-char tokens on original offsets;
+    //   `其見` and `中含` de-glue cleanly.
+    // - WS3-v3: `終於` -> `ADV`, `一旦` -> `SCONJ`, `一齊` -> `ADV`, `除了` -> `ADP`; Layer-4 contextual
+    //   `將` coverb -> `ADP` and `>= 3`-char `options.lexicon` compound `玄雲半天鏡` -> `NOUN` with
+    //   scraper-infix subword projection.
+    // - WS4-v3: interior `半天` inside `玄雲半天鏡`, `九天之上`, `退避三尺`, and bare `眨眼` emit 0 false
+    //   entities, while `眨眼工夫` (`RelativeDate`) and `七八丈` (`Quantity` with `value = "7-8"`) fire.
+    // - WS5-v3: multi-clause `雖然...` subordinate root-stealing guard promotes main-clause predicate
+    //   `取出` to `"root"` over subordinate `看見`, preserving an acyclic single-root UD tree.
+    // - WS6-v3: spatial `站在石柱之後` and kinship `名門之後` emit 0 false `Sequence` relations, while
+    //   temporal `收好地圖之後` (`Sequence`) and clause + sentence `與此同時` (`Parallel`) fire cleanly.
+    let raw_text = concat!(
+        "第一千零八章古道試煉\n\n",
+        "</P雖然少丅女看見了迷霧，長堊老終於將玄雲半天鏡取出。(月底最後一更，求下月票支持！）\n\n",
+        "<!go三更半夜裡，除了風聲，一旦機關啟動眾人便一齊退避三尺，其見名門之後站在石柱之後眨眼望向九天之上，石匣中含著古圖。\n\n",
+        "收好地圖之後，隊伍眨眼工夫走了七八丈山路，與此同時前哨點亮火把。與此同時，後隊守住山口。\n\n",
+        "一一小說 ddyueshu 最新全本，瀏覽貼子與轉貼次數。\n"
+    );
+
+    let opts = Options {
+        mask_editorial: true,
+        normalize_traditional: true,
+        lexicon: vec!["玄雲半天鏡".to_owned()],
+        ..Options::default()
+    };
+    let mut doc = analyze_document(raw_text, &opts);
+
+    // 1. WS1-v3: tight heading matched; editorial/HTML/pirate noise masked with zero `Upos::X` noise tokens.
+    assert!(doc.segmentation.opaque.iter().any(
+        |o| o.kind == OpaqueKind::Heading && slice(raw_text, o.span) == "第一千零八章古道試煉"
+    ));
+    let tok_surfaces: Vec<String> = doc.tokens.iter().map(|t| slice(raw_text, t.span)).collect();
+    for leaked in ["月票", "一一小說", "ddyueshu", "</P", "<!go"] {
+        assert!(
+            !tok_surfaces.iter().any(|t| t.contains(leaked)),
+            "editorial/HTML noise `{leaked}` must be silently masked, got: {tok_surfaces:?}"
+        );
+    }
+    assert!(
+        !doc.tokens.iter().any(|t| t.upos == Some(Upos::X)),
+        "silent_noise inline masks must emit zero Upos::X tokens, got: {:?}",
+        doc.tokens
+    );
+    assert!(
+        tok_surfaces
+            .iter()
+            .any(|t| t.contains("三更") || t == "三更半夜"),
+        "night-watch prose `三更半夜` must remain unmasked: {tok_surfaces:?}"
+    );
+
+    // 2. WS2-v3 & WS3-v3 (Layer 2): scraper infixes stay intact on raw spans; `其見`/`中含` de-glue; closed-class UPOS decided.
+    for expected_tok in [
+        "少丅女",
+        "長堊老",
+        "玄雲半天鏡",
+        "其",
+        "見",
+        "中",
+        "含",
+        "終於",
+        "除了",
+        "一旦",
+        "一齊",
+    ] {
+        assert!(
+            tok_surfaces.iter().any(|t| t == expected_tok),
+            "expected token {expected_tok:?} in {tok_surfaces:?}"
+        );
+    }
+    let upos_of = |d: &Document, surface: &str| -> Option<Upos> {
+        d.tokens
+            .iter()
+            .find(|t| slice(raw_text, t.span) == surface)
+            .and_then(|t| t.upos)
+    };
+    assert_eq!(upos_of(&doc, "終於"), Some(Upos::Adv));
+    assert_eq!(upos_of(&doc, "除了"), Some(Upos::Adp));
+    assert_eq!(upos_of(&doc, "一旦"), Some(Upos::Sconj));
+    assert_eq!(upos_of(&doc, "一齊"), Some(Upos::Adv));
+
+    // 3. WS4-v3: interior `半天` inside `玄雲半天鏡`, `九天` before `之上`, `退避三尺`, and bare `眨眼` suppressed;
+    //    `眨眼工夫` (`RelativeDate`) and `七八丈` (`Quantity`, `"7-8"`) emitted.
+    let ents: Vec<(EntityKind, String, Option<String>, Option<String>)> = doc
+        .entities
+        .iter()
+        .map(|e| {
+            (
+                e.kind,
+                slice(raw_text, e.span),
+                e.value.clone(),
+                e.unit.clone(),
+            )
+        })
+        .collect();
+    for forbidden_ent in ["半天", "九天", "三尺", "眨眼"] {
+        assert!(
+            !ents.iter().any(|(_, s, _, _)| s == forbidden_ent),
+            "guarded false-positive entity `{forbidden_ent}` must not fire: {ents:?}"
+        );
+    }
+    assert!(
+        ents.contains(&(EntityKind::RelativeDate, "眨眼工夫".to_owned(), None, None)),
+        "expected `眨眼工夫` RelativeDate in {ents:?}"
+    );
+    assert!(
+        ents.contains(&(
+            EntityKind::Quantity,
+            "七八丈".to_owned(),
+            Some("7-8".to_owned()),
+            Some("丈".to_owned()),
+        )),
+        "expected `七八丈` Quantity with value `7-8` in {ents:?}"
+    );
+
+    // 4. WS6-v3: kinship `名門之後` and spatial `站在石柱之後` do not emit `Sequence`;
+    //    temporal `收好地圖之後` (`Sequence`) and clause + sentence `與此同時` (`Parallel`) fire.
+    let rels: Vec<(RelationKind, RelationLevel, String, String)> = doc
+        .relations
+        .iter()
+        .map(|r| {
+            (
+                r.kind,
+                r.level,
+                slice(raw_text, r.connector),
+                slice(raw_text, r.arg1),
+            )
+        })
+        .collect();
+    assert!(
+        !rels
+            .iter()
+            .any(|(_, _, conn, a1)| conn == "之後" && (a1.contains("名門") || a1.contains("石柱"))),
+        "kinship/spatial `之後` must be suppressed: {rels:?}"
+    );
+    assert!(
+        rels.iter().any(|(k, lvl, conn, a1)| {
+            *k == RelationKind::Sequence
+                && *lvl == RelationLevel::Clause
+                && conn == "之後"
+                && a1.contains("收好地圖")
+        }),
+        "expected temporal `之後` Sequence relation in {rels:?}"
+    );
+    assert!(
+        rels.iter().any(|(k, lvl, conn, _)| {
+            *k == RelationKind::Parallel && *lvl == RelationLevel::Clause && conn == "與此同時"
+        }),
+        "expected clause-level `與此同時` Parallel relation in {rels:?}"
+    );
+    assert!(
+        rels.iter().any(|(k, lvl, conn, _)| {
+            *k == RelationKind::Parallel && *lvl == RelationLevel::Sentence && conn == "與此同時"
+        }),
+        "expected sentence-level `與此同時` Parallel relation in {rels:?}"
+    );
+
+    // 5. WS3-v3 & WS5-v3 (Layer 4): scraper infix subword projection, `將` -> `ADP`, lexicon `玄雲半天鏡` -> `NOUN`,
+    //    and multi-clause `雖然...` root-stealing guard (`看見` penalized `-2.5`, so main-clause `取出` wins `"root"`).
+    let exact_char_encode = |sentence_text: &str| -> Result<Subwords, ModelError> {
+        assert!(
+            !sentence_text.contains('丅') && !sentence_text.contains('堊'),
+            "scraper infixes must be stripped from temporary projected encoder string: {sentence_text:?}"
+        );
+        let mut ids = vec![0_i64];
+        let mut spans = vec![Span {
+            start_char: 0,
+            end_char: 0,
+        }];
+        for (idx, ch) in sentence_text.chars().enumerate() {
+            ids.push(i64::from(ch as u32) + 10);
+            spans.push(Span {
+                start_char: idx,
+                end_char: idx + 1,
+            });
+        }
+        let total = sentence_text.chars().count();
+        ids.push(2);
+        spans.push(Span {
+            start_char: total,
+            end_char: total,
+        });
+        Ok(Subwords { ids, spans })
+    };
+
+    let v3_model = SyntheticSyntaxModel::new(256, |ids, cols, data| {
+        let chars: Vec<char> = ids[1..ids.len().saturating_sub(1)]
+            .iter()
+            .map(|&id| char::from_u32((id - 10) as u32).unwrap_or(' '))
+            .collect();
+        let main_verb_s = chars
+            .iter()
+            .position(|&c| c == '取')
+            .map(|i| i + 1)
+            .unwrap_or(1);
+
+        for (idx, &ch) in chars.iter().enumerate() {
+            let s = idx + 1;
+            let row = &mut data[s * cols..(s + 1) * cols];
+            match ch {
+                '看' | '見' => {
+                    row[15] = 10.0; // VERB in subordinate `雖然` clause
+                    row[17] = 9.0; // higher raw root logit than `取出` (7.8), must be penalized by `-2.5` -> 6.5!
+                    row[17 + main_verb_s] = 7.2;
+                    row[17 + 256 + 1] = 10.0; // advcl
+                }
+                '取' | '出' => {
+                    row[15] = 10.0; // VERB in main clause
+                    row[17] = 7.8; // wins root after `看見` receives `-2.5` subordinate penalty!
+                    row[17 + 256 + 34] = 12.0; // root
+                }
+                '將' => {
+                    row[15] = 9.0; // raw VERB -> WS3-v3 coverb prior must disambiguate to ADP
+                    row[17] = -5.0;
+                    row[17 + main_verb_s] = 10.0;
+                    row[17 + 256 + 6] = 10.0; // case
+                }
+                '玄' | '雲' | '半' | '天' | '鏡' => {
+                    row[0] = 9.0; // raw ADJ -> WS3-v3 lexicon compound prior must override to NOUN
+                    row[17] = -5.0;
+                    row[17 + main_verb_s] = 10.0;
+                    row[17 + 256 + 29] = 10.0; // obj
+                }
+                '，' | '。' => {
+                    row[12] = 10.0; // PUNCT
+                    row[17] = -5.0;
+                    row[17 + main_verb_s] = 10.0;
+                    row[17 + 256 + 32] = 10.0; // punct
+                }
+                _ => {
+                    if s == 1 && main_verb_s == 1 {
+                        row[15] = 10.0; // VERB root for remaining sentences
+                        row[17] = 10.0;
+                    } else {
+                        row[7] = 10.0; // NOUN
+                        row[17] = -5.0;
+                        row[17 + main_verb_s] = 10.0;
+                    }
+                    row[17 + 256 + 26] = 10.0; // nsubj
+                }
+            }
+        }
+    });
+
+    annotate_with_encoder(&mut doc, raw_text, &v3_model, exact_char_encode)
+        .expect("annotate v3 end-to-end doc");
+
+    assert_valid_acyclic_ud_forest(&doc);
+    assert_eq!(
+        upos_of(&doc, "將"),
+        Some(Upos::Adp),
+        "disposal coverb `將` before NP+VP must upgrade to ADP"
+    );
+    assert_eq!(
+        upos_of(&doc, "玄雲半天鏡"),
+        Some(Upos::Noun),
+        ">=3-char lexicon compound `玄雲半天鏡` must receive NOUN prior"
+    );
+
+    // Verify sentence 0's decoded root is main-clause `取出` (not subordinate `看見`) and scraper-infix
+    // tokens `少丅女` / `長堊老` keep exact 3-char spans on `raw_text`.
+    let sent0_root = doc
+        .syntax
+        .iter()
+        .find(|s| s.sentence == 0 && s.head.is_none())
+        .expect("sentence 0 must have a single root");
+    assert_eq!(
+        slice(raw_text, sent0_root.span),
+        "取出",
+        "main-clause predicate `取出` must beat subordinate `雖然...看見` for sentence 0 root"
+    );
+    for infix_surface in ["少丅女", "長堊老"] {
+        let syn = doc
+            .syntax
+            .iter()
+            .find(|s| s.sentence == 0 && slice(raw_text, s.span) == infix_surface)
+            .unwrap_or_else(|| panic!("missing syntax token for {infix_surface}"));
+        assert_eq!(syn.span.end_char - syn.span.start_char, 3);
+    }
+}

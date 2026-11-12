@@ -958,3 +958,142 @@ fn auto_lexicon_and_high_signal_timeline_cues_cli_end_to_end() {
     assert_eq!(r3["auto_lexicon_enabled"].as_bool(), Some(false));
     assert_eq!(r3["discovered_lexicon_count"].as_u64(), Some(0));
 }
+
+#[test]
+fn six_workstreams_end_to_end_cli_synthetic() {
+    let tmp = tempfile::tempdir().unwrap();
+    let bundles_dir = tmp.path().join("bundles");
+    let out_dir = tmp.path().join("out_v2");
+    fs::create_dir_all(&bundles_dir).unwrap();
+
+    // Synthetic 4-chapter bundle exercising all 6 Phase 3 workstreams simultaneously:
+    // WS1: `<P`, `&qut;`, PUA `\u{e201}`, box-drawing banner, missing-`章` heading, editorial postscript
+    // WS2: Traditional->Simplified `jieba` projection, coverb/demonstrative de-gluing (`將那`, `對此`), `--auto-lexicon` (`玄冰玉匣`, `林牧雲`)
+    // WS3: `在下`/`妾身` pronouns, numeral-prefix idioms (`一清二楚`, `一會兒`), `什麼` disambiguation
+    // WS4: `四年`, `數日`, `半個時辰`, `百余丈`, `四年后`, `片刻`
+    // WS5: Paratactic `流水句` (>64 tokens, >=4 clauses) + 0 zero-root / 0 orphan syntax arcs
+    // WS6: `隨即`, `與此同時`, `整理好行裝之後，...`, plus `clean_arg1_text` / `clean_arg2_text` and bare-number filtering
+    let recurring_lines = [
+        "<P清晨，林牧雲打開玄冰玉匣檢查封條，隨即與同伴核對清單。",
+        "正午時，妾身將玄冰玉匣交給林牧雲保管，與此同時守衛關上石門。",
+        "夜色裡，林牧雲捧著玄冰玉匣走過百余丈長廊，&qut;在下已把路線看得一清二楚&qut;。\u{e201}",
+        "風雪中，老匠人替林牧雲加固玄冰玉匣，對此毫不在意。",
+        "晨光下，林牧雲收起玄冰玉匣等候半個時辰，片刻便啟程下山。",
+    ];
+    let paratactic = concat!(
+        "四年后，隊伍在山谷停留了四年與數日，",
+        "清晨的山風吹散了溪谷薄霧，旅人背起行囊踏上青石古道，",
+        "沿著蜿蜒山脊一路往北前行，穿過寂靜無聲的松林與竹海，",
+        "在石亭旁邊停下腳步喝了兩口清水，打開地圖仔細核對前方岔路，",
+        "確認通往山腰驛站的舊標記，重新收好水壺與隨身筆記本，",
+        "繞過三處濕滑陡峭的碎石坡，終於在一會兒之前抵達了木屋。",
+        "整理好行裝之後，眾人想出什麼辦法卻沒說什麼。\n"
+    );
+
+    let mut bundle = String::from("┏━━━━━━━━━━┓\n┃ 合成測試橫幅 ┃\n┗━━━━━━━━━━┛\n\n");
+    for ch in 1..=4 {
+        if ch == 2 {
+            bundle.push_str("第二百零二 石橋風雪\n\n");
+        } else {
+            bundle.push_str(&format!("第{ch}章 觀測紀要{ch}\n\n"));
+        }
+        for line in &recurring_lines {
+            bundle.push_str(line);
+            bundle.push('\n');
+        }
+        bundle.push_str(paratactic);
+        bundle.push_str("（月底最後一天，求下月票與推薦票！）\n\n\n");
+    }
+    fs::write(bundles_dir.join("01.txt"), bundle.as_bytes()).unwrap();
+
+    #[cfg(all(feature = "coreml", target_os = "macos"))]
+    let staged_models = find_staged_models_dir();
+    #[cfg(not(all(feature = "coreml", target_os = "macos")))]
+    let staged_models: Option<std::path::PathBuf> = None;
+
+    let mut cmd = Command::new(bin_path());
+    cmd.args([
+        "--bundles-dir",
+        bundles_dir.to_str().unwrap(),
+        "--out-dir",
+        out_dir.to_str().unwrap(),
+        "--workers",
+        "2",
+    ]);
+    if let Some(ref m_dir) = staged_models {
+        cmd.args([
+            "--models",
+            m_dir.to_str().unwrap(),
+            "--backend",
+            "coreml-fast",
+        ]);
+    } else {
+        cmd.args(["--backend", "none"]);
+    }
+    let out = cmd
+        .output()
+        .expect("run six_workstreams_end_to_end_cli_synthetic");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let receipt: Value =
+        serde_json::from_slice(&fs::read(out_dir.join("book_manifest_receipt.json")).unwrap())
+            .unwrap();
+    assert_eq!(receipt["total_chapters"].as_u64(), Some(4));
+    assert_eq!(receipt["zero_root_sentences"].as_u64(), Some(0));
+    assert_eq!(receipt["orphan_syntax_arcs"].as_u64(), Some(0));
+    assert_eq!(receipt["auto_lexicon_enabled"].as_bool(), Some(true));
+    assert!(receipt["discovered_lexicon_count"].as_u64().unwrap() >= 2);
+
+    if staged_models.is_some() {
+        assert!(receipt["decided_upos_rate"].as_f64().unwrap() > 0.96);
+        assert!(receipt["syntax_token_coverage_rate"].as_f64().unwrap() > 0.65);
+    }
+
+    let lex_json: Value =
+        serde_json::from_slice(&fs::read(out_dir.join("discovered_lexicon.json")).unwrap())
+            .unwrap();
+    let lex_terms: Vec<&str> = lex_json["terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|v| v["term"].as_str())
+        .collect();
+    assert!(lex_terms.contains(&"玄冰玉匣"), "lex_terms={lex_terms:?}");
+    assert!(lex_terms.contains(&"林牧雲"), "lex_terms={lex_terms:?}");
+
+    // Validate every chapter's spans & UD forest, plus WS4 entities and WS6 relations on Chapter 1.
+    for order in 1..=4 {
+        let ch_json: Value = serde_json::from_slice(
+            &fs::read(out_dir.join(format!("chapters/{order:04}.json"))).unwrap(),
+        )
+        .unwrap();
+        let sb = ch_json["source_span"]["start_byte"].as_u64().unwrap() as usize;
+        let eb = ch_json["source_span"]["end_byte"].as_u64().unwrap() as usize;
+        let ch_doc: Document = serde_json::from_value(ch_json["doc"].clone()).unwrap();
+        assert_doc_spans_valid(&ch_doc, &bundle[sb..eb]);
+    }
+
+    let cues: Vec<Value> = fs::read_to_string(out_dir.join("entities_timeline_cues.jsonl"))
+        .unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(!cues.iter().any(|c| c["kind"].as_str() == Some("number")));
+    for expected_ent in ["四年后", "四年", "數日", "百余丈", "半個時辰", "片刻"] {
+        assert!(
+            cues.iter().any(|c| c["cue_type"].as_str() == Some("entity")
+                && c["text"].as_str() == Some(expected_ent)),
+            "missing entity cue {expected_ent:?}"
+        );
+    }
+    assert!(cues.iter().any(|c| {
+        c["cue_type"].as_str() == Some("relation")
+            && c["kind"].as_str() == Some("sequence")
+            && c["clean_arg1_text"].as_str() == Some("整理好行裝")
+    }));
+}

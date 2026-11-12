@@ -2061,10 +2061,12 @@ fn clean_relation_arg_span(
 ) -> Span {
     let Some((t, tbl)) = chapter_text.zip(char_table) else {
         let mut s = arg.start_char;
-        let e = arg.end_char;
+        let mut e = arg.end_char;
         for marker in [Some(connector), correlate].into_iter().flatten() {
             if marker.start_char == s && marker.end_char > s && marker.end_char < e {
                 s = marker.end_char;
+            } else if marker.end_char == e && marker.start_char > s && marker.start_char < e {
+                e = marker.start_char;
             }
         }
         return Span {
@@ -2079,6 +2081,13 @@ fn clean_relation_arg_span(
         for marker in [Some(connector), correlate].into_iter().flatten() {
             if marker.start_char == s && marker.end_char > s && marker.end_char < e {
                 let (ns, ne) = trim_arg_bounds(t, tbl, marker.end_char, e);
+                if ns < ne {
+                    s = ns;
+                    e = ne;
+                    stripped = true;
+                }
+            } else if marker.end_char == e && marker.start_char > s && marker.start_char < e {
+                let (ns, ne) = trim_arg_bounds(t, tbl, s, marker.start_char);
                 if ns < ne {
                     s = ns;
                     e = ne;

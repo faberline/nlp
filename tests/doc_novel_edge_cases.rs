@@ -770,3 +770,281 @@ fn ws1_ws2_ws3_opaque_t2s_degluing_and_classical_pronouns_synthetic() {
     assert_eq!(cli_doc.entities.len(), 1);
     assert_eq!(cli_doc.entities[0].kind, EntityKind::Name);
 }
+
+#[test]
+fn ws4_ws6_novel_entities_and_narrative_relations_synthetic() {
+    // WS4: Chinese numeral durations, fractional `半`, approximate `數`/`余` quantities,
+    // relative duration anchors (`四年后`), moment cues (`片刻`), and calendar `2026年` preservation.
+    let ent_text = "四年后，隊伍在山谷停留了四年與數日，走了百余丈山路，等候半個時辰與一炷香，片刻便在2026年春啟程。";
+    let ent_doc = analyze_document(ent_text, &Options::default());
+    let ents: Vec<(EntityKind, String, Option<String>, Option<String>)> = ent_doc
+        .entities
+        .iter()
+        .map(|e| {
+            (
+                e.kind,
+                slice(ent_text, e.span),
+                e.value.clone(),
+                e.unit.clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        ents,
+        vec![
+            (EntityKind::RelativeDate, "四年后".to_owned(), None, None),
+            (
+                EntityKind::Quantity,
+                "四年".to_owned(),
+                Some("4".to_owned()),
+                Some("年".to_owned()),
+            ),
+            (
+                EntityKind::Quantity,
+                "數日".to_owned(),
+                None,
+                Some("日".to_owned()),
+            ),
+            (
+                EntityKind::Quantity,
+                "百余丈".to_owned(),
+                None,
+                Some("丈".to_owned()),
+            ),
+            (
+                EntityKind::Quantity,
+                "半個時辰".to_owned(),
+                Some("0.5".to_owned()),
+                Some("個時辰".to_owned()),
+            ),
+            (
+                EntityKind::Quantity,
+                "一炷香".to_owned(),
+                Some("1".to_owned()),
+                Some("炷香".to_owned()),
+            ),
+            (EntityKind::RelativeDate, "片刻".to_owned(), None, None),
+            (
+                EntityKind::Date,
+                "2026年".to_owned(),
+                Some("2026".to_owned()),
+                None,
+            ),
+        ]
+    );
+
+    // WS6: `隨即`, `與此同時`, `不過` (while `不過如此` is not a connector), `否則`,
+    // `先...旋即...`, and post-positional temporal frames (`...之後，...`, `...之際，...`).
+    let rel_text = concat!(
+        "旅人收起地圖，隨即邁步下山，與此同時同伴點亮火把，不過風勢漸大，否則早已抵達渡口。",
+        "那座石橋不過如此。",
+        "先檢查繩索，旋即跨過溪流。",
+        "整理好行裝之後，眾人踏上古道。",
+        "燈火搖曳之際，門外傳來腳步聲。"
+    );
+    let rel_doc = analyze_document(rel_text, &Options::default());
+    let rels: Vec<(RelationKind, String, Option<String>)> = rel_doc
+        .relations
+        .iter()
+        .map(|r| {
+            (
+                r.kind,
+                slice(rel_text, r.connector),
+                r.correlate.map(|c| slice(rel_text, c)),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rels,
+        vec![
+            (RelationKind::Sequence, "隨即".to_owned(), None),
+            (RelationKind::Parallel, "與此同時".to_owned(), None),
+            (RelationKind::Contrast, "不過".to_owned(), None),
+            (RelationKind::Condition, "否則".to_owned(), None),
+            (
+                RelationKind::Sequence,
+                "先".to_owned(),
+                Some("旋即".to_owned()),
+            ),
+            (RelationKind::Sequence, "之後".to_owned(), None),
+            (RelationKind::Sequence, "之際".to_owned(), None),
+        ]
+    );
+}
+
+#[test]
+fn ws3_pooling_and_ws5_soft_windowing_and_tree_retention_synthetic() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // 1. WS3-Pooling + `什麼` disambiguation:
+    //    `一清二楚` (4 subwords) has subword #0 biased toward `NUM` (6.0), while subwords #1..#3
+    //    strongly favor `ADV` (9.0) -> mean-pooling yields `ADV` instead of `NUM`!
+    //    `什麼` before `辦法` (`NOUN`) becomes `DET`, while `什麼` before `。` becomes `PRON`.
+    let pool_text = "他把路線看得一清二楚，想出什麼辦法，卻沒說什麼。";
+    let mut pool_doc = analyze_document(
+        pool_text,
+        &Options {
+            lexicon: vec!["一清二楚".to_owned()],
+            ..Options::default()
+        },
+    );
+    let sent_chars: Vec<char> = pool_text.chars().collect();
+    let pool_model = SyntheticSyntaxModel::new(256, move |ids, cols, data| {
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            let ch = sent_chars.get(s - 1).copied().unwrap_or(' ');
+            if ch == '一' {
+                row[8] = 6.0; // NUM bias on leading `一` subword
+                row[2] = 1.0; // ADV
+            } else if matches!(ch, '清' | '二' | '楚') {
+                row[2] = 10.0; // ADV on remaining subwords of `一清二楚`
+            } else if matches!(ch, '麼') || ch == '什' {
+                row[9] = 9.0; // PART -> triggers `什麼` contextual disambiguation
+            } else {
+                row[7] = 9.0; // NOUN (including `辦法`)
+            }
+            if s == 1 {
+                row[17] = 10.0;
+            } else {
+                row[17 + 1] = 10.0;
+            }
+            row[17 + 256 + 26] = 10.0;
+        }
+    });
+    annotate_with_encoder(&mut pool_doc, pool_text, &pool_model, novel_subword_encode)
+        .expect("annotate pooling doc");
+
+    let idiom_tok = pool_doc
+        .tokens
+        .iter()
+        .find(|t| slice(pool_text, t.span) == "一清二楚")
+        .expect("idiom token `一清二楚`");
+    assert_eq!(idiom_tok.upos, Some(Upos::Adv));
+
+    let shenme_toks: Vec<_> = pool_doc
+        .tokens
+        .iter()
+        .filter(|t| slice(pool_text, t.span) == "什麼")
+        .collect();
+    assert_eq!(shenme_toks.len(), 2);
+    assert_eq!(shenme_toks[0].upos, Some(Upos::Det));
+    assert_eq!(shenme_toks[1].upos, Some(Upos::Pron));
+
+    // 2. WS5 Soft clause-group windowing (`clauses >= 4`, `tokens > 64`, `subwords <= 256`):
+    //    10 clauses (~130 chars < 256 max_len, ~75 tokens > 64) must soft-window into >= 2 calls
+    //    and attach window `k >= 1` local roots to window `0` root via `deprel = "parataxis"`.
+    let paratactic_clauses = [
+        "清晨的山風吹散了溪谷薄霧",
+        "旅人背起行囊踏上青石古道",
+        "沿著蜿蜒山脊一路往北前行",
+        "穿過寂靜無聲的松林與竹海",
+        "在石亭旁邊停下腳步喝口水",
+        "打開地圖仔細核對前方岔路",
+        "確認通往山腰驛站的舊標記",
+        "重新收好水壺與隨身筆記本",
+        "繞過兩處濕滑陡峭的碎石坡",
+        "終於在午時之前抵達了木屋。",
+    ];
+    let paratactic_sent = paratactic_clauses.join("，");
+    assert!(paratactic_sent.chars().count() < 240);
+    let mut soft_doc = analyze_document(&paratactic_sent, &Options::default());
+    assert!(soft_doc.segmentation.clauses.len() >= 4);
+    assert!(soft_doc.tokens.len() > 64);
+
+    let calls = AtomicUsize::new(0);
+    let counting_model = SyntheticSyntaxModel::new(256, |ids, cols, data| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            row[7] = 10.0;
+            if s == 1 {
+                row[17] = 12.0;
+            } else {
+                row[17 + 1] = 12.0;
+            }
+            row[17 + 256 + 26] = 12.0;
+        }
+    });
+    annotate_with_encoder(
+        &mut soft_doc,
+        &paratactic_sent,
+        &counting_model,
+        novel_subword_encode,
+    )
+    .expect("soft-windowed syntax");
+    assert!(
+        calls.load(Ordering::SeqCst) >= 2,
+        "expected soft windowing to invoke >= 2 windows, got {}",
+        calls.load(Ordering::SeqCst)
+    );
+    assert_valid_acyclic_ud_forest(&soft_doc);
+    let roots: Vec<_> = soft_doc
+        .syntax
+        .iter()
+        .filter(|s| s.head.is_none())
+        .collect();
+    assert_eq!(roots.len(), 1, "sentence must have strictly one root");
+    assert!(
+        soft_doc
+            .syntax
+            .iter()
+            .any(|s| s.deprel == "parataxis" && s.head == Some(roots[0].token)),
+        "subsequent window roots must attach to window 0 root with parataxis"
+    );
+
+    // 3. WS5 Tree-consistent root & ancestor retention:
+    //    `short_sent = "旅人推開門。"` -> tokens: 0="旅人" (s_0=1), 1="推開" (s_0=3), 2="門" (s_0=5), 3="。" (s_0=6).
+    //    Token 0 is the decoded root with low confidence (logit margin small -> score < 0.35),
+    //    Token 1 attaches to Token 0 (`s_v = 1`) with moderate arc prob (~0.31, clearing ancestor
+    //    floor 0.12 but below 0.35), and Token 2 attaches to Token 1 (`s_v = 3`) with high confidence (> 0.95).
+    //    Retention must keep {Token 0 (root), Token 1 (ancestor), Token 2 (high-conf child)} ->
+    //    0 zero-root sentences and 0 orphan arcs!
+    let short_sent = "旅人推開門。";
+    let mut tree_doc = analyze_document(short_sent, &Options::default());
+    let low_root_model = SyntheticSyntaxModel::new(256, |ids, cols, data| {
+        for s in 1..ids.len().saturating_sub(1) {
+            let row = &mut data[s * cols..(s + 1) * cols];
+            row[15] = 9.0; // VERB
+            if s == 1 {
+                // Token 0 ("旅人"): slightly prefers [CLS] root (`s_v = 0`), p_arc ~ 0.24 < 0.35.
+                row[17] = 0.25;
+            } else if s == 3 {
+                // Token 1 ("推開"): prefers head Token 0 (`s_v = 1`) with p_arc ~ 0.31 (< 0.35, >= 0.12 floor).
+                row[17] = -5.0;
+                row[17 + 1] = 0.30;
+            } else if s == 5 {
+                // Token 2 ("門"): strongly attaches to Token 1 (`s_v = 3`) with confidence > 0.99!
+                row[17] = -5.0;
+                row[17 + 3] = 12.0;
+            } else {
+                // Token 3 ("。") and non-initial subwords: uniform low confidence (< 0.35) -> omitted cleanly.
+                row[17] = -5.0;
+            }
+            row[17 + 256 + 29] = 12.0; // high p_rel on "obj"
+        }
+    });
+    annotate_with_encoder(
+        &mut tree_doc,
+        short_sent,
+        &low_root_model,
+        novel_subword_encode,
+    )
+    .expect("tree retention decode");
+    assert!(!tree_doc.syntax.is_empty());
+    assert_valid_acyclic_ud_forest(&tree_doc);
+    let emitted_tokens: HashSet<usize> = tree_doc.syntax.iter().map(|s| s.token).collect();
+    assert_eq!(
+        tree_doc.syntax.iter().filter(|s| s.head.is_none()).count(),
+        1,
+        "must retain global root (0 zero-root sentences)"
+    );
+    for syn in &tree_doc.syntax {
+        if let Some(h) = syn.head {
+            assert!(
+                emitted_tokens.contains(&h),
+                "orphan syntax head {h} on token {}",
+                syn.token
+            );
+        }
+    }
+}

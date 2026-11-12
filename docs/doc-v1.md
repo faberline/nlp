@@ -304,13 +304,14 @@ follows). Multi-word English entries use exactly one space.
 
 | kind | connector sits in | zh | en |
 |---|---|---|---|
-| sequence | arg2 | 然後 然后 接著 接着 隨後 随后 | then, afterwards, after that |
+| sequence | arg2 | 然後 然后 接著 接着 隨後 随后 隨即 随即 緊接著 紧接着 旋即 | then, afterwards, after that |
 | cause (result) | arg2 | 所以 因此 | so, therefore, thus |
-| contrast | arg2 | 但是 然而 可是 但 | but, however |
-| parallel | arg2 | 另一方面 另外 此外 而且 並且 并且 同樣 | also, moreover, furthermore, likewise, similarly, in addition |
+| contrast | arg2 | 但是 然而 可是 不過 不过 但 | but, however |
+| condition | arg2 | 否則 否则 | none |
+| parallel | arg2 | 另一方面 另外 此外 而且 並且 并且 同樣 與此同時 与此同时 | also, moreover, furthermore, likewise, similarly, in addition |
 | cause (reason) | arg1 | 因為 因为 (correlate 所以 因此 so therefore thus) | because (correlate 所以 因此 so therefore thus) |
 | condition | arg1 | 如果 假如 要是 若是 若 (correlate 就 那麼 那么 便 then) | if (correlate 就 那麼 那么 便 then) |
-| sequence | arg1 | 先 (correlate 然後 然后 接著 接着 再 隨後 随后) | none |
+| sequence | arg1 | 先 (correlate 然後 然后 接著 接着 再 隨後 随后 隨即 随即 緊接著 紧接着 旋即) | none |
 | parallel | arg1 | 一方面 (correlate 另一方面) | none |
 
 The correlate lists are shared by both languages. Every cause opener (`因為`, `因为`, `because`) takes
@@ -359,7 +360,13 @@ far` is not one, and `So,` is not one).
 Special cases:
 
 - `但` is not a connector before `願 凡 求 見`. `若` is not one before `干 無 非 是 即`. `先` is
-  not one before `生 前 後`. `if only` is not a connector.
+  not one before `生 前 後`. `不過`/`不过` is not a connector before `如此 爾爾 尔尔`. `if only` is
+  not a connector.
+- Post-positional Chinese temporal frames: an unconsumed clause of at least 3 trimmed scalars whose
+  trimmed end matches `之後`, `之后`, `之際`, `之际`, `之時` or `之时` (ignoring trailing quotes and
+  closers), followed by a non-conflicting clause in the same sentence, emits a clause-level
+  `sequence` relation (`arg1` = the temporal frame clause, `arg2` = the following clause,
+  `connector` = the clause-end postposition span).
 - `however` counts only when `,` follows it (`However,`), not in `However hard he tried`.
 - `so` is not a connector before `far much many long as that good bad little few called on`.
   `So,` (a comma follows) gives an `unknown` and no relation.
@@ -390,12 +397,13 @@ A new paragraph also breaks the sentence relation.
 
 ### Relations limits
 
-- Connectors in the middle of a clause are not seen: `He left because it rained`, `A but B`
-  without a comma, `如果下雨我們就…` with `就` mid-clause, `We tested it, and then we ran it`.
+- Connectors in the middle of a clause are not seen (except clause-end temporal postpositions `之後
+  之后 之際 之际 之時 之时` above): `He left because it rained`, `A but B` without a comma,
+  `如果下雨我們就…` with `就` mid-clause, `We tested it, and then we ran it`.
 - Only one unit before (or after) a connector is its argument. No implicit relations: a relation
   needs a connector.
 - No `雖然…但是` or `although` concession pair beyond the contrast of `但是`.
-- Less common Simplified-only connector forms outside the table above (such as `虽然` or `否则`)
+- Less common Simplified-only connector forms outside the table above (such as `虽然`)
   are not matched. zh `又`, `而`, `並` alone are not connectors.
 - Argument spans are always clauses or sentences, never smaller.
 - A bare connector can leave an argument that is only the connector: `We stayed home, because.`
@@ -435,8 +443,13 @@ Values (`value` is omitted for kinds that have none):
 Scanners, run at each position of a supported sentence:
 
 - Relative dates: `今天 明天 昨天 後天 后天 前天 今晚 昨晚 今年 明年 去年 這週 这周 本週 本周 上週 上周
-  下週 下周 這個月 这个月 上個月 上个月 下個月 下个月`, and `today tomorrow yesterday tonight`, and
-  `last|this|next` followed by `week|month|year` (ASCII case-insensitive, one space).
+  下週 下周 這個月 这个月 上個月 上个月 下個月 下个月`, narrative moment/interval cues (`片刻 片刻後 片刻后
+  頃刻 頃刻間 顷刻 顷刻间 剎那 剎那間 刹那 刹那间 轉眼 轉眼間 转眼 转眼间 眨眼 眨眼間 眨眼间 瞬息 瞬息間
+  瞬息间 彈指間 弹指间 良久 許久 许久 半晌 一會兒 一会儿`), Chinese relative duration anchors formed by a
+  Chinese duration quantity followed by `前 後 后 內 内 間 间 以來 以来 之後 之后 之前 之內 之内 之間
+  之间` (`四年后`, `數日之後`, `半個時辰後`; `在 … 內/間` stays a `quantity`), and `today tomorrow
+  yesterday tonight`, and `last|this|next` followed by `week|month|year` (ASCII case-insensitive,
+  one space).
 - Dates, all checked for a real calendar day (leap years included):
   - Chinese: `Y年M月D日` (or `號` for `日`), `Y年M月`, `M月D日` (or `號`), and `Y年` alone. `Y` is
     four ASCII or Chinese digits, or `民國N` (N+1911). Month 1 to 12 is needed. `M月` alone and
@@ -465,9 +478,15 @@ Scanners, run at each position of a supported sentence:
   `一點` with no marker and no `半` or `M分` is "a bit" (`他有一點累`), so it gives no time and no
   unknown.
 - Quantities: a number, then optionally one space, then a unit. Units such as `kg km 分鐘 分钟 小時
-  小时 個時辰 个时辰 時辰 时辰 盞茶 盏茶 天 個月 个月 丈 尺 寸 畝 亩 days` need a space or none. `g m l`
-  are units only when attached (`5m`, not `5 m`). A currency prefix is `US$ NT$ $ ¥ € £`, and
-  `百分之N` is a percent. A bare English `one` is not a quantity.
+  小时 個時辰 个时辰 時辰 时辰 刻鐘 刻钟 盞茶 盏茶 炷香 柱香 個甲子 个甲子 甲子 年 載 载 天 日 夜 更 個月 个月
+  丈 尺 寸 里 畝 亩 days` need a space or none (4-digit calendar years such as `2026年` or `二〇二六年`
+  and `民國N年` remain `date`, whereas Chinese numeral durations such as `四年` or `三日` are
+  `quantity`). `g m l` are units only when attached (`5m`, not `5 m`). Fractional `半` + optional
+  `個`/`个` + unit emits `value: "0.5"` (`半個時辰`, `半日`, `半丈`). Approximate prefixes (`數`/`数`/`幾`/`几`
+  + optional `十`/`百`/`千`/`萬`/`万` + unit, such as `數日`, `數十年`, `幾丈`) and approximate cardinal
+  infixes (cardinal + `餘`/`余`/`多`/`幾`/`几` + optional `個`/`个` + unit, such as `百余丈`, `十餘年`,
+  `三十多天`) emit `quantity` with `unit` set and `value` omitted. A currency prefix is
+  `US$ NT$ $ ¥ € £`, and `百分之N` is a percent. A bare English `one` is not a quantity.
 - Numbers: ASCII digits with comma groups of exactly three digits and an optional decimal part.
   `萬 万` and `億 亿` multiply the number before them (`3萬`, `1.5億`). An ASCII number followed
   by Chinese numerals is read as `<number><chain>` where the chain ends in a multiplier: `5千元`
@@ -527,7 +546,9 @@ Known limits of entities:
 - No signs or ranges: `-5` gives the number 5, and `3-5` gives 3 and 5.
 - No weekdays: `Monday` gives nothing.
 - No ordinals: `1st` and `第三` give nothing.
-- Durations written with `年` are numbers: `3年` gives the number 3.
+- ASCII durations written with `年` or `日` (`3年`, `10日`) stay numbers (`3`, `10`), whereas
+  Chinese numeral durations (`四年`, `三日`) are `quantity` and 4-digit calendar years (`2026年`,
+  `二〇二六年`) are `date`.
 - No time zones: `3pm EST` gives the time `15:00`, and `EST` gives nothing.
 - Chinese numerals need a measure word: `三十五` gives nothing, and `三十五個` gives 35.
 - `and` ends an English number, so `one hundred and twenty-three` gives 100 and 23.
@@ -763,14 +784,17 @@ appends `[SEP]` at the end (empty span). Each Layer-2 token `u` (`1..=m`) maps t
 overlapping subword `s_u` (`1 <= s_u < subwords.ids.len()`) after adding `sentence.span.start_char`
 to the subword's scalar span:
 
-- When `subwords.ids.len() > model.info().max_len`, the sentence is partitioned into contiguous
-  windows aligned to `segmentation.clauses` boundaries (greedily packing consecutive clauses up to
-  `max_len - 2` content subwords plus `[CLS]` and `[SEP]`, and splitting cleanly at token
-  boundaries if a single mega-clause still exceeds `max_len - 2`). Each window runs the model,
-  single-root Chu-Liu/Edmonds decoding, and contextual UPOS upgrade independently, producing an
-  acyclic UD forest across the sentence. Sentence-level `not_applicable` is emitted only when a
-  single token alone exceeds `max_len - 2` subwords (or no token in the sentence maps to any
-  subword).
+- When `subwords.ids.len() > model.info().max_len`, or when a paratactic multi-clause sentence has
+  `clauses.len() >= 4` and `tokens.len() > 64` (`SOFT_WINDOW_MAX_LEN = 96`), the sentence is
+  partitioned into contiguous windows aligned to `segmentation.clauses` boundaries (greedily
+  packing consecutive clauses up to the window subword budget, allowing a single clause up to
+  `max_len`, and splitting cleanly at token boundaries if a single mega-clause still exceeds
+  `max_len - 2`). Each window runs the model, single-root Chu-Liu/Edmonds decoding, and contextual
+  UPOS upgrade independently; window `0`'s decoded root becomes the sentence's single global root
+  (`head: None, deprel: "root"`), and each subsequent window `k >= 1` attaches its local root to
+  window `0`'s global root with `deprel: "parataxis"`, producing a single-root acyclic UD tree
+  across the sentence. Sentence-level `not_applicable` is emitted only when a single token alone
+  exceeds `max_len - 2` subwords (or no token in the sentence maps to any subword).
 - When an individual control or replacement-character token (such as `U+007F` or `U+FFFD`)
   normalizes to an empty subword span while sibling tokens in the sentence map normally, only that
   unmapped token emits `{"layer": "syntax", "span": tok.span, "reason": "not_applicable"}`, and all
@@ -800,18 +824,45 @@ tensor with `C = 17 + max_len + 148` (`421` when `max_len = 256`):
   `conf = p_arc * p_rel`. `Score(u16)` stores `(conf.clamp(0.0, 1.0) * 1000.0).round() as u16` and
   serializes as `(milli as f64) / 1000.0`, keeping `Document: Eq` and giving byte-identical JSON
   across Core ML and ONNX.
-- **Thresholds and `unknown`**:
-  - When `score.milli() < 350` (`SYNTAX_THRESHOLD = 0.35`), the token is omitted from `syntax` and
-    emits `{"layer": "syntax", "span": tok.span, "reason": "low_confidence"}`. Otherwise a
-    `SyntaxToken` is emitted with 0-based `token` and `head` indices into `Document.tokens`.
+- **Thresholds, tree-consistent retention, and `unknown`**:
+  - Decoded syntax tokens are filtered at `SYNTAX_THRESHOLD = 0.35` (`score.milli() >= 350`) with
+    tree-consistent root and ancestor retention: a high-confidence dependent is retained when every
+    intermediate ancestor up to the sentence's global root clears the minimum structural arc floor,
+    and every retained token's ancestor chain (including the sentence's single global root) is
+    retained alongside it. Every non-empty `syntax` slice for a sentence therefore has **zero**
+    zero-root sentences (strictly one `head: None, deprel: "root"`) and **zero** orphan syntax arcs
+    (every `head: Some(h)` resolves to an emitted `SyntaxToken` in the same sentence). Omitted
+    tokens emit `{"layer": "syntax", "span": tok.span, "reason": "low_confidence"}`.
   - Tokens whose Layer-2 `upos` was already decided by rules or the lexicon keep their tag. Tokens
     whose Layer-2 `upos` was `None` get the model's top UPOS tag (and drop their `"pos"` `unknown`
-    entry) when `upos_prob >= 0.50`; otherwise `upos` stays `None` and the token's `"pos"` `unknown`
-    reason becomes `low_confidence`.
+    entry) when `upos_prob >= 0.50` (using arithmetic mean-pooling across overlapping subwords for
+    multi-character Chinese numeral-initial lexical phrases and idioms such as `一會兒`, `一時間`,
+    `一清二楚`, `五顏六色` so numeral subword #0 does not bias them toward `NUM`, plus deterministic
+    contextual `什麼`/`什么` disambiguation to `DET` before a same-sentence `NOUN`/`PROPN` else `PRON`);
+    otherwise `upos` stays `None` and the token's `"pos"` `unknown` reason becomes `low_confidence`.
   - When `backend` is not compiled in, or `doc-syntax-v1` or its files are absent (`NoBackend`,
     `UnknownModel`, `Missing`), each supported sentence emits
     `{"layer": "syntax", "span": sentence.span, "reason": "no_model"}`. Integrity and runtime
     errors (`HashMismatch`, `Manifest`, `Load`, `Run`) are returned to the caller.
+
+### Batch corpus CLI (`nlp_novel_batch`)
+
+`nlp_novel_batch` runs resumable multi-worker `nlp.doc.v1` analysis over chapter bundles or a
+chapter manifest:
+
+- **Defaults**: enables `Options { mask_editorial: true, normalize_traditional: true, lexicon, .. }`
+  and pure-statistical two-pass corpus compound discovery (`--auto-lexicon`, opt-out
+  `--no-auto-lexicon`), scanning frequent high-PMI / high-accessor-variety 2–5 character Han
+  compounds across chapters into `Options.lexicon` and writing `<out_dir>/discovered_lexicon.json`
+  (`schema: "nlp.novel_discovered_lexicon.v1"`).
+- **High-signal `entities_timeline_cues.jsonl`**: filters unitless `EntityKind::Number`
+  (`unit.is_none()`) by default (`--include-bare-numbers` to opt in), emits `name` entities when
+  `--name` is supplied, and enriches `relation` cues with `clean_arg1_span`, `clean_arg2_span`,
+  `clean_arg1_text`, and `clean_arg2_text` (stripping leading connector/correlate spans and
+  boundary punctuation while preserving balanced quote/bracket pairs).
+- **Receipt structural counters**: `book_manifest_receipt.json` records `auto_lexicon_enabled`,
+  `discovered_lexicon_count`, `zero_root_sentences`, and `orphan_syntax_arcs` alongside token,
+  UPOS, syntax, entity, relation, and SHA-256 provenance metrics.
 
 ## Readers of `nlp.doc.v1`
 

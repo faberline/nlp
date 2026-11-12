@@ -573,6 +573,8 @@ const EDITORIAL_CUES: &[&str] = &[
     "請別忘本書",
     "请别忘本书",
     "鼎立支持",
+    "票票",
+    "投一票",
 ];
 
 const SCRAPER_BOILERPLATE_CUES: &[&str] = &[
@@ -597,7 +599,8 @@ const SCRAPER_BOILERPLATE_CUES: &[&str] = &[
     "雲軒閣",
     "七星閣",
     "七星阁",
-    "搜/搜/9/9/9",
+    "第一中文",
+    "搜/搜/9",
     "最新全本：",
     "最新全本:",
     "閱讀提示",
@@ -621,17 +624,72 @@ const SCRAPER_BOILERPLATE_CUES: &[&str] = &[
     "热门作品推荐",
     "其他書友吐血推薦",
     "其他书友吐血推荐",
+    "章節更多",
+    "章节更多",
+    "爬書",
+    "爬书",
     "本周:",
     "本周：",
     "本週:",
     "本週：",
 ];
 
-const SCRAPER_ASCII_CUES: &[&str] = &["ddyueshu", "soso999", "3qzw", "qixingge", "qbxs8"];
+const SCRAPER_ASCII_CUES: &[&str] = &[
+    "ddyueshu", "soso999", "3qzw", "qixingge", "qixinge", "qbxs8", "56xs", "wap77", "0_3_wx",
+    "03wx",
+];
+
+const INLINE_PIRATE_SITES: &[&str] = &[
+    "就到一一小說",
+    "就到一一小说",
+    "手機站直接訪問云軒閣",
+    "手机站直接访问云轩阁",
+    "手機站直接訪問雲軒閣",
+    "書家文學",
+    "书家文学",
+    "56小說",
+    "56小说",
+    "一一小說",
+    "一一小说",
+    "云軒閣",
+    "雲軒閣",
+    "云轩阁",
+    "七星閣",
+    "七星阁",
+    "回味書庫",
+    "回味书库",
+    "理想文學",
+    "理想文学",
+    "全本小說吧",
+    "全本小说吧",
+    "在線書吧",
+    "在线书吧",
+    "看書窩",
+    "看书窝",
+];
+
+const WEB_FOOTER_META_CUES: &[&str] = &[
+    "小說",
+    "小说",
+    "網址",
+    "网址",
+    "域名",
+    "連載",
+    "连载",
+    "章節",
+    "章节",
+    "手機站",
+    "手机站",
+    "電腦站",
+    "电脑站",
+    "整理提供",
+];
 
 const UNBRACKETED_POSTSCRIPT_STARTERS: &[&str] = &[
     "如果您喜歡這部作品",
     "如果您喜欢这部作品",
+    "如欲知后事如何",
+    "如欲知後事如何",
     "另外雙倍月票",
     "另外双倍月票",
     "另外，雙倍月票",
@@ -667,10 +725,52 @@ fn contains_scraper_boilerplate(chars: &[char]) -> bool {
 }
 
 fn contains_bracketed_update_cue(chars: &[char]) -> bool {
-    if contains_substr(chars, "請假")
-        || contains_substr(chars, "请假")
-        || contains_substr(chars, "兩更")
-        || contains_substr(chars, "两更")
+    for cue in [
+        "請假",
+        "请假",
+        "兩更",
+        "两更",
+        "書友",
+        "书友",
+        "更新",
+        "碼出",
+        "码出",
+        "碼完",
+        "码完",
+        "章節數",
+        "章节数",
+        "章節名",
+        "章节名",
+        "大家見諒",
+        "大家见谅",
+        "，支持正",
+        ",支持正",
+        "支持正版",
+    ] {
+        if contains_substr(chars, cue) {
+            return true;
+        }
+    }
+    let has_author_time_or_audience = [
+        "大家",
+        "今天",
+        "今日",
+        "昨天",
+        "昨日",
+        "明天",
+        "明日",
+        "這兩日",
+        "这两日",
+        "晚上",
+        "少發",
+        "少发",
+    ]
+    .iter()
+    .any(|w| contains_substr(chars, w));
+    if has_author_time_or_audience
+        && ["補上", "补上", "一章", "兩章", "两章", "三章", "碼", "码"]
+            .iter()
+            .any(|w| contains_substr(chars, w))
     {
         return true;
     }
@@ -732,17 +832,53 @@ fn multi_paren_tag_list_line(t: &[char]) -> bool {
     groups >= 4
 }
 
-fn strip_inline_parens_and_postscripts(t: &[char]) -> Vec<char> {
+/// Find the end offset (`k + 1`) of a leading editorial sentence inside an unclosed `(` line when
+/// the remainder of the line is multi-sentence story prose with zero editorial/author-note cues.
+fn unclosed_editorial_prefix_before_story(c: &[char], open_idx: usize, le: usize) -> Option<usize> {
+    let end = trimmed_end(c, open_idx, le);
+    if end <= open_idx + 2 {
+        return None;
+    }
+    for k in (open_idx + 2)..end {
+        if matches!(c[k], '。' | '！' | '？' | '!' | '?')
+            && contains_inline_editorial_cue(&c[open_idx + 1..=k])
+        {
+            let tail = &c[k + 1..end];
+            let tail_han = tail.iter().filter(|&&ch| is_han(ch)).count();
+            let tail_sents = tail
+                .iter()
+                .filter(|&&ch| matches!(ch, '。' | '！' | '？' | '!' | '?'))
+                .count();
+            let tail_has_author_talk = contains_inline_editorial_cue(tail)
+                || ["大家", "書友", "书友", "咱", "抱歉", "見諒", "见谅"]
+                    .iter()
+                    .any(|w| contains_substr(tail, w));
+            if tail_han >= 20 && tail_sents >= 2 && !tail_has_author_talk {
+                return Some(k + 1);
+            }
+        }
+    }
+    None
+}
+
+fn strip_inline_parens_and_postscripts(t: &[char], strip_watermarks: bool) -> Vec<char> {
     let mut out = Vec::with_capacity(t.len());
     let mut i = 0;
     while i < t.len() {
-        if matches!(t[i], '(' | '（') {
+        if strip_watermarks
+            && let Some(end) = editorial_inline_at(t, i, 0, t.len())
+            && end > i
+        {
+            i = end;
+            continue;
+        }
+        if matches!(t[i], '(' | '（' | '[' | '【' | '［') {
             let mut j = i + 1;
             let mut depth = 1usize;
             while j < t.len() && depth > 0 {
-                if matches!(t[j], '(' | '（') {
+                if matches!(t[j], '(' | '（' | '[' | '【' | '［') {
                     depth += 1;
-                } else if matches!(t[j], ')' | '）') {
+                } else if matches!(t[j], ')' | '）' | ']' | '】' | '］') {
                     depth -= 1;
                 }
                 j += 1;
@@ -774,25 +910,31 @@ fn strip_inline_parens_and_postscripts(t: &[char]) -> Vec<char> {
     out
 }
 
+fn count_prose_sentence_ends(chars: &[char]) -> usize {
+    chars
+        .iter()
+        .filter(|&&ch| matches!(ch, '。' | '！' | '？' | '!' | '?'))
+        .count()
+}
+
 fn is_editorial_block_line(t: &[char]) -> bool {
     if multi_paren_tag_list_line(t) {
         return true;
     }
-    if t.len() <= 400 && contains_scraper_boilerplate(t) {
-        return true;
-    }
-    if matches!(t.first(), Some('(' | '（' | '【' | '[')) && contains_inline_editorial_cue(t) {
+    if matches!(t.first(), Some('(' | '（' | '【' | '[' | '［')) && contains_inline_editorial_cue(t)
+    {
         let stripped_end = t
             .iter()
             .rposition(|ch| !matches!(*ch, '！' | '!' | '。' | '.' | '~' | '～'))
             .map_or(0, |idx| idx + 1);
-        let closed = stripped_end > 1 && matches!(t[stripped_end - 1], ')' | '）' | '】' | ']');
+        let closed =
+            stripped_end > 1 && matches!(t[stripped_end - 1], ')' | '）' | '】' | ']' | '］');
         let mut depth = 1usize;
         let mut closed_early = false;
         for &ch in &t[1..stripped_end.max(1)] {
-            if matches!(ch, '(' | '（' | '【' | '[') {
+            if matches!(ch, '(' | '（' | '【' | '[' | '［') {
                 depth += 1;
-            } else if matches!(ch, ')' | '）' | '】' | ']') {
+            } else if matches!(ch, ')' | '）' | '】' | ']' | '］') {
                 depth = depth.saturating_sub(1);
                 if depth == 0 {
                     closed_early = true;
@@ -800,19 +942,45 @@ fn is_editorial_block_line(t: &[char]) -> bool {
                 }
             }
         }
-        if closed || !closed_early {
+        if closed
+            || (!closed_early && unclosed_editorial_prefix_before_story(t, 0, t.len()).is_none())
+        {
             return true;
         }
     }
-    if t.len() > 300 || t.iter().any(|ch| "「」『』“”\"'".contains(*ch)) {
+    if t.len() > 400 || t.iter().any(|ch| "「」『』“”\"'".contains(*ch)) {
         return false;
     }
-    let outside = strip_inline_parens_and_postscripts(t);
-    let periods = outside.iter().filter(|&&ch| ch == '。').count();
-    if contains_any_editorial_cue(&outside, false) {
-        return periods <= 2;
+    let paren_stripped = strip_inline_parens_and_postscripts(t, false);
+    let clean_outside = strip_inline_parens_and_postscripts(t, true);
+    if clean_outside.iter().any(|ch| "「」『』“”\"'".contains(*ch)) {
+        return false;
     }
-    contains_substr(&outside, "保底") && t.len() <= 80 && periods == 0
+    let clean_han = clean_outside.iter().filter(|&&ch| is_han(ch)).count();
+    let periods = clean_outside.iter().filter(|&&ch| ch == '。').count();
+    let sent_ends = count_prose_sentence_ends(&clean_outside);
+    let commas = clean_outside
+        .iter()
+        .filter(|&&ch| matches!(ch, '，' | ','))
+        .count();
+
+    if EDITORIAL_CUES
+        .iter()
+        .any(|cue| contains_substr(&clean_outside, cue))
+    {
+        return t.len() <= 300 && periods <= 2 && sent_ends <= 4;
+    }
+    if contains_scraper_boilerplate(&clean_outside) {
+        return clean_han <= 35 && periods <= 1 && sent_ends <= 2;
+    }
+    if contains_scraper_boilerplate(&paren_stripped) {
+        let has_web_meta = WEB_FOOTER_META_CUES
+            .iter()
+            .any(|cue| contains_substr(&clean_outside, cue));
+        return (clean_han <= 12 && periods == 0 && sent_ends == 0 && commas == 0)
+            || (has_web_meta && clean_han <= 35 && periods <= 1 && sent_ends <= 2);
+    }
+    contains_substr(&clean_outside, "保底") && t.len() <= 80 && periods == 0 && clean_han <= 35
 }
 
 /// Scan one line for inline spans. At each position the kinds are tried in order.
@@ -851,9 +1019,8 @@ fn inline_at(
     if c[i] == '`' {
         return code_span(c, i, le).map(|end| (OpaqueKind::Code, end, false));
     }
-    url(c, i, le)
-        .map(|end| (OpaqueKind::Url, end, false))
-        .or_else(|| raw_html_tag(c, i, ls, le).map(|end| (OpaqueKind::Code, end, true)))
+    raw_html_tag(c, i, ls, le)
+        .map(|end| (OpaqueKind::Code, end, true))
         .or_else(|| html_entity(c, i, le).map(|end| (OpaqueKind::Code, end, true)))
         .or_else(|| pua_run(c, i, le).map(|end| (OpaqueKind::Code, end, true)))
         .or_else(|| {
@@ -863,6 +1030,7 @@ fn inline_at(
                 None
             }
         })
+        .or_else(|| url(c, i, le).map(|end| (OpaqueKind::Url, end, false)))
         .or_else(|| citation(c, i, le).map(|end| (OpaqueKind::Citation, end, false)))
         .or_else(|| inline_formula(c, i, le).map(|end| (OpaqueKind::Formula, end, false)))
         .or_else(|| emoji(c, i, le).map(|end| (OpaqueKind::Emoji, end, false)))
@@ -1020,55 +1188,333 @@ fn matches_chars_at(c: &[char], i: usize, le: usize, pat: &str) -> bool {
     i + n <= le && c[i..i + n].iter().copied().eq(pat.chars())
 }
 
-/// Opt-in inline scraper/editorial tags (`/首/發`, `(..#..#..)`, mixed-bracket `(…）` / `（…)`
-/// notes with nested parens, and trailing unbracketed postscripts).
+fn is_obfuscated_domain_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '.' | '。' | '-' | '_' | 'ω' | '０'..='９')
+}
+
+fn consume_attached_asterisk_tag(c: &[char], pos: usize, le: usize) -> usize {
+    if pos < le && c[pos] == '＊' {
+        let limit = le.min(pos + 16);
+        if let Some(close) = ((pos + 1)..limit).find(|&k| c[k] == '＊') {
+            return close + 1;
+        }
+    }
+    pos
+}
+
+/// Unbracketed inline pirate site watermarks (`☆⌒_⌒☆...`, `書家文學`, `就到一一小說`, `請：m2.ddyueshu`,
+/// domain-prefixed site banners, etc.) matched strictly on the watermark substring.
+fn inline_pirate_watermark_at(c: &[char], i: usize, le: usize) -> Option<usize> {
+    let t_end = trimmed_end(c, i, le);
+    if i >= t_end {
+        return None;
+    }
+
+    // 1. Slash-obfuscated `<1..=2 Han>//<1..=3 Han>/首/發[/]` (`愛//書者/首/發`).
+    if is_han(c[i]) {
+        let h1 = (i..t_end.min(i + 3)).take_while(|&k| is_han(c[k])).count();
+        if (1..=2).contains(&h1) && matches_chars_at(c, i + h1, t_end, "//") {
+            let s2 = i + h1 + 2;
+            let h2 = (s2..t_end.min(s2 + 4))
+                .take_while(|&k| is_han(c[k]))
+                .count();
+            let sf = s2 + h2;
+            if (1..=3).contains(&h2)
+                && sf + 4 <= t_end
+                && c[sf] == '/'
+                && c[sf + 1] == '首'
+                && c[sf + 2] == '/'
+                && matches!(c[sf + 3], '發' | '发')
+            {
+                let end = if sf + 5 <= t_end && c[sf + 4] == '/' {
+                    sf + 5
+                } else {
+                    sf + 4
+                };
+                return Some(end);
+            }
+        }
+    }
+
+    // 2. Kaomoji star banners (`☆⌒_⌒☆...☆⌒_⌒☆[ωωω。qiXingge | ＊...＊]`).
+    for kao in ["☆⌒_⌒☆", "★⌒_⌒★"] {
+        if matches_chars_at(c, i, t_end, kao) {
+            let mut end = i + 5;
+            let scan_lim = t_end.min(end + 20);
+            for k in end..scan_lim {
+                if matches_chars_at(c, k, t_end, "☆⌒_⌒☆") || matches_chars_at(c, k, t_end, "★⌒_⌒★")
+                {
+                    end = k + 5;
+                    break;
+                }
+            }
+            let mut dom_end = end;
+            while dom_end < t_end && is_obfuscated_domain_char(c[dom_end]) {
+                dom_end += 1;
+            }
+            if dom_end > end
+                && c[end..dom_end]
+                    .iter()
+                    .any(|&ch| ch.is_ascii_alphanumeric() || ch == 'ω')
+            {
+                end = dom_end;
+            }
+            end = consume_attached_asterisk_tag(c, end, t_end);
+            return Some(end);
+        }
+    }
+
+    // 3. Triple-star tieba/pirate banners (`☆☆☆...☆☆☆`, `☆★☆...☆★☆`, `★☆★...★☆★`).
+    if i + 6 <= t_end && c[i..i + 3].iter().all(|ch| matches!(*ch, '☆' | '★')) {
+        let scan_lim = t_end.min(i + 80);
+        if scan_lim >= i + 6 {
+            for k in (i + 3)..=(scan_lim - 3) {
+                if c[k..k + 3].iter().all(|ch| matches!(*ch, '☆' | '★')) {
+                    return Some(k + 3);
+                }
+            }
+        }
+    }
+
+    // 4. Trailing star-search notices (`最新最快的更新盡在☆...☆`, `緊急通知:...` with scraper cue).
+    if matches_chars_at(c, i, t_end, "最新最快的更新") && c[i..t_end].contains(&'☆') {
+        return Some(t_end);
+    }
+    if (matches_chars_at(c, i, t_end, "緊急通知:")
+        || matches_chars_at(c, i, t_end, "緊急通知：")
+        || matches_chars_at(c, i, t_end, "紧急通知:")
+        || matches_chars_at(c, i, t_end, "紧急通知："))
+        && contains_scraper_boilerplate(&c[i..t_end])
+    {
+        return Some(t_end);
+    }
+
+    // 5. `請：m2.ddyueshu` / `请：m2.ddyueshu` domain watermarks.
+    if matches!(c[i], '請' | '请') && i + 2 < t_end && matches!(c[i + 1], '：' | ':') {
+        let mut k = i + 2;
+        while k < t_end && c[k].is_whitespace() {
+            k += 1;
+        }
+        let dom_start = k;
+        while k < t_end
+            && (c[k].is_ascii_alphanumeric() || matches!(c[k], '.' | '-' | '_' | '/' | ':'))
+        {
+            k += 1;
+        }
+        if k > dom_start + 3 && contains_scraper_boilerplate(&c[dom_start..k]) {
+            return Some(k);
+        }
+    }
+
+    // 6. Domain-prefixed inline pirate banners (`www.0_3_wx.理想文學書友整理提供`, `w.０3_x.om理想文學...`).
+    if starts_with_ci(c, i, t_end, "www.")
+        || starts_with_ci(c, i, t_end, "wap.")
+        || starts_with_ci(c, i, t_end, "w.")
+    {
+        let mut k = i;
+        while k < t_end
+            && (c[k].is_ascii_alphanumeric() || matches!(c[k], '.' | '_' | '-' | '０'..='９'))
+        {
+            k += 1;
+        }
+        if k > i + 3 {
+            for site in INLINE_PIRATE_SITES {
+                if matches_chars_at(c, k, t_end, site) {
+                    let mut end = k + site.chars().count();
+                    for suffix in ["書友整理提供", "书友整理提供"] {
+                        if matches_chars_at(c, end, t_end, suffix) {
+                            end += suffix.chars().count();
+                            break;
+                        }
+                    }
+                    return Some(end);
+                }
+            }
+            if contains_scraper_boilerplate(&c[i..k]) {
+                return Some(k);
+            }
+        }
+    }
+
+    // 7. Explicit inline pirate site names (`書家文學[.neΤ | www.]`, `就到一一小說`, `56小說[看(...)]`, etc.).
+    for site in INLINE_PIRATE_SITES {
+        if matches_chars_at(c, i, t_end, site) {
+            let mut end = i + site.chars().count();
+            if matches!(*site, "書家文學" | "书家文学") {
+                let mut d = end;
+                while d < t_end
+                    && (c[d].is_ascii_alphanumeric()
+                        || matches!(c[d], '.' | '-' | '_' | 'ω' | '\u{03A4}' | '\u{03C4}'))
+                {
+                    d += 1;
+                }
+                if d > end {
+                    end = d;
+                }
+            } else if matches!(
+                *site,
+                "云軒閣"
+                    | "雲軒閣"
+                    | "云轩阁"
+                    | "手機站直接訪問云軒閣"
+                    | "手机站直接访问云轩阁"
+                    | "手機站直接訪問雲軒閣"
+            ) && starts_with_ci(c, end, t_end, "xs")
+            {
+                end += 2;
+            } else if matches!(*site, "56小說" | "56小说")
+                && end + 3 < t_end
+                && c[end] == '看'
+                && matches!(c[end + 1], '(' | '（')
+            {
+                let lim = t_end.min(end + 42);
+                if let Some(close) = ((end + 2)..lim).find(|&k| matches!(c[k], ')' | '）'))
+                    && contains_scraper_boilerplate(&c[end + 2..close])
+                {
+                    end = close + 1;
+                }
+            } else if matches!(*site, "理想文學" | "理想文学")
+                && end + 1 == t_end
+                && matches!(c[end], '：' | ':')
+            {
+                end += 1;
+            }
+            for suffix in [
+                "書友整理提供",
+                "书友整理提供",
+                "書友整理上傳",
+                "书友整理上传",
+            ] {
+                if matches_chars_at(c, end, t_end, suffix) {
+                    end += suffix.chars().count();
+                    break;
+                }
+            }
+            return Some(end);
+        }
+    }
+
+    None
+}
+
+/// Opt-in inline scraper/editorial tags (`/首/發`, `(..#..#..)`, `()()(...)`, mixed-bracket
+/// `(…）` / `（…)` notes, unbracketed pirate watermarks, and trailing unbracketed postscripts).
 fn editorial_inline_at(c: &[char], i: usize, ls: usize, le: usize) -> Option<usize> {
-    if i + 4 <= le
+    let t_end = trimmed_end(c, i, le);
+    if i >= t_end {
+        return None;
+    }
+
+    if i + 4 <= t_end
         && c[i] == '/'
         && c[i + 1] == '首'
         && c[i + 2] == '/'
         && matches!(c[i + 3], '發' | '发')
     {
-        let end = if i + 5 <= le && c[i + 4] == '/' {
+        let end = if i + 5 <= t_end && c[i + 4] == '/' {
             i + 5
         } else {
             i + 4
         };
         return Some(end);
     }
-    if matches!(c[i], '(' | '（') {
-        let limit = le.min(i + 182);
-        let mut j = i + 1;
+
+    // Orphan line-start closing editorial parenthesis (`...票票哦！）<story>`).
+    if i == ls && !matches!(c[i], '(' | '（' | '[' | '【' | '［') {
+        let scan_lim = t_end.min(ls + 72);
+        let mut close_pos = None;
+        for (idx, &ch) in c.iter().enumerate().take(scan_lim).skip(ls) {
+            if matches!(ch, '(' | '（' | '[' | '【' | '［') {
+                break;
+            }
+            if matches!(ch, ')' | '）') {
+                close_pos = Some(idx);
+                break;
+            }
+        }
+        if let Some(cp) = close_pos
+            && cp > ls
+            && !c[ls..cp].iter().any(|ch| "「」『』“”\"'".contains(*ch))
+            && !c[ls..cp].contains(&'。')
+            && contains_inline_editorial_cue(&c[ls..cp.min(ls + 45)])
+        {
+            return Some(cp + 1);
+        }
+    }
+
+    if matches!(c[i], '(' | '（' | '[' | '【' | '［') {
+        // Advance past up to 4 consecutive leading empty paren pairs `()()(...)` when followed by `(`.
+        let mut open_pos = i;
+        let mut empty_skipped = 0usize;
+        while empty_skipped < 4
+            && open_pos + 2 < t_end
+            && matches!(c[open_pos], '(' | '（')
+            && matches!(c[open_pos + 1], ')' | '）')
+            && matches!(c[open_pos + 2], '(' | '（')
+        {
+            open_pos += 2;
+            empty_skipped += 1;
+        }
+
+        let limit = t_end.min(open_pos + 242);
+        let mut j = open_pos + 1;
         let mut depth = 1usize;
         let mut saw_nested_open = false;
         while j < limit {
-            if matches!(c[j], '(' | '（') {
+            if matches!(c[j], '(' | '（' | '[' | '【' | '［') {
                 depth += 1;
                 saw_nested_open = true;
-            } else if matches!(c[j], ')' | '）') {
+            } else if matches!(c[j], ')' | '）' | ']' | '】' | '］') {
                 depth -= 1;
                 if depth == 0 {
-                    let inner = &c[i + 1..j];
+                    let inner = &c[open_pos + 1..j];
                     let hashes = inner.iter().filter(|&&ch| ch == '#').count();
+                    let stars = inner.iter().filter(|&&ch| matches!(ch, '☆' | '★')).count();
                     if !inner.is_empty()
-                        && inner.len() <= 180
-                        && (hashes >= 2 || contains_inline_editorial_cue(inner))
+                        && inner.len() <= 240
+                        && (hashes >= 2 || stars >= 2 || contains_inline_editorial_cue(inner))
                     {
-                        return Some(j + 1);
+                        let mut end = j + 1;
+                        while end + 1 < t_end
+                            && matches!(c[end], '(' | '（')
+                            && matches!(c[end + 1], ')' | '）')
+                        {
+                            end += 2;
+                        }
+                        end = consume_attached_asterisk_tag(c, end, t_end);
+                        return Some(end);
                     }
                     break;
                 }
             }
             j += 1;
         }
-        // Unclosed trailing editorial parenthesis running to the end of the line.
-        if depth > 0 && !saw_nested_open && j == le && le > i + 1 && le - (i + 1) <= 180 {
-            let inner = &c[i + 1..le];
-            if contains_inline_editorial_cue(inner) {
-                return Some(le);
+        // Unclosed editorial parenthesis: either split cleanly before multi-sentence story prose,
+        // or run to `t_end` when trailing editorial noise reaches the end of the line.
+        if depth > 0 && open_pos == i {
+            if !saw_nested_open
+                && let Some(split_end) = unclosed_editorial_prefix_before_story(c, i, t_end)
+            {
+                return Some(split_end);
+            }
+            if depth == 1
+                && j == t_end
+                && t_end > i + 1
+                && t_end - (i + 1) <= 200
+                && !c[i + 1..t_end]
+                    .iter()
+                    .any(|ch| "「」『』“”\"'".contains(*ch))
+                && contains_inline_editorial_cue(&c[i + 1..t_end])
+            {
+                return Some(t_end);
             }
         }
     }
+
+    if let Some(end) = inline_pirate_watermark_at(c, i, t_end) {
+        return Some(end);
+    }
+
     // Trailing unbracketed sentence-end postscripts (including an optional orphaned comma right
     // after sentence-final punctuation, e.g. `。，如果您喜歡這部作品...`).
     let at_postscript_boundary = i == ls
@@ -1088,7 +1534,7 @@ fn editorial_inline_at(c: &[char], i: usize, ls: usize, le: usize) -> Option<usi
                 | '，'
                 | ','
         );
-    if at_postscript_boundary && le - i <= 240 {
+    if at_postscript_boundary && t_end - i <= 240 {
         let start = if matches!(c[i], '，' | ',')
             && i > ls
             && matches!(c[i - 1], '。' | '！' | '？' | '!' | '?')
@@ -1099,9 +1545,9 @@ fn editorial_inline_at(c: &[char], i: usize, ls: usize, le: usize) -> Option<usi
         };
         if UNBRACKETED_POSTSCRIPT_STARTERS
             .iter()
-            .any(|pat| matches_chars_at(c, start, le, pat))
+            .any(|pat| matches_chars_at(c, start, t_end, pat))
         {
-            return Some(le);
+            return Some(t_end);
         }
     }
     None

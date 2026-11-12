@@ -848,3 +848,174 @@ fn ws1_v3_unclosed_html_sgml_boilerplate_tight_headings_and_silent_noise() {
         );
     }
 }
+
+#[test]
+fn inline_pirate_watermarks_preserve_story_paragraphs_and_standalone_footers_stay_block() {
+    let opts = Options {
+        mask_editorial: true,
+        normalize_traditional: true,
+        ..Options::default()
+    };
+
+    // 1. 120+-char narrative & dialogue paragraphs with inline pirate watermarks and mixed-bracket
+    //    author notes must mask ONLY the watermark substring (`silent_noise`, 0 bogus tokens) and
+    //    preserve 100% of surrounding story sentences/tokens.
+    let p_3qzw = concat!(
+        "“這門古老的鍛造技藝流傳至今已經十分罕見，尋常鐵匠鋪根本無人知曉其中的火候奧秘(╰→3qzw）。",
+        "倘若我們能夠在入冬之前集齊三塊玄鐵礦石並修復石爐，便可以為全村守衛打造出堅固的護具。",
+        "至於剩下的木炭與清水，老夫明日清晨自會派兩名學徒送往山谷工坊。”白鬚匠人神色平靜地向眾人說道。"
+    );
+    assert!(p_3qzw.chars().count() >= 120);
+
+    let p_empty_parens = concat!(
+        "()()(724小時不間斷更新純TXT小說)“二位攔住在下與同伴的去路，莫非是想借閱這卷山川地理圖譜？",
+        "我們只是路過此地的商隊護衛，對山嶺深處的古墓傳聞毫無興趣，還請諸位行個方便讓開道路。”青衣護衛手按刀柄眉頭微皺，毫不猶豫地沉聲開口婉拒道。"
+    );
+    assert!(p_empty_parens.chars().count() >= 120);
+
+    let p_kaomoji = concat!(
+        "“區區風雪算得了什麼？沈兄看來還不清楚老夫早年在北境行商的經歷吧。",
+        "☆⌒_⌒☆七星閣☆⌒_⌒☆ωωω。qiXingge在下曾在冰原驛站駐守十餘載，對沿途每一處避風岩洞都瞭若指掌。",
+        "只要隊伍緊跟著前方的馬車隊列，天黑之前定能平安抵達山腳下的石橋客棧。”灰袍老者笑著拍了拍胸口答道。"
+    );
+    assert!(p_kaomoji.chars().count() >= 120);
+
+    let p_shujia = concat!(
+        "昨夜被狂風吹倒的幾株參天古松橫在溪谷窄道中央，雖然折斷的粗大樹枝暫時堵住了淺灘渡口。書家文學",
+        "但是熟悉山路的年輕樵夫還是帶著他（她）們小心翼翼地繞過濕滑的青石斜坡，在濃厚晨霧散去之前順利抵達了半山腰處的木屋營地，並生起溫暖明亮的松木篝火烘乾衣袍。"
+    );
+    assert!(p_shujia.chars().count() >= 120);
+
+    let p_mixed_notes_and_sites = [
+        "(本想晚上把兩章合為一章給大家碼出來的，可沒想到這兩日精神欠佳，等調整好再給大家想辦法補上吧！）旅人沿著蜿蜒的青石古道緩步前行，遠處鐘聲悠揚。",
+        "山門外的守衛收起長槍，轉身走入石亭避雨。（手機,電腦.還可以下載電子書TXT,CHM,UMD,JAR電子書）",
+        "石橋對面的茶棚燈火通明。(最新最全電子書下載SOSO999)幾名挑夫放下竹簍歇腳。(全部小說超速更新：搜/搜/9/9/9)",
+        "老掌櫃笑著端上熱茶。就到一一小說門外風雨漸歇。請：m2.ddyueshu",
+        "遠處高塔亮起微光。www.0_3_wx.理想文學書友整理提供",
+        "石階盡頭傳來腳步聲。w.０3_x.om理想文學書友整理提供院內燈籠隨風輕晃。理想文學書友整理提供",
+        "“這是何處？”青年打量四周石壁。，如欲知后事如何，請登陸.example，章節更多，支持作者，支持正版閱讀！)",
+        "兩名劍客在石橋上激戰數十回合，各自後退半步互不示弱！，如欲知后事如何，請登陸.example，章節更多，支持作者，支持正版閱讀！)",
+        "爐中器物在黎明時分鍛造完成。［要看最新文字版,全本小說吧］",
+    ]
+    .join("\n\n");
+
+    for (para, expected_opaque, must_have_words) in [
+        (
+            p_3qzw,
+            vec!["(╰→3qzw）"],
+            vec!["鍛造", "奧秘", "鐵礦石", "護具", "工坊", "白鬚", "說道"],
+        ),
+        (
+            p_empty_parens,
+            vec!["()()(724小時不間斷更新純TXT小說)"],
+            vec!["同伴", "圖譜", "商隊", "護衛", "古墓", "婉拒"],
+        ),
+        (
+            p_kaomoji,
+            vec!["☆⌒_⌒☆七星閣☆⌒_⌒☆ωωω。qiXingge"],
+            vec!["風雪", "在下", "驛站", "岩洞", "馬車", "客棧"],
+        ),
+        (
+            p_shujia,
+            vec!["書家文學"],
+            vec!["古松", "渡口", "樵夫", "她", "木屋", "篝火"],
+        ),
+    ] {
+        let doc = analyze_document(para, &opts);
+        let op_texts: Vec<String> = doc
+            .segmentation
+            .opaque
+            .iter()
+            .map(|o| slice(para, o.span))
+            .collect();
+        assert_eq!(
+            op_texts,
+            owned(&expected_opaque),
+            "opaque mismatch on {para}"
+        );
+        assert!(
+            doc.segmentation.sentences.len() >= 2,
+            "story sentences must not be swallowed: {:?}",
+            sentence_texts(para, &doc)
+        );
+        let tok_texts: Vec<String> = doc.tokens.iter().map(|t| slice(para, t.span)).collect();
+        for wm in &expected_opaque {
+            assert!(
+                !tok_texts.iter().any(|t| t.contains("3qzw")
+                    || t.contains("724")
+                    || t.contains("qiXingge")
+                    || t.contains("七星閣")
+                    || t.contains("書家文學")
+                    || t == wm),
+                "watermark leaked into tokens: {tok_texts:?}"
+            );
+        }
+        for w in must_have_words {
+            assert!(
+                tok_texts.iter().any(|t| t.contains(w)),
+                "expected story word {w:?} preserved in tokens: {tok_texts:?}"
+            );
+        }
+    }
+
+    let doc_mixed = analyze_document(&p_mixed_notes_and_sites, &opts);
+    let mixed_sents = sentence_texts(&p_mixed_notes_and_sites, &doc_mixed);
+    assert_eq!(
+        mixed_sents,
+        owned(&[
+            "旅人沿著蜿蜒的青石古道緩步前行，遠處鐘聲悠揚。",
+            "山門外的守衛收起長槍，轉身走入石亭避雨。",
+            "石橋對面的茶棚燈火通明。",
+            "幾名挑夫放下竹簍歇腳。",
+            "老掌櫃笑著端上熱茶。",
+            "門外風雨漸歇。",
+            "遠處高塔亮起微光。",
+            "石階盡頭傳來腳步聲。",
+            "院內燈籠隨風輕晃。",
+            "“這是何處？”",
+            "青年打量四周石壁。",
+            "兩名劍客在石橋上激戰數十回合，各自後退半步互不示弱！",
+            "爐中器物在黎明時分鍛造完成。",
+        ])
+    );
+    let mixed_tokens: Vec<String> = doc_mixed
+        .tokens
+        .iter()
+        .map(|t| slice(&p_mixed_notes_and_sites, t.span))
+        .collect();
+    assert!(
+        !mixed_tokens.iter().any(|t| t.contains("理想")
+            || t.contains("書友")
+            || t.contains("整理")
+            || t.contains("ddyueshu")
+            || t.contains("SOSO999")),
+        "inline watermark leaked into mixed tokens: {mixed_tokens:?}"
+    );
+
+    // 2. Standalone pirate footer & mixed-bracket author-note lines still mask as whole-line blocks.
+    let standalone_footers = [
+        "(大家投票票了！有票票才有動力，沒投的快投一票吧！）",
+        "(咱昨天有事少發了一章，心裡記得清楚，會給大家補上的！）",
+        "(經書友提醒，發現章節數與章節名字弄錯了，大家見諒一下哦！）",
+        "請：m2.ddyueshu",
+        "書家文學",
+        "一一小說 www.example.org 最新章節",
+        "全本小說吧（qbxs8）全部小說為全本小說，不接受連載小說上傳！",
+        "（第一更！第二更放到晚上更新了哦！）（，()書友整理上傳更新及。",
+        "真正保留下來的故事正文句子。",
+    ]
+    .join("\n\n");
+    let doc_footers = analyze_document(&standalone_footers, &opts);
+    assert_eq!(
+        sentence_texts(&standalone_footers, &doc_footers),
+        owned(&["真正保留下來的故事正文句子。"])
+    );
+    assert_eq!(doc_footers.segmentation.opaque.len(), 8);
+    assert!(
+        doc_footers
+            .segmentation
+            .opaque
+            .iter()
+            .all(|o| o.kind == OpaqueKind::Code)
+    );
+}

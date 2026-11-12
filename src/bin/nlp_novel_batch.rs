@@ -387,6 +387,12 @@ struct InputChapter {
 
 #[derive(Deserialize)]
 struct InputManifest {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    book_title: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
     chapters: Vec<InputManifestChapter>,
 }
 
@@ -1186,11 +1192,19 @@ fn load_inputs_from_bundles_dir(bundles_dir: &Path) -> Result<Vec<InputChapter>>
     Ok(chapters)
 }
 
-fn load_inputs_from_manifest(manifest_path: &Path) -> Result<Vec<InputChapter>> {
+fn load_inputs_from_manifest(manifest_path: &Path) -> Result<(Vec<InputChapter>, Vec<String>)> {
     let raw = fs::read(manifest_path)
         .with_context(|| format!("read manifest {}", manifest_path.display()))?;
     let parsed: InputManifest = serde_json::from_slice(&raw)
         .with_context(|| format!("parse manifest JSON {}", manifest_path.display()))?;
+    let mut manifest_meta = Vec::new();
+    for opt in [&parsed.title, &parsed.book_title, &parsed.name] {
+        if let Some(s) = opt
+            && !s.trim().is_empty()
+        {
+            manifest_meta.push(s.clone());
+        }
+    }
     let base_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
 
     let mut entries = parsed.chapters;
@@ -1257,7 +1271,7 @@ fn load_inputs_from_manifest(manifest_path: &Path) -> Result<Vec<InputChapter>> 
     if out.is_empty() {
         bail!("no active chapters found in {}", manifest_path.display());
     }
-    Ok(out)
+    Ok((out, manifest_meta))
 }
 
 // ============================================================================
@@ -1374,6 +1388,8 @@ fn is_blocked_meta_compound(term: &str) -> bool {
     const META_COMPOUNDS: &[&str] = &[
         "電子書",
         "电子书",
+        "電子书",
+        "电子書",
         "小說網",
         "小说网",
         "推薦票",
@@ -1389,6 +1405,106 @@ fn is_blocked_meta_compound(term: &str) -> bool {
         "转贴次数",
     ];
     META_COMPOUNDS.iter().any(|bad| term.contains(bad))
+}
+
+fn push_han_title_runs(raw: &str, out: &mut Vec<String>) {
+    const GENERIC_DIR_NAMES: &[&str] = &[
+        "匯入文件",
+        "导入文件",
+        "章節",
+        "章节",
+        "文本",
+        "小說",
+        "小说",
+        "資料",
+        "资料",
+    ];
+    let mut cur = String::new();
+    let flush = |buf: &mut String, dest: &mut Vec<String>| {
+        if buf.is_empty() {
+            return;
+        }
+        let mut s = buf.as_str();
+        if GENERIC_DIR_NAMES.contains(&s) {
+            buf.clear();
+            return;
+        }
+        for suffix in ["資料", "资料"] {
+            if let Some(stripped) = s.strip_suffix(suffix)
+                && stripped.chars().count() >= 2
+            {
+                s = stripped;
+                break;
+            }
+        }
+        if s.chars().count() >= 2 && !GENERIC_DIR_NAMES.contains(&s) && !dest.iter().any(|e| e == s)
+        {
+            dest.push(s.to_owned());
+        }
+        buf.clear();
+    };
+    for ch in raw.chars() {
+        if is_bmp_han(ch) {
+            cur.push(ch);
+        } else {
+            flush(&mut cur, out);
+        }
+    }
+    flush(&mut cur, out);
+}
+
+/// Dynamically collect corpus/book title metadata runs (`>= 2` BMP Han chars) from input paths,
+/// manifest metadata fields, recurring bundle filenames (`<Title>_0001-0100.txt`), and recurring
+/// paired chapter banner headers (`<Title>\u{00a0}<Heading>`).
+fn collect_corpus_title_metadata(chapters: &[InputChapter], extra_meta: &[String]) -> Vec<String> {
+    let mut meta_runs: Vec<String> = Vec::new();
+    for item in extra_meta {
+        push_han_title_runs(item, &mut meta_runs);
+    }
+
+    let min_recur = if chapters.len() >= 2 { 2usize } else { 1usize };
+    let mut file_prefix_counts: HashMap<String, usize> = HashMap::new();
+    let mut header_prefix_counts: HashMap<String, usize> = HashMap::new();
+
+    for ch in chapters {
+        if let Some(stem) = Path::new(&ch.source_file)
+            .file_stem()
+            .and_then(|s| s.to_str())
+        {
+            let prefix: String = stem.chars().take_while(|&c| is_bmp_han(c)).collect();
+            if prefix.chars().count() >= 2 {
+                *file_prefix_counts.entry(prefix).or_insert(0) += 1;
+            }
+        }
+        for line in ch.text.lines().take(6) {
+            let trimmed = line.trim_matches(is_heading_ws);
+            for sep in ['\u{00a0}', '\u{3000}'] {
+                if let Some((before, after)) = trimmed.split_once(sep) {
+                    let b = before.trim_matches(is_heading_ws);
+                    let a = after.trim_matches(is_heading_ws);
+                    if b.chars().count() >= 2
+                        && b.chars().count() <= 24
+                        && detect_chapter_heading(a).is_some()
+                    {
+                        *header_prefix_counts.entry(b.to_owned()).or_insert(0) += 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    for (pfx, cnt) in file_prefix_counts {
+        if cnt >= min_recur {
+            push_han_title_runs(&pfx, &mut meta_runs);
+        }
+    }
+    for (pfx, cnt) in header_prefix_counts {
+        if cnt >= min_recur {
+            push_han_title_runs(&pfx, &mut meta_runs);
+        }
+    }
+    meta_runs
 }
 
 /// Generic Chinese classifiers and measure characters (`CLF_CHARS`).
@@ -1624,14 +1740,24 @@ fn unpack_u16_gram_string(key: u128) -> String {
     s
 }
 
+#[cfg(test)]
+fn discover_corpus_lexicon(
+    chapters: &[InputChapter],
+    max_terms: usize,
+) -> DiscoveredLexiconArtifact {
+    discover_corpus_lexicon_with_meta(chapters, max_terms, &[])
+}
+
 /// Pure statistical two-pass discovery of recurring multi-character compounds and proper names
 /// (`2..=5` BMP Han scalars) across the input chapters, using Apriori frequent-bigram pruning,
 /// internal split-point PMI / Normalized PMI, left/right Accessor Variety & branching entropy,
 /// classifier + noun statistical pruning, bidirectional cohesive boundary-straddling rejection,
-/// chapter burstiness, closed-class boundary filtering, and superstring dominance suppression.
-fn discover_corpus_lexicon(
+/// chapter burstiness, closed-class boundary filtering, dynamic corpus-title metadata filtering,
+/// and superstring dominance suppression.
+fn discover_corpus_lexicon_with_meta(
     chapters: &[InputChapter],
     max_terms: usize,
+    extra_meta: &[String],
 ) -> DiscoveredLexiconArtifact {
     const MIN_BIGRAM_FREQ: u32 = 10;
     const MIN_FREQ_DEFAULT: u32 = 15;
@@ -1642,6 +1768,7 @@ fn discover_corpus_lexicon(
     const MAX_SAMPLE_CTX: u32 = 512;
 
     let t0 = Instant::now();
+    let corpus_meta_runs = collect_corpus_title_metadata(chapters, extra_meta);
 
     let mut han_ok = vec![false; 65536];
     let mut lead_ok = vec![false; 65536];
@@ -2063,7 +2190,9 @@ fn discover_corpus_lexicon(
         }
 
         let term = unpack_u16_gram_string(key);
-        if is_blocked_meta_compound(&term) {
+        if is_blocked_meta_compound(&term)
+            || corpus_meta_runs.iter().any(|meta| meta.contains(&term))
+        {
             continue;
         }
 
@@ -2796,9 +2925,35 @@ fn run() -> Result<()> {
     let start_instant = Instant::now();
     let args = Args::parse();
 
-    let (input_mode, chapters) = match (&args.bundles_dir, &args.manifest) {
-        (Some(dir), None) => ("bundles_dir", load_inputs_from_bundles_dir(dir)?),
-        (None, Some(manifest)) => ("manifest", load_inputs_from_manifest(manifest)?),
+    let (input_mode, chapters, extra_corpus_meta) = match (&args.bundles_dir, &args.manifest) {
+        (Some(dir), None) => {
+            let mut meta = Vec::new();
+            if let Some(name) = dir.file_name().and_then(|s| s.to_str()) {
+                meta.push(name.to_owned());
+            }
+            if let Some(parent_name) = dir
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+            {
+                meta.push(parent_name.to_owned());
+            }
+            ("bundles_dir", load_inputs_from_bundles_dir(dir)?, meta)
+        }
+        (None, Some(manifest)) => {
+            let (chs, mut meta) = load_inputs_from_manifest(manifest)?;
+            if let Some(stem) = manifest.file_stem().and_then(|s| s.to_str()) {
+                meta.push(stem.to_owned());
+            }
+            if let Some(parent_name) = manifest
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+            {
+                meta.push(parent_name.to_owned());
+            }
+            ("manifest", chs, meta)
+        }
         (None, None) => bail!("must specify either --bundles-dir <DIR> or --manifest <PATH>"),
         (Some(_), Some(_)) => bail!("--bundles-dir and --manifest are mutually exclusive"),
     };
@@ -2868,7 +3023,8 @@ fn run() -> Result<()> {
     let lexicon_path = args.out_dir.join("discovered_lexicon.json");
 
     let discovered_artifact = if auto_lexicon_enabled {
-        let art = discover_corpus_lexicon(&chapters, args.auto_lexicon_max);
+        let art =
+            discover_corpus_lexicon_with_meta(&chapters, args.auto_lexicon_max, &extra_corpus_meta);
         let mut lex_bytes = serde_json::to_vec_pretty(&art)?;
         lex_bytes.push(b'\n');
         atomic_write_bytes(&lexicon_path, &lex_bytes, "lexicon")?;
@@ -4004,5 +4160,65 @@ mod tests {
         let st = summarize_document(&doc, 0);
         assert_eq!(st.zero_root_sentences, 1);
         assert_eq!(st.orphan_syntax_arcs, 1);
+    }
+
+    #[test]
+    fn lexicon_filters_ebook_variants_and_dynamic_corpus_title_substrings() {
+        let mut chapters = Vec::new();
+        for ch_idx in 1..=4 {
+            let mut body = String::new();
+            // Paired NBSP chapter header carrying synthetic book title `滄海長歌`.
+            body.push_str(&format!(
+                "滄海長歌\u{00a0}第{ch_idx}章 潮汐初起{ch_idx}\n\n"
+            ));
+            // True domain proper nouns (`沈星河`, `星河劍派`, `玄鐵重盾`, `紫電驚雷`) vs leaked metadata titles
+            // (`青雲古卷` from directory metadata, `星河紀事` from bundle filename, `滄海長歌` from header)
+            // and `電子書`/`电子书` variants, each with >= 4 distinct left and right contexts so
+            // filtering is causally tested rather than masked by AV thresholds.
+            let lines = [
+                "清晨，沈星河背起玄鐵重盾踏入星河劍派山門，翻開紫電驚雷抄本，擺放青雲古卷冊子，收錄星河紀事殘篇，誦讀滄海長歌詩句，整理電子書目錄，備份电子书檔案。",
+                "正午時，老匠人向沈星河遞過玄鐵重盾返回星河劍派工坊，校對紫電驚雷手札，借閱青雲古卷真跡，抄寫星河紀事長卷，吟詠滄海長歌舊譜，瀏覽電子書章節，讀取电子书文本。",
+                "黃昏裡，沈星河握緊玄鐵重盾守住星河劍派石橋，參悟紫電驚雷圖譜，擦拭青雲古卷木匣，封存星河紀事手稿，默記滄海長歌韻律，檢索電子書索引，歸檔电子书卷宗。",
+                "夜幕下，眾護衛隨沈星河擦拭玄鐵重盾巡視星河劍派庭院，研讀紫電驚雷秘錄，珍藏青雲古卷拓片，裝訂星河紀事書冊，傳唱滄海長歌古調，刪除電子書緩存，清理电子书副本。",
+            ];
+            for line in lines {
+                body.push_str(line);
+                body.push('\n');
+            }
+            let mut ch =
+                make_synthetic_chapter(ch_idx, &format!("第{ch_idx}章 潮汐初起{ch_idx}"), &body);
+            ch.source_file = "星河紀事_0001-0100.txt".to_owned();
+            chapters.push(ch);
+        }
+
+        let extra_meta = vec!["青雲古卷資料".to_owned(), "匯入文件".to_owned()];
+        let art = discover_corpus_lexicon_with_meta(&chapters, 200, &extra_meta);
+        let terms: Vec<&str> = art.terms.iter().map(|t| t.term.as_str()).collect();
+
+        for kept in ["沈星河", "星河劍派", "玄鐵重盾", "紫電驚雷"] {
+            assert!(
+                terms.contains(&kept),
+                "expected non-title compound `{kept}` to remain in lexicon, got: {terms:?}"
+            );
+        }
+        for blocked in [
+            "電子書",
+            "电子书",
+            "青雲古卷",
+            "青雲古",
+            "雲古卷",
+            "星河紀事",
+            "星河紀",
+            "河紀事",
+            "滄海長歌",
+            "滄海長",
+            "海長歌",
+            "匯入文件",
+        ] {
+            assert!(
+                !terms.contains(&blocked),
+                "metadata/title substring `{blocked}` must be filtered out, got: {terms:?}"
+            );
+        }
     }
 }

@@ -1101,8 +1101,8 @@ fn ws2_ws3_v3_infix_projection_degluing_and_decided_lexicon() {
         );
     }
 
-    // 3. New `ZH_DECIDED` closed-class words (`終於`/`终于`, `一旦`, `一齊`/`一齐`, `除了`, `老身`).
-    let decided_sent = "除了老身之外，眾人終於與终于一齊和一齐退後，一旦石門開啟便進入。";
+    // 3. New `ZH_DECIDED` closed-class words (`終於`/`终于`/`終于`, `一旦`, `一齊`/`一齐`, `除了`, `老身`).
+    let decided_sent = "除了老身之外，眾人終於、终于與終于一齊和一齐退後，一旦石門開啟便進入。";
     let doc_dec = analyze_document(decided_sent, &opts);
     for tok in &doc_dec.tokens {
         assert!(tok.span.start_char < tok.span.end_char && tok.span.end_char <= doc_dec.text_chars);
@@ -1113,6 +1113,7 @@ fn ws2_ws3_v3_infix_projection_degluing_and_decided_lexicon() {
         ("老身", Upos::Pron),
         ("終於", Upos::Adv),
         ("终于", Upos::Adv),
+        ("終于", Upos::Adv),
         ("一齊", Upos::Adv),
         ("一齐", Upos::Adv),
         ("一旦", Upos::Sconj),

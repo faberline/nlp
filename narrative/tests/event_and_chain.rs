@@ -696,3 +696,149 @@ fn acl_modifier_skip_compound_merge_and_schema_serde_contract() {
     assert_eq!(roundtrip, chap);
     let _edge_kind_check = EdgeKind::Before;
 }
+
+#[test]
+fn model_syntax_low_conf_abstains_without_zero_score_fallback_and_negation_compounds() {
+    let vocab = sample_vocab();
+
+    // 1. Model-analyzed document where sentence 1 has EVERY token suppressed by `syntax: low_confidence`
+    // (while sentence 0 has valid syntax). Sentence 1 must abstain with `PredicateLowConfidence` and
+    // must NEVER fall back to `extract_args_no_syntax` emitting `DirectSyntax` with `score_milli == 0`.
+    let text = "林遠推開木門。蘇晴察看古銅鏡。";
+    let mut doc = analyze_with_vocab(text, &vocab);
+    let sent0_toks: Vec<usize> = doc
+        .tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.sentence == 0)
+        .map(|(i, _)| i)
+        .collect();
+    let sent1_toks: Vec<usize> = doc
+        .tokens
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.sentence == 1)
+        .map(|(i, _)| i)
+        .collect();
+    for &ti in &sent0_toks {
+        let s = char_slice(text, doc.tokens[ti].span);
+        doc.tokens[ti].upos = Some(match s.as_str() {
+            "林遠" => Upos::Propn,
+            "推開" => Upos::Verb,
+            "木門" => Upos::Noun,
+            _ => Upos::Punct,
+        });
+    }
+    let s0_lin = sent0_toks
+        .iter()
+        .copied()
+        .find(|&ti| char_slice(text, doc.tokens[ti].span) == "林遠")
+        .unwrap();
+    let s0_open = sent0_toks
+        .iter()
+        .copied()
+        .find(|&ti| char_slice(text, doc.tokens[ti].span) == "推開")
+        .unwrap();
+    let s0_door = sent0_toks
+        .iter()
+        .copied()
+        .find(|&ti| char_slice(text, doc.tokens[ti].span) == "木門")
+        .unwrap();
+    doc.syntax = vec![
+        SyntaxToken {
+            token: s0_lin,
+            sentence: 0,
+            span: doc.tokens[s0_lin].span,
+            head: Some(s0_open),
+            deprel: "nsubj".to_owned(),
+            score: Score(960),
+        },
+        SyntaxToken {
+            token: s0_open,
+            sentence: 0,
+            span: doc.tokens[s0_open].span,
+            head: None,
+            deprel: "root".to_owned(),
+            score: Score(980),
+        },
+        SyntaxToken {
+            token: s0_door,
+            sentence: 0,
+            span: doc.tokens[s0_door].span,
+            head: Some(s0_open),
+            deprel: "obj".to_owned(),
+            score: Score(940),
+        },
+    ];
+    for &ti in &sent1_toks {
+        let s = char_slice(text, doc.tokens[ti].span);
+        if s == "。" {
+            doc.tokens[ti].upos = Some(Upos::Punct);
+        } else {
+            // Leave `upos` as `Some(Verb)` or `None` while suppressing syntax completely.
+            if s == "察看" {
+                doc.tokens[ti].upos = Some(Upos::Verb);
+            }
+            doc.unknown.push(Unknown {
+                layer: "syntax".to_owned(),
+                span: doc.tokens[ti].span,
+                reason: Reason::LowConfidence,
+            });
+        }
+    }
+
+    let core = extract_core(1, text, &doc, &vocab);
+    assert_eq!(core.events.len(), 1, "sentence 1 must abstain");
+    assert!(
+        core.unknown
+            .iter()
+            .any(|u| u.kind == NarrativeUnknownKind::PredicateLowConfidence),
+        "expected PredicateLowConfidence for suppressed sentence 1"
+    );
+    for ev in &core.events {
+        for arg in &ev.arguments {
+            if arg.basis == ArgumentBasis::DirectSyntax {
+                assert!(arg.score_milli >= 350);
+            }
+        }
+    }
+
+    // 2. Multi-character negation tokens (`不會`, `不能`, `不敢`, `無法`, `未能`) vs `不得不` idiom guard.
+    let neg_text = "林遠不會輕易動手。蘇晴不能離開青石鎮。陳伯無法打開木匣。林遠不得不離開客棧。";
+    let neg_doc = analyze_with_vocab(neg_text, &vocab);
+    let neg_core = extract_core(1, neg_text, &neg_doc, &vocab);
+    assert_eq!(neg_core.events.len(), 4);
+    assert_eq!(neg_core.events[0].factuality, Factuality::Negated);
+    assert_eq!(neg_core.events[1].factuality, Factuality::Negated);
+    assert_eq!(neg_core.events[2].factuality, Factuality::Negated);
+    assert_eq!(neg_core.events[3].factuality, Factuality::Actual);
+
+    // 3. Passive `由` frame stops at embedded verb (`帶`) and never includes `由` in agent span.
+    let pass_text = "此行由陳伯帶眾人立即出發。";
+    let mut pass_doc = analyze_with_vocab(pass_text, &vocab);
+    for tok in &mut pass_doc.tokens {
+        let s = char_slice(pass_text, tok.span);
+        if s == "帶" || s == "出發" {
+            tok.upos = Some(Upos::Verb);
+        } else if s == "立即" {
+            tok.upos = Some(Upos::Adv);
+        }
+    }
+    let pass_core = extract_core(1, pass_text, &pass_doc, &vocab);
+    assert!(!pass_core.events.is_empty());
+    for ev in &pass_core.events {
+        for arg in &ev.arguments {
+            if arg.basis == ArgumentBasis::PassiveBei && arg.role == EventRole::Agent {
+                let s = char_slice(pass_text, arg.span);
+                assert!(
+                    !s.starts_with('由'),
+                    "agent span must not start with 由: {s}"
+                );
+                assert!(
+                    !s.contains('帶'),
+                    "agent span must stop before verb 帶: {s}"
+                );
+            }
+        }
+    }
+}

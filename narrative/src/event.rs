@@ -139,7 +139,9 @@ const HYPOTHETICAL_NON_COND_WORDS: &[&str] = &[
 
 const NEGATION_CJK_CUES: &[&str] = &[
     "沒有", "没有", "未曾", "並未", "并未", "並非", "并非", "毫無", "毫无", "絕不", "绝不", "從未",
-    "从未", "並不", "并不", "不", "沒", "没", "未", "莫", "勿",
+    "从未", "並不", "并不", "不會", "不会", "不能", "不可", "不敢", "不想", "不知", "不得", "無法",
+    "无法", "未能", "不用", "不必", "不曾", "不願", "不愿", "不肯", "沒法", "没法", "沒能", "没能",
+    "不再", "不是", "不見", "不见", "沒見", "没见", "不", "沒", "没", "未", "莫", "勿",
 ];
 const NEGATION_EN_CUES: &[&str] = &[
     "never",
@@ -198,6 +200,12 @@ const NON_NEGATED_IDIOMS: &[&str] = &[
     "不少",
     "不小",
     "不大",
+    "不得不",
+    "不得了",
+    "不得已",
+    "不可思議",
+    "不可思议",
+    "不可一世",
     "不多",
     "不到",
     "不等",
@@ -320,6 +328,9 @@ pub fn extract_events(
         .filter(|u| u.reason == Reason::LowConfidence && u.layer == "syntax")
         .map(|u| u.span)
         .collect();
+    // Distinguish genuine rule-only (`--no-model`) docs from model-analyzed docs where
+    // some or all sentences had `syntax` suppressed by `low_confidence`.
+    let model_syntax_attempted = !doc.syntax.is_empty() || !low_conf_syntax.is_empty();
 
     // Precompute actor/place/object spans from `WorkVocabulary` and `doc.entities`.
     let vocab_actors = vocab.find_actor_spans(text);
@@ -386,7 +397,7 @@ pub fn extract_events(
                 &zone_toks,
                 &token_clause,
                 c_idx,
-                has_syntax,
+                model_syntax_attempted,
                 &syntax_by_tok,
                 &low_conf_pos,
                 &low_conf_syntax,
@@ -411,7 +422,7 @@ pub fn extract_events(
 
             let raw_pred_span = doc.tokens[pred_tok].span;
             let raw_pred_surf = span_text(&chars, raw_pred_span);
-            let pred_span = if !has_syntax
+            let pred_span = if !model_syntax_attempted
                 && let Some(pron_prefix) = glued_pronoun_prefix(&raw_pred_surf, raw_pred_span)
             {
                 Span {
@@ -438,7 +449,7 @@ pub fn extract_events(
                     &vocab_places,
                     &vocab_objects,
                 )
-            } else {
+            } else if !model_syntax_attempted {
                 extract_args_no_syntax(
                     &chars,
                     doc,
@@ -451,6 +462,8 @@ pub fn extract_events(
                     &vocab_places,
                     &vocab_objects,
                 )
+            } else {
+                Vec::new()
             };
 
             apply_disposal_and_passive_realignment(
@@ -561,7 +574,7 @@ fn select_predicate(
     zone_toks: &[usize],
     token_clause: &[Option<usize>],
     clause_idx: usize,
-    has_syntax: bool,
+    model_syntax_attempted: bool,
     syntax_by_tok: &[Option<&SyntaxToken>],
     low_conf_pos: &[Span],
     low_conf_syntax: &[Span],
@@ -582,7 +595,7 @@ fn select_predicate(
             continue;
         }
         // Check `low_confidence` suppression when syntax was expected.
-        let is_low_syntax = has_syntax
+        let is_low_syntax = model_syntax_attempted
             && syntax_by_tok[ti].is_none()
             && low_conf_syntax.iter().any(|s| spans_overlap(*s, tok.span));
         if is_low_syntax {
@@ -626,7 +639,7 @@ fn select_predicate(
                 || low_conf_syntax.iter().any(|u| spans_overlap(*u, s))
         })
         .collect();
-    if !suppressed_candidates.is_empty() || (!low_conf_hits.is_empty() && has_syntax) {
+    if !suppressed_candidates.is_empty() || (!low_conf_hits.is_empty() && model_syntax_attempted) {
         return PredicatePick::AbstainLowConfidence(
             "candidate predicate suppressed by low_confidence diagnostic".to_owned(),
         );
@@ -645,7 +658,7 @@ fn select_predicate(
 
     // Fallback for `--no-model` rule-based mode (`doc.syntax` is empty and open-class
     // tokens have `upos: None` with `Reason::NoModel`).
-    if !has_syntax {
+    if !model_syntax_attempted {
         return fallback_predicate_no_model(
             chars,
             doc,
@@ -1830,7 +1843,13 @@ fn detect_passive(
             while agent_end < pred_pos {
                 let n_tok = &doc.tokens[zone_toks[agent_end]];
                 let n_surf = span_text(chars, n_tok.span);
-                if n_tok.upos == Some(Upos::Adv) || is_pseudo_predicate(&n_surf) {
+                if matches!(
+                    n_tok.upos,
+                    Some(Upos::Adv | Upos::Verb | Upos::Adp | Upos::Sconj | Upos::Cconj)
+                ) || is_pseudo_predicate(&n_surf)
+                    || NEGATION_CJK_CUES.contains(&n_surf.as_str())
+                    || MODAL_FUTURE_CJK_CUES.contains(&n_surf.as_str())
+                {
                     break;
                 }
                 agent_end += 1;
@@ -1971,6 +1990,12 @@ fn apply_disposal_and_passive_realignment(
             let mut matched = false;
             for arg in arguments.iter_mut() {
                 if spans_overlap(arg.span, agent_span) {
+                    if arg.span.start_char < agent_span.start_char
+                        && spans_overlap(arg.span, marker_span)
+                    {
+                        arg.span = agent_span;
+                        arg.token = Some(head_ti);
+                    }
                     arg.role = EventRole::Agent;
                     arg.basis = ArgumentBasis::PassiveBei;
                     matched = true;

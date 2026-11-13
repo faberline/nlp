@@ -6,6 +6,11 @@ description = "Source-linked narrative event and timeline graph over nlp.doc.v1"
 license = "MIT"
 publish = false
 
+[features]
+default = []
+onnx = ["faberline-nlp/onnx"]
+coreml = ["faberline-nlp/coreml"]
+
 [dependencies]
 aho-corasick = "1"
 anyhow = "1"

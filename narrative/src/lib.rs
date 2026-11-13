@@ -3,12 +3,24 @@
 pub mod chain;
 pub mod dialogue;
 pub mod event;
+pub mod graph;
 pub mod schema;
+
+pub use graph::{
+    BookEventRef, BookTimelineGraph, ChapterGraphBuild, ChapterTimelineDag,
+    build_chapter_dag_from_narrative, build_chapter_graph,
+};
+pub use schema::{
+    ActorMention, AliasEntry, ArgumentBasis, BOOK_RECEIPT_SCHEMA, CHAPTER_NARRATIVE_SCHEMA,
+    CandidateEvent, ChapterNarrative, ChronologyOrder, ContextZone, DialogueSpan, EdgeEvidenceKind,
+    EdgeKind, EdgeStatus, EventArgument, EventRole, Factuality, LocatedSpan, MentionKind,
+    NARRATIVE_SCHEMA, NarrativeManifestReceipt, NarrativeUnknown, NarrativeUnknownKind,
+    SpeakerBasis, TemporalAnchor, TimelineEdge, WorkVocabulary, text_sha256_hex,
+};
 
 use crate::chain::resolve_chains;
 use crate::dialogue::extract_dialogues;
 use crate::event::extract_events;
-use crate::schema::{ActorMention, CandidateEvent, DialogueSpan, NarrativeUnknown, WorkVocabulary};
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, EntityKind, Upos};
 
@@ -51,6 +63,64 @@ pub fn extract_core(
         mentions: chain_res.mentions,
         unknown,
     }
+}
+
+/// Validates `doc` against `text`, extracts Wave-1 core narrative structures, constructs the
+/// cycle-free timeline graph, and returns a self-contained [`ChapterNarrative`].
+pub fn analyze_chapter_narrative(
+    chapter: u32,
+    title: Option<String>,
+    text: &str,
+    doc: &Document,
+    vocab: &WorkVocabulary,
+) -> anyhow::Result<ChapterNarrative> {
+    let text_chars = text.chars().count();
+    if doc.text_chars != text_chars {
+        anyhow::bail!(
+            "chapter {chapter}: document text_chars ({}) does not match text scalar count ({text_chars})",
+            doc.text_chars
+        );
+    }
+    let text_sha256 = text_sha256_hex(text);
+    if doc.text_sha256 != text_sha256 {
+        anyhow::bail!(
+            "chapter {chapter}: document text_sha256 ({}) does not match text SHA-256 ({text_sha256})",
+            doc.text_sha256
+        );
+    }
+
+    let core = extract_core(chapter, text, doc, vocab);
+    let graph_build = build_chapter_graph(chapter, text, doc, &core.events);
+
+    if graph_build.event_dag_layers.len() != core.events.len() {
+        anyhow::bail!(
+            "chapter {chapter}: event_dag_layers length ({}) != events length ({})",
+            graph_build.event_dag_layers.len(),
+            core.events.len()
+        );
+    }
+    if graph_build.dag.has_cycle() {
+        anyhow::bail!("chapter {chapter}: condensed timeline DAG contains a cycle");
+    }
+
+    let mut unknown = core.unknown;
+    unknown.extend(graph_build.cycle_unknowns);
+    unknown.sort_by_key(|u| (u.span.start_char, u.span.end_char));
+
+    Ok(ChapterNarrative {
+        schema: CHAPTER_NARRATIVE_SCHEMA.to_string(),
+        chapter,
+        title,
+        text_chars,
+        text_sha256,
+        dialogues: core.dialogues,
+        events: core.events,
+        mentions: core.mentions,
+        edges: graph_build.edges,
+        event_dag_layers: graph_build.event_dag_layers,
+        conflict_cycles_broken: graph_build.conflict_cycles_broken,
+        unknown,
+    })
 }
 
 #[derive(Clone, Debug)]

@@ -5,7 +5,7 @@ use faberline_nlp::Span;
 use faberline_nlp::doc::{EntityKind, Options};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 pub const NARRATIVE_SCHEMA: &str = "nlp.narrative.v1";
 pub const CHAPTER_NARRATIVE_SCHEMA: &str = "nlp.narrative.chapter.v1";
@@ -415,6 +415,19 @@ pub enum NarrativeUnknownKind {
     CycleConflictDemoted,
 }
 
+impl NarrativeUnknownKind {
+    /// Returns the canonical `snake_case` key used in manifest receipts.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ProDropAmbiguous => "pro_drop_ambiguous",
+            Self::PronounAmbiguous => "pronoun_ambiguous",
+            Self::SpeakerAmbiguous => "speaker_ambiguous",
+            Self::PredicateLowConfidence => "predicate_low_confidence",
+            Self::CycleConflictDemoted => "cycle_conflict_demoted",
+        }
+    }
+}
+
 /// Source-linked diagnostic for an abstained or demoted narrative decision.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NarrativeUnknown {
@@ -441,4 +454,35 @@ pub struct ChapterNarrative {
     pub conflict_cycles_broken: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown: Vec<NarrativeUnknown>,
+}
+
+/// Corpus-level `nlp.narrative.receipt.v1` manifest written by `nlp_narrative_batch`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NarrativeManifestReceipt {
+    pub schema: String,
+    pub input_mode: String,
+    pub workers: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vocab_sha256: Option<String>,
+    #[serde(default)]
+    pub discovered_lexicon_terms: usize,
+    pub total_chapters: usize,
+    pub resumed_chapters: usize,
+    pub processed_chapters: usize,
+    pub total_chars: usize,
+    pub elapsed_secs: f64,
+    pub total_dialogues: usize,
+    pub total_events: usize,
+    pub actual_narrative_events: usize,
+    pub total_mentions: usize,
+    pub total_edges: usize,
+    pub supported_edges: usize,
+    pub non_chronological_edges: usize,
+    pub conflict_cycles_broken: usize,
+    pub residual_dag_cycles: usize,
+    pub unknown_by_kind: BTreeMap<String, usize>,
+    pub chapter_outputs_sha256: String,
+    pub events_stream_sha256: String,
+    pub timeline_edges_sha256: String,
+    pub actor_mentions_sha256: String,
 }

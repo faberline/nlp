@@ -1,0 +1,249 @@
+{
+  "schema": "nlp.receipt.syntax.v1",
+  "model": "doc-syntax-v1",
+  "layers": [
+    "pos",
+    "syntax"
+  ],
+  "licence": "MIT",
+  "base_encoder": "intfloat/multilingual-e5-small",
+  "date": "2026-11-11",
+  "macos": "26.5.2",
+  "arch": "arm64",
+  "rust": "rustc 1.96.1 (31fca3adb 2026-06-26) (Homebrew)",
+  "tolerance": 0.0001,
+  "parity": {
+    "fixtures_max_abs_diff": 1.4781951904296875e-05,
+    "all_pad_max_abs_diff": 5.21540641784668e-08,
+    "gold_max_abs_diff": 5.53131103515625e-05,
+    "probe_max_abs_diff": 2.574920654296875e-05,
+    "gold_tree_label_upos_mismatches": 0,
+    "gold_max_score_milli_diff": 1,
+    "decoded_outputs_identical": true
+  },
+  "latency_ms": {
+    "coreml_cpu_median": 66.815,
+    "coreml_cpu_p95": 69.031,
+    "onnx_cpu_median": 40.73,
+    "onnx_cpu_p95": 43.608
+  },
+  "gold_eval": {
+    "source": "swarm/gold-eval:tests/data/gold_layers4_6_v1.jsonl",
+    "sha256": "cd78c88a1ebfbbcaf7113df0b5ef104402560a177d26d4fea5987850c8e3f149",
+    "train_overlap_items": 0,
+    "overall": {
+      "items": 300,
+      "sentences": 450,
+      "tokens": 4457,
+      "uas": 0.7496,
+      "las": 0.6888,
+      "emitted_rate": 0.9287,
+      "low_confidence_rate": 0.0713,
+      "upos": 0.8883,
+      "contextual_upos_upgrade_acc": 0.8347,
+      "l2_undecided_tokens": 3012
+    },
+    "by_variant": {
+      "en": {
+        "items": 120,
+        "sentences": 180,
+        "tokens": 1717,
+        "uas": 0.8934,
+        "las": 0.8497,
+        "emitted_rate": 0.9744,
+        "low_confidence_rate": 0.0256,
+        "upos": 0.9423,
+        "contextual_upos_upgrade_acc": 0.9035,
+        "l2_undecided_tokens": 1026
+      },
+      "mixed-CN": {
+        "items": 30,
+        "sentences": 45,
+        "tokens": 504,
+        "uas": 0.6508,
+        "las": 0.5774,
+        "emitted_rate": 0.8929,
+        "low_confidence_rate": 0.1071,
+        "upos": 0.8591,
+        "contextual_upos_upgrade_acc": 0.8065,
+        "l2_undecided_tokens": 367
+      },
+      "mixed-TW": {
+        "items": 30,
+        "sentences": 45,
+        "tokens": 467,
+        "uas": 0.6895,
+        "las": 0.6103,
+        "emitted_rate": 0.8822,
+        "low_confidence_rate": 0.1178,
+        "upos": 0.8737,
+        "contextual_upos_upgrade_acc": 0.8239,
+        "l2_undecided_tokens": 335
+      },
+      "zh-CN": {
+        "items": 60,
+        "sentences": 90,
+        "tokens": 878,
+        "uas": 0.6412,
+        "las": 0.5661,
+        "emitted_rate": 0.8986,
+        "low_confidence_rate": 0.1014,
+        "upos": 0.8497,
+        "contextual_upos_upgrade_acc": 0.7969,
+        "l2_undecided_tokens": 650
+      },
+      "zh-TW": {
+        "items": 60,
+        "sentences": 90,
+        "tokens": 891,
+        "uas": 0.6667,
+        "las": 0.6038,
+        "emitted_rate": 0.9147,
+        "low_confidence_rate": 0.0853,
+        "upos": 0.8462,
+        "contextual_upos_upgrade_acc": 0.7839,
+        "l2_undecided_tokens": 634
+      }
+    },
+    "by_lang": {
+      "en": {
+        "items": 120,
+        "sentences": 180,
+        "tokens": 1717,
+        "uas": 0.8934,
+        "las": 0.8497,
+        "emitted_rate": 0.9744,
+        "low_confidence_rate": 0.0256,
+        "upos": 0.9423,
+        "contextual_upos_upgrade_acc": 0.9035,
+        "l2_undecided_tokens": 1026
+      },
+      "mixed": {
+        "items": 60,
+        "sentences": 90,
+        "tokens": 971,
+        "uas": 0.6694,
+        "las": 0.5932,
+        "emitted_rate": 0.8877,
+        "low_confidence_rate": 0.1123,
+        "upos": 0.8661,
+        "contextual_upos_upgrade_acc": 0.8148,
+        "l2_undecided_tokens": 702
+      },
+      "zh": {
+        "items": 120,
+        "sentences": 180,
+        "tokens": 1769,
+        "uas": 0.654,
+        "las": 0.5851,
+        "emitted_rate": 0.9067,
+        "low_confidence_rate": 0.0933,
+        "upos": 0.8479,
+        "contextual_upos_upgrade_acc": 0.7905,
+        "l2_undecided_tokens": 1284
+      }
+    },
+    "by_genre": {
+      "casual": {
+        "items": 100,
+        "sentences": 150,
+        "tokens": 1491,
+        "uas": 0.7022,
+        "las": 0.6351,
+        "emitted_rate": 0.9188,
+        "low_confidence_rate": 0.0812,
+        "upos": 0.8846,
+        "contextual_upos_upgrade_acc": 0.8199,
+        "l2_undecided_tokens": 955
+      },
+      "novel": {
+        "items": 100,
+        "sentences": 150,
+        "tokens": 1368,
+        "uas": 0.8575,
+        "las": 0.8136,
+        "emitted_rate": 0.9635,
+        "low_confidence_rate": 0.0365,
+        "upos": 0.9276,
+        "contextual_upos_upgrade_acc": 0.8904,
+        "l2_undecided_tokens": 903
+      },
+      "paper": {
+        "items": 100,
+        "sentences": 150,
+        "tokens": 1598,
+        "uas": 0.7015,
+        "las": 0.632,
+        "emitted_rate": 0.908,
+        "low_confidence_rate": 0.092,
+        "upos": 0.8579,
+        "contextual_upos_upgrade_acc": 0.8033,
+        "l2_undecided_tokens": 1154
+      }
+    }
+  },
+  "probe_eval": {
+    "source": "training/probe/annotations.jsonl",
+    "train_overlap_items": 0,
+    "overall": {
+      "items": 30,
+      "sentences": 54,
+      "tokens": 389,
+      "uas": 0.8458,
+      "las": 0.8175,
+      "emitted_rate": 0.9434,
+      "low_confidence_rate": 0.0566
+    },
+    "by_lang": {
+      "en": {
+        "items": 12,
+        "sentences": 21,
+        "tokens": 158,
+        "uas": 1.0,
+        "las": 0.9937,
+        "emitted_rate": 1.0,
+        "low_confidence_rate": 0.0
+      },
+      "mixed": {
+        "items": 6,
+        "sentences": 12,
+        "tokens": 77,
+        "uas": 0.7143,
+        "las": 0.6883,
+        "emitted_rate": 0.8182,
+        "low_confidence_rate": 0.1818
+      },
+      "zh": {
+        "items": 12,
+        "sentences": 21,
+        "tokens": 154,
+        "uas": 0.7532,
+        "las": 0.7013,
+        "emitted_rate": 0.9481,
+        "low_confidence_rate": 0.0519
+      }
+    }
+  },
+  "files": [
+    {
+      "path": "model.onnx",
+      "sha256": "9d16741f3137c57916d9c13fc3deebe7a66fa33fb275aeb28f0c66b9732d533e",
+      "bytes": 137543839
+    },
+    {
+      "path": "model.mlmodel",
+      "sha256": "2b001436301dddc7d894d49860a9316235e64832b1d7056ed1715da7b503950d",
+      "bytes": 137541336
+    },
+    {
+      "path": "tokenizer.json",
+      "sha256": "dbda95da3f836295a977a2ce4e4ae8a1583a6c97e8bcb7d46413017c54bb0ab7",
+      "bytes": 2356313
+    },
+    {
+      "path": "expected.json",
+      "sha256": "742b43a293abeb51709ae8e974b612fd366056d202108ccf29c3cfe7a8488c56",
+      "bytes": 1540582
+    }
+  ]
+}

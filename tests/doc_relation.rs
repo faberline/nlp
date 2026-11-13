@@ -1254,3 +1254,349 @@ fn review_unknown_examples_of_the_docs() {
         assert!(rel_unknown(text).is_empty(), "{text}");
     }
 }
+
+#[test]
+fn ws6_narrative_connectors_and_post_temporal_frames() {
+    // Unambiguous narrative sequence connectors (`隨即/随即`, `緊接著/紧接着`, `旋即`).
+    assert_eq!(
+        rels("木門緩緩開啟，隨即走入兩名巡守，緊接著燈火亮起，旋即大廳恢復安靜。"),
+        [
+            rel(
+                K::Sequence,
+                L::Clause,
+                "隨即",
+                None,
+                "木門緩緩開啟",
+                "隨即走入兩名巡守"
+            ),
+            rel(
+                K::Sequence,
+                L::Clause,
+                "緊接著",
+                None,
+                "隨即走入兩名巡守",
+                "緊接著燈火亮起"
+            ),
+            rel(
+                K::Sequence,
+                L::Clause,
+                "旋即",
+                None,
+                "緊接著燈火亮起",
+                "旋即大廳恢復安靜。"
+            ),
+        ]
+    );
+    assert_eq!(
+        rels("信號發出，随即船帆升起，紧接着船隊離港。"),
+        [
+            rel(
+                K::Sequence,
+                L::Clause,
+                "随即",
+                None,
+                "信號發出",
+                "随即船帆升起"
+            ),
+            rel(
+                K::Sequence,
+                L::Clause,
+                "紧接着",
+                None,
+                "随即船帆升起",
+                "紧接着船隊離港。"
+            ),
+        ]
+    );
+
+    // Parallel (`與此同時/与此同时`), Contrast (`不過/不过`), Condition (`否則/否则`).
+    assert_eq!(
+        rels("北側山谷起霧，與此同時南側渡口也刮起大風。"),
+        [rel(
+            K::Parallel,
+            L::Clause,
+            "與此同時",
+            None,
+            "北側山谷起霧",
+            "與此同時南側渡口也刮起大風。"
+        )]
+    );
+    assert_eq!(
+        rels("前隊抵達驛站。与此同时後隊仍在山路行進。"),
+        [rel(
+            K::Parallel,
+            L::Sentence,
+            "与此同时",
+            None,
+            "前隊抵達驛站。",
+            "与此同时後隊仍在山路行進。"
+        )]
+    );
+    assert_eq!(
+        rels("這條山路崎嶇，不過風景十分開闊。"),
+        [rel(
+            K::Contrast,
+            L::Clause,
+            "不過",
+            None,
+            "這條山路崎嶇",
+            "不過風景十分開闊。"
+        )]
+    );
+    assert_eq!(
+        rels("方案可行，不过還需要補充預算。"),
+        [rel(
+            K::Contrast,
+            L::Clause,
+            "不过",
+            None,
+            "方案可行",
+            "不过還需要補充預算。"
+        )]
+    );
+    // Idiomatic `不過如此` / `不過爾爾` must not trigger a contrast connector.
+    assert!(rels("大家原以為很難，不過如此而已。").is_empty());
+    assert!(rels("傳聞誇大其詞，不過爾爾。").is_empty());
+    assert!(rels("传闻夸大其词，不过尔尔。").is_empty());
+
+    assert_eq!(
+        rels("必須在日落前趕到渡口，否則船隻就會開走。"),
+        [rel(
+            K::Condition,
+            L::Clause,
+            "否則",
+            None,
+            "必須在日落前趕到渡口",
+            "否則船隻就會開走。"
+        )]
+    );
+    assert_eq!(
+        rels("請提前備妥通行證。否则無法進入園區。"),
+        [rel(
+            K::Condition,
+            L::Sentence,
+            "否则",
+            None,
+            "請提前備妥通行證。",
+            "否则無法進入園區。"
+        )]
+    );
+
+    // Clause-end post-positional temporal frames (`之後/之后`, `之際/之际`, `之時/之时`).
+    for (text, expected_conn, expected_a1, expected_a2) in [
+        (
+            "片刻之後，旅人推開了木門。",
+            "之後",
+            "片刻之後",
+            "旅人推開了木門。",
+        ),
+        (
+            "商議妥當之后，眾人各自散去。",
+            "之后",
+            "商議妥當之后",
+            "眾人各自散去。",
+        ),
+        (
+            "話音剛落之際，遠處亮起燈火。",
+            "之際",
+            "話音剛落之際",
+            "遠處亮起燈火。",
+        ),
+        (
+            "眾人猶豫之际，北風忽然轉急。",
+            "之际",
+            "眾人猶豫之际",
+            "北風忽然轉急。",
+        ),
+        (
+            "正當危急之時，守衛打開了側門。",
+            "之時",
+            "正當危急之時",
+            "守衛打開了側門。",
+        ),
+        (
+            "天色將明之时，船隊駛出了港灣。",
+            "之时",
+            "天色將明之时",
+            "船隊駛出了港灣。",
+        ),
+        (
+            "「商議妥當之後」，眾人立刻動身。",
+            "之後",
+            "「商議妥當之後」",
+            "眾人立刻動身。",
+        ),
+    ] {
+        assert_eq!(
+            rels(text),
+            [rel(
+                K::Sequence,
+                L::Clause,
+                expected_conn,
+                None,
+                expected_a1,
+                expected_a2
+            )],
+            "{text}"
+        );
+    }
+
+    // Bare `之後` (< 3 chars) is ignored; a conflicting connector on c_{i+1} suppresses duplicate frame emission.
+    assert!(rels("之後，旅人離開了。").is_empty());
+    assert_eq!(
+        rels("數日之後，然而大門依然緊閉。"),
+        [rel(
+            K::Contrast,
+            L::Clause,
+            "然而",
+            None,
+            "數日之後",
+            "然而大門依然緊閉。"
+        )]
+    );
+    assert_eq!(
+        rels("片刻之後，隨即傳來一陣腳步聲。"),
+        [rel(
+            K::Sequence,
+            L::Clause,
+            "隨即",
+            None,
+            "片刻之後",
+            "隨即傳來一陣腳步聲。"
+        )]
+    );
+}
+
+#[test]
+fn ws6_v3_kinship_spatial_after_guard_and_parallel_variants() {
+    // Kinship ("descendant") `之後/之后` must NOT emit a temporal `Sequence` relation.
+    for text in [
+        "他本是故人之後，眾人對他頗為禮遇。",
+        "此人既是高人之后，見識自然不凡。",
+        "身為名門之後，舉止一向穩重。",
+        "那少年乃是將門之后，自幼熟讀兵書。",
+        "傳聞此女為仙人之後，身懷異稟。",
+        "故人之後，理應多加照拂。",
+    ] {
+        assert!(
+            rels(text).is_empty(),
+            "kinship sense should not emit Sequence: {text}"
+        );
+    }
+
+    // Spatial ("behind") `之後/之后` introduced by locative verbs must NOT emit `Sequence`.
+    for text in [
+        "一道身影出現在了那道光影之後，悄然攔住去路。",
+        "兩名護衛出现在車隊之后，警惕地望向四周。",
+        "探子緊緊跟在商隊之後，沒有發出半點聲響。",
+        "灰衣老者落在眾人之后，緩步踏上石階。",
+        "守衛靜靜站在石門之後，手握長矛。",
+        "新來的學徒排在隊伍之后，依次登記姓名。",
+        "黑影躲在巨石之後，屏住呼吸。",
+        "暗哨藏在屏風之后，留意廳內動靜。",
+        "一輪圓月懸在山峰之後，灑下清冷輝光。",
+        "石像立在殿門之后，高逾數丈。",
+        "古碑立於高台之後，字跡斑駁。",
+        "古亭立于竹林之后，環境幽靜。",
+        "小村位於山嶺之後，極少有人踏足。",
+        "驛站位于河灣之后，往來商旅常在此歇腳。",
+    ] {
+        assert!(
+            rels(text).is_empty(),
+            "spatial sense should not emit Sequence: {text}"
+        );
+    }
+
+    // Genuine temporal `之後` after an explicit duration or eventive verb still emits `Sequence`.
+    assert_eq!(
+        rels("站在門外片刻之後，旅人輕輕叩響了木環。"),
+        [rel(
+            K::Sequence,
+            L::Clause,
+            "之後",
+            None,
+            "站在門外片刻之後",
+            "旅人輕輕叩響了木環。"
+        )]
+    );
+    assert_eq!(
+        rels("見到故人之後，老者欣然邀其入座。"),
+        [rel(
+            K::Sequence,
+            L::Clause,
+            "之後",
+            None,
+            "見到故人之後",
+            "老者欣然邀其入座。"
+        )]
+    );
+
+    // Clause-level (`，與此同時，…`) and sentence-level (`。與此同時，…`) `Parallel`, including
+    // mixed-script (`与此同時`/`與此同时`) and discourse-prefixed (`而與此同時`/`幾乎與此同時`).
+    assert_eq!(
+        rels("北側山谷起霧，與此同時，南側渡口也刮起大風。"),
+        [rel(
+            K::Parallel,
+            L::Clause,
+            "與此同時",
+            None,
+            "北側山谷起霧",
+            "南側渡口也刮起大風。"
+        )]
+    );
+    assert_eq!(
+        rels("前隊抵達驛站。與此同時，後隊仍在山路行進。"),
+        [rel(
+            K::Parallel,
+            L::Sentence,
+            "與此同時",
+            None,
+            "前隊抵達驛站。",
+            "與此同時，後隊仍在山路行進。"
+        )]
+    );
+    assert_eq!(
+        rels("前隊抵達驛站。与此同时，後隊仍在山路行進。"),
+        [rel(
+            K::Parallel,
+            L::Sentence,
+            "与此同时",
+            None,
+            "前隊抵達驛站。",
+            "与此同时，後隊仍在山路行進。"
+        )]
+    );
+    assert_eq!(
+        rels("東側鐘聲驟響。与此同時，西側烽火也沖天而起。"),
+        [rel(
+            K::Parallel,
+            L::Sentence,
+            "与此同時",
+            None,
+            "東側鐘聲驟響。",
+            "与此同時，西側烽火也沖天而起。"
+        )]
+    );
+    assert_eq!(
+        rels("前堂賓客散去。而與此同時，後院燈火卻亮了起來。"),
+        [rel(
+            K::Parallel,
+            L::Sentence,
+            "而與此同時",
+            None,
+            "前堂賓客散去。",
+            "而與此同時，後院燈火卻亮了起來。"
+        )]
+    );
+    assert_eq!(
+        rels("木門轟然合攏，幾乎與此同時，石室四角亮起微光。"),
+        [rel(
+            K::Parallel,
+            L::Clause,
+            "幾乎與此同時",
+            None,
+            "木門轟然合攏",
+            "石室四角亮起微光。"
+        )]
+    );
+}

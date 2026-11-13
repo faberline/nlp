@@ -40,6 +40,47 @@
         }
       ],
       "receipt": null
+    },
+    {
+      "id": "doc-syntax-v1",
+      "layers": [
+        "pos",
+        "syntax"
+      ],
+      "licence": "MIT",
+      "dir": "doc-syntax-v1",
+      "max_len": 256,
+      "pad_id": 0,
+      "model": "model.onnx",
+      "tokenizer": "tokenizer.json",
+      "expected": "expected.json",
+      "coreml": {
+        "model": "model.mlmodel",
+        "vocab": 32768
+      },
+      "files": [
+        {
+          "path": "model.onnx",
+          "sha256": "9d16741f3137c57916d9c13fc3deebe7a66fa33fb275aeb28f0c66b9732d533e",
+          "bytes": 137543839
+        },
+        {
+          "path": "model.mlmodel",
+          "sha256": "2b001436301dddc7d894d49860a9316235e64832b1d7056ed1715da7b503950d",
+          "bytes": 137541336
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "dbda95da3f836295a977a2ce4e4ae8a1583a6c97e8bcb7d46413017c54bb0ab7",
+          "bytes": 2356313
+        },
+        {
+          "path": "expected.json",
+          "sha256": "742b43a293abeb51709ae8e974b612fd366056d202108ccf29c3cfe7a8488c56",
+          "bytes": 1540582
+        }
+      ],
+      "receipt": "docs/receipts/syntax-2026-11-11.json"
     }
   ]
 }

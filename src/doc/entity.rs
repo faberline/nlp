@@ -4,19 +4,20 @@
 //! char that no rule matches, so no candidate can start or end inside one.
 
 use super::opaque::Found;
-use super::{Entity, EntityKind, OpaqueKind, Reason, Unknown};
+use super::{Entity, EntityKind, OpaqueKind, Reason, Token, Unknown};
 use crate::Span;
 use aho_corasick::{AhoCorasick, MatchKind};
 use std::cell::RefCell;
 use std::cmp::Reverse;
 
 const SENTINEL: char = '\u{0}';
-const MEASURE: &str = "個人位次件隻張本條台輛間場筆項回遍倍歲名所家句片顆枚篇部";
+const MEASURE: &str = "個人位次件隻張本條台輛間場筆項回遍倍歲名所家句片顆枚篇部个张条辆间场笔项岁颗層层頭头步把具柄株滴瓶粒塊块";
 const ZH_RELATIVE: &[&str] = &[
     "今天",
     "明天",
     "昨天",
     "後天",
+    "后天",
     "前天",
     "今晚",
     "昨晚",
@@ -24,12 +25,55 @@ const ZH_RELATIVE: &[&str] = &[
     "明年",
     "去年",
     "這週",
+    "这周",
     "本週",
+    "本周",
     "上週",
+    "上周",
     "下週",
+    "下周",
     "這個月",
+    "这个月",
     "上個月",
+    "上个月",
     "下個月",
+    "下个月",
+    "片刻後",
+    "片刻后",
+    "片刻",
+    "頃刻間",
+    "頃刻",
+    "顷刻间",
+    "顷刻",
+    "剎那間",
+    "剎那",
+    "刹那间",
+    "刹那",
+    "轉眼間",
+    "轉眼",
+    "转眼间",
+    "转眼",
+    "眨眼之間",
+    "眨眼之间",
+    "眨眼工夫",
+    "眨眼功夫",
+    "眨眼間",
+    "眨眼间",
+    "瞬息間",
+    "瞬息",
+    "瞬息间",
+    "彈指間",
+    "弹指间",
+    "良久",
+    "許久",
+    "许久",
+    "半晌",
+    "一會兒",
+    "一会儿",
+];
+const ZH_REL_SUFFIXES: &[&str] = &[
+    "之後", "之后", "之前", "以來", "以来", "之內", "之内", "之間", "之间", "前", "後", "后", "內",
+    "内", "間", "间",
 ];
 const EN_RELATIVE: &[&str] = &["today", "tomorrow", "yesterday", "tonight"];
 const MONTHS: [&str; 12] = [
@@ -89,10 +133,35 @@ const UNITS: &[(&str, bool)] = &[
     ("台幣", false),
     ("秒", false),
     ("分鐘", false),
+    ("分钟", false),
     ("小時", false),
+    ("小时", false),
+    ("個時辰", false),
+    ("个时辰", false),
+    ("時辰", false),
+    ("时辰", false),
+    ("刻鐘", false),
+    ("刻钟", false),
+    ("盞茶", false),
+    ("盏茶", false),
+    ("炷香", false),
+    ("柱香", false),
+    ("個甲子", false),
+    ("个甲子", false),
+    ("甲子", false),
+    ("載", false),
+    ("载", false),
     ("天", false),
+    ("夜", false),
+    ("更", false),
     ("週", false),
     ("個月", false),
+    ("个月", false),
+    ("丈", false),
+    ("尺", false),
+    ("寸", false),
+    ("畝", false),
+    ("亩", false),
     ("%", false),
     ("kg", false),
     ("mg", false),
@@ -239,7 +308,9 @@ pub(super) fn extract(
     c: &[char],
     found: &[Found],
     sentences: &[(usize, Span)],
+    tokens: &[Token],
     names: &[String],
+    normalize_traditional: bool,
 ) -> (Vec<Entity>, Vec<Unknown>) {
     let mut t = c.to_vec();
     for f in found.iter().filter(|f| !f.block) {
@@ -257,7 +328,16 @@ pub(super) fn extract(
             .expect("name patterns")
     });
     let mut cands = Vec::new();
+    let mut tok_cursor = 0usize;
     for &(idx, span) in sentences {
+        while tok_cursor < tokens.len() && tokens[tok_cursor].sentence < idx {
+            tok_cursor += 1;
+        }
+        let tok_start = tok_cursor;
+        while tok_cursor < tokens.len() && tokens[tok_cursor].sentence == idx {
+            tok_cursor += 1;
+        }
+        let sent_tokens = &tokens[tok_start..tok_cursor];
         let x = Sent {
             t: &t,
             s: span.start_char,
@@ -276,19 +356,50 @@ pub(super) fn extract(
             }
         }
         let bad = x.bad_dates.take();
-        cands.retain(|c| {
-            let hit = |&(s, e): &(usize, usize)| c.span.start_char < e && s < c.span.end_char;
+        cands.retain(|cand| {
+            let hit = |&(s, e): &(usize, usize)| cand.span.start_char < e && s < cand.span.end_char;
             // Inside an invalid full date, no date and no undecided candidate inside it (such as
             // `2/30`) is read, and its digits stay numbers. A date that overlaps the bad date is
             // dropped. An undecided candidate is dropped only when it lies fully inside the bad
             // date, so `9:45` before `Jan 2027` stays an unknown.
-            let inside = |&(s, e): &(usize, usize)| s <= c.span.start_char && c.span.end_char <= e;
-            let dated = match c.kind {
-                Some(EntityKind::Date) => bad.iter().any(hit),
+            let inside =
+                |&(s, e): &(usize, usize)| s <= cand.span.start_char && cand.span.end_char <= e;
+            let dated = match cand.kind {
+                Some(EntityKind::Date | EntityKind::RelativeDate) => bad.iter().any(hit),
+                Some(EntityKind::Quantity) if matches!(cand.unit.as_deref(), Some("年" | "日")) => {
+                    bad.iter().any(hit)
+                }
                 None => bad.iter().any(inside),
                 Some(_) => false,
             };
-            !(dead.iter().any(hit) || dated)
+            if dead.iter().any(hit) || dated {
+                return false;
+            }
+            if cand.sentence == idx
+                && matches!(
+                    cand.kind,
+                    Some(
+                        EntityKind::Quantity
+                            | EntityKind::RelativeDate
+                            | EntityKind::Date
+                            | EntityKind::Time
+                    )
+                )
+            {
+                if violates_surface_context_guard(
+                    &t,
+                    x.s,
+                    x.e,
+                    cand.span.start_char,
+                    cand.span.end_char,
+                ) {
+                    return false;
+                }
+                if normalize_traditional && cuts_non_temporal_token(c, sent_tokens, cand.span) {
+                    return false;
+                }
+            }
+            true
         });
         emails(&x, &mut cands);
         if let Some(ac) = &ac {
@@ -421,10 +532,13 @@ fn scan_at(x: &Sent, i: usize, out: &mut Vec<Cand>) {
 
 fn relative_at(x: &Sent, i: usize) -> Option<Cand> {
     let (t, e) = (x.t, x.e);
-    for word in ZH_RELATIVE {
-        if let Some(end) = matches_at(t, i, e, word) {
-            return Some(x.cand(i, end, Some(EntityKind::RelativeDate), None, None));
-        }
+    let zh_lex_end = ZH_RELATIVE
+        .iter()
+        .filter_map(|word| matches_at(t, i, e, word))
+        .max();
+    let zh_dur_end = zh_relative_duration_at(x, i);
+    if let Some(end) = zh_lex_end.max(zh_dur_end) {
+        return Some(x.cand(i, end, Some(EntityKind::RelativeDate), None, None));
     }
     if !x.bound(i) {
         return None;
@@ -839,23 +953,437 @@ fn quantity_at(x: &Sent, i: usize) -> Option<Cand> {
             ));
         }
     }
-    let num = number_at(x, i)?;
+    if let Some((unit, uend)) = half_quantity_at(x, i) {
+        return Some(x.cand(
+            i,
+            uend,
+            Some(EntityKind::Quantity),
+            Some("0.5".to_owned()),
+            Some(unit.to_owned()),
+        ));
+    }
+    if let Some((unit, uend)) = approx_prefix_quantity_at(x, i, false) {
+        return Some(x.cand(
+            i,
+            uend,
+            Some(EntityKind::Quantity),
+            None,
+            Some(unit.to_owned()),
+        ));
+    }
+    let num = quantity_cardinal_at(x, i)?;
     if num.bare_one {
         return None;
+    }
+    if let Some((unit, uend)) = approx_cardinal_quantity_at(x, i, &num, false) {
+        return Some(x.cand(
+            i,
+            uend,
+            Some(EntityKind::Quantity),
+            None,
+            Some(unit.to_owned()),
+        ));
     }
     let (j, attached) = if num.end < e && t[num.end] == ' ' {
         (num.end + 1, false)
     } else {
         (num.end, true)
     };
-    let (unit, uend) = unit_at(t, j, e, attached)?;
+    let bare_wan = matches!(t[i], '萬' | '万') && num.end == i + 1;
+    let (unit, uend) = zh_or_std_unit_at(x, i, j, attached, false, false)?;
+    if bare_wan && unit.is_ascii() {
+        return None;
+    }
+    let value = zh_ascending_approx_range(&t[i..num.end])
+        .map(str::to_owned)
+        .unwrap_or(num.value);
     Some(x.cand(
         i,
         uend,
         Some(EntityKind::Quantity),
-        Some(num.value),
+        Some(value),
         Some(unit.to_owned()),
     ))
+}
+
+/// Two-digit ascending Chinese approximations (`一二`..`八九`) before a quantity unit normalize to
+/// `"1-2"`..`"8-9"` rather than concatenating into `"12"`..`"89"`.
+fn zh_ascending_approx_range(run: &[char]) -> Option<&'static str> {
+    match run {
+        ['一', '二'] => Some("1-2"),
+        ['二', '三'] => Some("2-3"),
+        ['三', '四'] => Some("3-4"),
+        ['四', '五'] => Some("4-5"),
+        ['五', '六'] => Some("5-6"),
+        ['六', '七'] => Some("6-7"),
+        ['七', '八'] => Some("7-8"),
+        ['八', '九'] => Some("8-9"),
+        _ => None,
+    }
+}
+
+/// Explicit surface context guards for non-temporal/non-quantity compounds (`半天空`,
+/// `九天神/玄/之/上`, `萬天` before `明/星/空`, and indefinite `...的一天`).
+fn violates_surface_context_guard(
+    t: &[char],
+    sent_s: usize,
+    sent_e: usize,
+    s: usize,
+    e: usize,
+) -> bool {
+    let surf = &t[s..e];
+    if surf == ['半', '天'] && e < sent_e && t[e] == '空' {
+        return true;
+    }
+    if surf == ['九', '天'] && e < sent_e && matches!(t[e], '神' | '玄' | '之' | '上' | '落' | '外')
+    {
+        return true;
+    }
+    if matches!(surf, ['萬' | '万', '天'])
+        && e < sent_e
+        && matches!(t[e], '明' | '星' | '空' | '神' | '玄')
+    {
+        return true;
+    }
+    if surf == ['一', '天'] && s > sent_s && t[s - 1] == '的' {
+        return true;
+    }
+    if s >= sent_s + 2
+        && matches!(
+            (&t[s - 2..s], surf),
+            (['退', '避'] | ['垂', '涎'], ['三', '尺']) | (['火', '冒'], ['三', '丈'])
+        )
+    {
+        return true;
+    }
+    if matches!(surf, ['五', '尺'] | ['七', '尺'])
+        && e + 2 <= sent_e
+        && matches!(&t[e..e + 2], ['之', '軀'] | ['之', '躯'])
+    {
+        return true;
+    }
+    false
+}
+
+const COMPOSITE_NUM_CHARS: &str = "〇零一二三四五六七八九十百千萬万億亿兩两半數数幾几";
+const COMPOSITE_ALLOWED_CHARS: &str = "〇零一二三四五六七八九十百千萬万億亿兩两半數数幾几餘余多個个年月日號号天夜更週周時时辰刻鐘钟盞盏茶炷柱香甲子載载分秒丈尺寸畝亩公斤克里毫米升元台幣美元後后前內内間间之久左右開开外整足約约";
+
+/// True when a token's surface is itself a composite numeral/unit/temporal compound (`三天三夜`,
+/// `十丈開外`, `數月之久`, `2026年度`), so an entity boundary inside it is legitimate.
+fn is_composite_num_unit_token(tok_chars: &[char]) -> bool {
+    if tok_chars.is_empty() {
+        return false;
+    }
+    if tok_chars == ['年', '度'] {
+        return true;
+    }
+    let has_num = tok_chars
+        .iter()
+        .any(|&ch| ch.is_ascii_digit() || COMPOSITE_NUM_CHARS.contains(ch));
+    if !has_num {
+        return false;
+    }
+    tok_chars.iter().all(|&ch| {
+        ch.is_ascii_digit()
+            || matches!(ch, '.' | ',' | ':' | '/' | '-' | '%' | '$')
+            || super::token::is_scraper_infix(ch)
+            || COMPOSITE_ALLOWED_CHARS.contains(ch)
+    })
+}
+
+/// True when `span.start_char` or `span.end_char` cuts strictly inside the interior of a Layer-1
+/// token whose surface is not a composite numeral/quantity/temporal expression.
+fn cuts_non_temporal_token(c_orig: &[char], sent_tokens: &[Token], span: Span) -> bool {
+    for tok in sent_tokens {
+        let ts = tok.span.start_char;
+        let te = tok.span.end_char;
+        let cuts_start = ts < span.start_char && span.start_char < te;
+        let cuts_end = ts < span.end_char && span.end_char < te;
+        if (cuts_start || cuts_end) && !is_composite_num_unit_token(&c_orig[ts..te]) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Cardinal number for quantities: standard `number_at`, plus standalone `萬`/`万` (`10000`) when
+/// attached directly to a Chinese unit (`萬年`, `萬丈`, `萬餘年`, `萬年前`).
+fn quantity_cardinal_at(x: &Sent, i: usize) -> Option<Num> {
+    if let Some(num) = number_at(x, i) {
+        return Some(num);
+    }
+    let (t, e) = (x.t, x.e);
+    if i < e
+        && matches!(t[i], '萬' | '万')
+        && x.zh_start_ok(i)
+        && !(i + 1 < e && (is_zh_num(t[i + 1]) || t[i + 1].is_ascii_digit()))
+    {
+        return Some(Num {
+            value: "10000".to_owned(),
+            end: i + 1,
+            bare_one: false,
+        });
+    }
+    None
+}
+
+/// `半` + optional `個`/`个` + Chinese unit (`半日`, `半年`, `半天`, `半個時辰`, `半盞茶`, `半炷香`,
+/// `半小時`, `半個月`). Excludes `半夜`/`半更`.
+fn half_quantity_at(x: &Sent, i: usize) -> Option<(&'static str, usize)> {
+    let (t, e) = (x.t, x.e);
+    if i >= e || t[i] != '半' {
+        return None;
+    }
+    if i > x.s
+        && (is_zh_num(t[i - 1])
+            || t[i - 1].is_ascii_digit()
+            || matches!(t[i - 1], '點' | '点' | '第'))
+    {
+        return None;
+    }
+    let (unit, uend) = zh_or_std_unit_at(x, i, i + 1, true, true, true)?;
+    (!unit.is_ascii() && !matches!(unit, "夜" | "更")).then_some((unit, uend))
+}
+
+/// `數`/`数`/`幾`/`几` + optional `十/百/千/萬/万` + Chinese unit (`數年`, `數日`, `數月`, `數十丈`,
+/// `數百年`, `幾年`, `幾日`, `幾天`, `幾個月`).
+fn approx_prefix_quantity_at(
+    x: &Sent,
+    i: usize,
+    allow_bare_zhou: bool,
+) -> Option<(&'static str, usize)> {
+    let (t, e) = (x.t, x.e);
+    if i >= e || !matches!(t[i], '數' | '数' | '幾' | '几') || !x.zh_start_ok(i) {
+        return None;
+    }
+    let mut k = i + 1;
+    if k < e && "十百千萬万".contains(t[k]) {
+        let first = t[k];
+        k += 1;
+        if matches!(first, '十' | '百' | '千') && k < e && matches!(t[k], '萬' | '万') {
+            k += 1;
+        }
+    }
+    if let Some((unit, uend)) = zh_or_std_unit_at(x, i, k, true, true, true)
+        && !unit.is_ascii()
+    {
+        return Some((unit, uend));
+    }
+    if k == i + 1 && matches!(t[i], '數' | '数') && k < e && t[k] == '月' {
+        return Some(("月", k + 1));
+    }
+    if allow_bare_zhou && k < e && t[k] == '周' {
+        return Some(("周", k + 1));
+    }
+    None
+}
+
+/// `<tens cardinal><幾|几>` (`十幾丈`, `二十幾天`) or `<cardinal><餘|余|多>[個|个]<unit>` (`百餘年`,
+/// `百余丈`, `一百多年`, `三十多天`) or `<cardinal><個|个>多<unit>` (`三個多月`).
+fn approx_cardinal_quantity_at(
+    x: &Sent,
+    i: usize,
+    num: &Num,
+    allow_bare_zhou: bool,
+) -> Option<(&'static str, usize)> {
+    let (t, e) = (x.t, x.e);
+    if !t[i].is_ascii_digit()
+        && num.end > i
+        && t[num.end - 1] == '十'
+        && num.end < e
+        && matches!(t[num.end], '幾' | '几')
+    {
+        let mut k = num.end + 1;
+        if k < e && matches!(t[k], '萬' | '万') {
+            k += 1;
+        }
+        if let Some((unit, uend)) = zh_or_std_unit_at(x, i, k, true, true, true)
+            && !unit.is_ascii()
+        {
+            return Some((unit, uend));
+        }
+        if allow_bare_zhou && k < e && t[k] == '周' {
+            return Some(("周", k + 1));
+        }
+    }
+    if num.end < e && matches!(t[num.end], '餘' | '余' | '多') {
+        if let Some((unit, uend)) = zh_or_std_unit_at(x, i, num.end + 1, true, true, true)
+            && !unit.is_ascii()
+        {
+            return Some((unit, uend));
+        }
+        if allow_bare_zhou && num.end + 1 < e && t[num.end + 1] == '周' {
+            return Some(("周", num.end + 2));
+        }
+    }
+    if num.end + 2 < e && matches!(t[num.end], '個' | '个') && t[num.end + 1] == '多' {
+        let after = num.end + 2;
+        if t[after] == '月' {
+            let unit = if t[num.end] == '個' {
+                "個月"
+            } else {
+                "个月"
+            };
+            return Some((unit, after + 1));
+        }
+        if let Some((unit, uend)) = zh_or_std_unit_at(x, i, after, true, true, false)
+            && !unit.is_ascii()
+        {
+            return Some((unit, uend));
+        }
+    }
+    None
+}
+
+/// Duration quantity followed by a relative temporal suffix (`四年后`, `三百年前`, `兩日后`,
+/// `數月內`, `半個時辰后`).
+fn zh_relative_duration_at(x: &Sent, i: usize) -> Option<usize> {
+    let (t, e) = (x.t, x.e);
+    let dur = half_quantity_at(x, i)
+        .or_else(|| approx_prefix_quantity_at(x, i, true))
+        .or_else(|| {
+            let num = quantity_cardinal_at(x, i).filter(|n| !n.bare_one)?;
+            approx_cardinal_quantity_at(x, i, &num, true).or_else(|| {
+                if zh_year(x, i).is_some() {
+                    return None;
+                }
+                zh_or_std_unit_at(x, i, num.end, true, true, false)
+                    .or_else(|| (num.end < e && t[num.end] == '周').then_some(("周", num.end + 1)))
+            })
+        })?;
+    let (unit, uend) = dur;
+    if !is_zh_temporal_unit(unit) {
+        return None;
+    }
+    ZH_REL_SUFFIXES
+        .iter()
+        .filter_map(|&suf| {
+            let rend = matches_at(t, uend, e, suf)?;
+            // Preserve bounded-duration prepositional frames `在 [Quantity] 內/間` (`在三個時辰內`).
+            if matches!(
+                suf,
+                "內" | "内" | "之內" | "之内" | "間" | "间" | "之間" | "之间"
+            ) && i > x.s
+                && matches!(t[i - 1], '在' | '於' | '于')
+            {
+                return None;
+            }
+            if matches!(suf, "間" | "间")
+                && rend < e
+                && matches!(t[rend], '隔' | '斷' | '断' | '隙')
+            {
+                return None;
+            }
+            Some(rend)
+        })
+        .max()
+}
+
+fn is_zh_temporal_unit(unit: &str) -> bool {
+    matches!(
+        unit,
+        "年" | "載"
+            | "载"
+            | "個月"
+            | "个月"
+            | "月"
+            | "週"
+            | "周"
+            | "天"
+            | "日"
+            | "夜"
+            | "更"
+            | "小時"
+            | "小时"
+            | "個時辰"
+            | "个时辰"
+            | "時辰"
+            | "时辰"
+            | "刻鐘"
+            | "刻钟"
+            | "盞茶"
+            | "盏茶"
+            | "炷香"
+            | "柱香"
+            | "個甲子"
+            | "个甲子"
+            | "甲子"
+            | "分鐘"
+            | "分钟"
+            | "秒"
+    )
+}
+
+/// Longest unit at `j` from `UNITS` or restricted Chinese duration units (`年`, `日`), with
+/// optional `個`/`个` stripping before non-ASCII units when `allow_optional_ge` is set.
+fn zh_or_std_unit_at(
+    x: &Sent,
+    prefix_start: usize,
+    j: usize,
+    attached: bool,
+    allow_ascii_zh_duration: bool,
+    allow_optional_ge: bool,
+) -> Option<(&'static str, usize)> {
+    let std_u = unit_at(x.t, j, x.e, attached);
+    let zh_u = zh_duration_unit_at(x, prefix_start, j, attached, allow_ascii_zh_duration);
+    let direct = match (std_u, zh_u) {
+        (Some(a), Some(b)) => Some(if a.1 >= b.1 { a } else { b }),
+        (a, b) => a.or(b),
+    };
+    if direct.is_some() {
+        return direct;
+    }
+    if allow_optional_ge && attached && j < x.e && matches!(x.t[j], '個' | '个') {
+        let (unit, uend) = unit_at(x.t, j + 1, x.e, true)?;
+        if !unit.is_ascii() && !unit.starts_with(['個', '个']) {
+            return Some((unit, uend));
+        }
+    }
+    None
+}
+
+/// Chinese duration units `年` and `日`, restricted so calendar years (`2026年`, `二〇二六年`,
+/// `民國115年`), month-day dates (`11月10日`), and bare ASCII durations (`3年`, `10日`) keep their
+/// existing `Date`/`Number` readings.
+fn zh_duration_unit_at(
+    x: &Sent,
+    prefix_start: usize,
+    j: usize,
+    attached: bool,
+    allow_ascii_prefix: bool,
+) -> Option<(&'static str, usize)> {
+    if !attached || j >= x.e {
+        return None;
+    }
+    let zh_prefix = allow_ascii_prefix
+        || !x.t[prefix_start].is_ascii_digit()
+        || (j > prefix_start && is_zh_num(x.t[j - 1]));
+    if !zh_prefix {
+        return None;
+    }
+    match x.t[j] {
+        '年' => {
+            if zh_year(x, prefix_start).is_some() {
+                return None;
+            }
+            if prefix_start >= x.s + 2
+                && matches!(
+                    &x.t[prefix_start - 2..prefix_start],
+                    ['民', '國'] | ['民', '国']
+                )
+            {
+                return None;
+            }
+            Some(("年", j + 1))
+        }
+        '日' => {
+            if prefix_start > x.s && x.t[prefix_start - 1] == '月' {
+                return None;
+            }
+            Some(("日", j + 1))
+        }
+        _ => None,
+    }
 }
 
 /// The longest unit at `j`. Units marked as attached-only need no space before them.

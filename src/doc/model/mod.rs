@@ -2,8 +2,8 @@
 //!
 //! A model lives in `<models_dir>/<dir>/` and is listed in `<models_dir>/manifest.json`.
 //! [`verify`] checks every listed file against its sha256 before any file is parsed. [`load`]
-//! verifies too, then loads the model. Without the `onnx` feature, [`load`] returns `NoBackend`
-//! at once, so a layer reports `unknown` with reason `no_model`.
+//! verifies too, then loads the model. Without a compiled backend feature, [`load`] returns
+//! `NoBackend` at once, so a layer reports `unknown` with reason `no_model`.
 
 #[cfg(all(feature = "coreml", target_os = "macos"))]
 mod coreml;
@@ -126,8 +126,12 @@ impl std::error::Error for ModelError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Backend {
     Onnx,
-    /// Core ML on the CPU. Compiled only with the `coreml` feature on macOS.
+    /// Core ML on the CPU (`MLComputeUnits::CPUOnly`). Compiled only with the `coreml` feature on
+    /// macOS.
     Coreml,
+    /// High-throughput Core ML using all compute units (`MLComputeUnits::All`: CPU, GPU, and
+    /// Apple Neural Engine). Compiled only with the `coreml` feature on macOS.
+    CoremlFast,
 }
 
 /// A manifest entry whose files were read once, hashed, and found to match. The parsers read
@@ -306,10 +310,12 @@ pub fn verify(models_dir: &Path, model_id: &str) -> Result<Verified, ModelError>
 }
 
 /// Whether `backend` is compiled into this build.
-fn compiled(backend: Backend) -> bool {
+pub fn compiled(backend: Backend) -> bool {
     match backend {
         Backend::Onnx => cfg!(feature = "onnx"),
-        Backend::Coreml => cfg!(all(feature = "coreml", target_os = "macos")),
+        Backend::Coreml | Backend::CoremlFast => {
+            cfg!(all(feature = "coreml", target_os = "macos"))
+        }
     }
 }
 
@@ -344,6 +350,18 @@ pub fn load_verified(verified: &Verified, backend: Backend) -> Result<Box<dyn Mo
             #[cfg(all(feature = "coreml", target_os = "macos"))]
             {
                 coreml::load(verified).map(|m| Box::new(m) as Box<dyn Model>)
+            }
+            #[cfg(not(all(feature = "coreml", target_os = "macos")))]
+            {
+                let _ = verified;
+                Err(ModelError::NoBackend)
+            }
+        }
+        Backend::CoremlFast => {
+            #[cfg(all(feature = "coreml", target_os = "macos"))]
+            {
+                coreml::load_with_units(verified, objc2_core_ml::MLComputeUnits::All)
+                    .map(|m| Box::new(m) as Box<dyn Model>)
             }
             #[cfg(not(all(feature = "coreml", target_os = "macos")))]
             {
@@ -394,12 +412,12 @@ pub struct Subwords {
     pub spans: Vec<Span>,
 }
 
-#[cfg(feature = "onnx")]
+#[cfg(any(feature = "onnx", feature = "coreml"))]
 pub struct SubwordTokenizer {
     inner: tokenizers::Tokenizer,
 }
 
-#[cfg(feature = "onnx")]
+#[cfg(any(feature = "onnx", feature = "coreml"))]
 impl SubwordTokenizer {
     /// Parses the tokenizer from the bytes that `verify` checked.
     pub fn from_verified(verified: &Verified) -> Result<Self, ModelError> {
@@ -446,7 +464,7 @@ impl SubwordTokenizer {
 
 /// Maps each byte index to the index of the character that contains it. The index at
 /// `text.len()` is the character count.
-#[cfg(feature = "onnx")]
+#[cfg(any(feature = "onnx", feature = "coreml"))]
 fn char_index_table(text: &str) -> Vec<usize> {
     let mut table = vec![0; text.len() + 1];
     let mut index = 0;

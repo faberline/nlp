@@ -12,7 +12,7 @@ members = ["cnl"]
 [features]
 model-tokenizer = ["dep:tiktoken-rs"]
 onnx = ["dep:tract-onnx", "dep:tokenizers"]
-coreml = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-core-ml", "dep:tempfile"]
+coreml = ["dep:tokenizers", "dep:objc2", "dep:objc2-foundation", "dep:objc2-core-ml", "dep:tempfile"]
 
 [dependencies]
 aho-corasick = "1"

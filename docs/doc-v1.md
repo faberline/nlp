@@ -5,8 +5,13 @@ language tag per span, the opaque spans (code, formula, heading, list item, cita
 emoji) that sentences never split, and the entities found by rules. It uses no model and no
 network.
 
-CLI: `nlp_doc` reads UTF-8 text from stdin and prints one JSON document plus a newline. On a
-read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and exits with 1.
+CLI: `nlp_doc` reads UTF-8 text from stdin and prints one JSON document plus a newline. With no
+flags it runs `analyze_document` (rules only, no model). Optional flags `--name <SURFACE>` and
+`--lexicon <SURFACE>` (repeatable), `--mask-editorial`, and `--normalize-traditional` populate
+`Options`. With `--models <DIR>` and optional `--backend <coreml|coreml-fast|onnx>` (defaulting to
+`coreml` on macOS when compiled in, otherwise `onnx`), it runs `analyze_document_with_model` to
+populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prints
+`nlp_doc: <error>` to stderr and exits with 1.
 
 ## Schema
 
@@ -24,21 +29,28 @@ read error, including invalid UTF-8, it prints `nlp_doc: <error>` to stderr and 
   },
   "tokens": [{"span": {...}, "lang": "en", "sentence": 0, "upos": "PRON"}],
   "entities": [{"kind": "date", "span": {...}, "sentence": 0, "value": "2026-11-10"}],
+  "syntax": [{"token": 0, "sentence": 0, "span": {...}, "head": null, "deprel": "root", "score": 0.94}],
   "relations": [{"kind": "sequence", "level": "clause", "connector": {...}, "arg1": {...}, "arg2": {...}}],
   "unknown": [{"layer": "segmentation", "span": {...}, "reason": "unsupported_language"}]
 }
 ```
 
-- `options.names` is optional and empty by default (see Entities).
+- `options.names` and `options.lexicon` are optional (`Vec<String>`, omitted when empty);
+  `options.mask_editorial` and `options.normalize_traditional` are optional booleans (`false` by
+  default, omitted when `false`), so `Options::default()` serializes to `{}`.
 - `lang` is one of `zh`, `en`, `mixed`, `und`.
 - `reason` is one of `no_model`, `ambiguous`, `low_confidence`, `unsupported_language`,
   `not_applicable`. Layer 1 produces `unsupported_language`. Layer 2 produces `no_model` and
-  `ambiguous`, with `layer: "pos"`. Layer 3 produces `ambiguous`, with `layer: "entities"`.
+  `ambiguous` (and `low_confidence` when a syntax model runs with UPOS confidence `< 0.50`),
+  with `layer: "pos"`. Layer 3 produces `ambiguous`, with `layer: "entities"`. Layer 4 produces
+  `no_model`, `low_confidence` and `not_applicable`, with `layer: "syntax"`.
 - `sentence.paragraph` indexes `paragraphs`; `clause.sentence` indexes `sentences`.
-  `entity.sentence` indexes `sentences`.
+  `entity.sentence` and `syntax.sentence` index `sentences`. `syntax.token` and `syntax.head`
+  index `tokens` (`head` is `null` for `"root"`).
 - All lists are sorted by start. `unknown` is sorted by span start, then end, then layer.
-- `entities` and `relations` are always present, `[]` when nothing is found. The order of
-  the lists is `segmentation`, `tokens`, `entities`, `relations`, `unknown`.
+- `entities` and `relations` are always present, `[]` when nothing is found. `syntax` is omitted
+  when empty (`analyze_document` never emits it). When present, the order of the lists is
+  `segmentation`, `tokens`, `entities`, `syntax`, `relations`, `unknown`.
 
 ## Offsets
 
@@ -131,21 +143,39 @@ Blocks:
    text. A blank line before the closing `$$` also makes it normal text.
 3. Heading: the whole trimmed line is one of:
    - Markdown: 1 to 6 `#`, then a space or tab, then at least one non-space char.
-   - Chinese: `第`, then digits or any of `一二三四五六七八九十百零〇兩`, then one of `章節回卷篇部`,
-     then the end of the line, or whitespace / `：` / `:` / `、` and a title. The line is at most
-     40 chars and has none of `。！？`.
+   - Chinese: `第`, then digits or any of `一二三四五六七八九十百千萬万零〇兩两`, optional spaces, then
+     one of `章節回卷篇部`, then the end of the line, or whitespace / `：` / `:` / `、` and a title.
+     Punctuation-free web-novel header variants (`<numerals>章 <title>`, tight `第<numerals>章<title>`,
+     `<Prefix>\u{00a0}<Title>`, `<Prefix> 第...章 <Title>`, `»»»` / `·` prefixed volume/chapter headers,
+     `VIP第...卷...`, concatenated `[正文]第...卷...第...章...`, and standalone missing-`章`
+     `第<numerals>=2> <short_title>`) are also matched. The line is at most
+     60 chars and has none of `。！？`.
    - English: `chapter`, `part` or `section` (ASCII case-insensitive), one space, then one or
      more digits or `IVXLC`, then the end of the line, or one of `:` `.` `-` `—` and a title. The
      line is at most 60 chars.
 4. List item: the trimmed line starts with `- `, `* `, `+ `, `• ` or `・ ` (the marker, then a
    space, tab or U+3000), or with 1 to 3 ASCII digits, then `.` or `)`, then a space. The span
    is the trimmed line. Continuation lines are not included.
+5. Noise and optional editorial blocks (`kind: "code"`):
+   - By default, ASCII/Unicode box-drawing banner blocks (`┏━...┗━` / `┌─...└─`) and standalone
+     raw/unclosed HTML tag lines (`<P`, `<p>`, `</p>`, `<br>`, `<br/>`) are masked as block spans.
+   - When `options.mask_editorial` is `true`, standalone/parenthetical web-novel editorial
+     postscripts (vote/update pleas, bookshelf/pirate scraper footer lines, and `>= 4` parenthesized
+     tag-list lines) are also masked as block spans while keeping exact original scalar offsets.
 
 Inline spans are found left to right in a line. At each position the kinds are tried in this
 order, and a match continues after its span:
 
-1. Code: a run of N backticks, then the next run of exactly N backticks on the same line, with at
-   least one char between. Without that closing run, the whole backtick run is plain text.
+1. Code / inline noise: a run of N backticks, then the next run of exactly N backticks on the same
+   line, with at least one char between (without that closing run, the whole backtick run is plain
+   text); plus raw/unclosed inline HTML/SGML tags (`<P`, `</P`, `<p>`, `</p>`, `<br/>`, `<!go`,
+   `<!over`), raw/corrupted HTML entities (`&qut;`, `&quot;`, `&nbsp;`, `&amp;`, `&lt;`, `&gt;`),
+   Unicode Private Use Area runs (`U+E000..=U+F8FF`), and — when `options.mask_editorial` is
+   `true` — inline scraper tags and mixed-bracket/trailing editorial postscripts (`/首/發`,
+   `(..#..#..)`, `(…求月票…）`). When `options.mask_editorial` is `true`, inline HTML/entity/PUA
+   and editorial noise spans are masked silently to spaces (`silent_noise`) so they do not emit
+   spurious `X` tokens while standard backtick `code`, `url`, `citation`, `formula`, and `emoji`
+   inline spans still emit one token each.
 2. URL: starts with `http://`, `https://` or `www.` (scheme ASCII case-insensitive). It goes on
    over ASCII graphic chars, stopping at whitespace and at `<`, `>` and `"`. Trailing
    `.,;:!?)]}'` are dropped. At least one char must follow the scheme.
@@ -185,10 +215,20 @@ rule or word decides it. Tokens never cross a sentence boundary, and no token is
 
 Each sentence is split by these rules, in order:
 
-1. Every opaque span inside the sentence is one token. Block spans are never tokens.
+1. Every non-silent opaque span inside the sentence is one token. Block spans (and `silent_noise`
+   inline spans under `options.mask_editorial`) are never tokens.
 2. Han runs (maximal runs of the Han set) are matched against the Taiwan term list
-   (`臺灣`, `資料庫`, `記憶體` and so on), longest match first. The text between matches is
-   segmented by jieba with its HMM.
+   (`臺灣`, `資料庫`, `記憶體` and so on) plus pure-Han entries of `options.lexicon` and
+   `options.names`, longest match first. The text between matches is segmented by `doc_jieba()`
+   (jieba with HMM plus classical self-pronouns and generic genre nouns such as `在下`, `妾身`,
+   `老夫`, `老身`, `貧道`, `本座`, `儲物袋`, `築基丹`). When `options.normalize_traditional` is
+   `true`, unmatched Han slices are projected through `t2s` to Simplified characters for dictionary
+   lookup (skipping a single scraper anti-censorship infix in `['丅', '丵', '灬', '堊', '冇']` when
+   sandwiched between two Han chars so `少丅女` / `長堊老` stays one contiguous original-text span
+   with zero offset drift), sliced back by exact scalar index onto the original text, and passed
+   through the coverb/pronoun/postposition de-gluing guard (splitting false HMM merges such as
+   `將X`, `當X`, `對此`, `這XXX`, `其+V`, and `中+V` while keeping lexicalized compounds such as
+   `將軍`, `當時`, `對方`, `那天`, `其中`, `中期`).
 3. All other runs use Unicode word boundaries (UAX 29). Then:
    a. English clitics split off: `n't` (`didn't` gives `did`, `n't`; `can't` gives `ca`,
       `n't`), and `'s`, `'ll`, `'re`, `'ve`, `'m`, `'d`.
@@ -272,18 +312,19 @@ follows). Multi-word English entries use exactly one space.
 
 | kind | connector sits in | zh | en |
 |---|---|---|---|
-| sequence | arg2 | 然後 接著 隨後 | then, afterwards, after that |
+| sequence | arg2 | 然後 然后 接著 接着 隨後 随后 隨即 随即 緊接著 紧接着 旋即 | then, afterwards, after that |
 | cause (result) | arg2 | 所以 因此 | so, therefore, thus |
-| contrast | arg2 | 但是 然而 可是 但 | but, however |
-| parallel | arg2 | 另一方面 另外 此外 而且 並且 同樣 | also, moreover, furthermore, likewise, similarly, in addition |
-| cause (reason) | arg1 | 因為 (correlate 所以 因此 so therefore thus) | because (correlate 所以 因此 so therefore thus) |
-| condition | arg1 | 如果 假如 要是 若 (correlate 就 那麼 便 then) | if (correlate 就 那麼 便 then) |
-| sequence | arg1 | 先 (correlate 然後 接著 再 隨後) | none |
+| contrast | arg2 | 但是 然而 可是 不過 不过 但 | but, however |
+| condition | arg2 | 否則 否则 | none |
+| parallel | arg2 | 另一方面 另外 此外 而且 並且 并且 同樣 與此同時 与此同时 | also, moreover, furthermore, likewise, similarly, in addition |
+| cause (reason) | arg1 | 因為 因为 (correlate 所以 因此 so therefore thus) | because (correlate 所以 因此 so therefore thus) |
+| condition | arg1 | 如果 假如 要是 若是 若 (correlate 就 那麼 那么 便 then) | if (correlate 就 那麼 那么 便 then) |
+| sequence | arg1 | 先 (correlate 然後 然后 接著 接着 再 隨後 随后 隨即 随即 緊接著 紧接着 旋即) | none |
 | parallel | arg1 | 一方面 (correlate 另一方面) | none |
 
-The correlate lists are shared by both languages. Every cause opener (`因為`, `because`) takes
-`所以 因此 so therefore thus`, and every condition opener (`如果 假如 要是 若`, `if`) takes
-`就 那麼 便 then`.
+The correlate lists are shared by both languages. Every cause opener (`因為`, `因为`, `because`) takes
+`所以 因此 so therefore thus`, and every condition opener (`如果 假如 要是 若是 若`, `if`) takes
+`就 那麼 那么 便 then`.
 
 Connectors of arg2 take arg1 from the clause before them (or the sentence before, when they
 start a sentence).
@@ -327,7 +368,15 @@ far` is not one, and `So,` is not one).
 Special cases:
 
 - `但` is not a connector before `願 凡 求 見`. `若` is not one before `干 無 非 是 即`. `先` is
-  not one before `生 前 後`. `if only` is not a connector.
+  not one before `生 前 後`. `不過`/`不过` is not a connector before `如此 爾爾 尔尔`. `if only` is
+  not a connector.
+- Post-positional Chinese temporal frames: an unconsumed clause of at least 3 trimmed scalars whose
+  trimmed end matches `之後`, `之后`, `之際`, `之际`, `之時` or `之时` (ignoring trailing quotes and
+  closers, and excluding kinship compounds such as `故人之後`/`名門之後` and spatial locatives such
+  as `出現在…之後`/`站在…之後`), followed by a non-conflicting clause in the same sentence, emits a
+  clause-level `sequence` relation (`arg1` = the temporal frame clause, `arg2` = the following
+  clause, `connector` = the clause-end postposition span). Sentence-initial `與此同時`/`与此同时`
+  likewise pairs with the preceding supported sentence as a sentence-level `parallel` relation.
 - `however` counts only when `,` follows it (`However,`), not in `However hard he tried`.
 - `so` is not a connector before `far much many long as that good bad little few called on`.
   `So,` (a comma follows) gives an `unknown` and no relation.
@@ -340,7 +389,7 @@ Special cases:
 A connector gives an `unknown` with `layer: "relations"`, `reason: "ambiguous"`, and the
 connector's span, and no relation, in these cases:
 
-- It has several readings: zh `同時`; en `while`, `since`.
+- It has several readings: zh `同時`, `同时`; en `while`, `since`.
 - Its argument is not clear:
   - A connector of arg2 that starts its sentence, when no sentence before it can be its `arg1`
     (the first sentence of a paragraph, or the first sentence after an unsupported sentence).
@@ -358,14 +407,14 @@ A new paragraph also breaks the sentence relation.
 
 ### Relations limits
 
-- Connectors in the middle of a clause are not seen: `He left because it rained`, `A but B`
-  without a comma, `如果下雨我們就…` with `就` mid-clause, `We tested it, and then we ran it`.
+- Connectors in the middle of a clause are not seen (except clause-end temporal postpositions `之後
+  之后 之際 之际 之時 之时` above): `He left because it rained`, `A but B` without a comma,
+  `如果下雨我們就…` with `就` mid-clause, `We tested it, and then we ran it`.
 - Only one unit before (or after) a connector is its argument. No implicit relations: a relation
   needs a connector.
 - No `雖然…但是` or `although` concession pair beyond the contrast of `但是`.
-- Simplified-only connector forms are not matched, such as `因为` for `因為`. Forms that are the
-  same in both scripts still match: `因为下雨，所以比赛取消了。` gives a cause relation for `所以`, and
-  no relation for `因为`. zh `又`, `而`, `並` alone are not connectors.
+- Less common Simplified-only connector forms outside the table above (such as `虽然`)
+  are not matched. zh `又`, `而`, `並` alone are not connectors.
 - Argument spans are always clauses or sentences, never smaller.
 - A bare connector can leave an argument that is only the connector: `We stayed home, because.`
   (`arg1` is `because.`) and `We slept. So.` (`arg2` is `So.`). Such a relation is still
@@ -403,9 +452,18 @@ Values (`value` is omitted for kinds that have none):
 
 Scanners, run at each position of a supported sentence:
 
-- Relative dates: `今天 明天 昨天 後天 前天 今晚 昨晚 今年 明年 去年 這週 本週 上週 下週 這個月
-  上個月 下個月`, and `today tomorrow yesterday tonight`, and `last|this|next` followed by
-  `week|month|year` (ASCII case-insensitive, one space).
+- Relative dates: `今天 明天 昨天 後天 后天 前天 今晚 昨晚 今年 明年 去年 這週 这周 本週 本周 上週 上周
+  下週 下周 這個月 这个月 上個月 上个月 下個月 下个月`, narrative moment/interval cues (`片刻 片刻後 片刻后
+  頃刻 頃刻間 顷刻 顷刻间 剎那 剎那間 刹那 刹那间 轉眼 轉眼間 转眼 转眼间 眨眼間 眨眼间 眨眼之間 眨眼之间
+  眨眼工夫 眨眼功夫 瞬息 瞬息間 瞬息间 彈指間 弹指间 良久 許久 许久 半晌 一會兒 一会儿`; bare literal
+  `眨眼` is excluded), Chinese relative duration anchors formed by a
+  Chinese duration quantity followed by `前 後 后 內 内 間 间 以來 以来 之後 之后 之前 之內 之内 之間
+  之间` (`四年后`, `數日之後`, `半個時辰後`; `在 … 內/間` stays a `quantity`), and `today tomorrow
+  yesterday tonight`, and `last|this|next` followed by `week|month|year` (ASCII case-insensitive,
+  one space). When `options.normalize_traditional` is `true`, `quantity`, `relative_date`, `date`,
+  and `time` candidates whose start or end cuts strictly inside a non-temporal Layer-1 token are
+  rejected, and adjacent two-digit ascending Chinese approximations in `quantity` (`三四日`,
+  `七八丈`) normalize to range values (`"3-4"`, `"7-8"`).
 - Dates, all checked for a real calendar day (leap years included):
   - Chinese: `Y年M月D日` (or `號` for `日`), `Y年M月`, `M月D日` (or `號`), and `Y年` alone. `Y` is
     four ASCII or Chinese digits, or `民國N` (N+1911). Month 1 to 12 is needed. `M月` alone and
@@ -433,10 +491,16 @@ Scanners, run at each position of a supported sentence:
   ambiguous. An hour of 1 to 12 with no marker is ambiguous, so `3:30` alone is ambiguous. A bare
   `一點` with no marker and no `半` or `M分` is "a bit" (`他有一點累`), so it gives no time and no
   unknown.
-- Quantities: a number, then optionally one space, then a unit. Units such as `kg km 分鐘 天
-  days` need a space or none. `g m l` are units only when attached (`5m`, not `5 m`). A currency
-  prefix is `US$ NT$ $ ¥ € £`, and `百分之N` is a percent. A bare English `one` is not a
-  quantity.
+- Quantities: a number, then optionally one space, then a unit. Units such as `kg km 分鐘 分钟 小時
+  小时 個時辰 个时辰 時辰 时辰 刻鐘 刻钟 盞茶 盏茶 炷香 柱香 個甲子 个甲子 甲子 年 載 载 天 日 夜 更 個月 个月
+  丈 尺 寸 里 畝 亩 days` need a space or none (4-digit calendar years such as `2026年` or `二〇二六年`
+  and `民國N年` remain `date`, whereas Chinese numeral durations such as `四年` or `三日` are
+  `quantity`). `g m l` are units only when attached (`5m`, not `5 m`). Fractional `半` + optional
+  `個`/`个` + unit emits `value: "0.5"` (`半個時辰`, `半日`, `半丈`). Approximate prefixes (`數`/`数`/`幾`/`几`
+  + optional `十`/`百`/`千`/`萬`/`万` + unit, such as `數日`, `數十年`, `幾丈`) and approximate cardinal
+  infixes (cardinal + `餘`/`余`/`多`/`幾`/`几` + optional `個`/`个` + unit, such as `百余丈`, `十餘年`,
+  `三十多天`) emit `quantity` with `unit` set and `value` omitted. A currency prefix is
+  `US$ NT$ $ ¥ € £`, and `百分之N` is a percent. A bare English `one` is not a quantity.
 - Numbers: ASCII digits with comma groups of exactly three digits and an optional decimal part.
   `萬 万` and `億 亿` multiply the number before them (`3萬`, `1.5億`). An ASCII number followed
   by Chinese numerals is read as `<number><chain>` where the chain ends in a multiplier: `5千元`
@@ -496,7 +560,9 @@ Known limits of entities:
 - No signs or ranges: `-5` gives the number 5, and `3-5` gives 3 and 5.
 - No weekdays: `Monday` gives nothing.
 - No ordinals: `1st` and `第三` give nothing.
-- Durations written with `年` are numbers: `3年` gives the number 3.
+- ASCII durations written with `年` or `日` (`3年`, `10日`) stay numbers (`3`, `10`), whereas
+  Chinese numeral durations (`四年`, `三日`) are `quantity` and 4-digit calendar years (`2026年`,
+  `二〇二六年`) are `date`.
 - No time zones: `3pm EST` gives the time `15:00`, and `EST` gives nothing.
 - Chinese numerals need a measure word: `三十五` gives nothing, and `三十五個` gives 35.
 - `and` ends an English number, so `one hundred and twenty-three` gives 100 and 23.
@@ -579,19 +645,21 @@ pure Rust, under MIT or Apache-2.0, and needs no native download at build time. 
 were rejected for this layer. `ort` links or downloads the ONNX Runtime native library. `candle`
 has no ONNX loader that covers encoders reliably.
 
-`Backend::Coreml` runs on `objc2-core-ml` 0.3.2 (feature `coreml`, macOS only). The bindings crate is
-generated from the Apple headers and is maintained in the `objc2` project. Its licence is
-MIT OR Apache-2.0 OR Zlib, and so are `objc2` 0.6 and `objc2-foundation` 0.3. We write no FFI by
-hand. The framework calls are still `unsafe` in the bindings, and the few `unsafe` blocks in
+`Backend::Coreml` runs on `objc2-core-ml` 0.3.2 (feature `coreml`, macOS only, which also enables
+`tokenizers` so standalone `--features coreml` builds include `SubwordTokenizer` without `onnx`).
+The bindings crate is generated from the Apple headers and is maintained in the `objc2` project. Its
+licence is MIT OR Apache-2.0 OR Zlib, and so are `objc2` 0.6 and `objc2-foundation` 0.3. We write no
+FFI by hand. The framework calls are still `unsafe` in the bindings, and the few `unsafe` blocks in
 `src/doc/model/coreml.rs` say why each is sound. The three `objc2` crates are declared under
-`[target.'cfg(target_os = "macos")'.dependencies]`. On Linux the feature adds only `tempfile`, and
-no Core ML code is built. On Linux, or without the feature, `Backend::Coreml` returns `NoBackend`.
-The default `cargo test` never needs Core ML.
+`[target.'cfg(target_os = "macos")'.dependencies]`. On Linux the feature adds only `tokenizers` and
+`tempfile`, and no Core ML code is built. On Linux, or without the feature, `Backend::Coreml` returns
+`NoBackend`. The default `cargo test` never needs Core ML.
 
-Tokenization uses `tokenizers` 0.23.2 with its `fancy-regex` feature. `fancy-regex` is pure Rust, so
-no C source is built and no network is needed. The default `onig` feature is off, so `onig` is not
-in the dependency tree. Under `onnx`, `tokenizers` pulls in `rayon` transitively. This layer does not call it: `run` and
-`encode` stay sequential and start no thread pool.
+Tokenization uses `tokenizers` 0.23.2 with its `fancy-regex` feature (enabled by either `onnx` or
+`coreml`). `fancy-regex` is pure Rust, so no C source is built and no network is needed. The default
+`onig` feature is off, so `onig` is not in the dependency tree. `tokenizers` pulls in `rayon`
+transitively, and this layer does not call it: `run` and `encode` stay sequential and start no thread
+pool.
 
 ### Determinism
 
@@ -605,11 +673,20 @@ tract would panic. A `pad_id` outside the vocabulary is refused at load.
 
 ### Core ML backend
 
-Core ML loads only compiled models, from a file URL. So `load` writes the verified `.mlmodel` bytes
-to a private temporary directory (`tempfile`) and compiles them there with the synchronous
-`compileModelAtURL`. That call is deprecated, but it needs no run loop. The compiled model is loaded
-with `MLComputeUnitsCPUOnly`, and then the compiled copy is removed. The temporary directory that
-holds the `.mlmodel` file lives as long as the model. No GPU and no Neural Engine are used.
+Core ML loads only compiled models, from a file URL. So `load` / `load_with_units` writes the
+verified `.mlmodel` bytes to a private temporary directory (`tempfile`) and compiles them there with
+the synchronous `compileModelAtURL`. That call is deprecated, but it needs no run loop. The
+uncompiled `.mlmodel` temporary directory is dropped right after compilation, and the compiled
+`.mlmodelc` directory stays alive for the lifetime of the `CoremlModel` so lazy weight mmaps stay
+valid. Two compute modes are exposed:
+
+- `Backend::Coreml` (`--backend coreml`): loads with `MLComputeUnitsCPUOnly` for strict `< 1e-4`
+  cross-backend logit parity and byte-identical JSON determinism with `Backend::Onnx`.
+- `Backend::CoremlFast` (`--backend coreml-fast`): loads with `MLComputeUnitsAll` (Apple Silicon
+  CPU + GPU + Neural Engine) for high-throughput multi-worker corpus indexing (~1.7x single-worker
+  speedup, ~99.8% UPOS and head+deprel agreement with `CPUOnly`). Objective-C allocations in load
+  and inference are wrapped in `objc2::rc::autoreleasepool` so worker threads without an `NSRunLoop`
+  retain bounded memory across hundreds of thousands of predictions.
 
 The Core ML path takes the ids that the tokenizer gives, as the ONNX path does. After the model
 is loaded, `load` runs one sequence of `max_len` pad ids. A failure there is `Load`, with the
@@ -684,6 +761,134 @@ against it within 1e-5 and Core ML within 1e-4. The four files total 88,655 byte
 
 Real models are not in this repository. They will come as GitHub Release assets, pinned in the
 manifest by a script (a later issue).
+
+## Syntax (layer 4)
+
+`analyze_document_with_model(text, options, models_dir, backend)` runs Layers 1–3 and 7 first, then
+loads `SYNTAX_MODEL_ID` (`"doc-syntax-v1"`) on `backend` to decode Universal Dependencies v2 trees
+into `Document.syntax` and upgrade undecided Layer-2 `upos` tags. Callers that run many documents
+can verify and load the model once and call `analyze_document_with_loaded_model(text, options,
+model, tokenizer)` (or `doc::syntax::annotate`). Calling `analyze_document(text, options)` never
+runs a model and leaves `syntax` empty (omitted from JSON).
+
+### Language coverage (`en`, `zh-TW`, `zh-CN`, and `mixed`)
+
+`doc-syntax-v1` covers English (`en`), Traditional Chinese (`zh-TW`, Taiwan vocabulary and
+phrasing), Simplified Chinese (`zh-CN`, Mainland China vocabulary and phrasing), and code-switched
+`mixed` sentences (`zh-TW/en` and `zh-CN/en`) across novel, paper, and casual registers:
+
+- Layer 1 tags both Traditional and Simplified Chinese spans as `lang: "zh"` (or `"mixed"` when
+  paired with Latin words), and Layer 2 segments Simplified Han runs through `jieba` (`软件`,
+  `数据库`, `内存`, `服务器`, `出租车`, `地铁`, `我们`, `他们`, `因为`, `通过`, `已经`, `马上`).
+- Layer 2's hand-written Chinese lexicon covers both Traditional and Simplified closed-class forms
+  (`我們`/`我们`, `因為`/`因为`, `雖然`/`虽然`, `從`/`从`, `已經`/`已经`, `馬上`/`马上`, `這裡`/`这里`, ...)
+  plus classical first-person pronouns (`在下`, `妾身`, `老夫`, `老身`, `貧道`, `贫道`, `本座` -> `PRON`)
+  and script-shared single-character words (`我`, `他`, `的`, `了`, `很`, `不`). Ambiguous words
+  (`對`/`对`, `這`/`这`, `那`, `個`/`个`, `會`/`会`, `裡`/`里`, `什麼`/`什么`) and content words arrive at
+  Layer 4 with `upos: None` and a `"pos"` `ambiguous` or `no_model` `unknown`. When Layer 4 runs
+  (`upos_prob >= 0.50`), it assigns contextual UPOS tags to `no_model` tokens and clears their
+  `"pos"` `no_model` entries while keeping rule-decided tags (`的`, `了`, `很`, numerals,
+  punctuation).
+
+### Subword alignment and packed `[len, 421]` output
+
+For each supported sentence, `SubwordTokenizer::encode` runs on `&text[byte_start..byte_end]` of
+`sentence.span`. The tokenizer prepends `[CLS]` at subword index `0` (`s_0 = 0`, empty span) and
+appends `[SEP]` at the end (empty span). Each Layer-2 token `u` (`1..=m`) maps to its first
+overlapping subword `s_u` (`1 <= s_u < subwords.ids.len()`) after adding `sentence.span.start_char`
+to the subword's scalar span:
+
+- When `subwords.ids.len() > model.info().max_len`, or when a paratactic multi-clause sentence has
+  `clauses.len() >= 4` and `tokens.len() > 64` (`SOFT_WINDOW_MAX_LEN = 96`), the sentence is
+  partitioned into contiguous windows aligned to `segmentation.clauses` boundaries (greedily
+  packing consecutive clauses up to the window subword budget, allowing a single clause up to
+  `max_len`, and splitting cleanly at token boundaries if a single mega-clause still exceeds
+  `max_len - 2`). Each window runs the model, single-root Chu-Liu/Edmonds decoding, and contextual
+  UPOS upgrade independently; window `0`'s decoded root becomes the sentence's single global root
+  (`head: None, deprel: "root"`), and each subsequent window `k >= 1` attaches its local root to
+  window `0`'s global root with `deprel: "parataxis"`, producing a single-root acyclic UD tree
+  across the sentence. Sentence-level `not_applicable` is emitted only when a single token alone
+  exceeds `max_len - 2` subwords (or no token in the sentence maps to any subword).
+- When an individual control or replacement-character token (such as `U+007F` or `U+FFFD`)
+  normalizes to an empty subword span while sibling tokens in the sentence map normally, only that
+  unmapped token emits `{"layer": "syntax", "span": tok.span, "reason": "not_applicable"}`, and all
+  mapped tokens in the sentence are decoded normally.
+
+For a model with sequence cap `max_len` (`256` in `doc-syntax-v1`), `Model::run` returns a `[len, C]`
+tensor with `C = 17 + max_len + 148` (`421` when `max_len = 256`):
+
+- `0..17`: 17 UPOS logits in `Upos` enum order (`ADJ`, `ADP`, `ADV`, `AUX`, `CCONJ`, `DET`, `INTJ`,
+  `NOUN`, `NUM`, `PART`, `PRON`, `PROPN`, `PUNCT`, `SCONJ`, `SYM`, `VERB`, `X`).
+- `17..17 + max_len`: raw biaffine arc logits. For dependent token `u` (`1..=m`) and candidate head
+  `v` (`0..=m`, with `0` = `[CLS]` root at `s_0 = 0`), the arc score is `row(s_u)[17 + s_v]`.
+- `17 + max_len..C` (`148` columns): `r_dep` (`37`), `r_head` (`37`), `r_bi_dep` (`37`), and
+  `r_bi_head` (`37`) for the 37 alphabetical UD v2 base relation names (`acl` through `xcomp`, with
+  `root` at index `34`). For `(dep = u, head = v)`,
+  `rel_logit[c] = r_dep[s_u][c] + r_head[s_v][c] + r_bi_dep[s_u][c] * r_bi_head[s_v][c]`.
+
+### Chu-Liu/Edmonds, confidence, and UPOS upgrade
+
+- **Single-root tree decoding**: `doc::syntax::chu_liu_edmonds` finds the exact maximum-weight
+  spanning arborescence over `0..=m` subject to node `0` having exactly one child (with calibrated
+  `0 -> tok` root penalties on non-predicative UPOS tokens, prenominal `…的` modifiers, and
+  subordinate clauses in multi-clause Chinese sentences when a viable main-clause predicate exists).
+  Every decoded sentence is guaranteed to have strictly one `"root"` attachment (`head: None`), no
+  self-loops, and no cycles. When `v == 0`, `deprel` is forced to `"root"`; when `v > 0`, `deprel`
+  is the argmax over `c != 34` (ties go to the lowest index).
+- **Quantized confidence (`Score`)**: `p_arc = softmax(arc_scores_u_over_0..=m)[v]`,
+  `p_rel = 1.0` when `v == 0` else `softmax(rel_logits_excluding_34)[best_c]`, and
+  `conf = p_arc * p_rel`. `Score(u16)` stores `(conf.clamp(0.0, 1.0) * 1000.0).round() as u16` and
+  serializes as `(milli as f64) / 1000.0`, keeping `Document: Eq` and giving byte-identical JSON
+  across Core ML and ONNX.
+- **Thresholds, tree-consistent retention, and `unknown`**:
+  - Decoded syntax tokens are filtered at `SYNTAX_THRESHOLD = 0.35` (`score.milli() >= 350`) with
+    tree-consistent root and ancestor retention: a high-confidence dependent is retained when every
+    intermediate ancestor up to the sentence's global root clears the minimum structural arc floor,
+    and every retained token's ancestor chain (including the sentence's single global root) is
+    retained alongside it (preferring clause-local predicates or `parataxis`/`dep` bridge labels
+    over cross-clause core argument labels when a `< 0.35` closure arc crosses clauses). Every
+    non-empty `syntax` slice for a sentence therefore has **zero** zero-root sentences (strictly one
+    `head: None, deprel: "root"`) and **zero** orphan syntax arcs (every `head: Some(h)` resolves to
+    an emitted `SyntaxToken` in the same sentence). Omitted tokens emit
+    `{"layer": "syntax", "span": tok.span, "reason": "low_confidence"}`.
+  - Tokens whose Layer-2 `upos` was already decided by rules or the lexicon keep their tag. Tokens
+    whose Layer-2 `upos` was `None` get the model's top UPOS tag (and drop their `"pos"` `unknown`
+    entry) when `upos_prob >= 0.50` (stripping scraper anti-censorship infixes during subword
+    lookup under `normalize_traditional`, using arithmetic mean-pooling across overlapping subwords
+    for multi-character Chinese numeral-initial lexical phrases and idioms such as `一會兒`, `一時間`,
+    `一清二楚`, `二話不說`, `一動不動`, `五顏六色` so numeral subword #0 does not bias them toward `NUM`,
+    disambiguating disposal coverb `將`/`将` to `ADP`, applying a nominal prior for `>= 3`-char
+    `options.lexicon` compounds, and disambiguating `什麼`/`什么` to `DET` before a same-sentence
+    `NOUN`/`PROPN` else `PRON`); otherwise `upos` stays `None` and the token's `"pos"` `unknown`
+    reason becomes `low_confidence`.
+  - When `backend` is not compiled in, or `doc-syntax-v1` or its files are absent (`NoBackend`,
+    `UnknownModel`, `Missing`), each supported sentence emits
+    `{"layer": "syntax", "span": sentence.span, "reason": "no_model"}`. Integrity and runtime
+    errors (`HashMismatch`, `Manifest`, `Load`, `Run`) are returned to the caller.
+
+### Batch corpus CLI (`nlp_novel_batch`)
+
+`nlp_novel_batch` runs resumable multi-worker `nlp.doc.v1` analysis over chapter bundles or a
+chapter manifest:
+
+- **Defaults**: enables `Options { mask_editorial: true, normalize_traditional: true, lexicon, .. }`
+  and pure-statistical two-pass corpus compound discovery (`--auto-lexicon`, opt-out
+  `--no-auto-lexicon`), scanning frequent high-PMI / high-accessor-variety 2–5 character Han
+  compounds across chapters (`MIN_FREQ = 10` for 3–4 char proper names and `15` otherwise,
+  `MIN_CHAP_DF = 3`, `MIN_AV = 3` at `min_pmi >= 5.5` else `4`) while pruning scraper anti-censorship
+  infixes/metadata, numeral/demonstrative-preceded classifier+noun phrases (`CLF_CHARS`), and
+  bidirectional cohesive boundary-straddling 3+-grams (`>= 35%` left/right cohesive 2-gram straddle
+  ratio), writing `<out_dir>/discovered_lexicon.json` (`schema: "nlp.novel_discovered_lexicon.v1"`).
+- **High-signal `entities_timeline_cues.jsonl`**: filters unitless `EntityKind::Number`
+  (`unit.is_none()`) by default (`--include-bare-numbers` to opt in), emits `name` entities when
+  `--name` is supplied, and enriches `relation` cues with `clean_arg1_span`, `clean_arg2_span`,
+  `clean_arg1_text`, and `clean_arg2_text` (stripping leading/trailing connector and correlate
+  spans and boundary punctuation while preserving balanced quote/bracket pairs, and omitting
+  degenerate relation cues whose cleaned arguments lack lexical characters or overlap
+  `connector`/`correlate` while leaving `Document.relations` intact).
+- **Receipt structural counters**: `book_manifest_receipt.json` records `auto_lexicon_enabled`,
+  `discovered_lexicon_count`, `zero_root_sentences`, and `orphan_syntax_arcs` alongside token,
+  UPOS, syntax, entity, relation, and SHA-256 provenance metrics.
 
 ## Readers of `nlp.doc.v1`
 

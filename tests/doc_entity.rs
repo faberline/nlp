@@ -21,6 +21,7 @@ fn analyze(text: &str) -> Document {
 fn analyze_names(text: &str, names: &[&str]) -> Document {
     let options = Options {
         names: names.iter().map(|n| n.to_string()).collect(),
+        ..Options::default()
     };
     analyze_document(text, &options)
 }
@@ -454,6 +455,7 @@ fn names() {
     assert_eq!(serde_json::to_value(Options::default()).unwrap(), json!({}));
     let with = serde_json::to_value(Options {
         names: vec!["王小明".to_owned()],
+        ..Options::default()
     })
     .unwrap();
     assert_eq!(with, json!({ "names": ["王小明"] }));
@@ -976,5 +978,260 @@ fn doc_examples() {
     assert_eq!(
         ents("2023年2月29日"),
         vec![n("2023", "2023"), n("2", "2"), n("29", "29")]
+    );
+}
+
+#[test]
+fn ws4_classical_durations_and_approx_quantities() {
+    let approx = |span: &str, unit: &str| -> Row {
+        (
+            EntityKind::Quantity,
+            span.to_owned(),
+            None,
+            Some(unit.to_owned()),
+        )
+    };
+
+    // Exact classical & temporal durations.
+    assert_eq!(ents("他在山中住了四年。"), vec![qty("四年", "4", "年")]);
+    assert_eq!(
+        ents("古樹已歷三百年與萬年風霜。"),
+        vec![qty("三百年", "300", "年"), qty("萬年", "10000", "年")]
+    );
+    assert_eq!(
+        ents("船隊航行了兩日三夜，歷時三載。"),
+        vec![
+            qty("兩日", "2", "日"),
+            qty("三夜", "3", "夜"),
+            qty("三載", "3", "載"),
+        ]
+    );
+    assert_eq!(
+        ents("他靜坐五载，守到五更，等了一刻鐘與两刻钟。"),
+        vec![
+            qty("五载", "5", "载"),
+            qty("五更", "5", "更"),
+            qty("一刻鐘", "1", "刻鐘"),
+            qty("两刻钟", "2", "刻钟"),
+        ]
+    );
+    assert_eq!(
+        ents("茶水煮了一炷香或两柱香，歷經一甲子與兩個甲子。"),
+        vec![
+            qty("一炷香", "1", "炷香"),
+            qty("两柱香", "2", "柱香"),
+            qty("一甲子", "1", "甲子"),
+            qty("兩個甲子", "2", "個甲子"),
+        ]
+    );
+
+    // Fractional `半` quantities (`0.5`).
+    assert_eq!(
+        ents("他走了半日，休息半個時辰，又等了半盞茶與半炷香。"),
+        vec![
+            qty("半日", "0.5", "日"),
+            qty("半個時辰", "0.5", "個時辰"),
+            qty("半盞茶", "0.5", "盞茶"),
+            qty("半炷香", "0.5", "炷香"),
+        ]
+    );
+    assert_eq!(
+        ents("工程耗時半年、半個月、半天、半小時、半个时辰、半盏茶、半柱香、半小时、半个月。"),
+        vec![
+            qty("半年", "0.5", "年"),
+            qty("半個月", "0.5", "個月"),
+            qty("半天", "0.5", "天"),
+            qty("半小時", "0.5", "小時"),
+            qty("半个时辰", "0.5", "个时辰"),
+            qty("半盏茶", "0.5", "盏茶"),
+            qty("半柱香", "0.5", "柱香"),
+            qty("半小时", "0.5", "小时"),
+            qty("半个月", "0.5", "个月"),
+        ]
+    );
+
+    // Approximate prefixes (`數/数`, `幾/几`, `<十-cardinal>幾`) and infixes (`餘/余/多`).
+    assert_eq!(
+        ents("數年與数年、數日與数日、數月與数月、數十丈與数十丈、數百年與数百年。"),
+        vec![
+            approx("數年", "年"),
+            approx("数年", "年"),
+            approx("數日", "日"),
+            approx("数日", "日"),
+            approx("數月", "月"),
+            approx("数月", "月"),
+            approx("數十丈", "丈"),
+            approx("数十丈", "丈"),
+            approx("數百年", "年"),
+            approx("数百年", "年"),
+        ]
+    );
+    assert_eq!(
+        ents("石壁高十幾丈或十几丈，他們停留幾年、几年、幾日、几日、幾天、几天、幾個月。"),
+        vec![
+            approx("十幾丈", "丈"),
+            approx("十几丈", "丈"),
+            approx("幾年", "年"),
+            approx("几年", "年"),
+            approx("幾日", "日"),
+            approx("几日", "日"),
+            approx("幾天", "天"),
+            approx("几天", "天"),
+            approx("幾個月", "個月"),
+        ]
+    );
+    assert_eq!(
+        ents("歷經百餘年與百余年，石塔高百餘丈、百余丈、十餘丈、十余丈，耗時一百多年與三十多天。"),
+        vec![
+            approx("百餘年", "年"),
+            approx("百余年", "年"),
+            approx("百餘丈", "丈"),
+            approx("百余丈", "丈"),
+            approx("十餘丈", "丈"),
+            approx("十余丈", "丈"),
+            approx("一百多年", "年"),
+            approx("三十多天", "天"),
+        ]
+    );
+
+    // Non-regression guards (`MEASURE` words, calendar years, `半夜`, `一刻也不停`).
+    assert_eq!(ents("她走了三十里路，只帶了一包乾糧。"), vec![]);
+    assert_eq!(ents("超過一半的人 agreed."), vec![]);
+    assert_eq!(ents("半夜聽見風聲，他一刻也不停。"), vec![]);
+    assert_eq!(ents("2026年"), vec![d("2026年", "2026")]);
+    assert_eq!(ents("二〇二六年"), vec![d("二〇二六年", "2026")]);
+}
+
+#[test]
+fn ws4_relative_duration_anchors_and_moment_cues() {
+    let rd = |span: &str| row(EntityKind::RelativeDate, span, None);
+
+    assert_eq!(
+        ents("四年后與四年後、三百年前、兩日后、數月內、半個時辰后、數月前、百餘年後。"),
+        vec![
+            rd("四年后"),
+            rd("四年後"),
+            rd("三百年前"),
+            rd("兩日后"),
+            rd("數月內"),
+            rd("半個時辰后"),
+            rd("數月前"),
+            rd("百餘年後"),
+        ]
+    );
+
+    assert_eq!(
+        ents("片刻、片刻後、片刻后、頃刻、頃刻間、顷刻、顷刻间、剎那、剎那間、刹那、刹那间。"),
+        vec![
+            rd("片刻"),
+            rd("片刻後"),
+            rd("片刻后"),
+            rd("頃刻"),
+            rd("頃刻間"),
+            rd("顷刻"),
+            rd("顷刻间"),
+            rd("剎那"),
+            rd("剎那間"),
+            rd("刹那"),
+            rd("刹那间"),
+        ]
+    );
+
+    assert_eq!(
+        ents(
+            "轉眼、轉眼間、转眼、转眼间、眨眼間、眨眼间、眨眼工夫、眨眼功夫、眨眼之間、眨眼之间、瞬息、瞬息間、瞬息间、彈指間、弹指间。"
+        ),
+        vec![
+            rd("轉眼"),
+            rd("轉眼間"),
+            rd("转眼"),
+            rd("转眼间"),
+            rd("眨眼間"),
+            rd("眨眼间"),
+            rd("眨眼工夫"),
+            rd("眨眼功夫"),
+            rd("眨眼之間"),
+            rd("眨眼之间"),
+            rd("瞬息"),
+            rd("瞬息間"),
+            rd("瞬息间"),
+            rd("彈指間"),
+            rd("弹指间"),
+        ]
+    );
+    assert_eq!(ents("青衫老者眨了眨眼，沒有說話。"), vec![]);
+
+    assert_eq!(
+        ents("良久、許久、许久、半晌、一會兒、一会儿。"),
+        vec![
+            rd("良久"),
+            rd("許久"),
+            rd("许久"),
+            rd("半晌"),
+            rd("一會兒"),
+            rd("一会儿"),
+        ]
+    );
+}
+
+#[test]
+fn ws4_v3_token_boundary_alignment_guard_and_ascending_approx_ranges() {
+    let opts = Options {
+        normalize_traditional: true,
+        lexicon: vec!["萬天星".to_owned(), "玄剎".to_owned()],
+        ..Options::default()
+    };
+
+    // 1. False-positive candidates cutting inside proper names, idioms, or lexical compounds
+    //    must be rejected under `normalize_traditional: true` + context guards.
+    let false_pos_text = concat!(
+        "萬天星與萬天星光映照石殿，玄剎那道霞光在半天空中化作九天神雷落向九天之上，",
+        "這真是千載難逢的機緣，眾人退避三尺，以後天氣轉涼，迎來晴朗的一天。"
+    );
+    let doc_fp = analyze_document(false_pos_text, &opts);
+    let fp_ents: Vec<(EntityKind, String)> = doc_fp
+        .entities
+        .iter()
+        .map(|e| (e.kind, slice(false_pos_text, e.span)))
+        .collect();
+    assert_eq!(
+        fp_ents,
+        vec![],
+        "expected zero false-positive entities on lexical/idiom compounds, got {fp_ents:?}"
+    );
+
+    // 2. Legitimate quantities, relative dates, and composite temporal tokens still pass 100%.
+    let valid_text = "王天明在山谷等了半天，三天後又走了半個時辰，苦修三天三夜並採下三株仙草。";
+    let doc_valid = analyze_document(valid_text, &opts);
+    for e in &doc_valid.entities {
+        assert!(e.span.start_char < e.span.end_char && e.span.end_char <= doc_valid.text_chars);
+    }
+    assert_eq!(
+        rows(valid_text, &doc_valid),
+        vec![
+            qty("半天", "0.5", "天"),
+            r("三天後"),
+            qty("半個時辰", "0.5", "個時辰"),
+            qty("三天", "3", "天"),
+            qty("三夜", "3", "夜"),
+            n("三", "3"),
+        ]
+    );
+
+    // 3. Two-digit ascending Chinese approximations normalize to `"a-b"` ranges in `Quantity`.
+    let approx_text = "石劍長一二尺、寬二三寸，隊伍行了三四日、越過四五丈溪流、挖出五六寸木盒、停留六七天、退開七八丈、歷時八九年。";
+    let doc_approx = analyze_document(approx_text, &opts);
+    assert_eq!(
+        rows(approx_text, &doc_approx),
+        vec![
+            qty("一二尺", "1-2", "尺"),
+            qty("二三寸", "2-3", "寸"),
+            qty("三四日", "3-4", "日"),
+            qty("四五丈", "4-5", "丈"),
+            qty("五六寸", "5-6", "寸"),
+            qty("六七天", "6-7", "天"),
+            qty("七八丈", "7-8", "丈"),
+            qty("八九年", "8-9", "年"),
+        ]
     );
 }

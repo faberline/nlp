@@ -1,5 +1,5 @@
 use faberline_nlp::Span;
-use faberline_nlp::doc::{Document, Lang, Options, Reason, analyze_document};
+use faberline_nlp::doc::{Document, Lang, Options, Reason, Upos, analyze_document};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -831,4 +831,298 @@ fn pos_receipt() {
     let mut text = serde_json::to_string_pretty(&receipt).expect("receipt json");
     text.push('\n');
     fs::write(&path, text).expect("write receipt");
+}
+
+#[test]
+fn simplified_closed_class_and_classical_pronouns() {
+    assert_eq!(
+        show("我们已经从这里出发，因为虽然路远，但是他们应该能够马上到达吗？"),
+        [
+            "我们/PRON",
+            "已经/ADV",
+            "从/ADP",
+            "这里/PRON",
+            "出发/M",
+            "，/PUNCT",
+            "因为/SCONJ",
+            "虽然/SCONJ",
+            "路/M",
+            "远/M",
+            "，/PUNCT",
+            "但是/CCONJ",
+            "他们/PRON",
+            "应该/AUX",
+            "能够/AUX",
+            "马上/ADV",
+            "到达/M",
+            "吗/PART",
+            "？/PUNCT",
+        ]
+    );
+
+    assert_eq!(
+        show("尽管刚刚根据新方法并且为了大家，你们、她们、它们、咱们和谁在那里曾经必须小心。"),
+        [
+            "尽管/SCONJ",
+            "刚刚/ADV",
+            "根据/ADP",
+            "新/M",
+            "方法/M",
+            "并且/CCONJ",
+            "为了/ADP",
+            "大家/PRON",
+            "，/PUNCT",
+            "你们/PRON",
+            "、/PUNCT",
+            "她们/PRON",
+            "、/PUNCT",
+            "它们/PRON",
+            "、/PUNCT",
+            "咱们/PRON",
+            "和/A",
+            "谁/PRON",
+            "在/A",
+            "那里/PRON",
+            "曾经/ADV",
+            "必须/AUX",
+            "小心/M",
+            "。/PUNCT",
+        ]
+    );
+
+    // Simplified ambiguous closed-class entries emit Reason::Ambiguous (`A`).
+    let ambig_doc =
+        analyze("这、这个、那个、什么、对、与、给、于是、会、没、没有、还、几、着、过。");
+    for expected in [
+        "这", "这个", "那个", "什么", "对", "与", "给", "于是", "会", "没", "没有", "还", "几",
+        "着", "过",
+    ] {
+        let tok = ambig_doc
+            .tokens
+            .iter()
+            .find(|t| {
+                slice(
+                    "这、这个、那个、什么、对、与、给、于是、会、没、没有、还、几、着、过。",
+                    t.span,
+                ) == expected
+            })
+            .unwrap_or_else(|| panic!("missing token {expected}"));
+        assert_eq!(tok.upos, None, "{expected} should be undecided");
+        assert_eq!(
+            pos_reason(&ambig_doc, tok.span),
+            Some(Reason::Ambiguous),
+            "{expected} should be Ambiguous"
+        );
+    }
+
+    // Classical first-person self-pronouns decide Upos::Pron; `還在下雨` keeps `在` + `下雨`.
+    for pron in ["在下", "妾身", "老夫", "老身", "貧道", "贫道", "本座"] {
+        let s = format!("{pron}告辭。");
+        let shown = show(&s);
+        assert_eq!(shown[0], format!("{pron}/PRON"));
+    }
+    let rain = show("外头还在下雨。");
+    assert!(rain.contains(&"在/A".to_owned()), "{rain:?}");
+    assert!(rain.contains(&"下雨/M".to_owned()), "{rain:?}");
+}
+
+#[test]
+fn normalize_traditional_t2s_degluing_and_lexicon() {
+    let opts = Options {
+        normalize_traditional: true,
+        lexicon: vec!["青竹木劍".to_owned(), "白露灵草".to_owned()],
+        names: vec!["白衣老者".to_owned()],
+        ..Options::default()
+    };
+
+    // Coverb/demonstrative de-gluing + Traditional->Simplified projection + lexicon/names protection.
+    let t1 =
+        "當白衣老者將其與青竹木劍收起，對此沒有多言，向大漢點頭，這讓眾人連忙後退，採摘白露靈草。";
+    let doc1 = analyze_document(t1, &opts);
+    let toks1: Vec<String> = doc1.tokens.iter().map(|t| slice(t1, t.span)).collect();
+    for expected in [
+        "當",
+        "白衣老者",
+        "將",
+        "其",
+        "與",
+        "青竹木劍",
+        "收起",
+        "對",
+        "此",
+        "沒有",
+        "向",
+        "大漢",
+        "這",
+        "讓",
+        "眾人",
+        "連忙",
+        "後退",
+        "白露靈草",
+    ] {
+        assert!(
+            toks1.iter().any(|x| x == expected),
+            "expected token {expected:?} in {toks1:?}"
+        );
+    }
+
+    // Contraction splits (`將此`, `將那`) and lexicalized whitelist preservation.
+    let t2 = "將此收好，將那放回。此時將軍與對方在這裡談話，那天從前輩處取回儲物袋與築基丹，神識與靈力如往常一般溫和。";
+    let doc2 = analyze_document(t2, &opts);
+    let toks2: Vec<String> = doc2.tokens.iter().map(|t| slice(t2, t.span)).collect();
+    for expected in [
+        "將",
+        "此",
+        "將",
+        "那",
+        "此時",
+        "將軍",
+        "對方",
+        "這裡",
+        "那天",
+        "前輩",
+        "儲物袋",
+        "築基丹",
+        "神識",
+        "靈力",
+        "往常",
+        "溫和",
+    ] {
+        assert!(
+            toks2.iter().any(|x| x == expected),
+            "expected token {expected:?} in {toks2:?}"
+        );
+    }
+
+    // Multi-byte UTF-8 safety: 4-byte CJK Extension B char (`\u{20000}`) alongside 3-byte Traditional chars.
+    let t3 = "\u{20000}老者將其放入儲物袋。";
+    let doc3 = analyze_document(t3, &opts);
+    let toks3: Vec<String> = doc3.tokens.iter().map(|t| slice(t3, t.span)).collect();
+    assert_eq!(toks3[0], "\u{20000}");
+    assert!(toks3.contains(&"老者".to_owned()));
+    assert!(toks3.contains(&"將".to_owned()));
+    assert!(toks3.contains(&"其".to_owned()));
+    assert!(toks3.contains(&"儲物袋".to_owned()));
+}
+
+#[test]
+fn ws2_ws3_v3_infix_projection_degluing_and_decided_lexicon() {
+    let opts = Options {
+        normalize_traditional: true,
+        ..Options::default()
+    };
+
+    // 1. Scraper anti-censorship infix projection + POS lookup via `strip_scraper_infix`.
+    let t_infix = "那名少丅女與長堊老終丅於一丅齊走入傳丅送陣，一丅旦啟程便需丅要護住肉冇身離開大灬陸，免被吞灬噬，老堊身也沒丅有多言。";
+    let doc_infix = analyze_document(t_infix, &opts);
+    for tok in &doc_infix.tokens {
+        assert!(
+            tok.span.start_char < tok.span.end_char && tok.span.end_char <= doc_infix.text_chars
+        );
+    }
+    let toks_infix: Vec<(String, Option<Upos>)> = doc_infix
+        .tokens
+        .iter()
+        .map(|t| (slice(t_infix, t.span), t.upos))
+        .collect();
+    for expected in [
+        "少丅女",
+        "長堊老",
+        "終丅於",
+        "一丅齊",
+        "傳丅送",
+        "一丅旦",
+        "需丅要",
+        "肉冇身",
+        "大灬陸",
+        "吞灬噬",
+        "老堊身",
+        "沒丅有",
+    ] {
+        assert!(
+            toks_infix.iter().any(|(s, _)| s == expected),
+            "expected infix-projected token {expected:?} in {toks_infix:?}"
+        );
+    }
+    let find_upos = |surf: &str| {
+        toks_infix
+            .iter()
+            .find(|(s, _)| s == surf)
+            .unwrap_or_else(|| panic!("missing {surf}"))
+            .1
+    };
+    assert_eq!(find_upos("終丅於"), Some(Upos::Adv));
+    assert_eq!(find_upos("一丅齊"), Some(Upos::Adv));
+    assert_eq!(find_upos("一丅旦"), Some(Upos::Sconj));
+    assert_eq!(find_upos("老堊身"), Some(Upos::Pron));
+    let meiyou_span = doc_infix
+        .tokens
+        .iter()
+        .find(|t| slice(t_infix, t.span) == "沒丅有")
+        .unwrap()
+        .span;
+    assert_eq!(pos_reason(&doc_infix, meiyou_span), Some(Reason::Ambiguous));
+
+    // 2. `其 + verb` and `中 + verb/prep` de-gluing vs lexicalized whitelists.
+    let t_deglue = concat!(
+        "青衫老者將其放下、將其收起、將其滅去、將其斬斷、將其拿住、將其吞下。",
+        "其實其中其他同伴與其它修士其次將其餘木盒在期間期待地放回其間。",
+        "他從袋中探出手，在山谷中方才停步，心中狂喜，目中激射精光，在石室中專心打坐，於陣中為眾人護法。",
+        "中國中間的中心石台有中年旅人中途拿出中品丹藥，在中期與中階修士於中央中原會合，未曾中毒、中計或中斷，保持中等與中立的中樞秩序。"
+    );
+    let doc_deglue = analyze_document(t_deglue, &opts);
+    for tok in &doc_deglue.tokens {
+        assert!(
+            tok.span.start_char < tok.span.end_char && tok.span.end_char <= doc_deglue.text_chars
+        );
+    }
+    let surf_deglue: Vec<String> = doc_deglue
+        .tokens
+        .iter()
+        .map(|t| slice(t_deglue, t.span))
+        .collect();
+    for forbidden in [
+        "其放", "其收", "其滅", "其斬", "其拿", "其吞", "中探", "中方", "中狂", "中激", "中專",
+        "中為",
+    ] {
+        assert!(
+            !surf_deglue.iter().any(|s| s == forbidden),
+            "false merge {forbidden:?} must be split: {surf_deglue:?}"
+        );
+    }
+    for preserved in [
+        "其實", "其中", "其他", "其它", "其次", "其餘", "期間", "期待", "其間", "中國", "中間",
+        "中心", "中年", "中途", "中品", "中期", "中階", "中央", "中原", "中毒", "中計", "中斷",
+        "中等", "中立", "中樞",
+    ] {
+        assert!(
+            surf_deglue.iter().any(|s| s == preserved),
+            "lexicalized word {preserved:?} must stay intact: {surf_deglue:?}"
+        );
+    }
+
+    // 3. New `ZH_DECIDED` closed-class words (`終於`/`终于`/`終于`, `一旦`, `一齊`/`一齐`, `除了`, `老身`).
+    let decided_sent = "除了老身之外，眾人終於、终于與終于一齊和一齐退後，一旦石門開啟便進入。";
+    let doc_dec = analyze_document(decided_sent, &opts);
+    for tok in &doc_dec.tokens {
+        assert!(tok.span.start_char < tok.span.end_char && tok.span.end_char <= doc_dec.text_chars);
+    }
+    check_invariants("除了老身之外，众人终于一齐退后，一旦石门开启便进入。");
+    for (word, expected_upos) in [
+        ("除了", Upos::Adp),
+        ("老身", Upos::Pron),
+        ("終於", Upos::Adv),
+        ("终于", Upos::Adv),
+        ("終于", Upos::Adv),
+        ("一齊", Upos::Adv),
+        ("一齐", Upos::Adv),
+        ("一旦", Upos::Sconj),
+    ] {
+        let tok = doc_dec
+            .tokens
+            .iter()
+            .find(|t| slice(decided_sent, t.span) == word)
+            .unwrap_or_else(|| panic!("missing token {word}"));
+        assert_eq!(tok.upos, Some(expected_upos), "{word} upos mismatch");
+    }
 }

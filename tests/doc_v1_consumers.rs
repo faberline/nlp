@@ -6,7 +6,8 @@
 use faberline_nlp::{
     Lexicon, NarrativeAnalyzer, analyze,
     doc::{Lang, Options, Reason, analyze_document},
-    text::Locale,
+    source_cross_chapter::{CrossChapterCandidates, CrossChapterPolicy},
+    text::{Analyzer, Locale},
     timeline::{self, TimelineDocument},
 };
 
@@ -175,4 +176,86 @@ fn text_in_an_unsupported_language_is_unknown_and_yields_nothing() {
     assert!(result.events.is_empty());
     let plain = analyze(text, "", &lexicon);
     assert!(plain.events.is_empty());
+}
+
+#[test]
+fn cross_chapter_push_gives_the_generic_tokenizer_pronouns() {
+    const PRONOUN_CHAPTERS: &[&str] = &[
+        "他走進木屋。她留在港口。\n",
+        "他們說：「我們明天出發。」它們不動。\n",
+        "他说她们走了，它也走了。\n",
+        "哈哈 他先走了 我也要回家了\n",
+        "Alice met him at the 港口. 她笑了。\n",
+        "他走了很久……終於到了。\n",
+        "他讀了 `a。b` 這段，她也讀了。\n",
+        "他看了 https://example.org/a 然後她走了。\n",
+        "一行沒有標點的文字\n",
+        "\n",
+        "- 他走進木屋。\n",
+        "# 他走了\n",
+        "第一章 他們\n",
+        "1. 她走了。\n",
+        "把 `他` 換成 `她`。\n",
+        "$他$ 她\n",
+        "他走了。她留下。\n",
+        "他說：「我們走。」她點頭。\n",
+        "　　他走進木屋。她留在港口。\n　　他們說：「她們也來了。」\n",
+    ];
+    const PRONOUN_FORMS: &[&str] = &[
+        "他", "她", "它", "他們", "她們", "它們", "他们", "她们", "它们",
+    ];
+
+    let lexicon = Lexicon {
+        actors: ACTORS,
+        ..Lexicon::default()
+    };
+    let policy = CrossChapterPolicy {
+        max_chapter_bytes: 1 << 20,
+        max_terms: 8,
+        max_term_bytes: 64,
+        history_distance: 4,
+        max_names_per_chapter: 8,
+        max_pronouns_per_chapter: 64,
+        max_pairs_per_pronoun: 8,
+        max_pairs_per_chapter: 64,
+    };
+    let generic = Analyzer::new(Locale::ChineseTaiwan).expect("analyzer");
+    let chapter1 = "小甲走進木屋。阿乙留在港口。Alice Lee 留下。\n";
+
+    for &chapter2 in PRONOUN_CHAPTERS {
+        let mut tw =
+            CrossChapterCandidates::new(Locale::ChineseTaiwan, lexicon, policy).expect("tw");
+        let mut cn =
+            CrossChapterCandidates::new(Locale::ChineseChina, lexicon, policy).expect("cn");
+        tw.push(1, chapter1, "").expect("tw ch1");
+        cn.push(1, chapter1, "").expect("cn ch1");
+        let got = tw.push(2, chapter2, "").expect("tw ch2");
+        let ref_out = cn.push(2, chapter2, "").expect("cn ch2");
+
+        let mut got_json = serde_json::to_value(&got).expect("json");
+        let ref_json = serde_json::to_value(&ref_out).expect("json");
+        assert_eq!(got_json["locale"], "zh-Hant-TW");
+        got_json["locale"] = serde_json::json!("zh-Hans-CN");
+        assert_eq!(got_json, ref_json, "push output differs for {chapter2:?}");
+
+        let mut line_base = 0usize;
+        let mut want_bytes = Vec::new();
+        for line in chapter2.split_inclusive('\n') {
+            for tok in generic.analyze(line).into_iter().flat_map(|s| s.tokens) {
+                if PRONOUN_FORMS.contains(&tok.text) {
+                    want_bytes.push((line_base + tok.bytes.start)..(line_base + tok.bytes.end));
+                }
+            }
+            line_base += line.len();
+        }
+        let got_bytes: Vec<_> = got
+            .pronouns
+            .iter()
+            .map(|p| p.source.bytes.clone())
+            .collect();
+        assert_eq!(
+            got_bytes, want_bytes,
+            "pronoun bytes differ for {chapter2:?}"
+        );
+    }
 }

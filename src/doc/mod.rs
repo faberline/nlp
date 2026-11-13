@@ -6,20 +6,42 @@ mod opaque;
 mod pos;
 mod relation;
 mod segment;
+pub mod syntax;
+mod t2s;
 mod token;
 
 use crate::Span;
 pub(crate) use entity::NameRule;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(any(feature = "onnx", feature = "coreml"))]
+pub use syntax::analyze_document_with_loaded_model;
+pub use syntax::{
+    DEPRELS, SYNTAX_MODEL_ID, SYNTAX_THRESHOLD, Score, SyntaxToken, analyze_document_with_model,
+};
 
 pub const SCHEMA: &str = "nlp.doc.v1";
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Options {
     /// Names for the name rule. Matched as exact text, leftmost-longest.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub names: Vec<String>,
+    /// Mask generic web-novel editorial/scraper boilerplate lines and inline scraper tags.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mask_editorial: bool,
+    /// Project Traditional Han characters onto Simplified equivalents during Chinese word
+    /// segmentation and split false coverb/demonstrative HMM merges while preserving exact
+    /// original character offsets.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub normalize_traditional: bool,
+    /// Extra domain vocabulary matched leftmost-longest before Chinese word segmentation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lexicon: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,15 +212,28 @@ pub struct Document {
     pub segmentation: Segmentation,
     pub tokens: Vec<Token>,
     pub entities: Vec<Entity>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub syntax: Vec<SyntaxToken>,
     pub relations: Vec<Relation>,
     pub unknown: Vec<Unknown>,
 }
 
+pub(crate) fn sort_unknown(unknown: &mut [Unknown]) {
+    unknown.sort_by(|a, b| {
+        (a.span.start_char, a.span.end_char, a.layer.as_str()).cmp(&(
+            b.span.start_char,
+            b.span.end_char,
+            b.layer.as_str(),
+        ))
+    });
+}
+
 pub fn analyze_document(text: &str, options: &Options) -> Document {
     let c: Vec<char> = text.chars().collect();
-    let found = opaque::find(&c);
+    let found = opaque::find_with_options(&c, options.mask_editorial);
     // Splitting runs on the masked text, so no boundary falls inside an opaque span.
     let m = opaque::mask(&c, &found);
+    let token_matcher = token::TokenMatcher::from_options(options);
     let mut seg = Segmentation {
         paragraphs: Vec::new(),
         sentences: Vec::new(),
@@ -209,8 +244,17 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
     let mut tokens = Vec::new();
     let inline: Vec<(Span, OpaqueKind)> = found
         .iter()
-        .filter(|f| !f.block && !matches!(f.item.kind, OpaqueKind::Heading | OpaqueKind::ListItem))
+        .filter(|f| {
+            !f.block
+                && !f.silent_noise
+                && !matches!(f.item.kind, OpaqueKind::Heading | OpaqueKind::ListItem)
+        })
         .map(|f| (f.item.span, f.item.kind))
+        .collect();
+    let silent: Vec<Span> = found
+        .iter()
+        .filter(|f| !f.block && f.silent_noise)
+        .map(|f| f.item.span)
         .collect();
     // Supported sentences only, as (sentence index, span). Unsupported text gets no entities.
     let mut scanned = Vec::new();
@@ -252,7 +296,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
             if unsupported {
                 continue;
             }
-            for piece in token::tokenize(&c, span, &inline) {
+            for piece in token::tokenize_with_matcher(&c, span, &inline, &silent, &token_matcher) {
                 let text: String = c[piece.span.start_char..piece.span.end_char]
                     .iter()
                     .collect();
@@ -283,17 +327,18 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         }
     }
 
-    let (entities, entity_unknown) = entity::extract(&c, &found, &scanned, &options.names);
+    let (entities, entity_unknown) = entity::extract(
+        &c,
+        &found,
+        &scanned,
+        &tokens,
+        &options.names,
+        options.normalize_traditional,
+    );
     unknown.extend(entity_unknown);
     let (relations, relation_unknown) = relation::relations(&c, &seg);
     unknown.extend(relation_unknown);
-    unknown.sort_by(|a, b| {
-        (a.span.start_char, a.span.end_char, a.layer.as_str()).cmp(&(
-            b.span.start_char,
-            b.span.end_char,
-            b.layer.as_str(),
-        ))
-    });
+    sort_unknown(&mut unknown);
 
     Document {
         schema: SCHEMA.to_owned(),
@@ -306,6 +351,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         segmentation: seg,
         tokens,
         entities,
+        syntax: Vec::new(),
         relations,
         unknown,
     }

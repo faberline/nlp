@@ -251,3 +251,54 @@ model or prompt checks"; it needs the same change (Sonnet labels, a second Sonne
   tokens. The two valid_tree columns have different rules, and Sonnet's number is only on the
   second basis.
 - Source sizes come from metadata of 2026-11-10 and change over time.
+
+## Silver pipeline
+
+Issue #27 implements the resumable two-pass silver-label pipeline under `training/silver/` without
+embedding API keys or running network calls inside the scripts:
+
+- `training/silver/prepare_batches.py` reads raw UTF-8 text or JSONL items, runs the local
+  `nlp_doc` binary (layers 1 and 2) to attach exact `tokens`, `layer2_upos`, and `sentences`
+  ranges, slices items into fixed-size `batches/batch_NNNN.input.jsonl` files, and writes
+  `<work-dir>/manifest.json` (`schema: "nlp.silver.v1"`) recording `source_sha256`,
+  `model_id` (`claude-sonnet-5-5`), `prompt_version` (`silver-v1`), `batch_size`, and per-batch
+  status (`pending`, `partial`, `ready_to_merge`, `merged`). Re-running on an existing work
+  directory checks `source_sha256`, `model_id`, `prompt_version`, and `batch_size` before
+  continuing, preserving completed Pass-A, Pass-B, and merged batch files.
+- `training/silver/validate_merge.py` validates independent Pass-A (`batch_NNNN.pass_a.jsonl`)
+  and Pass-B (`batch_NNNN.pass_b.jsonl`) annotations against each prepared batch: valid JSON,
+  exact Layer 1/2 token and sentence-range match, one root per sentence, no self-heads or cycles,
+  the 37 UD v2 relation labels (no subtypes), `ARG0`/`ARG1`/`ARGM` frame arguments inside the
+  predicate's sentence, coreference mention bounds, and known flags (`layer2_token_error`). It
+  then applies the two-pass agreement filter (requiring Pass A and Pass B to agree on `heads`,
+  `deprels`, flags, and canonicalized `frames` and `coref`, while restricting `layer2_token_error`
+  items to `usable_layers: ["syntax"]`), records per-batch `kept`, `invalid`, and `dropped`
+  counts in `manifest.json`, skips already-merged batches whose SHA-256 hashes match on resume,
+  and writes the merged silver output when all batches are finished.
+- `training/silver/sample_dryrun.jsonl` and `tests/silver_pipeline.rs` verify the validator,
+  agreement filter (4 kept, 3 disagreed/dropped, 3 structurally invalid), and resumable manifest
+  checks offline in `cargo test` without Python, network access, or a model.
+
+## Syntax model training and dual export (`doc-syntax-v1`)
+
+Issue #20 trains and dual-exports `doc-syntax-v1` (Layer-4 UD v2 dependency parser and contextual
+UPOS upgrader) under `training/syntax/` using `training/requirements.lock.txt`:
+
+- **Multilingual & multivariant coverage**: `training/syntax/corpus_gen.py` builds a neutral,
+  `nlp_doc`-verified training and validation corpus in `training/.work/syntax/` (gitignored)
+  covering authentic Taiwan Traditional Chinese (`zh-TW`), authentic Mainland Simplified Chinese
+  (`zh-CN`), English (`en`), and both `mixed-TW` (`zh-TW/en`) and `mixed-CN` (`zh-CN/en`)
+  code-switched sentences across `novel`, `paper`, and `casual` genres, strictly excluding
+  `training/probe/`, `training/silver/sample_dryrun.jsonl`, and `tests/data/gold_layers4_6_v1.jsonl`.
+- **Encoder & pruned subword vocabulary**: `training/syntax/train_syntax.py` initializes from
+  `intfloat/multilingual-e5-small` (MIT licence), pruning the Unigram vocabulary to `32,768` pieces
+  (`[PAD]=0, [UNK]=1, [CLS]=2, [SEP]=3`, single-character Traditional and Simplified Han pieces,
+  punctuation/symbols, and top English subwords) with pre-tokenizer splitting that prevents
+  subword-to-token collisions across both `jieba` and English tokenization.
+- **Dual Core ML + ONNX export**: `training/syntax/export_dual.py` exports both `model.onnx`
+  (opset 13, `ir_version = 8`, exactly one `Gather` node, fused `[1, 256, 384]` positional +
+  token-type constant, internal pad-mask attention bias, packed `[1, 256, 421]` output) and
+  single-file `model.mlmodel` (`neuralnetwork` float32) from identical float32 weights, checking
+  cross-backend parity (`max |onnx - coreml| <= 1e-4`).
+- **Manifest pinning**: `training/syntax/fetch_model.py` pins `doc-syntax-v1` hashes and byte
+  counts in `models/manifest.json` while keeping `models/doc-syntax-v1/` binaries out of git.

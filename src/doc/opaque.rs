@@ -215,7 +215,11 @@ fn line_kind(
 }
 
 fn is_heading(t: &[char]) -> bool {
-    markdown_heading(t) || chinese_heading(t) || english_heading(t)
+    markdown_heading(t)
+        || chinese_heading(t)
+        || japanese_heading(t)
+        || korean_heading(t)
+        || english_heading(t)
 }
 
 fn markdown_heading(t: &[char]) -> bool {
@@ -445,6 +449,358 @@ fn chinese_heading(t: &[char]) -> bool {
     false
 }
 
+/// Japanese headings: `第<num><unit>[sep title | tight non-particle title]`, bare `<num>話 <title>`,
+/// and standalone structural headings (`プロローグ`, `エピローグ`, `幕間`, `序章`, `終章`, `最終話`, `最終章`, `番外編`).
+const JA_HEADING_NUMERALS: &str = "一二三四五六七八九十百千万零〇壱弐参";
+const JA_HEADING_UNITS: &str = "話巻章節回部編幕条項";
+const JA_STRUCTURAL_HEADINGS: &[&str] = &[
+    "プロローグ",
+    "エピローグ",
+    "幕間",
+    "序章",
+    "終章",
+    "最終話",
+    "最終章",
+    "番外編",
+];
+
+fn is_ja_numeral(ch: char) -> bool {
+    ch.is_ascii_digit() || ('０'..='９').contains(&ch) || JA_HEADING_NUMERALS.contains(ch)
+}
+
+fn ja_numeral_len(s: &[char]) -> usize {
+    s.iter().take_while(|&&ch| is_ja_numeral(ch)).count()
+}
+
+fn is_ja_heading_sep(ch: char) -> bool {
+    is_heading_sep(ch) || matches!(ch, '・' | '―' | '—' | '-' | '〜' | '～' | '\u{3000}')
+}
+
+fn is_ja_subtitle_sep(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '：' | ':' | '・' | '―' | '—' | '-' | '〜' | '～')
+}
+
+fn has_ja_heading_title(chars: &[char]) -> bool {
+    chars.iter().any(|ch| {
+        !ch.is_whitespace()
+            && !matches!(
+                *ch,
+                '：' | ':' | '・' | '―' | '—' | '-' | '〜' | '～' | '·' | '‧' | '»'
+            )
+    })
+}
+
+fn starts_with_ja_particle(s: &[char]) -> bool {
+    let Some(&first) = s.first() else {
+        return false;
+    };
+    if matches!(
+        first,
+        'は' | 'が' | 'を' | 'に' | 'で' | 'の' | 'と' | 'も' | 'へ' | 'や'
+    ) {
+        return true;
+    }
+    if s == ['だ'] {
+        return true;
+    }
+    [
+        "から",
+        "まで",
+        "より",
+        "だけ",
+        "ほど",
+        "など",
+        "こそ",
+        "さえ",
+        "しか",
+        "すら",
+        "だった",
+        "である",
+        "です",
+    ]
+    .iter()
+    .any(|p| matches_chars_at(s, 0, s.len(), p))
+}
+
+fn starts_with_zh_prose_continuation(s: &[char]) -> bool {
+    s.first().is_some_and(|&ch| {
+        matches!(
+            ch,
+            '的' | '之'
+                | '了'
+                | '是'
+                | '在'
+                | '有'
+                | '中'
+                | '裡'
+                | '里'
+                | '內'
+                | '内'
+                | '講'
+                | '讲'
+                | '說'
+                | '说'
+                | '討'
+                | '讨'
+                | '介'
+                | '論'
+                | '论'
+        )
+    })
+}
+
+fn japanese_dai_heading(t: &[char]) -> bool {
+    if t.first() != Some(&'第') {
+        return false;
+    }
+    let numerals = ja_numeral_len(&t[1..]);
+    if numerals == 0 {
+        return false;
+    }
+    let ws = heading_ws_len(&t[1 + numerals..]);
+    let [unit, after @ ..] = &t[1 + numerals + ws..] else {
+        return false;
+    };
+    if !JA_HEADING_UNITS.contains(*unit) {
+        return false;
+    }
+    match after {
+        [] => ws == 0,
+        [sep, title @ ..] if is_ja_heading_sep(*sep) => has_ja_heading_title(title),
+        _ => {
+            ws == 0
+                && (1..=20).contains(&after.len())
+                && (matches!(*unit, '話' | '巻')
+                    || after.len() >= 2
+                    || after.iter().any(|&ch| is_kana(ch)))
+                && !starts_with_ja_particle(after)
+                && !starts_with_zh_prose_continuation(after)
+                && !after
+                    .iter()
+                    .any(|ch| "，。！？；：、,.;:!?'\"「」『』“”‘’".contains(*ch))
+        }
+    }
+}
+
+fn japanese_bare_wa_heading(t: &[char]) -> bool {
+    if t.len() > 40 || t.iter().any(|ch| matches!(*ch, '，' | '、' | ',')) {
+        return false;
+    }
+    let numerals = ja_numeral_len(t);
+    if !(1..=4).contains(&numerals) || t.get(numerals) != Some(&'話') {
+        return false;
+    }
+    matches!(
+        &t[numerals + 1..],
+        [sep, title @ ..] if is_ja_subtitle_sep(*sep) && has_ja_heading_title(title)
+    )
+}
+
+fn japanese_structural_heading(t: &[char]) -> bool {
+    if t.len() > 40
+        || t.iter()
+            .any(|ch| matches!(*ch, '，' | '、' | ',' | '；' | ';'))
+    {
+        return false;
+    }
+    for kw in JA_STRUCTURAL_HEADINGS {
+        if matches_chars_at(t, 0, t.len(), kw) {
+            let rest = &t[kw.chars().count()..];
+            return match rest {
+                [] => true,
+                [sep, subtitle @ ..] => is_ja_subtitle_sep(*sep) && has_ja_heading_title(subtitle),
+            };
+        }
+    }
+    false
+}
+
+fn japanese_heading(t: &[char]) -> bool {
+    if t.is_empty() || t.len() > 60 || t.iter().any(|ch| matches!(*ch, '。' | '！' | '？' | '｡'))
+    {
+        return false;
+    }
+    japanese_dai_heading(t) || japanese_bare_wa_heading(t) || japanese_structural_heading(t)
+}
+
+/// Korean headings: `제<num><unit>[sep title]`, bare `<1..=4 digits>화` / `<1..=3 digits>장`,
+/// and standalone structural headings (`프롤로그`, `에필로그`, `서장`, `종장`, `외전`).
+const KO_HEADING_NUMERALS: &str = "일이삼사오육륙칠팔구십백천만영공";
+const KO_HEADING_UNITS: &str = "장절화회권부편막";
+const KO_STRUCTURAL_HEADINGS: &[&str] = &["프롤로그", "에필로그", "서장", "종장", "외전"];
+
+fn is_ko_numeral(ch: char) -> bool {
+    ch.is_ascii_digit() || ('０'..='９').contains(&ch) || KO_HEADING_NUMERALS.contains(ch)
+}
+
+fn ko_numeral_len(s: &[char]) -> usize {
+    s.iter().take_while(|&&ch| is_ko_numeral(ch)).count()
+}
+
+fn is_ko_heading_sep(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, ':' | '：' | '-' | '—' | '·' | '‧' | '.' | '―')
+}
+
+fn has_ko_heading_title(chars: &[char]) -> bool {
+    chars.iter().any(|ch| {
+        !ch.is_whitespace() && !matches!(*ch, ':' | '：' | '-' | '—' | '·' | '‧' | '.' | '―')
+    })
+}
+
+fn starts_with_ko_particle(s: &[char]) -> bool {
+    ["에서", "으로"]
+        .iter()
+        .any(|p| matches_chars_at(s, 0, s.len(), p))
+        || s.first().is_some_and(|&ch| {
+            matches!(
+                ch,
+                '은' | '는'
+                    | '이'
+                    | '가'
+                    | '을'
+                    | '를'
+                    | '의'
+                    | '에'
+                    | '도'
+                    | '만'
+                    | '과'
+                    | '와'
+                    | '로'
+            )
+        })
+}
+
+fn ends_with_ko_prose_verb(title: &[char]) -> bool {
+    let title = trim(title);
+    let Some(&last) = title.last() else {
+        return false;
+    };
+    if matches!(last, '요' | '죠' | '까') {
+        return true;
+    }
+    if last != '다' {
+        return false;
+    }
+    let has_verb_suffix = [
+        "이다",
+        "하다",
+        "한다",
+        "했다",
+        "된다",
+        "됐다",
+        "있다",
+        "없다",
+        "같다",
+        "않다",
+        "는다",
+        "습니다",
+        "입니다",
+    ]
+    .iter()
+    .any(|suf| {
+        let n = suf.chars().count();
+        title.len() >= n && matches_chars_at(title, title.len() - n, title.len(), suf)
+    });
+    let has_past_ssangsiot = title.len() >= 2
+        && is_hangul_syllable(title[title.len() - 2])
+        && (title[title.len() - 2] as u32 - 0xAC00) % 28 == 20;
+    has_verb_suffix || has_past_ssangsiot
+}
+
+fn korean_je_heading(t: &[char]) -> bool {
+    if t.first() != Some(&'제') {
+        return false;
+    }
+    let ws1 = heading_ws_len(&t[1..]);
+    let numerals = ko_numeral_len(&t[1 + ws1..]);
+    if numerals == 0 {
+        return false;
+    }
+    let ws2 = heading_ws_len(&t[1 + ws1 + numerals..]);
+    let [unit, after @ ..] = &t[1 + ws1 + numerals + ws2..] else {
+        return false;
+    };
+    if !KO_HEADING_UNITS.contains(*unit) || starts_with_ko_particle(after) {
+        return false;
+    }
+    match after {
+        [] => true,
+        [sep, title @ ..] => {
+            is_ko_heading_sep(*sep)
+                && has_ko_heading_title(title)
+                && !ends_with_ko_prose_verb(title)
+        }
+    }
+}
+
+fn korean_bare_episode_heading(t: &[char]) -> bool {
+    let digits = t.iter().take_while(|ch| ch.is_ascii_digit()).count();
+    if digits == 0 {
+        return false;
+    }
+    let Some(&unit) = t.get(digits) else {
+        return false;
+    };
+    let valid_unit =
+        (unit == '화' && (1..=4).contains(&digits)) || (unit == '장' && (1..=3).contains(&digits));
+    if !valid_unit {
+        return false;
+    }
+    let after = &t[digits + 1..];
+    if starts_with_ko_particle(after) {
+        return false;
+    }
+    match after {
+        [] => true,
+        [sep, raw_title @ ..]
+            if matches!(*sep, ' ' | '\t' | '\u{3000}' | ':' | '：' | '-' | '—' | '.') =>
+        {
+            let title = trim(raw_title);
+            (1..=30).contains(&title.len())
+                && has_ko_heading_title(title)
+                && !title.iter().any(|ch| matches!(*ch, ',' | '，'))
+                && !matches!(title.last(), Some('다' | '요' | '죠' | '까' | '네'))
+        }
+        _ => false,
+    }
+}
+
+fn korean_structural_heading(t: &[char]) -> bool {
+    if t.len() > 40 || t.iter().any(|ch| matches!(*ch, ',' | '，' | ';' | '；')) {
+        return false;
+    }
+    for kw in KO_STRUCTURAL_HEADINGS {
+        if matches_chars_at(t, 0, t.len(), kw) {
+            let rest = &t[kw.chars().count()..];
+            if starts_with_ko_particle(rest) {
+                return false;
+            }
+            return match rest {
+                [] => true,
+                [sep, subtitle @ ..] => {
+                    (sep.is_whitespace()
+                        || matches!(*sep, ':' | '：' | '-' | '—' | '·' | '‧' | '―'))
+                        && has_ko_heading_title(subtitle)
+                        && !ends_with_ko_prose_verb(subtitle)
+                }
+            };
+        }
+    }
+    false
+}
+
+fn korean_heading(t: &[char]) -> bool {
+    if t.is_empty()
+        || t.len() > 60
+        || t.last() == Some(&'.')
+        || t.iter()
+            .any(|ch| matches!(*ch, '!' | '?' | '。' | '！' | '？'))
+    {
+        return false;
+    }
+    korean_je_heading(t) || korean_bare_episode_heading(t) || korean_structural_heading(t)
+}
+
 /// `chapter`, `part` or `section`, one space, then digits or Roman numerals, then the end of the
 /// line or a separator and a title. The line is at most 60 chars.
 fn english_heading(t: &[char]) -> bool {
@@ -476,7 +832,7 @@ fn numeral_then_end_or_title(rest: &[char]) -> bool {
 
 /// A bullet or a number of 1 to 3 digits, then `.` or `)`. Each marker needs the space after it.
 fn is_list_item(t: &[char]) -> bool {
-    const BULLETS: &[char] = &['-', '*', '+', '•', '・'];
+    const BULLETS: &[char] = &['-', '*', '+', '•', '・', '※'];
     match t {
         [marker, sep, ..] if BULLETS.contains(marker) => {
             matches!(*sep, ' ' | '\t' | '\u{3000}')
@@ -1633,18 +1989,18 @@ fn author_year_citation(c: &[char], i: usize, le: usize) -> Option<usize> {
     valid.then_some(j + 1)
 }
 
-/// Uppercase ASCII or Han first, at most 60 chars, and a year at the end.
+/// Uppercase ASCII, Han, Kana, or Hangul syllable first, at most 60 chars, and a year at the end.
 fn is_author_year_part(part: &[char]) -> bool {
     let part = trim(part);
     part.len() <= 60
-        && part
-            .first()
-            .is_some_and(|&ch| ch.is_ascii_uppercase() || is_han(ch))
+        && part.first().is_some_and(|&ch| {
+            ch.is_ascii_uppercase() || is_han(ch) || is_kana(ch) || is_hangul_syllable(ch)
+        })
         && ends_with_year(part)
 }
 
 /// A year from 1500 to 2099, optionally followed by one lowercase letter, and preceded by a
-/// space, `,` or `，`.
+/// space, fullwidth space, `,`, `，` or `、`.
 fn ends_with_year(part: &[char]) -> bool {
     let mut end = part.len();
     if part.last().is_some_and(|ch| ch.is_ascii_lowercase()) {
@@ -1658,7 +2014,7 @@ fn ends_with_year(part: &[char]) -> bool {
     let digits: String = year.iter().collect();
     year.iter().all(|ch| ch.is_ascii_digit())
         && (1500..=2099).contains(&digits.parse::<u32>().unwrap_or(0))
-        && matches!(sep, ' ' | ',' | '，')
+        && matches!(sep, ' ' | '\u{3000}' | ',' | '，' | '、')
 }
 
 /// `$` then a char that is not whitespace, a digit or `$`. The next `$` closes it, and must be
@@ -1698,9 +2054,27 @@ fn is_han(ch: char) -> bool {
         ch,
         '\u{4e00}'..='\u{9fff}'
             | '\u{3400}'..='\u{4dbf}'
-            | '\u{20000}'..='\u{2a6df}'
+            | '\u{20000}'..='\u{2ceaf}'
             | '\u{f900}'..='\u{faff}'
+            | '\u{3005}'
+            | '\u{3007}'
     )
+}
+
+fn is_kana(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{3041}'..='\u{3096}'
+            | '\u{309d}'..='\u{309f}'
+            | '\u{30a1}'..='\u{30fa}'
+            | '\u{30fc}'..='\u{30ff}'
+            | '\u{31f0}'..='\u{31ff}'
+            | '\u{ff66}'..='\u{ff9f}'
+    )
+}
+
+fn is_hangul_syllable(ch: char) -> bool {
+    ('\u{ac00}'..='\u{d7a3}').contains(&ch)
 }
 
 /// Start and end index of each line; the newline itself is excluded.

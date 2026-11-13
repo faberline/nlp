@@ -49,6 +49,8 @@ pub struct Options {
 pub enum Lang {
     Zh,
     En,
+    Ja,
+    Ko,
     Mixed,
     Und,
 }
@@ -261,13 +263,18 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
 
     for paragraph in segment::paragraphs(&m) {
         let paragraph_index = seg.paragraphs.len();
+        let (para_lang, _) = segment::lang_in_context(&c, paragraph, false);
+        let para_ja = para_lang == Lang::Ja || segment::has_ja_cue(&c, paragraph);
         seg.paragraphs.push(Paragraph {
             span: paragraph,
-            lang: segment::lang(&c, paragraph).0,
+            lang: para_lang,
         });
 
         for span in segment::sentences(&m, paragraph) {
-            let (lang, unsupported) = segment::lang(&c, span);
+            let (lang, unsupported) = segment::lang_in_context(&c, span, para_ja);
+            let sent_ja = lang == Lang::Ja
+                || (para_ja && !segment::has_ja_or_ko(&c, span))
+                || segment::has_ja_cue(&c, span);
             let sentence_index = seg.sentences.len();
             if unsupported {
                 unknown.push(Unknown {
@@ -275,7 +282,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
                     span,
                     reason: Reason::UnsupportedLanguage,
                 });
-            } else {
+            } else if !matches!(lang, Lang::Ja | Lang::Ko) && !segment::has_ja_or_ko(&c, span) {
                 scanned.push((sentence_index, span));
             }
             seg.sentences.push(Sentence {
@@ -284,8 +291,8 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
                 paragraph: paragraph_index,
             });
 
-            for clause in segment::clauses(&m, span) {
-                let lang = segment::lang(&c, clause).0;
+            for clause in segment::clauses_with_lang(&m, span, sent_ja) {
+                let lang = segment::lang_in_context(&c, clause, sent_ja).0;
                 seg.clauses.push(Clause {
                     span: clause,
                     lang,
@@ -296,11 +303,13 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
             if unsupported {
                 continue;
             }
-            for piece in token::tokenize_with_matcher(&c, span, &inline, &silent, &token_matcher) {
+            for piece in
+                token::tokenize_with_matcher(&c, span, sent_ja, &inline, &silent, &token_matcher)
+            {
                 let text: String = c[piece.span.start_char..piece.span.end_char]
                     .iter()
                     .collect();
-                let lang = token::token_lang(&text);
+                let lang = token::token_lang(&text, sent_ja);
                 let undecided = |reason| Unknown {
                     layer: "pos".to_owned(),
                     span: piece.span,
@@ -314,6 +323,10 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
                     }
                     pos::Tag::Missing => {
                         unknown.push(undecided(Reason::NoModel));
+                        None
+                    }
+                    pos::Tag::UnsupportedLang => {
+                        unknown.push(undecided(Reason::UnsupportedLanguage));
                         None
                     }
                 };
@@ -418,7 +431,7 @@ pub(crate) fn line_tokens(text: &str) -> Option<Vec<std::ops::Range<usize>>> {
     let mut out = Vec::new();
     for paragraph in segment::paragraphs(&m) {
         for sentence in segment::sentences(&m, paragraph) {
-            if segment::lang(&c, sentence).1 {
+            if segment::lang(&c, sentence).1 || segment::has_ja_or_ko(&c, sentence) {
                 return None;
             }
             out.extend(

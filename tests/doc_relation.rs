@@ -460,18 +460,21 @@ fn chains_scope_and_opaque() {
 
     let text = "これはテストです。But it works.";
     let doc = analyze(text);
-    let unsupported: Vec<Span> = doc
-        .unknown
-        .iter()
-        .filter(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
-        .map(|u| u.span)
-        .collect();
-    assert_eq!(unsupported, [doc.segmentation.sentences[0].span]);
+    assert!(
+        !doc.unknown
+            .iter()
+            .any(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
+    );
+    assert!(
+        doc.unknown
+            .iter()
+            .any(|u| u.layer == "pos" && u.reason == Reason::UnsupportedLanguage)
+    );
     assert!(rels(text).is_empty());
     assert_eq!(rel_unknown(text), ["But"]);
     assert!(rels("We ran it. これはテストです。").is_empty());
     assert!(rel_unknown("We ran it. これはテストです。").is_empty());
-    // The unsupported sentence after a connector sentence is not used as an argument.
+    // A JA/KO sentence after a connector sentence is not used as an argument.
     let text = "It works. But it is slow. これはテストです。";
     let japanese = "これはテストです。";
     assert_eq!(
@@ -491,18 +494,64 @@ fn chains_scope_and_opaque() {
             .all(|r| r.4 != japanese && r.5 != japanese)
     );
     assert!(rel_unknown(text).is_empty());
-    // The unsupported sentence starts with the connector: no relation and no unknown.
+    // A mixed JA sentence starting with an English connector is skipped by Layer 7:
+    // no relation, no `relations` unknown, and `pos` (not `segmentation`) unsupported unknowns.
     let text = "It works. But これはテストです。";
     let doc = analyze(text);
-    let unsupported: Vec<Span> = doc
+    assert!(
+        !doc.unknown
+            .iter()
+            .any(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
+    );
+    let pos_unsupported: Vec<Span> = doc
+        .unknown
+        .iter()
+        .filter(|u| u.layer == "pos" && u.reason == Reason::UnsupportedLanguage)
+        .map(|u| u.span)
+        .collect();
+    assert!(!pos_unsupported.is_empty());
+    assert!(pos_unsupported.iter().all(|sp| {
+        sp.start_char >= doc.segmentation.sentences[1].span.start_char
+            && sp.end_char <= doc.segmentation.sentences[1].span.end_char
+    }));
+    assert!(rels(text).is_empty());
+    assert!(rel_unknown(text).is_empty());
+
+    // Korean sentences are likewise skipped by Layer 7 while emitting `pos` unsupported unknowns.
+    let ko_before = "안녕하세요. But it works.";
+    assert!(rels(ko_before).is_empty());
+    assert_eq!(rel_unknown(ko_before), ["But"]);
+    let ko_mixed = "It works. But 안녕하세요.";
+    assert!(rels(ko_mixed).is_empty());
+    assert!(rel_unknown(ko_mixed).is_empty());
+
+    // Truly unsupported script (Cyrillic) still emits `segmentation` `UnsupportedLanguage`.
+    let cyr_before = "Привет, мир. But it works.";
+    let doc_cyr_before = analyze(cyr_before);
+    let unsupported: Vec<Span> = doc_cyr_before
         .unknown
         .iter()
         .filter(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
         .map(|u| u.span)
         .collect();
-    assert_eq!(unsupported, [doc.segmentation.sentences[1].span]);
-    assert!(rels(text).is_empty());
-    assert!(rel_unknown(text).is_empty());
+    assert_eq!(unsupported, [doc_cyr_before.segmentation.sentences[0].span]);
+    assert!(rels(cyr_before).is_empty());
+    assert_eq!(rel_unknown(cyr_before), ["But"]);
+
+    let cyr_after = "It works. But Привет.";
+    let doc_cyr_after = analyze(cyr_after);
+    let unsupported_after: Vec<Span> = doc_cyr_after
+        .unknown
+        .iter()
+        .filter(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
+        .map(|u| u.span)
+        .collect();
+    assert_eq!(
+        unsupported_after,
+        [doc_cyr_after.segmentation.sentences[1].span]
+    );
+    assert!(rels(cyr_after).is_empty());
+    assert!(rel_unknown(cyr_after).is_empty());
 
     assert_eq!(
         rels("`then` is a keyword, then we go."),
@@ -657,6 +706,10 @@ const CASES: &[&str] = &[
     "一方面便宜，另一方面。",
     "It works. But it is slow. これはテストです。",
     "It works. But これはテストです。",
+    "안녕하세요. But it works.",
+    "It works. But 안녕하세요.",
+    "Привет, мир. But it works.",
+    "It works. But Привет.",
     "We left, because, it rained.",
     "如果，我們回家。",
     "Because, we stayed.",

@@ -423,9 +423,26 @@ fn softmax_prob(logits: &[f32], chosen: usize) -> f64 {
 }
 
 fn is_unsupported_sentence(doc: &Document, span: Span) -> bool {
-    doc.unknown.iter().any(|u| {
+    if doc.unknown.iter().any(|u| {
         u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage && u.span == span
-    })
+    }) {
+        return true;
+    }
+    let Some((sent_idx, sent)) = doc
+        .segmentation
+        .sentences
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.span == span)
+    else {
+        return false;
+    };
+    if matches!(sent.lang, Lang::Ja | Lang::Ko) {
+        return true;
+    }
+    doc.tokens
+        .iter()
+        .any(|t| t.sentence == sent_idx && matches!(t.lang, Lang::Ja | Lang::Ko))
 }
 
 /// Emits `no_model` `unknown` entries (`layer: "syntax"`) for every supported sentence in `doc`.

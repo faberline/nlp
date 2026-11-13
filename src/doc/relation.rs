@@ -179,7 +179,11 @@ pub(super) fn relations(c: &[char], seg: &Segmentation) -> (Vec<Relation>, Vec<U
     let unsupported: Vec<bool> = seg
         .sentences
         .iter()
-        .map(|s| segment::lang(c, s.span).1)
+        .map(|s| {
+            segment::lang(c, s.span).1
+                || matches!(s.lang, super::Lang::Ja | super::Lang::Ko)
+                || segment::has_ja_or_ko(c, s.span)
+        })
         .collect();
     let mut units = vec![Vec::new(); seg.sentences.len()];
     for (i, clause) in seg.clauses.iter().enumerate() {

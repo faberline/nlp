@@ -117,6 +117,8 @@ fn lang_str(l: Lang) -> &'static str {
     match l {
         Lang::Zh => "zh",
         Lang::En => "en",
+        Lang::Ja => "ja",
+        Lang::Ko => "ko",
         Lang::Mixed => "mixed",
         Lang::Und => "und",
     }
@@ -853,6 +855,8 @@ fn gold_items_match_analyze_document_and_pass_validator() {
 
 #[test]
 fn validator_and_scorer_reject_bad_inputs_and_score_perturbations() {
+    assert_eq!(lang_str(Lang::Ja), "ja");
+    assert_eq!(lang_str(Lang::Ko), "ko");
     let gold = read_jsonl(GOLD_PATH);
 
     // 1. Reference scorer achieves 1.0 on gold-vs-gold and drops predictably under perturbations.

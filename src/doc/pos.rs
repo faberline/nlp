@@ -11,11 +11,11 @@ pub(super) enum Tag {
     Decided(Upos),
     Ambiguous,
     Missing,
+    UnsupportedLang,
 }
 
-const PUNCT: &str =
-    "!\"'(),-./:;?[\\]_{}，。、；：？！…「」『』（）《》〈〉“”‘’—–～·‧【】〔〕［］｛｝";
-const SYM: &str = "$%+<=>@^`|~#*°×÷±©®™§¥€£₩¢←→↑↓";
+const PUNCT: &str = "!\"'(),-./:;?[\\]_{}，。、；：？！…‥⋯「」『』（）《》〈〉“”‘’—–―─～〜·‧・｡｢｣､･«»【】〔〕［］｛｝〘〙〖〗〝〟※";
+const SYM: &str = "$%+<=>@^`|~#*°×÷±©®™§¥€£₩¢←→↑↓＄％＋＜＝＞＠￥￦";
 const ZH_NUMERALS: &str = "〇零一二三四五六七八九十百千萬万億亿兩两";
 
 const EN_DECIDED: &[(Upos, &str)] = &[
@@ -140,6 +140,7 @@ pub(super) fn tag(text: &str, lang: Lang, opaque: Option<OpaqueKind>) -> Tag {
             zh_key = super::token::strip_scraper_infix(text);
             zh_key.as_ref()
         }
+        Lang::Ja | Lang::Ko => return Tag::UnsupportedLang,
         Lang::Mixed | Lang::Und => return Tag::Missing,
     };
     if let Some(&upos) = decided().get(key) {

@@ -38,12 +38,15 @@ populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prin
 - `options.names` and `options.lexicon` are optional (`Vec<String>`, omitted when empty);
   `options.mask_editorial` and `options.normalize_traditional` are optional booleans (`false` by
   default, omitted when `false`), so `Options::default()` serializes to `{}`.
-- `lang` is one of `zh`, `en`, `mixed`, `und`.
+- `lang` is one of `zh`, `en`, `ja`, `ko`, `mixed`, `und`.
 - `reason` is one of `no_model`, `ambiguous`, `low_confidence`, `unsupported_language`,
-  `not_applicable`. Layer 1 produces `unsupported_language`. Layer 2 produces `no_model` and
-  `ambiguous` (and `low_confidence` when a syntax model runs with UPOS confidence `< 0.50`),
-  with `layer: "pos"`. Layer 3 produces `ambiguous`, with `layer: "entities"`. Layer 4 produces
-  `no_model`, `low_confidence` and `not_applicable`, with `layer: "syntax"`.
+  `not_applicable`. Layer 1 produces `unsupported_language` (`layer: "segmentation"`) when
+  unsupported-script letters are at least as numerous as supported-script (`han + kana + hangul +
+  latin`) letters. Layer 2 produces `no_model`, `ambiguous`, and `unsupported_language` (for
+  undecided `ja` and `ko` lexical/particle tokens), plus `low_confidence` when a syntax model runs
+  with UPOS confidence `< 0.50`, all with `layer: "pos"`. Layer 3 produces `ambiguous`, with
+  `layer: "entities"`. Layer 4 produces `no_model`, `low_confidence` and `not_applicable`, with
+  `layer: "syntax"`. Layer 7 produces `ambiguous`, with `layer: "relations"`.
 - `sentence.paragraph` indexes `paragraphs`; `clause.sentence` indexes `sentences`.
   `entity.sentence` and `syntax.sentence` index `sentences`. `syntax.token` and `syntax.head`
   index `tokens` (`head` is `null` for `"root"`).
@@ -65,25 +68,48 @@ and empty spans are dropped. `\r` is only whitespace. A line ends at `\n`.
 1. A blank line (only whitespace) ends the current paragraph.
 2. Inside a block, a line starts a new paragraph when:
    a. it begins with U+3000, a tab, or two ASCII spaces; or
-   b. the previous line has more Han letters than other letters, and its last non-whitespace
-      character is one of `。！？…」』”’）`.
+   b. the previous line has more Han + Kana letters than Latin + other letters
+      (`(han + kana) > (latin + other)`), and its last non-whitespace character is one of
+      `。！？…‥⋯」』”’）】〕〉》］｝`.
 
 ### Sentences
 
 Scan each paragraph left to right. A sentence ends after the characters named below.
 
-1. A run of `。！？…` and ASCII `!` `?` (the run may include ASCII `.` and `!` `?`), then any closers
-   `」』”’）)"`. A CJK terminator in the run always ends the sentence. For ASCII-only runs, the sentence
-   ends only if the next char is whitespace or the paragraph ends.
-2. A single ASCII `.`, then any closers `)”’」』）"`. The sentence ends only if the next char is
-   whitespace or the paragraph ends, and the word before the dot is not an abbreviation. The word is
-   the maximal run of ASCII letters and dots before the dot. Abbreviations, compared with ASCII
-   case folding: `mr mrs ms mx dr prof rev sr jr st vs cf fig eq no e.g i.e`, and any single
-   uppercase letter. `etc` and `al` also require the next non-whitespace char to be uppercase or
-   absent. An abbreviated month (`jan feb mar apr jun jul aug sep sept oct nov dec`, ASCII
-   case-insensitive; `May` is not one) does not end the sentence when one space and then an ASCII
-   digit follow, so `Nov. 10, 2026 was fine.` is one sentence. `It was Dec. Then we ran.` still
-   splits.
+1. A run of CJK terminators (`。！？…‥⋯｡`) and ASCII `!` `?` (the run may include ASCII `.` and
+   `!` `?`), then any closers `」』”’）)"'»]】〕〉》］｝`:
+   - **Ellipsis-before-clause-separator guard**: if the terminator run consists solely of ellipsis
+     chars (`…`, `‥`, `⋯`) with no closer after it, and the immediately following char is a clause
+     separator (`，`, `、`, `；`, `：`, `,`, `;`, `:`), it does **not** end the sentence (so
+     `「……，但是眾人已經抵達山谷。」` stays one sentence).
+   - **English quoted `?`/`!` + lowercase attribution verb**: for an ASCII-only `!`/`?`/`.` run
+     followed by at least one quote closer (`"`, `”`, `'`, `’`), if on the **same line** (no `\n`
+     in between) the next non-whitespace char is an ASCII lowercase letter (`a`–`z`), it does
+     **not** end the sentence (so `"Really?" she asked.` stays one sentence, whereas
+     `"Really?" She left.` splits).
+   - Otherwise, a CJK terminator in the run always ends the sentence, and an ASCII-only run ends
+     the sentence only if the next char is whitespace or the paragraph ends.
+2. A single ASCII `.`, then any closers `」』”’）)"'»]】〕〉》］｝`. The sentence ends only if the
+   next char is whitespace or the paragraph ends, and none of the following non-split guards hold:
+   - **Korean dotted dates**: `<1..=4 ASCII digits>. <1..=2 ASCII digits>.` (and
+     `<1..=4 ASCII digits>. <1..=2 ASCII digits>. <1..=2 ASCII digits>.`, such as `2026. 11. 13.`
+     or `11. 13.`). An inner dot between `<1..=4 digits>` and `' '` + `<1..=2 digits>.` never ends
+     the sentence; the trailing dot of such a date does not end the sentence when on the same line
+     a space is followed by Hangul, an ASCII digit, or an ASCII lowercase letter (so
+     `2026. 11. 13. 오후 서울에서 회의가 열렸다.` stays one sentence, while `2020. 새해가 밝았다.`
+     and `2020. The year began.` still split).
+   - **Unambiguous abbreviations**: the word before the dot (the maximal run of ASCII letters and
+     dots before it) matches:
+     - case-insensitively: `mr mrs ms mx dr prof rev sr jr st vs cf fig eq no e.g i.e`, or any
+       single uppercase ASCII letter (`A.`–`Z.`);
+     - capitalized title and organization abbreviations: `Gen. Col. Maj. Capt. Lt. Sgt. Gov. Sen.
+       Rep. Univ. Dept. Assn. Bros. Inc. Ltd. Corp.`;
+     - context-sensitive abbreviations (`etc. al. a.m. p.m. Ph.D. M.D. B.A. M.A. B.S. M.S. U.S.
+       U.K. E.U. U.N. Co.`): these keep the sentence open unless the next non-whitespace char is an
+       ASCII uppercase letter or absent (paragraph end);
+     - abbreviated months (`jan feb mar apr jun jul aug sep sept oct nov dec`, ASCII
+       case-insensitive; `May` is not one) followed by one space and an ASCII digit (`Nov. 10, 2026
+       was fine.` stays one sentence; `It was Dec. Then we ran.` still splits).
 3. A run of two or more ASCII dots ends the sentence only if whitespace or the paragraph end
    follows and the next non-whitespace char is not a lowercase ASCII letter. Closers are not
    skipped here.
@@ -95,21 +121,52 @@ Scan each paragraph left to right. A sentence ends after the characters named be
 
 ### Clauses
 
-Split a sentence at `，` `；` `：` always. Split at ASCII `,` `;` `:` only when the next char is
-whitespace or the sentence ends, so `1,000` and `10:30` are not split. `、` is not a separator.
-The separator belongs to no clause. The final terminator stays in the last clause.
+Split a sentence at `，` `；` `：` always. For `、` (`U+3001`), splitting is language-aware: in a
+Japanese sentence (`lang == "ja"` or containing Kana / Japanese-exclusive Kanji), `、` (Japanese
+*tōten*) splits clauses; in Chinese and other non-Japanese sentences, `、` (Chinese enumeration
+comma *dùnhào*) does not split clauses. Split at ASCII `,` `;` `:` when the next char is whitespace
+or the sentence ends (so `1,000` and `10:30` are not split), and also split at a tight ASCII `,`
+directly between two Hangul characters (`먹고,마시고`, whereas `a,b` and `1,000` stay unsplit). The
+separator belongs to no clause. The final terminator stays in the last clause.
 
 ### Language
 
-A span's language comes from its letters. Han letters are U+4E00–9FFF, U+3400–4DBF,
-U+20000–2A6DF and U+F900–FAFF. Latin letters are ASCII letters and U+00C0–024F, except U+00D7
-and U+00F7. Other letters are `char::is_alphabetic` and neither of the above.
+A span's language is classified from four supported script families plus paragraph-context
+disambiguation (`lang_in_context`):
 
-- No letters: `und`, no unknown.
-- Other letters >= Han + Latin: `und`, and the sentence gets `unsupported_language`.
-- Han > 0 and Latin > 0: `mixed`.
-- Han > 0: `zh`.
-- Otherwise: `en`.
+- **Han**: U+4E00–9FFF, U+3400–4DBF, U+20000–2CEAF, U+F900–FAFF, U+3005 (`々`), and U+3007 (`〇`)
+  (plus U+3006 `〆` counted toward Japanese support).
+- **Kana**: Hiragana (U+3041–3096, U+309D–309F), Katakana (U+30A1–30FA, U+30FD–30FF), prolonged
+  sound mark `ー` (U+30FC), Katakana phonetic extensions (U+31F0–31FF), and halfwidth Katakana
+  (U+FF66–FF9F).
+- **Hangul**: Hangul syllables (U+AC00–D7A3), Jamo (U+1100–11FF), Compatibility Jamo (U+3131–318E,
+  such as `ㅋㅋㅋ`, `ㅎㅎ`), Jamo Extended-A/B (U+A960–A97C, U+D7B0–D7FB), and halfwidth Hangul
+  (U+FFA0–FFDC).
+- **Latin**: ASCII letters, U+00C0–024F (excluding `×` U+00D7 and `÷` U+00F7), and fullwidth Latin
+  (U+FF21–FF3A, U+FF41–FF5A).
+- **Other**: any `char::is_alphabetic` character outside the four families above (such as Cyrillic,
+  Arabic, or Greek).
+- **Japanese-exclusive Kanji / Kokuji (`is_ja_exclusive_kanji`)**: curated Shinjitai and Kokuji
+  disjoint from Traditional and Simplified Chinese (`駅 図 読 発 観 験 権 様 戦 続 転 広 庁 労 変 実
+  気 楽 帰 歩 毎 黒 経 絵 総 訳 鉄 鉱 顕 込 枠 峠 畑 辻 雫 〆`).
+
+Let `sup = han + kana + hangul + latin`:
+
+- `sup + other == 0`: `und`, no `unknown`.
+- `other >= sup`: `und`, and the sentence gets
+  `{"layer": "segmentation", "span": sentence.span, "reason": "unsupported_language"}`.
+- Otherwise (`other < sup`), active language families are:
+  - `has_ja = kana > 0 || (han > 0 && (has_ja_exclusive || (context_ja && hangul == 0)))`
+  - `has_zh = han > 0 && !has_ja`
+  - `has_ko = hangul > 0`
+  - `has_en = latin > 0`
+- If 2 or more families are active: `mixed`; otherwise `ja`, `ko`, `zh`, or `en`.
+- **Paragraph-context disambiguation (`context_ja`)**: a paragraph containing any Kana or
+  Japanese-exclusive Kanji sets `para_ja = true`, so pure-Kanji sentences inside that paragraph
+  (such as `「約束。」` in `「約束。」彼は言った。`) and pure-Kanji clauses inside a Japanese
+  sentence inherit `ja` instead of flipping to `zh`. Standalone pure-Han paragraphs without a
+  Japanese cue default to `zh`. Hangul + Hanja without Kana (`한국어(韓國語)`) has `hangul > 0`, so
+  `context_ja && hangul == 0` is false and it tags as `mixed`.
 
 ## Opaque spans
 
@@ -153,9 +210,31 @@ Blocks:
    - English: `chapter`, `part` or `section` (ASCII case-insensitive), one space, then one or
      more digits or `IVXLC`, then the end of the line, or one of `:` `.` `-` `—` and a title. The
      line is at most 60 chars.
-4. List item: the trimmed line starts with `- `, `* `, `+ `, `• ` or `・ ` (the marker, then a
-   space, tab or U+3000), or with 1 to 3 ASCII digits, then `.` or `)`, then a space. The span
-   is the trimmed line. Continuation lines are not included.
+   - Japanese: at most 60 chars and containing none of `。！？`:
+     - `第`, then ASCII digits, fullwidth digits (`０`–`９`) or Kanji numerals (`一二三四五六七八九十百千万零〇壱弐参`),
+       optional spaces, then one of `話巻章節回部編幕条項`, followed by the end of the line, a separator
+       (whitespace, `：`, `:`, `・`, `―`, `—`, `-`, `〜`, `～`) and a title, or an attached title
+       that does **not** begin with a Japanese case/topic particle (`は が を に で の と も へ や から まで`,
+       preventing prose such as `第1話は面白い` from matching);
+     - `第`-less episode headers `<numerals>話` followed by a separator and non-particle title
+       (`12話 雨の駅`); or
+     - standalone section keywords (`プロローグ`, `エピローグ`, `幕間`, `序章`, `終章`, `最終話`,
+       `最終章`, `番外編`), alone or followed by a separator and subtitle (at most 40 chars).
+   - Korean: at most 60 chars and containing none of `.!?。！？`:
+     - `제`, optional spaces, ASCII digits, fullwidth digits or Hangul Sino-Korean numerals
+       (`일이삼사오육륙칠팔구십백천`), optional spaces, then one of `장절화회권부편막`, followed by the end
+       of the line or a separator (whitespace, `:`, `：`, `-`, `—`, `·`, `.`) and a title, excluding
+       lines where a Korean particle (`은 는 이 가 을 를 의 에 에서 도 만 과 와 로 으로`) immediately
+       follows the unit (so `제1장은 중요하다` stays normal prose);
+     - webtoon / web-novel episode headers `<1..=4 digits>화` or `<1..=3 digits>장` alone or followed
+       by whitespace/`:`/`-`/`.` and a short title (excluding declarative/polite sentence endings
+       `다`, `요`, `죠`); or
+     - standalone section keywords (`프롤로그`, `에필로그`, `서장`, `종장`, `외전`), alone or
+       followed by a separator and subtitle (at most 40 chars).
+4. List item: the trimmed line starts with `- `, `* `, `+ `, `• `, `・ `, or `※ ` (the marker, then
+   a space, tab or U+3000; inline `※1` without whitespace stays normal text), or with 1 to 3 ASCII
+   digits, then `.` or `)`, then a space. The span is the trimmed line. Continuation lines are not
+   included.
 5. Noise and optional editorial blocks (`kind: "code"`):
    - By default, ASCII/Unicode box-drawing banner blocks (`┏━...┗━` / `┌─...└─`) and standalone
      raw/unclosed HTML tag lines (`<P`, `<p>`, `</p>`, `<br>`, `<br/>`) are masked as block spans.
@@ -183,9 +262,11 @@ order, and a match continues after its span:
    - Numeric: `[`, then only ASCII digits, `,`, `-`, `–` and spaces (at least one digit), then `]`.
    - Author-year: `(` or `（`, then content with no `(`, `（`, `)` or `）`, then `)` or `）` on
      the same line. The content is at most 80 chars and is split at `;` and `；`. Each part,
-     trimmed, is at most 60 chars, starts with an uppercase ASCII letter or a Han char, and ends
-     with a year: four digits from `1500` to `2099`, optionally followed by one lowercase ASCII
-     letter, and preceded by a space, `,` or `，`.
+     trimmed, is at most 60 chars, starts with an uppercase ASCII letter, Han char, Hiragana/Katakana
+     char, or Hangul char, and ends with a year: four digits from `1500` to `2099`, optionally
+     followed by one lowercase ASCII letter, and preceded by a space, U+3000, `,`, `，`, or `、`
+     (matching e.g. `（田中・佐藤、2020）`, `（たなか，2020a）`, `(김철수, 2020)`,
+     `(박지민·최유진, 2021b)`).
 4. Formula: `$`, then a char that is not whitespace, not a digit and not `$`. The next `$` on the
    line closes it. That `$` must follow a non-whitespace char and must not be followed by an
    ASCII digit. `$5 and $10` is not a formula.
@@ -206,30 +287,37 @@ Known limits of opaque spans:
 
 `tokens` is a list of tokens in text order, sorted by start. A token has a `span`, a `lang`,
 the index of its `sentence`, and an optional `upos` (Universal POS, UD v2 names in upper case).
-A token's `lang` is `zh` when it has a Han char, `en` when it has a Latin letter (a letter that
-is not Han), and `und` otherwise. The Han set is U+3400–4DBF, U+4E00–9FFF, U+F900–FAFF, U+3005
-(々) and U+3007 (〇). Extension B is not in it. `upos` is absent when no
-rule or word decides it. Tokens never cross a sentence boundary, and no token is whitespace.
+A token's `lang` is `ja` when it has a Kana char, a Japanese-exclusive Kanji, or a Han char inside a
+Japanese-context sentence (`sent_ja`), `ko` when it has a Hangul char, `zh` when it has a Han char
+(outside Japanese context), `en` when it has a Latin letter, and `und` otherwise. `upos` is absent
+when no rule or word decides it. Tokens never cross a sentence boundary, and no token is whitespace.
 
 ### Tokenization
 
-Each sentence is split by these rules, in order:
+Each supported sentence is split by these rules, in order:
 
 1. Every non-silent opaque span inside the sentence is one token. Block spans (and `silent_noise`
    inline spans under `options.mask_editorial`) are never tokens.
-2. Han runs (maximal runs of the Han set) are matched against the Taiwan term list
-   (`臺灣`, `資料庫`, `記憶體` and so on) plus pure-Han entries of `options.lexicon` and
-   `options.names`, longest match first. The text between matches is segmented by `doc_jieba()`
-   (jieba with HMM plus classical self-pronouns and generic genre nouns such as `在下`, `妾身`,
-   `老夫`, `老身`, `貧道`, `本座`, `儲物袋`, `築基丹`). When `options.normalize_traditional` is
-   `true`, unmatched Han slices are projected through `t2s` to Simplified characters for dictionary
-   lookup (skipping a single scraper anti-censorship infix in `['丅', '丵', '灬', '堊', '冇']` when
-   sandwiched between two Han chars so `少丅女` / `長堊老` stays one contiguous original-text span
-   with zero offset drift), sliced back by exact scalar index onto the original text, and passed
-   through the coverb/pronoun/postposition de-gluing guard (splitting false HMM merges such as
-   `將X`, `當X`, `對此`, `這XXX`, `其+V`, and `中+V` while keeping lexicalized compounds such as
-   `將軍`, `當時`, `對方`, `那天`, `其中`, `中期`).
-3. All other runs use Unicode word boundaries (UAX 29). Then:
+2. **Japanese Han+Kana runs** (maximal contiguous runs of `is_han || is_kana` when the sentence has
+   Japanese context `sent_ja` or the run contains Kana or Japanese-exclusive Kanji) are matched
+   leftmost-longest against `options.names` and `options.lexicon` first, and the text between
+   matches is segmented by `icu_segmenter::WordSegmenter::new_dictionary` (ICU4X compiled `cjdict`
+   dictionary, offline with zero offset drift).
+3. **Chinese Han runs** (maximal runs of `is_han` outside Japanese context) are matched against the
+   Taiwan term list (`臺灣`, `資料庫`, `記憶體` and so on) plus pure-Han entries of
+   `options.lexicon` and `options.names`, longest match first. The text between matches is segmented
+   by `doc_jieba()` (jieba with HMM plus classical self-pronouns and generic genre nouns such as
+   `在下`, `妾身`, `老夫`, `老身`, `貧道`, `本座`, `儲物袋`, `築基丹`). When
+   `options.normalize_traditional` is `true`, unmatched Han slices are projected through `t2s` to
+   Simplified characters for dictionary lookup (skipping a single scraper anti-censorship infix in
+   `['丅', '丵', '灬', '堊', '冇']` when sandwiched between two Han chars so `少丅女` / `長堊老` stays
+   one contiguous original-text span with zero offset drift), sliced back by exact scalar index onto
+   the original text, and passed through the coverb/pronoun/postposition de-gluing guard (splitting
+   false HMM merges such as `將X`, `當X`, `對此`, `這XXX`, `其+V`, and `中+V` while keeping
+   lexicalized compounds such as `將軍`, `當時`, `對方`, `那天`, `其中`, `中期`).
+4. **Korean, English, numeric, and punctuation runs**: Hangul entries in `options.names` and
+   `options.lexicon` are matched leftmost-longest first; all remaining text uses Unicode word
+   boundaries (UAX #29, yielding Korean *eojeol* 어절 tokens and standalone punctuation). Then:
    a. English clitics split off: `n't` (`didn't` gives `did`, `n't`; `can't` gives `ca`,
       `n't`), and `'s`, `'ll`, `'re`, `'ve`, `'m`, `'d`.
    b. A hyphen (`-` or `‐`, U+2010) between two words joins them: `well-known` is one token.
@@ -237,31 +325,37 @@ Each sentence is split by these rules, in order:
       `COVID`, `-`, `19`.
    c. A dot after a listed abbreviation, a single uppercase letter (the abbreviation list of
       the sentence rules) or a word with a dot inside (`U.S`) joins it: `Dr.` and `U.S.` are
-      one token each. `etc.` keeps its dot too, although `etc` is not in the list.
-   d. A run of one char from `. … - — ~ ! ? ！ ？` is one token: `...`, `!!!`, `---`. A
-      different char starts a new token, so `?!!` is `?` and `!!`.
-4. Whitespace is dropped. Every other char belongs to exactly one token.
+      one token each. `etc.` keeps its dot too, although `etc` is context-sensitive.
+   d. A run of one char from `. … ‥ ⋯ - — ― ─ ~ 〜 ～ ! ? ！ ？` is one token: `...`, `……`,
+      `‥‥`, `⋯⋯`, `---`, `――`, `──`, `〜〜`, `!!!`. A different char starts a new token, so `?!!`
+      is `?` and `!!`.
+5. Whitespace is dropped. Every other char belongs to exactly one token.
 
 ### POS tagging
 
 The tag of each token is decided by the first rule that matches:
 
 1. Opaque `url`, `citation` and `code` are `X`. Opaque `formula` and `emoji` are `SYM`.
-2. Only punctuation characters (ASCII and CJK punctuation) are `PUNCT`.
-3. Only symbol characters (for example `$ % + = @ ° × ± © € →`) are `SYM`.
+2. Only punctuation characters (ASCII, CJK, and Japanese/Korean punctuation including
+   `‥ ⋯ 〜 ・ ｡ ｢ ｣ ､ ･ ― ─ « » 〘 〙 〖 〗 〝 〟 ※`) are `PUNCT`.
+3. Only symbol characters (for example `$ % + = @ ° × ± © € →` and fullwidth
+   `＄ ％ ＋ ＜ ＝ ＞ ＠ ￥ ￦`) are `SYM`.
 4. A number is `NUM`: ASCII digits, with `.` or `,` allowed between them (`3.5`, `1,000`), or
    a run of Chinese numerals (`〇零一二三四五六七八九十百千萬万億亿兩两`).
-5. The lexicon. English words are looked up in lower case, Chinese words exactly. A word has
-   one tag.
-6. A word in the ambiguous list gets no tag, with reason `ambiguous`.
-7. Anything else gets no tag, with reason `no_model`.
+5. A token whose `lang` is `ja` or `ko` (not already tagged by rules 1–4) gets no tag, with reason
+   `unsupported_language`.
+6. The lexicon (`zh` and `en`). English words are looked up in lower case, Chinese words exactly. A
+   word has one tag.
+7. A word in the ambiguous list (`zh` and `en`) gets no tag, with reason `ambiguous`.
+8. Anything else gets no tag, with reason `no_model`.
 
 Every undecided token has exactly one `unknown` entry with `layer: "pos"` and the token's span.
-The lexicon is hand-written and small. It has no statistical model, so most content words
-(nouns, verbs, adjectives) are `no_model`.
+The lexicon is hand-written and small, covering Chinese and English closed-class words. Most Chinese
+and English content words (nouns, verbs, adjectives) are `no_model`, while undecided Japanese and
+Korean lexical/particle tokens are `unsupported_language`.
 
-Sentences with `unsupported_language` have no tokens, and the sentence's `pos` entries are
-absent.
+Sentences with Layer-1 `segmentation` `unsupported_language` (scripts outside Han, Kana, Hangul, and
+Latin, such as Cyrillic or Arabic) have no tokens, and the sentence's `pos` entries are absent.
 
 Known limits of tokens and POS:
 
@@ -272,11 +366,14 @@ Known limits of tokens and POS:
 - `etc.` at the end of a sentence keeps its dot, so the sentence has no separate `.` token.
 - An abbreviation dot swallows a sentence-final period: `She said no. Then I left.` gives
   `no.` as one token (`no_model`), and `I said I.` gives `I.` as one token.
-- Most content words are `no_model` until the model layers. The lexicon only has closed-class
-  words and a few numerals.
+- Most `zh`/`en` content words are `no_model` until the model layers. The lexicon only has
+  closed-class words and a few numerals.
 - `&` is `und` by the token language rule, so it never matches the CCONJ entry in the
   lexicon. The entry stays, and it is a known spec issue.
-- Japanese, Korean and other scripts get no tokens.
+- Korean UAX #29 tokenization cuts at *eojeol* (whitespace/punctuation) boundaries unless split by
+  `options.names` or `options.lexicon`; attached Korean case/topic particles stay with their stem,
+  and neither Japanese nor Korean has a Layer-2 POS lexicon (`pos: unsupported_language`).
+- Scripts outside Han, Kana, Hangul, and Latin get no tokens (`segmentation: unsupported_language`).
 
 ## Relations
 
@@ -402,8 +499,9 @@ connector's span, and no relation, in these cases:
   on its own: `先，然後吃飯。` gives a sequence for `然後` with `arg1` = `先`.
 - A discourse marker: `So,`.
 
-A sentence with `unsupported_language` has no relations, and no relation uses it as an argument.
-A new paragraph also breaks the sentence relation.
+A sentence with Layer-1 `unsupported_language` or containing Japanese or Korean script (`lang` of
+`ja` or `ko`, or Kana / Hangul / Japanese-exclusive Kanji) has no relations, and no relation uses
+it as an argument. A new paragraph also breaks the sentence relation.
 
 ### Relations limits
 
@@ -436,10 +534,12 @@ A new paragraph also breaks the sentence relation.
 
 ## Entities (layer 3)
 
-`entities` lists entities found by rules in supported sentences. A sentence whose language is
-unsupported gets no entities. Each entity has a `kind`, a `span`, the `sentence` index, and
-`value` and `unit` when the kind has them. Kinds: `number`, `date`, `relative_date`, `time`,
-`quantity`, `url`, `email`, `name`. The list is sorted by start.
+`entities` lists entities found by rules in `zh`, `en`, and `zh`/`en` `mixed` sentences. A sentence
+with Layer-1 `unsupported_language` or containing Japanese or Korean script gets no entities (so
+Chinese measure-word and date rules never fire on Japanese Kanji or Korean text). Each entity has a
+`kind`, a `span`, the `sentence` index, and `value` and `unit` when the kind has them. Kinds:
+`number`, `date`, `relative_date`, `time`, `quantity`, `url`, `email`, `name`. The list is sorted
+by start.
 
 Values (`value` is omitted for kinds that have none):
 
@@ -551,10 +651,11 @@ Ambiguous candidates are not entities. Each one is an `unknown` with layer `enti
 
 Known limits of entities:
 
-- The sentence splitter ends a sentence after `a.m.` or `p.m.` when whitespace follows, as it
-  does for any dot. The time entity still resolves: `3:30 p.m.` gives `15:30` and `10 a.m.` gives
-  `10:00`. `Sept. 3rd` and `Nov. 10` resolve as dates, because of the abbreviated-month rule in
-  layer 1 (a digit must follow the dot).
+- `a.m.` and `p.m.` are context-sensitive abbreviations in Layer 1 (staying inside the sentence
+  before lowercase text, commas, or digits, and splitting before an uppercase new sentence). The
+  time entity resolves both ways: `3:30 p.m.` gives `15:30` and `10 a.m.` gives `10:00`. `Sept. 3rd`
+  and `Nov. 10` resolve as dates, because of the abbreviated-month rule in layer 1 (a digit must
+  follow the dot).
 - No model. Names come only from `options.names`. Other proper nouns are not entities.
 - Dates, times and numbers without a marker or unit are only numbers or ambiguous.
 - No signs or ranges: `-5` gives the number 5, and `3-5` gives 3 and 5.
@@ -576,7 +677,10 @@ Known limits of entities:
 
 - Hard-wrapped Chinese text splits at each line break. Rule 4 only keeps a wrap when the next
   line starts lowercase Latin, so Chinese line wraps become sentence boundaries.
-- Japanese, Korean and other scripts are `und` with `unsupported_language`.
+- Japanese (`ja`) and Korean (`ko`) are segmented and tokenized in Layers 1–2 (`pos:
+  unsupported_language` on undecided lexical/particle tokens), and are skipped by Layers 3
+  (`entities`), 4 (`syntax`), and 7 (`relations`). Scripts outside Han, Kana, Hangul, and Latin are
+  `und` with `segmentation: unsupported_language`.
 - Layer 2 has no statistical tagger. Its UPOS comes from the rules and the lexicon in
   "Tokens and POS". There is no model and no network.
 - Layer 7 (Relations) sees only connectors at the start of a clause. See "Relations limits".
@@ -862,8 +966,10 @@ tensor with `C = 17 + max_len + 148` (`421` when `max_len = 256`):
     `NOUN`/`PROPN` else `PRON`); otherwise `upos` stays `None` and the token's `"pos"` `unknown`
     reason becomes `low_confidence`.
   - When `backend` is not compiled in, or `doc-syntax-v1` or its files are absent (`NoBackend`,
-    `UnknownModel`, `Missing`), each supported sentence emits
-    `{"layer": "syntax", "span": sentence.span, "reason": "no_model"}`. Integrity and runtime
+    `UnknownModel`, `Missing`), each supported `zh`/`en`/`mixed` sentence emits
+    `{"layer": "syntax", "span": sentence.span, "reason": "no_model"}`. Sentences with Layer-1
+    `unsupported_language` or containing Japanese or Korean script (`ja`/`ko` sentences or `ja`/`ko`
+    tokens) are skipped cleanly by both `annotate` and `no_model` reporting. Integrity and runtime
     errors (`HashMismatch`, `Manifest`, `Load`, `Run`) are returned to the caller.
 
 ### Batch corpus CLI (`nlp_novel_batch`)
@@ -927,8 +1033,8 @@ shorter valid one. Per reader:
 - `NarrativeAnalyzer`: a line outside the allow list, or one with any opaque span, uses ICU
   sentences and `Term` tokens.
 - `CrossChapterCandidates`: a line outside the allow list, one with any opaque span (heading,
-  list item, code, formula, citation, URL), or one in a language that layer 2 does not support
-  uses the generic tokenizer.
+  list item, code, formula, citation, URL), one containing Japanese or Korean script (`line_tokens`
+  returns `None`), or one in an unsupported language uses the generic tokenizer.
 
 Differential tests (`doc_line_tests`, `doc_pronoun_tests`) compare the doc path with the old
 path, including the inputs of both reviews of pull request 36. Fixed-seed generated runs compare

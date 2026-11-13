@@ -488,3 +488,324 @@ fn ws1_ws2_v3_silent_noise_and_infix_zero_offset_drift() {
         );
     }
 }
+
+#[test]
+fn ja_novel_dialogue_context_and_clauses() {
+    // Pure-Kanji dialogue `「約束。」` inside a Japanese paragraph inherits `Lang::Ja`,
+    // and Japanese `、` splits clauses while Chinese `、` does not.
+    let text = "「約束。」彼は言った。雨が降り、風が吹いた。\n\n「約束。」他說。蘋果、香蕉。";
+    let doc = analyze(text);
+    assert_eq!(doc.segmentation.paragraphs.len(), 2);
+    assert_eq!(doc.segmentation.paragraphs[0].lang, Lang::Ja);
+    assert_eq!(doc.segmentation.paragraphs[1].lang, Lang::Zh);
+    assert!(!doc.unknown.iter().any(|u| u.layer == "segmentation"));
+
+    assert_eq!(
+        sentence_texts(text, &doc),
+        [
+            "「約束。」",
+            "彼は言った。",
+            "雨が降り、風が吹いた。",
+            "「約束。」",
+            "他說。",
+            "蘋果、香蕉。",
+        ]
+    );
+    let sent_langs: Vec<Lang> = doc.segmentation.sentences.iter().map(|s| s.lang).collect();
+    assert_eq!(
+        sent_langs,
+        [Lang::Ja, Lang::Ja, Lang::Ja, Lang::Zh, Lang::Zh, Lang::Zh]
+    );
+
+    assert_eq!(
+        clause_texts(text, &doc),
+        [
+            "「約束。」",
+            "彼は言った。",
+            "雨が降り",
+            "風が吹いた。",
+            "「約束。」",
+            "他說。",
+            "蘋果、香蕉。",
+        ]
+    );
+    let clause_langs: Vec<Lang> = doc.segmentation.clauses.iter().map(|c| c.lang).collect();
+    assert_eq!(
+        clause_langs,
+        [
+            Lang::Ja,
+            Lang::Ja,
+            Lang::Ja,
+            Lang::Ja,
+            Lang::Zh,
+            Lang::Zh,
+            Lang::Zh,
+        ]
+    );
+}
+
+#[test]
+fn ja_academic_colloquial_exclusive_kanji_and_paragraph_breaks() {
+    // Academic Japanese with `、` clause splits.
+    let paper = "本研究では、提案手法の有効性を検証した。その結果、精度が向上した。";
+    let doc = analyze(paper);
+    assert_eq!(
+        sentence_texts(paper, &doc),
+        [
+            "本研究では、提案手法の有効性を検証した。",
+            "その結果、精度が向上した。"
+        ]
+    );
+    assert_eq!(
+        clause_texts(paper, &doc),
+        [
+            "本研究では",
+            "提案手法の有効性を検証した。",
+            "その結果",
+            "精度が向上した。",
+        ]
+    );
+    assert!(
+        doc.segmentation
+            .sentences
+            .iter()
+            .all(|s| s.lang == Lang::Ja)
+    );
+    assert!(!doc.unknown.iter().any(|u| u.layer == "segmentation"));
+
+    // Standalone sentences with JA-exclusive shinjitai/kokuji and no kana.
+    for s in ["東京駅発。", "試験続行。", "〆"] {
+        let d = analyze(s);
+        assert_eq!(d.segmentation.sentences.len(), 1, "{s}");
+        assert_eq!(d.segmentation.sentences[0].lang, Lang::Ja, "{s}");
+        assert!(!d.unknown.iter().any(|u| u.layer == "segmentation"), "{s}");
+    }
+
+    // Colloquial Kana: prolonged sound mark, halfwidth katakana + `｡`, `‥` ellipsis + comma guard,
+    // and Kana-heavy single-newline paragraph break on terminators vs non-terminated lines.
+    let kana_paras = "そうだね。\nうん、いこう！";
+    let d_paras = analyze(kana_paras);
+    assert_eq!(
+        paragraph_texts(kana_paras, &d_paras),
+        ["そうだね。", "うん、いこう！"]
+    );
+    assert!(
+        d_paras
+            .segmentation
+            .paragraphs
+            .iter()
+            .all(|p| p.lang == Lang::Ja)
+    );
+
+    let bracket_paras = "彼女は【了解】\nつぎのひ、でかけた。";
+    assert_eq!(analyze(bracket_paras).segmentation.paragraphs.len(), 2);
+
+    let casual_ja = "きょうはつかれた\nなにたべる\nコーヒーとﾃｽﾄ｡";
+    let d_casual = analyze(casual_ja);
+    assert_eq!(d_casual.segmentation.paragraphs.len(), 1);
+    assert_eq!(
+        sentence_texts(casual_ja, &d_casual),
+        ["きょうはつかれた", "なにたべる", "コーヒーとﾃｽﾄ｡"]
+    );
+    assert!(
+        d_casual
+            .segmentation
+            .sentences
+            .iter()
+            .all(|s| s.lang == Lang::Ja)
+    );
+
+    let ellipsis_ja = "「‥‥、やはり行こう。」彼は立ち上がった。";
+    assert_eq!(
+        sentence_texts(ellipsis_ja, &analyze(ellipsis_ja)),
+        ["「‥‥、やはり行こう。」", "彼は立ち上がった。"]
+    );
+}
+
+#[test]
+fn ko_novel_academic_colloquial_and_tight_comma() {
+    let novel = "그는 조용히 문을 열었다.\n\n“왔구나.” 그녀가 말했다.";
+    let doc = analyze(novel);
+    assert_eq!(doc.segmentation.paragraphs.len(), 2);
+    assert_eq!(
+        sentence_texts(novel, &doc),
+        ["그는 조용히 문을 열었다.", "“왔구나.”", "그녀가 말했다."]
+    );
+    assert!(
+        doc.segmentation
+            .paragraphs
+            .iter()
+            .all(|p| p.lang == Lang::Ko)
+    );
+    assert!(
+        doc.segmentation
+            .sentences
+            .iter()
+            .all(|s| s.lang == Lang::Ko)
+    );
+    assert!(!doc.unknown.iter().any(|u| u.layer == "segmentation"));
+
+    let paper = "본 연구에서는 새로운 분석 방법을 제안한다. 실험 결과는 유의미하였다.";
+    let doc = analyze(paper);
+    assert_eq!(
+        sentence_texts(paper, &doc),
+        [
+            "본 연구에서는 새로운 분석 방법을 제안한다.",
+            "실험 결과는 유의미하였다.",
+        ]
+    );
+    assert!(
+        doc.segmentation
+            .sentences
+            .iter()
+            .all(|s| s.lang == Lang::Ko)
+    );
+
+    // Compatibility Jamo (`ㅋㅋㅋ`, `ㅎㅎ`) colloquial Korean.
+    let jamo = "ㅋㅋㅋ 진짜 웃기네\nㅎㅎ 맞아";
+    let doc = analyze(jamo);
+    assert_eq!(
+        sentence_texts(jamo, &doc),
+        ["ㅋㅋㅋ 진짜 웃기네", "ㅎㅎ 맞아"]
+    );
+    assert!(
+        doc.segmentation
+            .sentences
+            .iter()
+            .all(|s| s.lang == Lang::Ko)
+    );
+    let bare_jamo = analyze("ㅋㅋㅋ");
+    assert_eq!(bare_jamo.segmentation.sentences[0].lang, Lang::Ko);
+    assert!(!bare_jamo.unknown.iter().any(|u| u.layer == "segmentation"));
+
+    // Tight comma between Hangul syllables splits clauses, while numeric `1,000` stays intact.
+    let tight = "먹고,마시고, 1,000원을 냈다.";
+    let doc = analyze(tight);
+    assert_eq!(doc.segmentation.sentences.len(), 1);
+    assert_eq!(
+        clause_texts(tight, &doc),
+        ["먹고", "마시고", "1,000원을 냈다."]
+    );
+    assert!(doc.segmentation.clauses.iter().all(|c| c.lang == Lang::Ko));
+}
+
+#[test]
+fn ko_dotted_date_guard() {
+    let t = "2026. 11. 13. 오후 서울에서 회의가 열렸다.";
+    let doc = analyze(t);
+    assert_eq!(sentence_texts(t, &doc), [t]);
+    assert_eq!(doc.segmentation.sentences[0].lang, Lang::Ko);
+
+    let t = "오늘은 11. 13. 금요일이다.";
+    assert_eq!(sentence_texts(t, &analyze(t)), [t]);
+
+    let t = "2026. 11. 기준 자료이다.";
+    assert_eq!(sentence_texts(t, &analyze(t)), [t]);
+
+    // Single number + dot still splits before a new sentence in both Korean and English.
+    let t = "2020. 새해가 밝았다.";
+    assert_eq!(sentence_texts(t, &analyze(t)), ["2020.", "새해가 밝았다."]);
+
+    let t = "2020. The year began.";
+    assert_eq!(sentence_texts(t, &analyze(t)), ["2020.", "The year began."]);
+
+    let t = "It was May. 10 was the day.";
+    assert_eq!(
+        sentence_texts(t, &analyze(t)),
+        ["It was May.", "10 was the day."]
+    );
+}
+
+#[test]
+fn multilingual_mixed_lang_lattice() {
+    // ja + en
+    let doc = analyze("東京駅で Rust を学ぶ。");
+    assert_eq!(doc.segmentation.sentences[0].lang, Lang::Mixed);
+
+    // ko + en
+    let doc = analyze("서울에서 AI 회의가 열렸다.");
+    assert_eq!(doc.segmentation.sentences[0].lang, Lang::Mixed);
+
+    // ko + han (Hanja)
+    let doc = analyze("漢字와 한글을 함께 쓴다.");
+    assert_eq!(doc.segmentation.sentences[0].lang, Lang::Mixed);
+
+    // ja + ko
+    let doc = analyze("日本語と한국어を比べる。");
+    assert_eq!(doc.segmentation.sentences[0].lang, Lang::Mixed);
+
+    // Fullwidth Latin counts as En.
+    let doc = analyze("ＡＢＣ");
+    assert_eq!(doc.segmentation.sentences[0].lang, Lang::En);
+}
+
+#[test]
+fn zh_en_quoted_attribution_ellipsis_and_abbreviations() {
+    // English quoted `?`/`!` + lowercase attribution verb stays one sentence.
+    let t = "\"Really?\" she asked. \"No!\" he replied.";
+    assert_eq!(
+        sentence_texts(t, &analyze(t)),
+        ["\"Really?\" she asked.", "\"No!\" he replied."]
+    );
+
+    let t = "“Wait!” whispered Tom.";
+    assert_eq!(sentence_texts(t, &analyze(t)), [t]);
+
+    let t = "'Why?' she wondered.";
+    assert_eq!(sentence_texts(t, &analyze(t)), [t]);
+
+    // Capitalized new sentence after closing quote still splits.
+    let t = "\"Really?\" She left.";
+    assert_eq!(sentence_texts(t, &analyze(t)), ["\"Really?\"", "She left."]);
+
+    // Newline after closing quote still splits.
+    let t = "\"Really?\"\nshe asked.";
+    assert_eq!(
+        sentence_texts(t, &analyze(t)),
+        ["\"Really?\"", "she asked."]
+    );
+
+    // Ellipsis followed directly by clause separator stays one sentence.
+    let t = "「……，但是眾人已經抵達山谷。」";
+    let doc = analyze(t);
+    assert_eq!(sentence_texts(t, &doc), [t]);
+    assert_eq!(clause_texts(t, &doc), ["「……", "但是眾人已經抵達山谷。」"]);
+
+    // Ellipsis followed by closer still ends the quoted sentence.
+    let t = "「……」她說。";
+    assert_eq!(sentence_texts(t, &analyze(t)), ["「……」", "她說。"]);
+
+    // Capitalized-only title & org abbreviations.
+    let t = "Gen. Smith and Sen. Lee met at Univ. of California with Apple Inc. and Sony Ltd. executives.";
+    assert_eq!(sentence_texts(t, &analyze(t)), [t]);
+
+    // Lowercase casual homographs (`gen.`) still end sentences.
+    let t = "This is next gen. It works.";
+    assert_eq!(
+        sentence_texts(t, &analyze(t)),
+        ["This is next gen.", "It works."]
+    );
+
+    // Continuation-guarded dotted/time/degree/Co abbreviations.
+    let t = "We met at 9 a.m. sharp and left at 5 p.m. quietly.";
+    assert_eq!(sentence_texts(t, &analyze(t)), [t]);
+
+    let t = "We met at 9 a.m. Then we left.";
+    assert_eq!(
+        sentence_texts(t, &analyze(t)),
+        ["We met at 9 a.m.", "Then we left."]
+    );
+
+    let t = "She earned a Ph.D. in physics under a U.S. government grant at Acme Co. last year.";
+    assert_eq!(sentence_texts(t, &analyze(t)), [t]);
+
+    let t = "He returned to the U.S. Later he left Acme Co. Then he retired.";
+    assert_eq!(
+        sentence_texts(t, &analyze(t)),
+        [
+            "He returned to the U.S.",
+            "Later he left Acme Co.",
+            "Then he retired.",
+        ]
+    );
+}

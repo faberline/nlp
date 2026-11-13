@@ -210,7 +210,15 @@ Blocks:
    - English: `chapter`, `part` or `section` (ASCII case-insensitive), one space, then one or
      more digits or `IVXLC`, then the end of the line, or one of `:` `.` `-` `—` and a title. The
      line is at most 60 chars.
-   - Japanese: at most 60 chars and containing none of `。！？`:
+   - Academic numbered section headings (at most 60 chars, without sentence-final punctuation
+     `. ! ? 。 ！ ？ ．`):
+     - Multi-level `^\d{1,2}\.\d{1,2}(\.\d{1,2})*\.?\s+<Title>` across EN/ZH/JA/KO (`2.1 Related Work`,
+       `3.1.2 Experimental Setup`, `2.1 関連研究`, `2.1 관련 연구`), where `<Title>` has at least one
+       alphabetic/Han/Kana/Hangul char.
+     - Block-isolated (blank line or BOF/EOF before and after) single-integer `^\d{1,2}\.\s+<Title>`
+       when `<Title>` matches standard academic section names (`1. Introduction`, `1. はじめに`,
+       `1. 서론`, `1. 緒論`); contiguous list lines remain `list_item`.
+   - Japanese: at most 60 chars and containing none of `。！？` (nor non-numeric `．` U+FF0E):
      - `第`, then ASCII digits, fullwidth digits (`０`–`９`) or Kanji numerals (`一二三四五六七八九十百千万零〇壱弐参`),
        optional spaces, then one of `話巻章節回部編幕条項`, followed by the end of the line, a separator
        (whitespace, `：`, `:`, `・`, `―`, `—`, `-`, `〜`, `～`) and a title, or an attached title
@@ -302,7 +310,9 @@ Each supported sentence is split by these rules, in order:
    Japanese context `sent_ja` or the run contains Kana or Japanese-exclusive Kanji) are matched
    leftmost-longest against `options.names` and `options.lexicon` first, and the text between
    matches is segmented by `icu_segmenter::WordSegmenter::new_dictionary` (ICU4X compiled `cjdict`
-   dictionary, offline with zero offset drift).
+   dictionary, offline with zero offset drift), followed by a particle+function-word de-merging
+   guard that splits false merges across a non-initial Japanese particle (`は が を に で と も`)
+   and high-frequency Hiragana adverbs/demonstratives (`まだ`, `ただ`, `それ`, `これ`, etc.).
 3. **Chinese Han runs** (maximal runs of `is_han` outside Japanese context) are matched against the
    Taiwan term list (`臺灣`, `資料庫`, `記憶體` and so on) plus pure-Han entries of
    `options.lexicon` and `options.names`, longest match first. The text between matches is segmented
@@ -324,8 +334,10 @@ Each supported sentence is split by these rules, in order:
       Both words must contain a letter, so `3-4` gives `3`, `-`, `4` and `COVID-19` gives
       `COVID`, `-`, `19`.
    c. A dot after a listed abbreviation, a single uppercase letter (the abbreviation list of
-      the sentence rules) or a word with a dot inside (`U.S`) joins it: `Dr.` and `U.S.` are
-      one token each. `etc.` keeps its dot too, although `etc` is context-sensitive.
+      the sentence rules), a word with a dot inside (`U.S`), or a capitalized abbreviated month
+      (`Jan.`–`Dec.`, `Sept.`) followed by a digit-initial token (`Nov. 13`) joins it: `Dr.`,
+      `U.S.`, and `Nov.` (before `13`) are one token each. `etc.` keeps its dot too, although `etc`
+      is context-sensitive.
    d. A run of one char from `. … ‥ ⋯ - — ― ─ ~ 〜 ～ ! ? ！ ？` is one token: `...`, `……`,
       `‥‥`, `⋯⋯`, `---`, `――`, `──`, `〜〜`, `!!!`. A different char starts a new token, so `?!!`
       is `?` and `!!`.
@@ -337,7 +349,7 @@ The tag of each token is decided by the first rule that matches:
 
 1. Opaque `url`, `citation` and `code` are `X`. Opaque `formula` and `emoji` are `SYM`.
 2. Only punctuation characters (ASCII, CJK, and Japanese/Korean punctuation including
-   `‥ ⋯ 〜 ・ ｡ ｢ ｣ ､ ･ ― ─ « » 〘 〙 〖 〗 〝 〟 ※`) are `PUNCT`.
+   `． ‥ ⋯ 〜 ・ ｡ ｢ ｣ ､ ･ ― ─ « » 〘 〙 〖 〗 〝 〟 ※`) are `PUNCT`.
 3. Only symbol characters (for example `$ % + = @ ° × ± © € →` and fullwidth
    `＄ ％ ＋ ＜ ＝ ＞ ＠ ￥ ￦`) are `SYM`.
 4. A number is `NUM`: ASCII digits, with `.` or `,` allowed between them (`3.5`, `1,000`), or

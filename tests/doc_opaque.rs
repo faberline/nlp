@@ -1213,3 +1213,97 @@ fn japanese_and_korean_citations_and_komejirushi_lists() {
         owned(&["2020.", "The year began."])
     );
 }
+
+#[test]
+fn academic_numbered_headings_and_fullwidth_period_guards() {
+    // 1. Multi-level numbered section headings across EN/JA/KO/ZH.
+    let multi = [
+        "2.1 Related Work",
+        "3.1.2 Experimental Setup",
+        "2.1 関連研究",
+        "2.1 관련 연구",
+        "1.2.3. 結果與討論",
+    ]
+    .join("\n\n");
+    let multi_doc = analyze(&multi);
+    assert_eq!(
+        opaque_pairs(&multi, &multi_doc),
+        vec![
+            (OpaqueKind::Heading, "2.1 Related Work".to_owned()),
+            (OpaqueKind::Heading, "3.1.2 Experimental Setup".to_owned()),
+            (OpaqueKind::Heading, "2.1 関連研究".to_owned()),
+            (OpaqueKind::Heading, "2.1 관련 연구".to_owned()),
+            (OpaqueKind::Heading, "1.2.3. 結果與討論".to_owned()),
+        ]
+    );
+
+    // Multi-level lines ending in sentence punctuation or lacking letters stay non-heading.
+    for non_heading in ["2.1 This is a sentence.", "2.1 12345"] {
+        let d = analyze(non_heading);
+        assert!(
+            !d.segmentation
+                .opaque
+                .iter()
+                .any(|o| o.kind == OpaqueKind::Heading),
+            "unexpected heading for {non_heading:?}"
+        );
+    }
+
+    // 2. Block-isolated single-integer academic headings vs contiguous list items.
+    let isolated = [
+        "1. Introduction",
+        "Body sentence.",
+        "1. はじめに",
+        "本文。",
+        "1. 서론",
+        "본문.",
+        "1. 緒論",
+        "正文。",
+        "1. 結論與未來展望",
+        "尾聲。",
+    ]
+    .join("\n\n");
+    let iso_doc = analyze(&isolated);
+    assert_eq!(
+        opaque_pairs(&isolated, &iso_doc),
+        vec![
+            (OpaqueKind::Heading, "1. Introduction".to_owned()),
+            (OpaqueKind::Heading, "1. はじめに".to_owned()),
+            (OpaqueKind::Heading, "1. 서론".to_owned()),
+            (OpaqueKind::Heading, "1. 緒論".to_owned()),
+            (OpaqueKind::Heading, "1. 結論與未來展望".to_owned()),
+        ]
+    );
+
+    // Contiguous list items must remain ListItem even if the title matches an academic heading.
+    let contiguous = "- second item\n1. Introduction\n2) Fourth item";
+    let cont_doc = analyze(contiguous);
+    assert_eq!(
+        opaque_pairs(contiguous, &cont_doc),
+        vec![
+            (OpaqueKind::ListItem, "- second item".to_owned()),
+            (OpaqueKind::ListItem, "1. Introduction".to_owned()),
+            (OpaqueKind::ListItem, "2) Fourth item".to_owned()),
+        ]
+    );
+
+    // 3. Fullwidth period `．` (U+FF0E) sentence-end guard in ZH/JA headings.
+    assert!(
+        !analyze("第1章 今日は晴れた．")
+            .segmentation
+            .opaque
+            .iter()
+            .any(|o| o.kind == OpaqueKind::Heading)
+    );
+    assert!(
+        !analyze("第一章 今日は晴れた．次の日")
+            .segmentation
+            .opaque
+            .iter()
+            .any(|o| o.kind == OpaqueKind::Heading)
+    );
+    assert_eq!(
+        opaque_pairs("第1章 3．5", &analyze("第1章 3．5")),
+        vec![(OpaqueKind::Heading, "第1章 3．5".to_owned())]
+    );
+}

@@ -76,6 +76,9 @@ const DOC_EXTRA_WORDS: &[&str] = &[
     "大汉",
     "婦人",
     "妇人",
+    "狼藉",
+    "狼籍",
+    "狼借",
 ];
 
 /// Curated Simplified lexicalized words starting with coverb/preposition or demonstrative chars
@@ -1045,20 +1048,104 @@ fn ja_tokens(s: &str, a: usize, b: usize, matcher: &TokenMatcher, out: &mut Vec<
     }
 }
 
+fn is_hiragana(ch: char) -> bool {
+    ('\u{3040}'..='\u{309F}').contains(&ch)
+}
+
+const JA_PARTICLES: &[char] = &['は', 'が', 'を', 'に', 'で', 'と', 'も'];
+const JA_STOLEN_ADVERBS_DEMONSTRATIVES: &[&str] = &[
+    "まるで",
+    "まさに",
+    "まだ",
+    "ただ",
+    "それ",
+    "これ",
+    "あれ",
+    "どれ",
+    "そこ",
+    "ここ",
+    "どこ",
+    "そう",
+    "こう",
+    "どう",
+    "なぜ",
+    "すぐ",
+    "もう",
+    "みな",
+    "まず",
+    "また",
+];
+
 fn ja_words(stretch: &str, base: usize, out: &mut Vec<(usize, usize)>) {
     if stretch.is_empty() {
         return;
     }
+    let mut initial: Vec<(usize, usize)> = Vec::new();
     let mut prev = 0;
     for end in ja_segmenter().segment_str(stretch) {
         if end > prev {
-            out.push((base + prev, base + end));
+            initial.push((prev, end));
             prev = end;
         }
     }
     if prev < stretch.len() {
-        out.push((base + prev, base + stretch.len()));
+        initial.push((prev, stretch.len()));
     }
+
+    let mut i = 0;
+    let out_start = out.len();
+    while i < initial.len() {
+        if i > 0
+            && i + 1 < initial.len()
+            && stretch[initial[i - 1].0..initial[i - 1].1]
+                .chars()
+                .any(char::is_alphanumeric)
+        {
+            let (a0, b0) = initial[i];
+            let (a1, b1) = initial[i + 1];
+            let t0 = &stretch[a0..b0];
+            let t1 = &stretch[a1..b1];
+            let mut t0_chars = t0.chars();
+            if let (Some(p_char), Some(c1), None) =
+                (t0_chars.next(), t0_chars.next(), t0_chars.next())
+                && JA_PARTICLES.contains(&p_char)
+                && is_hiragana(c1)
+                && t1.chars().next().is_some_and(is_hiragana)
+            {
+                let mid = a0 + p_char.len_utf8();
+                let rest = &stretch[mid..b1];
+                if let Some(&kw) = JA_STOLEN_ADVERBS_DEMONSTRATIVES
+                    .iter()
+                    .find(|&&w| rest.starts_with(w))
+                {
+                    out.push((base + a0, base + mid));
+                    let kw_end = mid + kw.len();
+                    out.push((base + mid, base + kw_end));
+                    if kw_end < b1 {
+                        let tail = &stretch[kw_end..b1];
+                        let mut tail_prev = 0;
+                        for end in ja_segmenter().segment_str(tail) {
+                            if end > tail_prev {
+                                out.push((base + kw_end + tail_prev, base + kw_end + end));
+                                tail_prev = end;
+                            }
+                        }
+                        if tail_prev < tail.len() {
+                            out.push((base + kw_end + tail_prev, base + b1));
+                        }
+                    }
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        let (a, b) = initial[i];
+        out.push((base + a, base + b));
+        i += 1;
+    }
+    debug_assert_eq!(out[out_start].0, base);
+    debug_assert_eq!(out.last().unwrap().1, base + stretch.len());
+    debug_assert!(out[out_start..].windows(2).all(|w| w[0].1 == w[1].0));
 }
 
 /// Non-CJK/Kana text: protect Hangul caller terms first when Hangul is present, then `word_ranges`.
@@ -1293,6 +1380,14 @@ fn should_split_coverb_or_dem(w: &str, w_chars: usize) -> bool {
     true
 }
 
+fn is_abbreviated_month(w: &str) -> bool {
+    const MONTHS: &[&str] = &[
+        "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+    ];
+    w.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase())
+        && MONTHS.iter().any(|m| w.eq_ignore_ascii_case(m))
+}
+
 /// Non-Han text: UAX 29 words, then clitics, hyphens, abbreviation dots and repeated marks.
 fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
     if a0 >= b0 {
@@ -1331,11 +1426,16 @@ fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
             i += 1;
             continue;
         }
-        // A dot after a listed abbreviation, a single capital, `etc`, or a word with an inner dot.
+        // A dot after a listed abbreviation, a single capital, `etc`, a word with an inner dot,
+        // or an abbreviated month followed by a token starting with an ASCII digit (`Nov. 13`).
         if text == "."
             && (segment::is_abbreviation(prev_text)
                 || prev_text.eq_ignore_ascii_case("etc")
-                || (has_letter(prev_text) && prev_text.contains('.') && !prev_text.ends_with('.')))
+                || (has_letter(prev_text) && prev_text.contains('.') && !prev_text.ends_with('.'))
+                || (is_abbreviated_month(prev_text)
+                    && raw.get(i).is_some_and(|&(na, nb)| {
+                        s[na..nb].starts_with(|c: char| c.is_ascii_digit())
+                    })))
         {
             if let Some(last) = merged.last_mut() {
                 last.1 = b;

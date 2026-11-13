@@ -809,3 +809,163 @@ fn zh_en_quoted_attribution_ellipsis_and_abbreviations() {
         ]
     );
 }
+
+#[test]
+fn real_world_corpora_fixes() {
+    // 1. Japanese STEM/NLP academic fullwidth period `．` (U+FF0E) and decimal guard.
+    let ja_stem = "本研究では，新しい手法を提案する．実験の結果は良好であった．";
+    let doc = analyze(ja_stem);
+    assert_eq!(
+        sentence_texts(ja_stem, &doc),
+        [
+            "本研究では，新しい手法を提案する．",
+            "実験の結果は良好であった．",
+        ]
+    );
+    assert!(
+        doc.segmentation
+            .sentences
+            .iter()
+            .all(|s| s.lang == Lang::Ja)
+    );
+
+    let ja_dec = "円周率は３．１４である．値は3．14である．";
+    assert_eq!(
+        sentence_texts(ja_dec, &analyze(ja_dec)),
+        ["円周率は３．１４である．", "値は3．14である．"]
+    );
+
+    let ja_closer = "「実験結果である．」次の文．";
+    assert_eq!(
+        sentence_texts(ja_closer, &analyze(ja_closer)),
+        ["「実験結果である．」", "次の文．"]
+    );
+
+    // 2. English academic/reference abbreviations & U.S./U.K./E.U./U.N. + Proper Noun.
+    let acad = "In Sec. 2, Ch. 3, Vol. 5, Vols. 1-2, pp. 10-12, Smith eds. and Doe trans. analyze the data.";
+    assert_eq!(sentence_texts(acad, &analyze(acad)), [acad]);
+
+    let num_abbrev = "See p. 14, ed. 2, art. 5, pt. 3, para. 4, and paras. 6-8 for details.";
+    assert_eq!(
+        sentence_texts(num_abbrev, &analyze(num_abbrev)),
+        [num_abbrev]
+    );
+
+    let p_end = "See p. Next sentence.";
+    assert_eq!(
+        sentence_texts(p_end, &analyze(p_end)),
+        ["See p.", "Next sentence."]
+    );
+
+    let us_propn = "across 12 corpora from the U.S. National Library of Medicine.";
+    assert_eq!(sentence_texts(us_propn, &analyze(us_propn)), [us_propn]);
+
+    let geo_propn = "The U.K. Parliament and U.N. Security Council met with the E.U. Commission.";
+    assert_eq!(sentence_texts(geo_propn, &analyze(geo_propn)), [geo_propn]);
+
+    let us_split_he = "She lives in the U.S. He lives in Canada.";
+    assert_eq!(
+        sentence_texts(us_split_he, &analyze(us_split_he)),
+        ["She lives in the U.S.", "He lives in Canada."]
+    );
+
+    let us_split_the = "It happened in the U.S. The results were clear.";
+    assert_eq!(
+        sentence_texts(us_split_the, &analyze(us_split_the)),
+        ["It happened in the U.S.", "The results were clear."]
+    );
+
+    let geo_newline = "They met at the U.N.\nNext day they left.";
+    assert_eq!(
+        sentence_texts(geo_newline, &analyze(geo_newline)),
+        ["They met at the U.N.", "Next day they left."]
+    );
+
+    // 3. Korean quoted speech + quotative verb/particle.
+    let ko_q1 = "“네 소원이 무엇이냐?” 하고 하느님이 물으시면";
+    assert_eq!(sentence_texts(ko_q1, &analyze(ko_q1)), [ko_q1]);
+
+    let ko_q2 = "“어디 가니?”라고 물었다.";
+    assert_eq!(sentence_texts(ko_q2, &analyze(ko_q2)), [ko_q2]);
+
+    let ko_q3 = "“조심하시오.” 하고 말했다.";
+    assert_eq!(sentence_texts(ko_q3, &analyze(ko_q3)), [ko_q3]);
+
+    let ko_q4 = "“정말이야?”고 물었다.";
+    assert_eq!(sentence_texts(ko_q4, &analyze(ko_q4)), [ko_q4]);
+
+    let ko_q5 = "「괜찮아?」하며 웃었다.";
+    assert_eq!(sentence_texts(ko_q5, &analyze(ko_q5)), [ko_q5]);
+
+    let ko_q_split = "“네 소원이 무엇이냐?” 하느님이 물었다.";
+    assert_eq!(
+        sentence_texts(ko_q_split, &analyze(ko_q_split)),
+        ["“네 소원이 무엇이냐?”", "하느님이 물었다."]
+    );
+
+    let ko_q_newline = "“네 소원이 무엇이냐?”\n하고 물었다.";
+    assert_eq!(
+        sentence_texts(ko_q_newline, &analyze(ko_q_newline)),
+        ["“네 소원이 무엇이냐?”", "하고 물었다."]
+    );
+
+    // 4. Japanese ellipsis + inline parenthetical tag & Ja slang lang detection.
+    for tag in [
+        "雨…（笑）",
+        "雨… (笑)",
+        "大変…（泣）",
+        "失敗…（汗）",
+        "感動…（涙）",
+        "すごい…（爆）",
+    ] {
+        let doc = analyze(tag);
+        assert_eq!(sentence_texts(tag, &doc), [tag]);
+        assert_eq!(doc.segmentation.sentences[0].lang, Lang::Ja);
+    }
+
+    let long_paren = "雨…（とても長い説明文が続く場合）";
+    assert_eq!(
+        sentence_texts(long_paren, &analyze(long_paren)),
+        ["雨…", "（とても長い説明文が続く場合）"]
+    );
+
+    // 5. Parenthetical commas & US date commas in clauses_with_lang.
+    let parens = "LLM(GPT-3.5, GPT-4, Gemini, EXAONE, LLaMA) 모델을 비교했다.";
+    let doc = analyze(parens);
+    assert_eq!(sentence_texts(parens, &doc), [parens]);
+    assert_eq!(clause_texts(parens, &doc), [parens]);
+
+    let fw_parens = "主要モデル（GPT-4、Gemini、Claude）を比較する。";
+    let doc = analyze(fw_parens);
+    assert_eq!(clause_texts(fw_parens, &doc), [fw_parens]);
+
+    let smiley = "He smiled :) and, later, left.";
+    assert_eq!(
+        clause_texts(smiley, &analyze(smiley)),
+        ["He smiled :) and", "later", "left."]
+    );
+
+    let unclosed = "She said (unclosed, and then left.";
+    assert_eq!(
+        clause_texts(unclosed, &analyze(unclosed)),
+        ["She said (unclosed", "and then left."]
+    );
+
+    let us_date = "On Nov. 13, 2026, the report was published.";
+    assert_eq!(
+        clause_texts(us_date, &analyze(us_date)),
+        ["On Nov. 13, 2026", "the report was published."]
+    );
+
+    let us_date_full = "November 13, 2026";
+    assert_eq!(
+        clause_texts(us_date_full, &analyze(us_date_full)),
+        [us_date_full]
+    );
+
+    let us_date_may = "May 5, 2026, was sunny.";
+    assert_eq!(
+        clause_texts(us_date_may, &analyze(us_date_may)),
+        ["May 5, 2026", "was sunny."]
+    );
+}

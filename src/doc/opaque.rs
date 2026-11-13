@@ -29,11 +29,16 @@ pub(super) fn find_with_options(c: &[char], mask_editorial: bool) -> Vec<Found> 
             continue;
         };
         let t_end = trimmed_end(c, s, le);
+        let prev_blank = li == 0 || first_non_ws(c, lines[li - 1].0, lines[li - 1].1).is_none();
+        let next_blank =
+            li + 1 >= lines.len() || first_non_ws(c, lines[li + 1].0, lines[li + 1].1).is_none();
+        let block_isolated = prev_blank && next_blank;
         let block = code_block(c, &lines, li, s)
             .or_else(|| formula_block(c, &lines, li, s))
             .or_else(|| box_banner_block(c, &lines, li, s))
             .or_else(|| {
-                line_kind(c, ls, s, t_end, le, mask_editorial).map(|kind| (kind, t_end, li + 1))
+                line_kind(c, ls, s, t_end, le, mask_editorial, block_isolated)
+                    .map(|kind| (kind, t_end, li + 1))
             });
         match block {
             Some((kind, end, next)) => {
@@ -199,9 +204,10 @@ fn line_kind(
     t_end: usize,
     le: usize,
     mask_editorial: bool,
+    block_isolated: bool,
 ) -> Option<OpaqueKind> {
     let t = &c[s..t_end];
-    if is_heading(t) {
+    if is_heading(t) || (block_isolated && academic_single_int_heading(t)) {
         Some(OpaqueKind::Heading)
     } else if is_list_item(t) {
         Some(OpaqueKind::ListItem)
@@ -216,6 +222,7 @@ fn line_kind(
 
 fn is_heading(t: &[char]) -> bool {
     markdown_heading(t)
+        || multi_level_numbered_heading(t)
         || chinese_heading(t)
         || japanese_heading(t)
         || korean_heading(t)
@@ -399,7 +406,10 @@ fn prefixed_chinese_heading(rest: &[char]) -> bool {
 /// `<numerals>章 <Title>`, `第<numerals>=2> <short_title>`, tight `第<num>章<title>`, and `»»»`/`·`
 /// heading separators). At most 60 chars with no sentence end.
 fn chinese_heading(t: &[char]) -> bool {
-    if t.len() > 60 || t.iter().any(|ch| "。！？".contains(*ch)) {
+    if t.len() > 60
+        || t.iter().any(|ch| "。！？".contains(*ch))
+        || has_fullwidth_period_sentence_end(t)
+    {
         return false;
     }
     if chinese_di_heading(t, false) {
@@ -616,7 +626,10 @@ fn japanese_structural_heading(t: &[char]) -> bool {
 }
 
 fn japanese_heading(t: &[char]) -> bool {
-    if t.is_empty() || t.len() > 60 || t.iter().any(|ch| matches!(*ch, '。' | '！' | '？' | '｡'))
+    if t.is_empty()
+        || t.len() > 60
+        || t.iter().any(|ch| matches!(*ch, '。' | '！' | '？' | '｡'))
+        || has_fullwidth_period_sentence_end(t)
     {
         return false;
     }
@@ -799,6 +812,165 @@ fn korean_heading(t: &[char]) -> bool {
         return false;
     }
     korean_je_heading(t) || korean_bare_episode_heading(t) || korean_structural_heading(t)
+}
+
+fn has_fullwidth_period_sentence_end(t: &[char]) -> bool {
+    t.iter().enumerate().any(|(i, &ch)| {
+        if ch != '．' {
+            return false;
+        }
+        let prev_digit = i > 0 && (t[i - 1].is_ascii_digit() || ('０'..='９').contains(&t[i - 1]));
+        let next_digit =
+            i + 1 < t.len() && (t[i + 1].is_ascii_digit() || ('０'..='９').contains(&t[i + 1]));
+        !(prev_digit && next_digit)
+    })
+}
+
+fn ends_with_sentence_punct(t: &[char]) -> bool {
+    let trimmed = trim(t);
+    trimmed
+        .last()
+        .is_some_and(|ch| matches!(*ch, '.' | '!' | '?' | '。' | '！' | '？' | '．'))
+}
+
+/// Multi-level numbered section headings: `^\d{1,2}\.\d{1,2}(\.\d{1,2})*\.?\s+<Title>`
+/// with total length <= 60, at least one alphabetic/Han/Kana/Hangul char in `<Title>`,
+/// and no sentence-final punctuation at the end.
+fn multi_level_numbered_heading(t: &[char]) -> bool {
+    if t.len() > 60 {
+        return false;
+    }
+    let mut i = 0;
+    let d1 = t[i..].iter().take_while(|ch| ch.is_ascii_digit()).count();
+    if !(1..=2).contains(&d1) {
+        return false;
+    }
+    i += d1;
+    let mut segments = 1;
+    while i < t.len() && t[i] == '.' {
+        let rest = &t[i + 1..];
+        let d = rest.iter().take_while(|ch| ch.is_ascii_digit()).count();
+        if (1..=2).contains(&d) {
+            i += 1 + d;
+            segments += 1;
+        } else {
+            break;
+        }
+    }
+    if segments < 2 {
+        return false;
+    }
+    if i < t.len() && t[i] == '.' {
+        i += 1;
+    }
+    let ws = heading_ws_len(&t[i..]);
+    if ws == 0 {
+        return false;
+    }
+    let title = trim(&t[i + ws..]);
+    !title.is_empty()
+        && title.iter().any(|ch| ch.is_alphabetic())
+        && !ends_with_sentence_punct(title)
+}
+
+const EN_ACADEMIC_SECTIONS: &[&str] = &[
+    "abstract",
+    "introduction",
+    "background",
+    "preliminaries",
+    "related work",
+    "literature review",
+    "method",
+    "methods",
+    "methodology",
+    "proposed method",
+    "approach",
+    "model",
+    "architecture",
+    "experiments",
+    "experimental setup",
+    "evaluation",
+    "results",
+    "results and discussion",
+    "analysis",
+    "discussion",
+    "ablation study",
+    "limitations",
+    "conclusion",
+    "conclusions",
+    "conclusion and future work",
+    "future work",
+    "acknowledgments",
+    "acknowledgements",
+    "references",
+    "appendix",
+];
+
+const CJK_ACADEMIC_SECTIONS: &[&str] = &[
+    "摘要",
+    "緒論",
+    "绪论",
+    "前言",
+    "引言",
+    "相關研究",
+    "相关研究",
+    "研究方法",
+    "實驗",
+    "实验",
+    "實驗結果",
+    "实验结果",
+    "結果與討論",
+    "结果与讨论",
+    "結論",
+    "结论",
+    "參考文獻",
+    "参考文献",
+    "はじめに",
+    "まえがき",
+    "関連研究",
+    "提案手法",
+    "実験",
+    "実験設定",
+    "実験結果",
+    "考察",
+    "おわりに",
+    "まとめ",
+    "謝辞",
+    "서론",
+    "이론적 배경",
+    "관련 연구",
+    "연구 방법",
+    "제안 방법",
+    "실험",
+    "실험 결과",
+    "결론",
+    "참고문헌",
+];
+
+/// Block-isolated single-integer academic section heading: `^\d{1,2}\.\s+<Title>`.
+fn academic_single_int_heading(t: &[char]) -> bool {
+    if t.len() > 60 {
+        return false;
+    }
+    let d = t.iter().take_while(|ch| ch.is_ascii_digit()).count();
+    if !(1..=2).contains(&d) || t.get(d).copied() != Some('.') {
+        return false;
+    }
+    let ws = heading_ws_len(&t[d + 1..]);
+    if ws == 0 {
+        return false;
+    }
+    let title = trim(&t[d + 1 + ws..]);
+    if title.is_empty() || ends_with_sentence_punct(title) {
+        return false;
+    }
+    let title_str: String = title.iter().collect();
+    EN_ACADEMIC_SECTIONS
+        .iter()
+        .any(|s| title_str.eq_ignore_ascii_case(s))
+        || CJK_ACADEMIC_SECTIONS
+            .iter()
+            .any(|s| title_str.starts_with(s))
 }
 
 /// `chapter`, `part` or `section`, one space, then digits or Roman numerals, then the end of the

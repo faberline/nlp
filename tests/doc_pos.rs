@@ -1314,3 +1314,56 @@ fn ko_tokenization_and_pos() {
     );
     check_invariants(price);
 }
+
+#[test]
+fn fullwidth_period_langji_abbrev_months_and_ja_demerging() {
+    // 1. Fullwidth academic period `．` (U+FF0E) tags as PUNCT.
+    let ja_acad = "提案手法は有効である．";
+    let ja_acad_tokens = show(ja_acad);
+    assert_eq!(ja_acad_tokens.last().map(String::as_str), Some("．/PUNCT"));
+    check_invariants(ja_acad);
+
+    // 2. `狼藉` and `狼籍` stay whole under `normalize_traditional: true`.
+    let norm_opts = Options {
+        normalize_traditional: true,
+        ..Options::default()
+    };
+    for text in ["場內一片狼藉。", "场内一片狼籍。"] {
+        let d = analyze_document(text, &norm_opts);
+        let surfs: Vec<String> = d.tokens.iter().map(|t| slice(text, t.span)).collect();
+        assert!(
+            surfs.iter().any(|s| s == "狼藉" || s == "狼籍"),
+            "expected whole 狼藉/狼籍 in {surfs:?}"
+        );
+    }
+
+    // 3. Abbreviated months followed by an ASCII digit keep `.` attached.
+    let date_text = "On Nov. 13, 2026 and Sept. 5, we met.";
+    let date_doc = analyze(date_text);
+    let date_surfs: Vec<String> = date_doc
+        .tokens
+        .iter()
+        .map(|t| slice(date_text, t.span))
+        .collect();
+    assert!(date_surfs.contains(&"Nov.".to_owned()), "{date_surfs:?}");
+    assert!(date_surfs.contains(&"Sept.".to_owned()), "{date_surfs:?}");
+    check_invariants(date_text);
+
+    // 4. Japanese Hiragana particle + adverb/demonstrative de-merging.
+    for (text, expected) in [
+        (
+            "名前はまだ無い。",
+            &["名前", "は", "まだ", "無い", "。"][..],
+        ),
+        ("私はただ歩く。", &["私", "は", "ただ", "歩く", "。"][..]),
+        (
+            "聞くとそれは本当だ。",
+            &["聞く", "と", "それ", "は", "本当", "だ", "。"][..],
+        ),
+    ] {
+        let d = analyze(text);
+        let surfs: Vec<String> = d.tokens.iter().map(|t| slice(text, t.span)).collect();
+        assert_eq!(surfs, expected, "input: {text}");
+        check_invariants(text);
+    }
+}

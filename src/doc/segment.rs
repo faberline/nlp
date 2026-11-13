@@ -4,27 +4,80 @@
 use super::Lang;
 use crate::Span;
 
-const CJK_END: &[char] = &['。', '！', '？', '…', '‥', '⋯', '｡'];
+const CJK_END: &[char] = &['。', '．', '！', '？', '…', '‥', '⋯', '｡'];
 const CLOSERS: &[char] = &[
     '」', '』', '”', '’', '）', ')', '"', '\'', '»', ']', '】', '〕', '〉', '》', '］', '｝',
 ];
 const PARAGRAPH_END: &[char] = &[
-    '。', '！', '？', '…', '‥', '⋯', '」', '』', '”', '’', '）', '】', '〕', '〉', '》', '］', '｝',
+    '。', '．', '！', '？', '…', '‥', '⋯', '」', '』', '”', '’', '）', '】', '〕', '〉', '》',
+    '］', '｝',
 ];
 const ABBREVIATIONS: &[&str] = &[
     "mr", "mrs", "ms", "mx", "dr", "prof", "rev", "sr", "jr", "st", "vs", "cf", "fig", "eq", "no",
-    "e.g", "i.e",
+    "e.g", "i.e", "sec", "ch", "vol", "vols", "eds", "trans", "pp",
 ];
+/// Reference abbreviations that suppress a sentence break only when followed by an ASCII digit.
+const NUMERIC_ABBREVIATIONS: &[&str] = &["p", "ed", "art", "pt", "para", "paras"];
 /// Unconditional title and organization abbreviations matched only when capitalized so lowercase
 /// common words (`gen`, `rep`, `lt`, `inc`) are never merged or suppressed at sentence end.
 const CAP_ABBREVIATIONS: &[&str] = &[
     "gen", "col", "maj", "capt", "lt", "sgt", "gov", "sen", "rep", "univ", "dept", "assn", "bros",
     "inc", "ltd", "corp",
 ];
-/// Dotted time, degree, and jurisdiction abbreviations whose trailing dot stays in the token, and
-/// whose sentence boundary is suppressed unless an uppercase new sentence follows.
-const CONT_ABBREVIATIONS: &[&str] = &[
-    "a.m", "p.m", "ph.d", "m.d", "b.a", "m.a", "b.s", "m.s", "u.s", "u.k", "e.u", "u.n",
+/// Dotted time and degree abbreviations whose trailing dot stays in the token, and whose sentence
+/// boundary is suppressed unless an uppercase new sentence follows.
+const CONT_ABBREVIATIONS: &[&str] = &["a.m", "p.m", "ph.d", "m.d", "b.a", "m.a", "b.s", "m.s"];
+/// Jurisdiction abbreviations (`U.S.`, `U.K.`, `E.U.`, `U.N.`) whose trailing dot stays in the
+/// token and suppresses sentence break before proper nouns unless a sentence-starter follows.
+const GEO_ABBREVIATIONS: &[&str] = &["u.s", "u.k", "e.u", "u.n"];
+/// Uppercase closed-class sentence-starters that end a sentence after a `GEO_ABBREVIATIONS` dot.
+const SENTENCE_STARTERS: &[&str] = &[
+    "The",
+    "This",
+    "That",
+    "These",
+    "Those",
+    "It",
+    "He",
+    "She",
+    "They",
+    "We",
+    "I",
+    "In",
+    "On",
+    "At",
+    "For",
+    "From",
+    "By",
+    "With",
+    "However",
+    "Moreover",
+    "Furthermore",
+    "Therefore",
+    "Thus",
+    "Meanwhile",
+    "Although",
+    "Because",
+    "When",
+    "While",
+    "If",
+    "As",
+    "But",
+    "And",
+    "Or",
+    "Yet",
+    "So",
+    "Our",
+    "Their",
+    "His",
+    "Her",
+    "Its",
+    "A",
+    "An",
+    "Here",
+    "There",
+    "Later",
+    "Then",
 ];
 /// Capitalized continuation-guarded abbreviations without an inner dot.
 const CONT_CAP_ABBREVIATIONS: &[&str] = &["co"];
@@ -32,6 +85,32 @@ const CONT_CAP_ABBREVIATIONS: &[&str] = &["co"];
 /// a digit follows, so `Nov. 10, 2026` stays one sentence.
 const ABBREVIATED_MONTHS: &[&str] = &[
     "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+];
+const MONTH_NAMES: &[&str] = &[
+    "jan",
+    "january",
+    "feb",
+    "february",
+    "mar",
+    "march",
+    "apr",
+    "april",
+    "may",
+    "jun",
+    "june",
+    "jul",
+    "july",
+    "aug",
+    "august",
+    "sep",
+    "sept",
+    "september",
+    "oct",
+    "october",
+    "nov",
+    "november",
+    "dec",
+    "december",
 ];
 
 pub(super) fn paragraphs(c: &[char]) -> Vec<Span> {
@@ -68,6 +147,7 @@ pub(super) fn sentences(c: &[char], paragraph: Span) -> Vec<Span> {
     let mut i = start;
     while i < end {
         let (cut, next) = match c[i] {
+            '．' if is_decimal_fullwidth_dot(c, paragraph.start_char, i, end) => (None, i + 1),
             ch if CJK_END.contains(&ch) || matches!(ch, '!' | '?') => terminal_run(c, i, end),
             '.' => dots(c, paragraph, i),
             '\n' => newline(c, paragraph, i),
@@ -104,12 +184,26 @@ pub(super) fn clauses(c: &[char], sentence: Span) -> Vec<Span> {
 pub(super) fn clauses_with_lang(c: &[char], sentence: Span, sent_ja: bool) -> Vec<Span> {
     let mut out = Vec::new();
     let mut start = sentence.start_char;
+    let mut paren_depth: usize = 0;
     for (k, &ch) in c[sentence.start_char..sentence.end_char].iter().enumerate() {
         let i = sentence.start_char + k;
+        if matches!(ch, '(' | '（') {
+            if has_matching_close_paren(c, i, sentence.end_char) {
+                paren_depth += 1;
+            }
+            continue;
+        }
+        if matches!(ch, ')' | '）') {
+            paren_depth = paren_depth.saturating_sub(1);
+            continue;
+        }
         let split = match ch {
-            '，' | '；' | '：' => true,
-            '、' => sent_ja,
-            ',' => {
+            '，' if paren_depth == 0 => true,
+            '；' | '：' => true,
+            '、' => sent_ja && paren_depth == 0,
+            ',' if paren_depth == 0
+                && !is_us_date_comma(c, sentence.start_char, i, sentence.end_char) =>
+            {
                 i + 1 == sentence.end_char
                     || c[i + 1].is_whitespace()
                     || (i > sentence.start_char && is_hangul(c[i - 1]) && is_hangul(c[i + 1]))
@@ -172,10 +266,12 @@ pub(super) fn lang_in_context(c: &[char], span: Span, context_ja: bool) -> (Lang
 }
 
 pub(super) fn has_ja_cue(c: &[char], span: Span) -> bool {
-    c[span.start_char..span.end_char]
+    let slice = &c[span.start_char..span.end_char];
+    slice
         .iter()
         .copied()
         .any(|ch| is_kana(ch) || is_ja_exclusive_kanji(ch))
+        || has_ja_slang_tag(slice)
 }
 
 pub(super) fn has_ja_or_ko(c: &[char], span: Span) -> bool {
@@ -261,7 +357,73 @@ fn counts(chars: &[char]) -> ScriptCounts {
             out.other += 1;
         }
     }
+    if !out.has_ja_exclusive && has_ja_slang_tag(chars) {
+        out.has_ja_exclusive = true;
+    }
     out
+}
+
+fn has_ja_slang_tag(chars: &[char]) -> bool {
+    chars.windows(3).any(|w| {
+        matches!(
+            w,
+            ['（', '笑' | '泣' | '汗' | '涙' | '爆', '）']
+                | ['(', '笑' | '泣' | '汗' | '涙' | '爆', ')']
+        )
+    })
+}
+
+fn is_decimal_fullwidth_dot(c: &[char], bound: usize, i: usize, end: usize) -> bool {
+    let is_digit = |ch: char| ch.is_ascii_digit() || ('０'..='９').contains(&ch);
+    i > bound && i + 1 < end && is_digit(c[i - 1]) && is_digit(c[i + 1])
+}
+
+fn has_matching_close_paren(c: &[char], open_at: usize, end: usize) -> bool {
+    let mut balance: usize = 1;
+    for &ch in &c[open_at + 1..end] {
+        if matches!(ch, '(' | '（') {
+            balance += 1;
+        } else if matches!(ch, ')' | '）') {
+            balance -= 1;
+            if balance == 0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_us_date_comma(c: &[char], bound: usize, i: usize, end: usize) -> bool {
+    if i + 6 > end
+        || c[i + 1] != ' '
+        || !c[i + 2..i + 6].iter().all(|ch| ch.is_ascii_digit())
+        || (i + 6 < end && c[i + 6].is_ascii_digit())
+    {
+        return false;
+    }
+    let Some(day_start) = digits_before(c, bound, i, 2) else {
+        return false;
+    };
+    if day_start <= bound || c[day_start - 1] != ' ' {
+        return false;
+    }
+    let word_end = if day_start >= bound + 2 && c[day_start - 2] == '.' {
+        day_start - 2
+    } else {
+        day_start - 1
+    };
+    let mut word_start = word_end;
+    while word_start > bound && c[word_start - 1].is_ascii_alphabetic() {
+        word_start -= 1;
+    }
+    if word_start == word_end {
+        return false;
+    }
+    let lower: String = c[word_start..word_end]
+        .iter()
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    MONTH_NAMES.contains(&lower.as_str())
 }
 
 pub(super) fn is_han(ch: char) -> bool {
@@ -379,6 +541,118 @@ fn next_nonspace_same_line(c: &[char], from: usize, end: usize) -> Option<char> 
     None
 }
 
+fn next_word_same_line(c: &[char], from: usize, end: usize) -> Option<String> {
+    let mut i = from;
+    while i < end {
+        if c[i] == '\n' || c[i] == '\r' {
+            return None;
+        }
+        if !c[i].is_whitespace() {
+            break;
+        }
+        i += 1;
+    }
+    if i >= end {
+        return None;
+    }
+    let w_end = run_end(c, i, end, |ch| ch.is_ascii_alphabetic());
+    Some(c[i..w_end].iter().collect())
+}
+
+fn starts_with_str(slice: &[char], pat: &str) -> bool {
+    let mut it = slice.iter().copied();
+    for p in pat.chars() {
+        if it.next() != Some(p) {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_korean_quotative_continuation(c: &[char], k: usize, end: usize) -> bool {
+    if k >= end {
+        return false;
+    }
+    let mut ns = k;
+    while ns < end && c[ns].is_whitespace() {
+        if c[ns] == '\n' || c[ns] == '\r' {
+            return false;
+        }
+        ns += 1;
+    }
+    if ns == end {
+        return false;
+    }
+    if ns == k {
+        const ATTACHED: &[&str] = &[
+            "라고",
+            "이라며",
+            "냐고",
+            "자고",
+            "다고",
+            "고 ",
+            "고,",
+            "고.",
+        ];
+        if ATTACHED.iter().any(|pat| starts_with_str(&c[k..end], pat)) {
+            return true;
+        }
+    }
+    const FOLLOWED: &[&str] = &[
+        "하고",
+        "하며",
+        "하면",
+        "하는",
+        "하자",
+        "하니",
+        "하여",
+        "해서",
+        "하더니",
+        "라고",
+        "이라며",
+    ];
+    for pat in FOLLOWED {
+        if starts_with_str(&c[ns..end], pat) {
+            let after = ns + pat.chars().count();
+            if after == end
+                || c[after].is_whitespace()
+                || matches!(c[after], ',' | '.' | '!' | '?' | '，' | '。')
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_inline_parenthetical_tag(c: &[char], k: usize, end: usize) -> bool {
+    let mut ns = k;
+    while ns < end && c[ns].is_whitespace() {
+        if c[ns] == '\n' || c[ns] == '\r' {
+            return false;
+        }
+        ns += 1;
+    }
+    if ns >= end {
+        return false;
+    }
+    let close = match c[ns] {
+        '(' => ')',
+        '（' => '）',
+        _ => return false,
+    };
+    let limit = (ns + 6).min(end.saturating_sub(1));
+    for (m, &ch) in c[..=limit].iter().enumerate().skip(ns + 1) {
+        if ch == '\n' || ch == '\r' {
+            return false;
+        }
+        if m >= ns + 2 && ch == close {
+            return true;
+        }
+    }
+    false
+}
+
 /// Rule 1: a run of CJK or ASCII terminators, then closers. Returns (cut, next index).
 fn terminal_run(c: &[char], i: usize, end: usize) -> (Option<(usize, usize)>, usize) {
     let j = run_end(c, i, end, |ch| {
@@ -390,6 +664,17 @@ fn terminal_run(c: &[char], i: usize, end: usize) -> (Option<(usize, usize)>, us
         && j == k
         && k < end
         && matches!(c[k], '，' | '、' | '；' | '：' | ',' | ';' | ':')
+    {
+        return (None, k);
+    }
+    if only_ellipsis && is_inline_parenthetical_tag(c, k, end) {
+        return (None, k);
+    }
+    if k > j
+        && c[j..k]
+            .iter()
+            .any(|ch| matches!(ch, '"' | '”' | '\'' | '’' | '」' | '』'))
+        && is_korean_quotative_continuation(c, k, end)
     {
         return (None, k);
     }
@@ -420,6 +705,14 @@ fn dots(c: &[char], paragraph: Span, i: usize) -> (Option<(usize, usize)>, usize
     if !at_break(c, k, end) {
         return (None, j);
     }
+    if k > j
+        && c[j..k]
+            .iter()
+            .any(|ch| matches!(ch, '"' | '”' | '\'' | '’'))
+        && is_korean_quotative_continuation(c, k, end)
+    {
+        return (None, k);
+    }
     if is_korean_date_inner_dot(c, paragraph, i, j, k) {
         return (None, j);
     }
@@ -445,12 +738,23 @@ fn dots(c: &[char], paragraph: Span, i: usize) -> (Option<(usize, usize)>, usize
     {
         return (None, j);
     }
-    if ABBREVIATED_MONTHS.contains(&lower.as_str())
+    if (ABBREVIATED_MONTHS.contains(&lower.as_str())
+        || NUMERIC_ABBREVIATIONS.contains(&lower.as_str()))
         && k + 1 < end
         && c[k] == ' '
         && c[k + 1].is_ascii_digit()
     {
         return (None, j);
+    }
+    if GEO_ABBREVIATIONS.contains(&lower.as_str()) {
+        let should_split = match next_word_same_line(c, k, end) {
+            None => true,
+            Some(w) => SENTENCE_STARTERS.contains(&w.as_str()),
+        };
+        if !should_split {
+            return (None, j);
+        }
+        return (Some((k, k)), k);
     }
     let cont_abbrev = matches!(lower.as_str(), "etc" | "al")
         || CONT_ABBREVIATIONS.contains(&lower.as_str())
@@ -536,6 +840,7 @@ pub(super) fn is_abbreviation(word: &str) -> bool {
     single_upper
         || ABBREVIATIONS.contains(&lower.as_str())
         || CONT_ABBREVIATIONS.contains(&lower.as_str())
+        || GEO_ABBREVIATIONS.contains(&lower.as_str())
         || (first_upper
             && (CAP_ABBREVIATIONS.contains(&lower.as_str())
                 || CONT_CAP_ABBREVIATIONS.contains(&lower.as_str())))

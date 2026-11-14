@@ -104,6 +104,49 @@ const CJK_SPEECH_VERBS: &[&str] = &[
     "叫",
     "講",
     "讲",
+    // Japanese speech & vocalization verbs
+    "言った",
+    "言う",
+    "言っ",
+    "話した",
+    "話す",
+    "尋ねた",
+    "尋ねる",
+    "聞いた",
+    "訊いた",
+    "答えた",
+    "答える",
+    "叫んだ",
+    "叫ぶ",
+    "囁いた",
+    "囁く",
+    "囁い",
+    "ささやいた",
+    "ささやく",
+    "ささやい",
+    "呟いた",
+    "呟く",
+    "呟い",
+    "つぶやいた",
+    "つぶやく",
+    "つぶやい",
+    "喘いだ",
+    "喘ぐ",
+    "喘い",
+    "あえいだ",
+    "あえぐ",
+    "あえい",
+    "呻いた",
+    "呻く",
+    "呻い",
+    "漏らした",
+    "漏らす",
+    "告げた",
+    "告げる",
+    "笑った",
+    "怒鳴った",
+    "懇願した",
+    "頼んだ",
 ];
 
 const DAO_NON_SPEECH_PREV: &[char] = &[
@@ -239,6 +282,27 @@ pub fn extract_dialogues(
                 &mut dialogues[idx],
                 &mut unknown,
             );
+        } else if pre_win.is_none() && q_span.start_char > prev_q_end {
+            let prev_sent_start =
+                sentence_start_at(&chars, doc, q_span.start_char.saturating_sub(1), prev_q_end)
+                    .max(prev_q_end);
+            if let Some(prev_sent) = trim_window(&chars, prev_sent_start, q_span.start_char)
+                && let Some(sv_span) = find_ja_trailing_sentence_speech_verb(&chars, doc, prev_sent)
+            {
+                attributed = true;
+                resolve_framing_speaker(
+                    chapter,
+                    &chars,
+                    doc,
+                    &syntax_by_tok,
+                    &all_actors,
+                    prev_sent,
+                    sv_span,
+                    SpeakerBasis::PreQuoteSpeechVerb,
+                    &mut dialogues[idx],
+                    &mut unknown,
+                );
+            }
         }
 
         // 2. Post-quote framing window (up to next sentence end or next quote in the paragraph).
@@ -418,7 +482,7 @@ fn post_quote_window_end(
 ) -> usize {
     let limit = next_quote_start.min(chars.len());
     let mut i = after_quote.min(limit);
-    while i < limit && (chars[i].is_whitespace() || matches!(chars[i], '，' | ',')) {
+    while i < limit && (chars[i].is_whitespace() || matches!(chars[i], '，' | ',' | '、')) {
         i += 1;
     }
     for s in &doc.segmentation.sentences {
@@ -452,7 +516,8 @@ fn post_introduces_next_quote(
     while prev > current_q.start_char && chars[prev - 1].is_whitespace() {
         prev -= 1;
     }
-    let quote_continued = prev > current_q.start_char && matches!(chars[prev - 1], '，' | ',');
+    let quote_continued =
+        prev > current_q.start_char && matches!(chars[prev - 1], '，' | ',' | '、');
     !quote_continued
 }
 
@@ -475,10 +540,66 @@ fn trim_window(chars: &[char], start: usize, end: usize) -> Option<Span> {
     }
 }
 
+fn find_ja_trailing_sentence_speech_verb(
+    chars: &[char],
+    _doc: &Document,
+    window: Span,
+) -> Option<Span> {
+    let mut end = window.end_char;
+    while end > window.start_char
+        && (chars[end - 1].is_whitespace() || matches!(chars[end - 1], '。' | '！' | '？' | '.'))
+    {
+        end -= 1;
+    }
+    if end <= window.start_char {
+        return None;
+    }
+    let slice_text = span_text(
+        chars,
+        Span {
+            start_char: window.start_char,
+            end_char: end,
+        },
+    );
+    const JA_TRAILING_VERBS: &[&str] = &[
+        "言った",
+        "話した",
+        "尋ねた",
+        "聞いた",
+        "訊いた",
+        "答えた",
+        "叫んだ",
+        "囁いた",
+        "ささやいた",
+        "呟いた",
+        "つぶやいた",
+        "喘いだ",
+        "あえいだ",
+        "呻いた",
+        "漏らした",
+        "告げた",
+        "笑った",
+        "怒鳴った",
+        "懇願した",
+        "頼んだ",
+    ];
+    for &verb in JA_TRAILING_VERBS {
+        if slice_text.ends_with(verb) {
+            let v_chars = verb.chars().count();
+            return Some(Span {
+                start_char: end - v_chars,
+                end_char: end,
+            });
+        }
+    }
+    None
+}
+
 fn find_pre_quote_speech_verb(chars: &[char], doc: &Document, window: Span) -> Option<Span> {
     let mut end = window.end_char;
     while end > window.start_char
-        && (chars[end - 1].is_whitespace() || matches!(chars[end - 1], '：' | ':' | '，' | ','))
+        && (chars[end - 1].is_whitespace()
+            || matches!(chars[end - 1], '：' | ':' | '，' | ',' | '、'))
     {
         end -= 1;
     }
@@ -492,7 +613,7 @@ fn find_pre_quote_speech_verb(chars: &[char], doc: &Document, window: Span) -> O
     // Look in the trailing clause of the pre-quote window.
     let mut clause_start = trimmed.start_char;
     for i in (trimmed.start_char..trimmed.end_char).rev() {
-        if matches!(chars[i], '，' | '；' | ',' | ';') {
+        if matches!(chars[i], '，' | '；' | ',' | ';' | '、') {
             clause_start = i + 1;
             break;
         }
@@ -505,13 +626,13 @@ fn find_post_quote_speech_verb(chars: &[char], doc: &Document, window: Span) -> 
     // Only inspect the first framing clause immediately following the closing quote.
     let mut start = window.start_char;
     while start < window.end_char
-        && (chars[start].is_whitespace() || matches!(chars[start], '，' | ','))
+        && (chars[start].is_whitespace() || matches!(chars[start], '，' | ',' | '、'))
     {
         start += 1;
     }
     let mut clause_end = window.end_char;
     for (i, &ch) in chars.iter().enumerate().take(window.end_char).skip(start) {
-        if matches!(ch, '，' | '；' | '：' | ',' | ';' | ':') {
+        if matches!(ch, '，' | '；' | '：' | ',' | ';' | ':' | '、') {
             clause_end = i;
             break;
         }

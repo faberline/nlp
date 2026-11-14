@@ -436,6 +436,77 @@ pub fn apply_cjk_latin_spacing(
     out
 }
 
+/// Clean up stray spaces between CJK characters and CJK punctuation outside `protected_spans`,
+/// collapsing redundant ASCII spaces while preserving spaces around Latin/opaque spans and
+/// updating `tracked_spans`.
+pub fn cleanup_cjk_translation_spacing(
+    text: &str,
+    protected_spans: &[Span],
+    tracked_spans: &mut [Span],
+) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() < 2 {
+        return text.to_owned();
+    }
+    let is_protected = |idx: usize| -> bool {
+        protected_spans
+            .iter()
+            .any(|s| idx >= s.start_char && idx < s.end_char)
+    };
+    let is_cjk_or_punct = |c: char| -> bool {
+        is_cjk_letter(c)
+            || matches!(
+                c,
+                '，' | '。'
+                    | '！'
+                    | '？'
+                    | '、'
+                    | '「'
+                    | '」'
+                    | '『'
+                    | '』'
+                    | '“'
+                    | '”'
+                    | '‘'
+                    | '’'
+                    | '（'
+                    | '）'
+                    | '：'
+                    | '；'
+                    | '…'
+                    | '—'
+            )
+    };
+
+    let mut out = String::with_capacity(text.len());
+    let mut shifts: Vec<(usize, isize)> = Vec::new();
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == ' ' && !is_protected(i) {
+            let prev = out.chars().next_back();
+            let next = chars.get(i + 1).copied();
+            let drop_space = match (prev, next) {
+                (None, _) | (_, None) => true,
+                (Some(' '), _) => true,
+                (Some(p), Some(n)) if is_cjk_or_punct(p) && is_cjk_or_punct(n) => true,
+                _ => false,
+            };
+            if drop_space {
+                shifts.push((i + 1, -1));
+                i += 1;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+
+    if !shifts.is_empty() {
+        apply_span_shifts(tracked_spans, &shifts);
+    }
+    out
+}
+
 fn is_cjk_letter(c: char) -> bool {
     matches!(
         c as u32,

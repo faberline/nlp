@@ -2,52 +2,52 @@
   "schema": "nlp.lexicon.receipt.v1",
   "date": "2026-11-14",
   "binary_format": "FNLPLX01",
-  "binary_bytes": 14722615,
-  "total_entries": 342333,
-  "total_rules": 649,
+  "binary_bytes": 15125939,
+  "total_entries": 350361,
+  "total_rules": 1389,
   "variants": {
-    "zh-Hant": 66850,
-    "zh-Hans": 71103,
+    "zh-Hant": 69474,
+    "zh-Hans": 73722,
     "en-US": 12591,
     "en-GB": 12648,
     "en": 41158,
-    "ja": 68000,
+    "ja": 70785,
     "ko": 69983
   },
   "rules": {
-    "ja_inflect": 508,
+    "ja_inflect": 1248,
     "ko_morph": 141
   },
   "tsv_files": [
     {
       "path": "lexicon/data/zh_hant.tsv",
-      "entries": 66850,
-      "bytes": 2948559,
-      "sha256": "2fd758eb2efbdcdae67945c7af8fb4c07158ab82c9cd277f2fe18cbf41519e11"
+      "entries": 69474,
+      "bytes": 3067272,
+      "sha256": "7fe39affdfe85597f31003234e9349ec0ca4919fc7cb49f4b622804f3f16752a"
     },
     {
       "path": "lexicon/data/zh_hans.tsv",
-      "entries": 71103,
-      "bytes": 3151113,
-      "sha256": "ae2dd6888e346ef0ae2f9372e5276a5469c7b2c2a2768689b8f9934bcdaf4636"
+      "entries": 73722,
+      "bytes": 3269612,
+      "sha256": "fb0f7202cd2eb61d855fc697ebbb122548e045c90d7b350f509ead1dabaf4120"
     },
     {
       "path": "lexicon/data/en.tsv",
-      "entries": 66395,
+      "entries": 66397,
       "bytes": 2846120,
       "sha256": "ad16a3493296839b9899bc1a62aa7877e2157dc27bd7753d87e7401bf142b1e0"
     },
     {
       "path": "lexicon/data/ja.tsv",
-      "entries": 68000,
-      "bytes": 2758516,
-      "sha256": "73975303dd4b640563fa83cc8f62ef4a0467544e659cf5bc58707fb0a56a65fd"
+      "entries": 70785,
+      "bytes": 2916152,
+      "sha256": "c8796e7e2c6e02b25f848816ce2dd6263be7c5be5b88573bd050e639f3574331"
     },
     {
       "path": "lexicon/data/ja_inflect.tsv",
-      "entries": 508,
-      "bytes": 37343,
-      "sha256": "c5aec778c47c7ef70d5db55257de3783ff92e52d63ea9dba7791613f2ac714fc"
+      "entries": 1248,
+      "bytes": 102075,
+      "sha256": "99d38574dca069b622eba9ca67f731215b4a421eeb740d64feccd62e35d8963f"
     },
     {
       "path": "lexicon/data/ko.tsv",
@@ -115,6 +115,18 @@
       ],
       "license": "Apache-2.0",
       "license_file": "LICENSE-MECAB-KO-DIC-APACHE-2.0.txt"
+    },
+    {
+      "name": "faberline-first-party-lexicon",
+      "variants": [
+        "ja",
+        "zh-Hant",
+        "zh-Hans"
+      ],
+      "license": "MIT",
+      "license_file": "LICENSE-FABERLINE-FIRST-PARTY-MIT.txt"
     }
-  ]
+  ],
+  "lexicon_bin_bytes": 15125939,
+  "lexicon_bin_sha256": "0dfe8abc48d12494bf6066da45e926ecc1f7f4cf3ceceb0e664292a883a45d94"
 }

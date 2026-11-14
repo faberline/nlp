@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use super::format::LangGroup;
+use super::format::{LangGroup, NONE_U32};
 use super::{
     JaInflectRule, SemanticClass, code_to_upos, db, decided_from_mask, lookup_ja,
     mask_to_candidates,
@@ -136,14 +136,58 @@ struct BackEdge {
     kind: EdgeKind,
 }
 
+/// Look up the best-cost `zh-Hant` translation gloss (`counterpart`) for a Japanese surface form,
+/// preferring entries matching `upos` when provided.
+pub fn lookup_ja_gloss(surface: &str, upos: Option<Upos>) -> Option<&'static str> {
+    let db = db();
+    let entries = db.lookup_raw(LangGroup::Ja, surface);
+    if entries.is_empty() {
+        return None;
+    }
+    if let Some(u) = upos {
+        let bit = 1u32 << (u as u8);
+        if let Some(best) = entries
+            .iter()
+            .filter(|e| {
+                e.extra_off != NONE_U32
+                    && ((e.upos_mask & bit) != 0 || code_to_upos(e.decided_upos) == Some(u))
+            })
+            .min_by_key(|e| e.cost)
+            && let Some(gloss) = db.str_at(best.extra_off)
+        {
+            return Some(gloss);
+        }
+    }
+    entries
+        .iter()
+        .filter(|e| e.extra_off != NONE_U32)
+        .min_by_key(|e| e.cost)
+        .and_then(|e| db.str_at(e.extra_off))
+}
+
 /// Segment a Japanese character slice using Viterbi minimum-cost DP over `ja.tsv`
 /// and `ja_inflect.tsv`, emitting UD-aligned tokens (splitting conjugated verbs/adjectives
 /// into stem + auxiliary morphemes).
 pub fn segment_ja(chars: &[char], base_char: usize) -> Vec<JaSegment> {
+    segment_ja_with_lexicon(chars, base_char, &[])
+}
+
+/// Segment a Japanese character slice with caller-supplied custom lexicon terms honored at low cost.
+pub fn segment_ja_with_lexicon(
+    chars: &[char],
+    base_char: usize,
+    extra_lexicon: &[String],
+) -> Vec<JaSegment> {
     let n = chars.len();
     if n == 0 {
         return Vec::new();
     }
+
+    let custom_terms: Vec<(&str, usize)> = extra_lexicon
+        .iter()
+        .filter(|t| !t.is_empty() && !t.chars().any(char::is_whitespace))
+        .map(|t| (t.as_str(), t.chars().count()))
+        .collect();
 
     let mut text = String::with_capacity(n * 3);
     let mut byte_offs = Vec::with_capacity(n + 1);
@@ -231,6 +275,19 @@ pub fn segment_ja(chars: &[char], base_char: usize) -> Vec<JaSegment> {
 
         // Exact lexicon common-prefix matches.
         let rest = &text[byte_offs[i]..];
+        for &(term, term_chars) in &custom_terms {
+            if i + term_chars <= n && rest.starts_with(term) {
+                let end = i + term_chars;
+                let cand_cost = base_cost + 250;
+                if cand_cost < dp_cost[end] {
+                    dp_cost[end] = cand_cost;
+                    back[end] = Some(BackEdge {
+                        len_chars: term_chars,
+                        kind: EdgeKind::Lexicon,
+                    });
+                }
+            }
+        }
         let max_c = MAX_WORD_CHARS.min(n - i);
         db.common_prefix_search(
             LangGroup::Ja,
@@ -276,9 +333,6 @@ pub fn segment_ja(chars: &[char], base_char: usize) -> Vec<JaSegment> {
                     if stem_len == 0 && inf.rule.stem_drop_chars < 2 {
                         continue;
                     }
-                    if stem_len > 0 && inf.rule.stem_drop_chars >= 2 {
-                        continue;
-                    }
 
                     let dict_form = if stem_len == 0 {
                         inf.dict_ending.to_owned()
@@ -286,10 +340,14 @@ pub fn segment_ja(chars: &[char], base_char: usize) -> Vec<JaSegment> {
                         format!("{stem_str}{}", inf.dict_ending)
                     };
 
-                    // Also handle くる for kahen when hiragana.
+                    // Also handle くる for kahen when hiragana (standalone or compound).
                     let hit = lookup_ja(&dict_form).or_else(|| {
-                        if inf.paradigm == "kahen" && stem_len == 0 {
-                            lookup_ja("くる")
+                        if inf.paradigm == "kahen" {
+                            if stem_len == 0 {
+                                lookup_ja("くる")
+                            } else {
+                                lookup_ja(&format!("{stem_str}くる"))
+                            }
                         } else {
                             None
                         }

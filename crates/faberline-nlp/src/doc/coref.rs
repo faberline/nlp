@@ -449,15 +449,23 @@ fn infer_pronoun_kind(canon: &str) -> (PronounKind, Person, Number, Animacy) {
             Animacy::Animal,
         ),
         "他们" | "她们" | "它们" | "牠们" | "they" | "them" | "their" | "theirs" | "彼ら"
-        | "그들" => (
+        | "彼女ら" | "그들" => (
             PronounKind::Personal3rd,
             Person::Third,
             Number::Plural,
             if matches!(canon, "它们" | "牠们") {
                 Animacy::Inanimate
+            } else if canon == "彼女ら" {
+                Animacy::HumanFemale
             } else {
                 Animacy::Unknown
             },
+        ),
+        "あいつ" | "こいつ" | "そいつ" => (
+            PronounKind::Personal3rd,
+            Person::Third,
+            Number::Singular,
+            Animacy::HumanUnknown,
         ),
         "其" => (
             PronounKind::Personal3rd,
@@ -480,19 +488,23 @@ fn infer_pronoun_kind(canon: &str) -> (PronounKind, Person, Number, Animacy) {
                 _ => Animacy::Unknown,
             },
         ),
-        "我" | "i" | "me" | "my" | "mine" | "私" | "僕" | "나" | "저" => (
+        "我" | "i" | "me" | "my" | "mine" | "私" | "わたし" | "あたし" | "わたくし" | "僕"
+        | "ぼく" | "俺" | "おれ" | "나" | "저" => (
             PronounKind::Personal1st,
             Person::First,
             Number::Singular,
             Animacy::HumanUnknown,
         ),
-        "我们" | "we" | "us" | "our" | "ours" | "私たち" | "우리" => (
-            PronounKind::Personal1st,
-            Person::First,
-            Number::Plural,
-            Animacy::HumanUnknown,
-        ),
-        "你" | "you" | "your" | "yours" | "あなた" | "너" => (
+        "我们" | "we" | "us" | "our" | "ours" | "私たち" | "僕ら" | "俺たち" | "우리" => {
+            (
+                PronounKind::Personal1st,
+                Person::First,
+                Number::Plural,
+                Animacy::HumanUnknown,
+            )
+        }
+        "你" | "you" | "your" | "yours" | "あなた" | "あんた" | "お前" | "おまえ" | "きみ"
+        | "貴様" | "너" => (
             PronounKind::Personal2nd,
             Person::Second,
             Number::Unknown,
@@ -539,12 +551,42 @@ fn infer_pronoun_kind(canon: &str) -> (PronounKind, Person, Number, Animacy) {
 
 fn has_female_hint(s: &str) -> bool {
     const FEMALE_HINTS: &[&str] = &[
-        "小姐", "女士", "阿姨", "姐姐", "妹妹", "妈妈", "奶奶", "外婆", "表妹", "表姐", "姑姑",
-        "mrs.", "ms.", "clara", "elena", "hannah", "miriam", "maya", "rachel", "claire", "alice",
-        "小芸", "小琳",
+        "小姐",
+        "女士",
+        "阿姨",
+        "姐姐",
+        "妹妹",
+        "妈妈",
+        "奶奶",
+        "外婆",
+        "表妹",
+        "表姐",
+        "姑姑",
+        "mrs.",
+        "ms.",
+        "clara",
+        "elena",
+        "hannah",
+        "miriam",
+        "maya",
+        "rachel",
+        "claire",
+        "alice",
+        "小芸",
+        "小琳",
+        "ちゃん",
+        "お嬢様",
+        "嬢",
+        "少女",
+        "姉",
+        "妹",
+        "妻",
     ];
     let lower = s.to_lowercase();
-    FEMALE_HINTS.iter().any(|h| lower.contains(h))
+    if FEMALE_HINTS.iter().any(|h| lower.contains(h)) {
+        return true;
+    }
+    lower.contains("女") && !lower.contains("男女") && !lower.contains("子女")
 }
 
 fn has_male_hint(s: &str) -> bool {
@@ -578,9 +620,18 @@ fn has_male_hint(s: &str) -> bool {
         "小杰",
         "小周",
         "阿文",
+        "くん",
+        "氏",
+        "少年",
+        "兄",
+        "弟",
+        "夫",
     ];
     let lower = s.to_lowercase();
-    MALE_HINTS.iter().any(|h| lower.contains(h))
+    if MALE_HINTS.iter().any(|h| lower.contains(h)) {
+        return true;
+    }
+    lower.contains("男") && !lower.contains("男女")
 }
 
 fn has_human_hint(

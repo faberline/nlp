@@ -2,11 +2,11 @@
 //! optional `nlp.narrative.v1` (`ChapterNarrative`).
 
 use faberline_nlp::Span;
-use faberline_nlp::doc::{Clause, Document, RelationKind};
+use faberline_nlp::doc::{Clause, Document, Lang, RelationKind};
 #[cfg(feature = "narrative")]
 use faberline_nlp_narrative::{ChapterNarrative, Factuality, MentionKind};
 
-use crate::schema::{SentenceConditioning, TargetVariant, TranslationGlossary};
+use crate::schema::{PronounClass, SentenceConditioning, TargetVariant, TranslationGlossary};
 
 /// A clause-aligned sub-window of a sentence, together with the trailing separator text (if any)
 /// between this window and the next window.
@@ -111,7 +111,81 @@ pub fn build_sentence_conditioning(
         let _ = (sentence_idx, glossary, target);
     }
 
+    // 3. Layer 6 `doc.zero_mentions` fallback when narrative did not resolve pro-drop,
+    //    plus Japanese-to-Chinese factuality/register cues for Track B & Track A.
+    if cond.resolved_pro_drop.is_none()
+        && let Some(zm) = doc
+            .zero_mentions
+            .iter()
+            .find(|z| z.sentence == sentence_idx)
+        && let Some(head_tok) = doc.tokens.get(zm.antecedent.head_token)
+    {
+        let ant_text = head_tok
+            .lemma
+            .as_deref()
+            .or(head_tok.canonical_variant.as_deref())
+            .unwrap_or("");
+        if !ant_text.is_empty() {
+            cond.resolved_pro_drop = Some(ant_text.to_owned());
+            if cond.pronoun_hint.is_none()
+                && let Some(actor) = glossary.find_actor(ant_text)
+            {
+                if target.is_en() {
+                    cond.pronoun_hint = actor.pronoun_class.en_subject_pronoun().map(str::to_owned);
+                } else {
+                    cond.pronoun_hint = actor.pronoun_class.control_code().map(str::to_owned);
+                }
+            }
+        }
+    }
+
+    if target.is_zh()
+        && doc
+            .segmentation
+            .sentences
+            .get(sentence_idx)
+            .is_some_and(|s| s.lang == Lang::Ja)
+        && cond.factuality.is_none()
+    {
+        let has_neg = doc.tokens.iter().any(|t| {
+            t.sentence == sentence_idx
+                && matches!(
+                    t.lemma.as_deref(),
+                    Some("ない" | "ぬ" | "ん" | "ません" | "なかった")
+                )
+        });
+        if has_neg {
+            cond.factuality = Some("negated".to_owned());
+        }
+    }
+
     cond
+}
+
+/// Map a `PronounClass` or control-code hint (`"3sg.m"`, `"3sg.f"`, etc.) to a Chinese pronoun.
+pub fn zh_pronoun_for_class(class: PronounClass) -> Option<&'static str> {
+    match class {
+        PronounClass::MasculineSingular => Some("他"),
+        PronounClass::FeminineSingular => Some("她"),
+        PronounClass::NeuterSingular => Some("它"),
+        PronounClass::AnimatePlural => Some("他們"),
+        PronounClass::FirstSingular => Some("我"),
+        PronounClass::SecondSingular => Some("你"),
+        PronounClass::Unspecified => None,
+    }
+}
+
+/// Map a control-code `pronoun_hint` (`"3sg.m"`, `"3sg.f"`, etc.) to a Chinese pronoun.
+pub fn zh_pronoun_for_hint(hint: &str) -> Option<&'static str> {
+    match hint {
+        "3sg.m" | "he" => Some("他"),
+        "3sg.f" | "she" => Some("她"),
+        "3sg.n" | "it" => Some("它"),
+        "3pl" | "they" => Some("他們"),
+        "1sg" | "I" => Some("我"),
+        "2sg" | "you" => Some("你"),
+        _ => None,
+    }
 }
 
 /// Format compact deterministic control prefix tokens prepended to a sentence window before

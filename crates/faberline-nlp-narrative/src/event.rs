@@ -123,7 +123,36 @@ const ADVERBIAL_PSEUDO_PREDICATES: &[&str] = &[
 const ADVERB_PROXY_HEADS: &[&str] = &["還", "还", "才", "就", "都", "也", "只", "更", "卻", "却"];
 
 const HYPOTHETICAL_CJK_CUES: &[&str] = &[
-    "若是", "倘若", "如果", "假如", "萬一", "万一", "一旦", "設若", "设若", "若", "除非",
+    "若是",
+    "倘若",
+    "如果",
+    "假如",
+    "萬一",
+    "万一",
+    "一旦",
+    "設若",
+    "设若",
+    "若",
+    "除非",
+    "もしも",
+    "もし",
+    "仮に",
+    "万が一",
+    "ならば",
+    "としたら",
+    "とすれば",
+];
+const HYPOTHETICAL_JA_TOKEN_CUES: &[&str] = &[
+    "もしも",
+    "もし",
+    "仮に",
+    "万が一",
+    "たら",
+    "れば",
+    "なら",
+    "ならば",
+    "としたら",
+    "とすれば",
 ];
 const HYPOTHETICAL_EN_CUES: &[&str] = &["if", "unless", "suppose", "supposing", "provided"];
 const HYPOTHETICAL_NON_COND_WORDS: &[&str] = &[
@@ -138,10 +167,66 @@ const HYPOTHETICAL_NON_COND_WORDS: &[&str] = &[
 ];
 
 const NEGATION_CJK_CUES: &[&str] = &[
-    "沒有", "没有", "未曾", "並未", "并未", "並非", "并非", "毫無", "毫无", "絕不", "绝不", "從未",
-    "从未", "並不", "并不", "不會", "不会", "不能", "不可", "不敢", "不想", "不知", "不得", "無法",
-    "无法", "未能", "不用", "不必", "不曾", "不願", "不愿", "不肯", "沒法", "没法", "沒能", "没能",
-    "不再", "不是", "不見", "不见", "沒見", "没见", "不", "沒", "没", "未", "莫", "勿",
+    "沒有",
+    "没有",
+    "未曾",
+    "並未",
+    "并未",
+    "並非",
+    "并非",
+    "毫無",
+    "毫无",
+    "絕不",
+    "绝不",
+    "從未",
+    "从未",
+    "並不",
+    "并不",
+    "不會",
+    "不会",
+    "不能",
+    "不可",
+    "不敢",
+    "不想",
+    "不知",
+    "不得",
+    "無法",
+    "无法",
+    "未能",
+    "不用",
+    "不必",
+    "不曾",
+    "不願",
+    "不愿",
+    "不肯",
+    "沒法",
+    "没法",
+    "沒能",
+    "没能",
+    "不再",
+    "不是",
+    "不見",
+    "不见",
+    "沒見",
+    "没见",
+    "不",
+    "沒",
+    "没",
+    "未",
+    "莫",
+    "勿",
+    "ない",
+    "なかっ",
+    "なかった",
+    "なく",
+    "ず",
+    "ぬ",
+    "ません",
+    "ませんでした",
+    "まい",
+    "じゃない",
+    "ではない",
+    "ではなかった",
 ];
 const NEGATION_EN_CUES: &[&str] = &[
     "never",
@@ -226,8 +311,40 @@ const NON_NEGATED_IDIOMS: &[&str] = &[
 ];
 
 const MODAL_FUTURE_CJK_CUES: &[&str] = &[
-    "將要", "将要", "即將", "即将", "快要", "打算", "準備", "准备", "想要", "或許", "或许", "恐怕",
-    "未必", "可能", "也許", "也许", "大概", "應該", "应该", "必須", "必须", "欲",
+    "將要",
+    "将要",
+    "即將",
+    "即将",
+    "快要",
+    "打算",
+    "準備",
+    "准备",
+    "想要",
+    "或許",
+    "或许",
+    "恐怕",
+    "未必",
+    "可能",
+    "也許",
+    "也许",
+    "大概",
+    "應該",
+    "应该",
+    "必須",
+    "必须",
+    "欲",
+    "よう",
+    "だろう",
+    "でしょう",
+    "かもしれ",
+    "かもしれない",
+    "かもしれません",
+    "たい",
+    "たかった",
+    "つもり",
+    "はず",
+    "べき",
+    "ほしい",
 ];
 const MODAL_FUTURE_EN_CUES: &[&str] = &[
     "will", "would", "might", "may", "could", "should", "shall", "must", "'ll",
@@ -248,6 +365,14 @@ const TEMPORAL_QUANTITY_UNITS: &[&str] = &[
     "分钟",
     "小時",
     "小时",
+    "時間",
+    "分間",
+    "秒間",
+    "日間",
+    "週間",
+    "ヶ月間",
+    "か月間",
+    "年間",
     "個時辰",
     "个时辰",
     "時辰",
@@ -515,7 +640,7 @@ pub fn extract_events(
         }
     }
 
-    attach_temporal_anchors(doc, dialogues, &clause_has_event, &mut events);
+    attach_temporal_anchors(&chars, doc, dialogues, &clause_has_event, &mut events);
 
     EventExtraction { events, unknown }
 }
@@ -1461,6 +1586,39 @@ fn extract_args_no_syntax(
                 vocab_places,
                 vocab_objects,
             );
+            let next_surf = zone_toks
+                .get(next_i)
+                .map(|&nti| span_text(chars, doc.tokens[nti].span));
+            if doc.tokens[pred_tok].lang == faberline_nlp::doc::Lang::Ja
+                && let Some(ref p_surf) = next_surf
+                && matches!(
+                    p_surf.as_str(),
+                    "は" | "が" | "を" | "に" | "で" | "へ" | "から"
+                )
+            {
+                let role = match p_surf.as_str() {
+                    "は" | "が" => EventRole::Agent,
+                    "を" => EventRole::Patient,
+                    _ => EventRole::Oblique,
+                };
+                args.push(EventArgument {
+                    role,
+                    span: np_span,
+                    token: Some(ti),
+                    canonical: lookup_canonical(
+                        chars,
+                        vocab,
+                        np_span,
+                        vocab_actors,
+                        vocab_places,
+                        vocab_objects,
+                    ),
+                    basis: ArgumentBasis::DirectSyntax,
+                    score_milli: 0,
+                });
+                i = next_i + 1;
+                continue;
+            }
             if pre_pp_active {
                 args.push(EventArgument {
                     role: EventRole::Oblique,
@@ -1884,6 +2042,54 @@ fn detect_passive(
         }
     }
 
+    // Japanese passive: `れる` / `られる` / `れ` / `られ` / `れた` / `られた` / `れて` / `られて` aux.
+    if doc.tokens[pred_tok].lang == faberline_nlp::doc::Lang::Ja {
+        let ja_pass_pos = zone_toks.iter().enumerate().find_map(|(pos, &ti)| {
+            let surf = span_text(chars, doc.tokens[ti].span);
+            let is_pass_aux = matches!(
+                surf.as_str(),
+                "れる" | "られる" | "れ" | "られ" | "れた" | "られた" | "れて" | "られて"
+            ) && (pos == pred_pos + 1
+                || syntax_by_tok
+                    .get(ti)
+                    .and_then(|s| *s)
+                    .is_some_and(|st| st.deprel == "aux" && st.head == Some(pred_tok)));
+            is_pass_aux.then_some(pos)
+        });
+        if let Some(marker_pos) = ja_pass_pos {
+            // Find an animate `に`/`によって`/`により`-marked agent in the clause.
+            let mut agent_range: Option<(usize, usize)> = None;
+            for (pos, &ti) in zone_toks.iter().enumerate() {
+                if pos >= pred_pos {
+                    break;
+                }
+                let is_ja_obl_agent = syntax_by_tok.get(ti).and_then(|s| *s).is_some_and(|st| {
+                    st.head == Some(pred_tok)
+                        && matches!(st.deprel.as_str(), "obl" | "iobj" | "obl:agent")
+                        && zone_toks.iter().any(|&ct| {
+                            syntax_by_tok.get(ct).and_then(|s| *s).is_some_and(|cst| {
+                                cst.head == Some(ti)
+                                    && cst.deprel == "case"
+                                    && matches!(
+                                        span_text(chars, doc.tokens[ct].span).as_str(),
+                                        "に" | "によって" | "により"
+                                    )
+                            })
+                        })
+                });
+                if is_ja_obl_agent && is_ja_animate_token(chars, doc, ti) {
+                    agent_range = Some((pos, pos + 1));
+                    break;
+                }
+            }
+            return Some(PassiveFrame {
+                marker_tok: marker_pos,
+                agent_start_tok: agent_range.map(|r| r.0),
+                agent_end_tok: agent_range.map(|r| r.1),
+            });
+        }
+    }
+
     // Also detect syntax `nsubj:pass` in English/Chinese.
     let has_pass_subj = zone_toks.iter().any(|&ti| {
         syntax_by_tok
@@ -2101,7 +2307,34 @@ fn lookup_canonical(
             return Some(c.clone());
         }
     }
+    if let Some(canon) = crate::normalize_ja_actor_key(vocab, &surf) {
+        return Some(canon);
+    }
     None
+}
+
+fn is_ja_animate_token(chars: &[char], doc: &Document, tok_idx: usize) -> bool {
+    let tok = &doc.tokens[tok_idx];
+    if doc.entities.iter().any(|e| {
+        matches!(
+            e.kind,
+            EntityKind::Date | EntityKind::RelativeDate | EntityKind::Time
+        ) && spans_overlap(e.span, tok.span)
+    }) {
+        return false;
+    }
+    if doc
+        .entities
+        .iter()
+        .any(|e| e.kind == EntityKind::Name && spans_overlap(e.span, tok.span))
+    {
+        return true;
+    }
+    if matches!(tok.upos, Some(Upos::Propn | Upos::Pron)) {
+        return true;
+    }
+    let surf = span_text(chars, tok.span);
+    crate::strip_ja_honorific(&surf) != surf || crate::is_personal_pronoun(&surf)
 }
 
 fn classify_factuality(
@@ -2173,10 +2406,22 @@ fn find_hypothetical_cue(
         if HYPOTHETICAL_EN_CUES.contains(&lower.as_str()) {
             return Some(tok.span);
         }
-        if HYPOTHETICAL_CJK_CUES.contains(&surf.as_str()) {
+        if HYPOTHETICAL_CJK_CUES.contains(&surf.as_str())
+            || HYPOTHETICAL_JA_TOKEN_CUES.contains(&surf.as_str())
+        {
             if surf == "若" && is_non_conditional_ruo(chars, tok.span, clause_span) {
                 continue;
             }
+            return Some(tok.span);
+        }
+        if tok.lang == faberline_nlp::doc::Lang::Ja
+            && matches!(
+                tok.upos,
+                Some(Upos::Verb | Upos::Adj | Upos::Aux | Upos::Sconj)
+            )
+            && surf != "ながら"
+            && (surf.ends_with("たら") || surf.ends_with("れば"))
+        {
             return Some(tok.span);
         }
     }
@@ -2232,6 +2477,15 @@ fn find_negation_cue(chars: &[char], doc: &Document, zone_toks: &[usize]) -> Opt
         let lower = surf.to_ascii_lowercase();
 
         if NEGATION_EN_CUES.contains(&lower.as_str()) {
+            return Some(tok.span);
+        }
+        if tok.lang == faberline_nlp::doc::Lang::Ja
+            && matches!(tok.upos, Some(Upos::Verb | Upos::Aux))
+            && (surf.ends_with("ない")
+                || surf.ends_with("なかった")
+                || surf.ends_with("ません")
+                || surf.ends_with("ませんでした"))
+        {
             return Some(tok.span);
         }
         if NEGATION_CJK_CUES.contains(&surf.as_str()) {
@@ -2298,6 +2552,15 @@ fn find_modal_future_cue(
         if MODAL_FUTURE_CJK_CUES.contains(&surf.as_str()) {
             return Some(tok.span);
         }
+        if tok.lang == faberline_nlp::doc::Lang::Ja
+            && matches!(tok.upos, Some(Upos::Verb | Upos::Aux | Upos::Adj))
+            && (surf.ends_with("たい")
+                || surf.ends_with("たかった")
+                || surf.ends_with("だろう")
+                || surf.ends_with("でしょう"))
+        {
+            return Some(tok.span);
+        }
         // Handle multi-char cues split across tokens (e.g. `即` + `將`).
         for &cue in MODAL_FUTURE_CJK_CUES {
             if cue.chars().count() >= 2 {
@@ -2327,6 +2590,7 @@ fn find_modal_future_cue(
 }
 
 fn attach_temporal_anchors(
+    chars: &[char],
     doc: &Document,
     dialogues: &[DialogueSpan],
     clause_has_event: &[bool],
@@ -2405,6 +2669,50 @@ fn attach_temporal_anchors(
             && let Some(shared) = sent_shared_anchors.get(ev.sentence)
         {
             ev.temporal_anchors = shared.clone();
+        }
+        if ev.zone == ContextZone::Narrative {
+            attach_ja_fallback_temporal_anchors(chars, doc, ev);
+        }
+    }
+}
+
+fn attach_ja_fallback_temporal_anchors(chars: &[char], doc: &Document, ev: &mut CandidateEvent) {
+    let Some(sent) = doc.segmentation.sentences.get(ev.sentence) else {
+        return;
+    };
+    if sent.lang != faberline_nlp::doc::Lang::Ja {
+        return;
+    }
+    const JA_POINT_IN_TIME: &[&str] = &[
+        "翌朝",
+        "その夜",
+        "翌晩",
+        "次の日",
+        "翌日",
+        "今朝",
+        "今夜",
+        "昨夜",
+    ];
+    for tok in &doc.tokens {
+        if tok.sentence != ev.sentence || !spans_overlap(ev.clause_span, tok.span) {
+            continue;
+        }
+        if ev
+            .temporal_anchors
+            .iter()
+            .any(|a| spans_overlap(a.span, tok.span))
+        {
+            continue;
+        }
+        let s = span_text(chars, tok.span);
+        if JA_POINT_IN_TIME.contains(&s.as_str()) {
+            ev.temporal_anchors.push(TemporalAnchor {
+                entity_index: doc.entities.len(),
+                kind: EntityKind::RelativeDate,
+                span: tok.span,
+                value: Some(s),
+                unit: None,
+            });
         }
     }
 }

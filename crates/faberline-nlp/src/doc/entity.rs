@@ -2627,6 +2627,7 @@ const KO_PRONOUNS: &[&str] = &[
 ];
 
 fn propn_entities_ja_ko(x: &Sent, c: &[char], sent_tokens: &[Token], local: &mut Vec<Cand>) {
+    ja_honorific_person_entities(x, c, sent_tokens, local);
     for tok in sent_tokens {
         if tok.upos != Some(Upos::Propn) {
             continue;
@@ -2713,5 +2714,269 @@ fn propn_entities_ja_ko(x: &Sent, c: &[char], sent_tokens: &[Token], local: &mut
                 None,
             ));
         }
+    }
+}
+
+const JA_PERSON_HONORIFICS: &[&str] = &[
+    "お嬢様",
+    "先輩",
+    "先生",
+    "ちゃん",
+    "さん",
+    "くん",
+    "さま",
+    "様",
+    "殿",
+    "氏",
+    "嬢",
+];
+
+fn is_ja_name_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{4e00}'..='\u{9fff}' | '\u{3040}'..='\u{309f}' | '\u{30a0}'..='\u{30ff}'
+    )
+}
+
+fn is_valid_ja_name_stem(stem: &str, stem_upos: Option<Upos>) -> bool {
+    let char_count = stem.chars().count();
+    if !(1..=6).contains(&char_count) {
+        return false;
+    }
+    if char_count == 1 && !stem.chars().all(|ch| matches!(ch, '\u{4e00}'..='\u{9fff}')) {
+        return false;
+    }
+    if !stem.chars().all(is_ja_name_char) {
+        return false;
+    }
+    if matches!(
+        stem,
+        "私" | "わたし"
+            | "あたし"
+            | "わたくし"
+            | "僕"
+            | "ぼく"
+            | "俺"
+            | "おれ"
+            | "あなた"
+            | "あんた"
+            | "君"
+            | "きみ"
+            | "お前"
+            | "おまえ"
+            | "彼"
+            | "彼女"
+            | "誰"
+            | "だれ"
+            | "何"
+            | "なに"
+            | "皆"
+            | "みな"
+            | "これ"
+            | "それ"
+            | "あれ"
+            | "どれ"
+            | "お"
+            | "ご"
+            | "御"
+            | "お客"
+            | "お客様"
+            | "お兄"
+            | "お姉"
+            | "お母"
+            | "お父"
+            | "神"
+            | "王"
+            | "奥"
+            | "社長"
+            | "部長"
+            | "課長"
+            | "店長"
+            | "店員"
+            | "医者"
+            | "警察"
+            | "運転手"
+            | "会社"
+            | "学校"
+            | "病院"
+            | "子供"
+            | "子ども"
+            | "生徒"
+            | "学生"
+            | "友達"
+            | "友人"
+    ) {
+        return false;
+    }
+    if matches!(
+        stem_upos,
+        Some(
+            Upos::Pron
+                | Upos::Verb
+                | Upos::Adj
+                | Upos::Adv
+                | Upos::Adp
+                | Upos::Part
+                | Upos::Num
+                | Upos::Punct
+                | Upos::Det
+                | Upos::Cconj
+                | Upos::Sconj
+                | Upos::Aux
+        )
+    ) {
+        return false;
+    }
+    if let Some(hit) = crate::lexicon::lookup_ja(stem) {
+        if matches!(
+            hit.sem_class,
+            Some(
+                SemanticClass::Location
+                    | SemanticClass::Organization
+                    | SemanticClass::Artifact
+                    | SemanticClass::Time
+            )
+        ) {
+            return false;
+        }
+        if matches!(
+            hit.decided_upos,
+            Some(
+                Upos::Pron
+                    | Upos::Verb
+                    | Upos::Adj
+                    | Upos::Adv
+                    | Upos::Adp
+                    | Upos::Part
+                    | Upos::Num
+                    | Upos::Det
+                    | Upos::Cconj
+                    | Upos::Sconj
+                    | Upos::Aux
+            )
+        ) {
+            return false;
+        }
+        if hit.decided_upos == Some(Upos::Noun)
+            && stem_upos != Some(Upos::Propn)
+            && hit.sem_class != Some(SemanticClass::Person)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn push_ja_name_if_free(x: &Sent, start: usize, end: usize, local: &mut Vec<Cand>) {
+    if let Some(existing) = local.iter_mut().find(|existing| {
+        existing.kind == Some(EntityKind::Name)
+            && existing.span.start_char == start
+            && existing.span.end_char < end
+    }) {
+        existing.span.end_char = end;
+        return;
+    }
+    let overlaps = local
+        .iter()
+        .any(|existing| existing.span.start_char < end && start < existing.span.end_char);
+    if !overlaps {
+        local.push(x.cand(start, end, Some(EntityKind::Name), None, None));
+    }
+}
+
+fn ja_honorific_person_entities(
+    x: &Sent,
+    _c: &[char],
+    sent_tokens: &[Token],
+    local: &mut Vec<Cand>,
+) {
+    let is_ja_sent = sent_tokens.iter().any(|t| t.lang == Lang::Ja)
+        || x.t[x.s..x.e]
+            .iter()
+            .any(|&ch| matches!(ch, '\u{3040}'..='\u{30ff}'));
+    if !is_ja_sent {
+        return;
+    }
+    let mut i = x.s;
+    while i < x.e {
+        if x.t[i] == SENTINEL {
+            i += 1;
+            continue;
+        }
+        let mut matched_hon: Option<(&str, usize)> = None;
+        for &hon in JA_PERSON_HONORIFICS {
+            let hon_len = hon.chars().count();
+            if i + hon_len <= x.e
+                && (i..i + hon_len).all(|k| x.t[k] != SENTINEL)
+                && hon.chars().eq(x.t[i..i + hon_len].iter().copied())
+            {
+                // Avoid splitting words like `様子` (`様` + Kanji) or `氏名` (`氏` + Kanji).
+                let next_is_kanji =
+                    x.t.get(i + hon_len)
+                        .is_some_and(|&ch| matches!(ch, '\u{4e00}'..='\u{9fff}'));
+                if matches!(hon, "様" | "殿" | "氏" | "嬢") && next_is_kanji {
+                    continue;
+                }
+                matched_hon = Some((hon, hon_len));
+                break;
+            }
+        }
+        let Some((hon, hon_len)) = matched_hon else {
+            i += 1;
+            continue;
+        };
+
+        if i == x.s {
+            i += hon_len;
+            continue;
+        }
+
+        // Collect preceding Kanji or Katakana proper-name stem (1..=4 Kanji or 2..=6 Katakana).
+        let prev = x.t[i - 1];
+        let mut stem_start = i;
+        if matches!(prev, '\u{4e00}'..='\u{9fff}') {
+            while stem_start > x.s
+                && i - stem_start < 4
+                && matches!(x.t[stem_start - 1], '\u{4e00}'..='\u{9fff}')
+            {
+                stem_start -= 1;
+            }
+        } else if matches!(prev, '\u{30a0}'..='\u{30ff}') {
+            while stem_start > x.s
+                && i - stem_start < 6
+                && matches!(x.t[stem_start - 1], '\u{30a0}'..='\u{30ff}')
+            {
+                stem_start -= 1;
+            }
+        } else {
+            i += hon_len;
+            continue;
+        }
+
+        // Reject if preceded by honorific prefix `お`/`ご`/`御` (e.g. `お兄さん`, `お客様`).
+        if stem_start > x.s && matches!(x.t[stem_start - 1], 'お' | 'ご' | '御') {
+            i += hon_len;
+            continue;
+        }
+        // Reject if the Kanji/Katakana run was longer than the cap (likely a compound noun, not a name).
+        if stem_start > x.s
+            && ((matches!(prev, '\u{4e00}'..='\u{9fff}')
+                && matches!(x.t[stem_start - 1], '\u{4e00}'..='\u{9fff}'))
+                || (matches!(prev, '\u{30a0}'..='\u{30ff}')
+                    && matches!(x.t[stem_start - 1], '\u{30a0}'..='\u{30ff}')))
+        {
+            i += hon_len;
+            continue;
+        }
+
+        let end = i + hon_len;
+        let stem: String = x.t[stem_start..i].iter().collect();
+        if is_valid_ja_name_stem(&stem, None) {
+            push_ja_name_if_free(x, stem_start, end, local);
+            let _ = hon;
+            i = end;
+            continue;
+        }
+        i += hon_len;
     }
 }

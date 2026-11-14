@@ -797,6 +797,7 @@ fn detect_backward_causal_connector(
         "因为",
         "由於",
         "由于",
+        "なぜなら",
     ];
     for pat in BACKWARD_PREFIXES {
         if let Some(end) = starts_with_chars(chars, c_start, cause_span.end_char, pat) {
@@ -828,17 +829,77 @@ fn detect_forward_causal_connector(
 
     let c2_start = skip_opening_chars(chars, doc, effect_span);
     const RESULT_PREFIXES: &[&str] = &[
-        "導致", "导致", "致使", "以致", "故而", "因而", "於是", "于是",
+        "導致",
+        "导致",
+        "致使",
+        "以致",
+        "故而",
+        "因而",
+        "於是",
+        "于是",
+        "だから",
+        "そのため",
+        "したがって",
     ];
     for pat in RESULT_PREFIXES {
         if let Some(end) = starts_with_chars(chars, c2_start, effect_span.end_char, pat)
             && (has_cause_opener
-                || matches!(*pat, "導致" | "导致" | "致使" | "以致" | "故而" | "因而"))
+                || matches!(
+                    *pat,
+                    "導致"
+                        | "导致"
+                        | "致使"
+                        | "以致"
+                        | "故而"
+                        | "因而"
+                        | "だから"
+                        | "そのため"
+                        | "したがって"
+                ))
         {
             return Some(Span {
                 start_char: c2_start,
                 end_char: end,
             });
+        }
+    }
+
+    // Japanese clause-final causal `ので` / `から` (when `から` follows a predicate/aux, not a noun).
+    let c1_end = trim_closing_chars(chars, c1_start, cause_span.end_char);
+    if c1_end > c1_start {
+        if ends_with_chars(chars, c1_start, c1_end, "ので") {
+            return Some(Span {
+                start_char: c1_end - 2,
+                end_char: c1_end,
+            });
+        }
+        if ends_with_chars(chars, c1_start, c1_end, "から") && c1_end >= c1_start + 3 {
+            let prev_ch = chars[c1_end - 3];
+            let is_pred_kara = matches!(
+                prev_ch,
+                'た' | 'だ'
+                    | 'る'
+                    | 'い'
+                    | 'う'
+                    | 'く'
+                    | 'ぐ'
+                    | 'す'
+                    | 'つ'
+                    | 'ぬ'
+                    | 'ぶ'
+                    | 'む'
+                    | 'ん'
+            ) || doc.tokens.iter().any(|t| {
+                t.span.start_char == c1_end - 2
+                    && t.span.end_char == c1_end
+                    && t.upos == Some(faberline_nlp::doc::Upos::Sconj)
+            });
+            if is_pred_kara {
+                return Some(Span {
+                    start_char: c1_end - 2,
+                    end_char: c1_end,
+                });
+            }
         }
     }
     None
@@ -902,7 +963,22 @@ fn detect_simultaneous_connector(
         }
     }
 
-    // Clause/sentence-initial `同時` / `同时` (excluding `同時期`, `同時代`, `同事`, `同伴`).
+    // Clause/sentence-initial `同時` / `同时` / `同時に` (excluding `同時期`, `同時代`, `同事`, `同伴`).
+    if let Some(end) = starts_with_chars(chars, c2_start, c2.end_char, "同時に")
+        && c1_start < c1.end_char
+    {
+        return Some(Span {
+            start_char: c2_start,
+            end_char: end,
+        });
+    }
+    let c1_end = trim_closing_chars(chars, c1_start, c1.end_char);
+    if c1_end >= c1_start + 3 && ends_with_chars(chars, c1_start, c1_end, "ながら") {
+        return Some(Span {
+            start_char: c1_end - 3,
+            end_char: c1_end,
+        });
+    }
     for pat in ["同時", "同时"] {
         if let Some(end) = starts_with_chars(chars, c2_start, c2.end_char, pat) {
             let next_ch = chars.get(end).copied();
@@ -1400,6 +1476,10 @@ const RETROSPECTIVE_PHRASES: &[&str] = &[
     "上个月",
     "上週",
     "上周",
+    "以前",
+    "かつて",
+    "前に",
+    "昔",
 ];
 
 const EN_RETROSPECTIVE_PHRASES: &[&str] = &[
@@ -1469,6 +1549,11 @@ const FORWARD_SHIFT_PHRASES: &[&str] = &[
     "下个月",
     "下週",
     "下周",
+    "三日後",
+    "数日後",
+    "数分後",
+    "翌朝",
+    "その夜",
 ];
 
 const EN_FORWARD_SHIFT_PHRASES: &[&str] = &[

@@ -97,6 +97,7 @@ pub fn doc_options_for_translate(
         lexicon,
         enrich_morphology: true,
         first_party_zh_segmenter: true,
+        ..DocOptions::default()
     }
 }
 

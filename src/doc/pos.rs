@@ -6,16 +6,19 @@ use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use super::{Lang, OpaqueKind, Upos};
+use crate::lexicon::LexTokenAnalysis;
+use crate::lexicon::ja::JaSegment;
 
 pub(super) enum Tag {
     Decided(Upos),
     Ambiguous,
     Missing,
+    #[allow(dead_code)]
+    UnsupportedLang,
 }
 
-const PUNCT: &str =
-    "!\"'(),-./:;?[\\]_{}，。、；：？！…「」『』（）《》〈〉“”‘’—–～·‧【】〔〕［］｛｝";
-const SYM: &str = "$%+<=>@^`|~#*°×÷±©®™§¥€£₩¢←→↑↓";
+const PUNCT: &str = "!\"'(),-./:;?[\\]_{}，。．、；：？！…‥⋯「」『』（）《》〈〉“”‘’—–―─～〜·‧・｡｢｣､･«»【】〔〕［］｛｝〘〙〖〗〝〟※";
+const SYM: &str = "$%+<=>@^`|~#*°×÷±©®™§¥€£₩¢←→↑↓＄％＋＜＝＞＠￥￦";
 const ZH_NUMERALS: &str = "〇零一二三四五六七八九十百千萬万億亿兩两";
 
 const EN_DECIDED: &[(Upos, &str)] = &[
@@ -107,8 +110,15 @@ fn ambiguous() -> &'static HashSet<&'static str> {
     })
 }
 
-/// Tag one token. `lang` picks the lookup key: lowercase for English, exact for Chinese.
-pub(super) fn tag(text: &str, lang: Lang, opaque: Option<OpaqueKind>) -> Tag {
+/// Tag one token. `lang` picks the lookup key: lowercase for English, exact for Chinese,
+/// and first-party lexicon lookup/analysis for Japanese and Korean.
+pub(super) fn tag_with_lex(
+    text: &str,
+    lang: Lang,
+    opaque: Option<OpaqueKind>,
+    ja_lex: Option<&JaSegment>,
+    ko_lex: Option<&LexTokenAnalysis>,
+) -> Tag {
     match opaque {
         Some(OpaqueKind::Url | OpaqueKind::Citation | OpaqueKind::Code) => {
             return Tag::Decided(Upos::X);
@@ -140,11 +150,37 @@ pub(super) fn tag(text: &str, lang: Lang, opaque: Option<OpaqueKind>) -> Tag {
             zh_key = super::token::strip_scraper_infix(text);
             zh_key.as_ref()
         }
+        Lang::Ja => {
+            if let Some(seg) = ja_lex {
+                return tag_from_mask(seg.decided_upos, seg.upos_mask);
+            }
+            if let Some(hit) = crate::lexicon::lookup_ja(text) {
+                return tag_from_mask(hit.decided_upos, hit.upos_mask);
+            }
+            return Tag::Missing;
+        }
+        Lang::Ko => {
+            if let Some(ko) = ko_lex {
+                return tag_from_mask(ko.decided_upos, ko.upos_mask);
+            }
+            let ko = crate::lexicon::ko::analyze_ko_eojeol(&chars, 0);
+            return tag_from_mask(ko.decided_upos, ko.upos_mask);
+        }
         Lang::Mixed | Lang::Und => return Tag::Missing,
     };
     if let Some(&upos) = decided().get(key) {
         Tag::Decided(upos)
     } else if ambiguous().contains(key) {
+        Tag::Ambiguous
+    } else {
+        Tag::Missing
+    }
+}
+
+fn tag_from_mask(decided_upos: Option<Upos>, upos_mask: u32) -> Tag {
+    if let Some(upos) = decided_upos {
+        Tag::Decided(upos)
+    } else if upos_mask.count_ones() > 1 {
         Tag::Ambiguous
     } else {
         Tag::Missing

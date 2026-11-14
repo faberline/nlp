@@ -7,6 +7,7 @@
 mod analyze;
 pub mod doc;
 mod language;
+pub mod lexicon;
 mod recap_time;
 pub mod scoped_transfer;
 pub mod source_cross_chapter;

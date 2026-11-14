@@ -157,7 +157,7 @@ fn timeline_builds_from_every_style() {
 
 #[test]
 fn text_in_an_unsupported_language_is_unknown_and_yields_nothing() {
-    let text = "안녕하세요 오늘은 날씨가 좋습니다. 감사합니다.\n";
+    let text = "Привет, мир.\n";
     let doc = analyze_document(text, &Options::default());
     assert!(
         doc.unknown
@@ -176,6 +176,52 @@ fn text_in_an_unsupported_language_is_unknown_and_yields_nothing() {
     assert!(result.events.is_empty());
     let plain = analyze(text, "", &lexicon);
     assert!(plain.events.is_empty());
+}
+
+#[test]
+fn ja_and_ko_segment_in_doc_v1_while_zh_consumers_stay_unchanged() {
+    let lexicon = Lexicon {
+        actors: ACTORS,
+        ..Lexicon::default()
+    };
+    let analyzer = NarrativeAnalyzer::new(Locale::ChineseTaiwan, &lexicon).expect("analyzer");
+    for (text, expected_lang) in [
+        ("안녕하세요 오늘은 날씨가 좋습니다. 감사합니다.\n", Lang::Ko),
+        (
+            "こんにちは、今日はいい天気ですね。ありがとうございます。\n",
+            Lang::Ja,
+        ),
+    ] {
+        let doc = analyze_document(text, &Options::default());
+        assert!(
+            doc.segmentation
+                .sentences
+                .iter()
+                .all(|s| s.lang == expected_lang),
+            "{:?}",
+            doc.segmentation.sentences
+        );
+        assert!(
+            !doc.unknown
+                .iter()
+                .any(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage),
+            "{:?}",
+            doc.unknown
+        );
+        assert!(!doc.tokens.is_empty());
+        assert!(
+            !doc.unknown
+                .iter()
+                .any(|u| u.reason == Reason::UnsupportedLanguage),
+            "{:?}",
+            doc.unknown
+        );
+        assert!(doc.tokens.iter().any(|t| t.upos.is_some()));
+        let result = analyzer.analyze(text, "");
+        assert!(result.events.is_empty());
+        let plain = analyze(text, "", &lexicon);
+        assert!(plain.events.is_empty());
+    }
 }
 
 #[test]
@@ -200,6 +246,8 @@ fn cross_chapter_push_gives_the_generic_tokenizer_pronouns() {
         "他走了。她留下。\n",
         "他說：「我們走。」她點頭。\n",
         "　　他走進木屋。她留在港口。\n　　他們說：「她們也來了。」\n",
+        "안녕하세요 오늘은 날씨가 좋습니다. 감사합니다.\n",
+        "こんにちは、今日はいい天気ですね。\n",
     ];
     const PRONOUN_FORMS: &[&str] = &[
         "他", "她", "它", "他們", "她們", "它們", "他们", "她们", "它们",

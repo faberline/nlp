@@ -17,10 +17,13 @@ use crate::text::{TAIWAN_TERMS, default_jieba};
 pub(super) struct Piece {
     pub span: Span,
     pub opaque: Option<OpaqueKind>,
+    pub ja_lex: Option<crate::lexicon::ja::JaSegment>,
 }
 
 const CLITICS: &[&str] = &["'s", "'ll", "'re", "'ve", "'m", "'d"];
-const REPEATABLE: &[char] = &['.', '…', '-', '—', '~', '!', '?', '！', '？'];
+const REPEATABLE: &[char] = &[
+    '.', '…', '‥', '⋯', '-', '—', '―', '─', '~', '〜', '～', '!', '?', '！', '？',
+];
 const HYPHENS: &[&str] = &["-", "\u{2010}"];
 
 /// Classical pronouns, address terms, and common genre nouns added to `doc_jieba()`.
@@ -73,6 +76,9 @@ const DOC_EXTRA_WORDS: &[&str] = &[
     "大汉",
     "婦人",
     "妇人",
+    "狼藉",
+    "狼籍",
+    "狼借",
 ];
 
 /// Curated Simplified lexicalized words starting with coverb/preposition or demonstrative chars
@@ -656,18 +662,32 @@ pub(crate) fn strip_scraper_infix(s: &str) -> Cow<'_, str> {
     }
 }
 
-/// The Han set of `nlp.doc.v1` tokens: CJK ideographs, compatibility ideographs, 々 and 〇.
+/// The Han set of `nlp.doc.v1` tokens: CJK ideographs, compatibility ideographs, 々, 〆 and 〇.
 /// Layer 1 keeps its own set (`segment::is_han`).
 pub(super) fn is_han(ch: char) -> bool {
     matches!(
         ch,
-        '\u{3400}'..='\u{4dbf}' | '\u{4e00}'..='\u{9fff}' | '\u{f900}'..='\u{faff}' | '\u{3005}' | '\u{3007}'
+        '\u{3400}'..='\u{4dbf}'
+            | '\u{4e00}'..='\u{9fff}'
+            | '\u{20000}'..='\u{2ceaf}'
+            | '\u{f900}'..='\u{faff}'
+            | '\u{3005}'
+            | '\u{3006}'
+            | '\u{3007}'
     )
 }
 
-/// Language of one token: zh with a Han char, en with a Latin letter, otherwise und.
-pub(super) fn token_lang(text: &str) -> Lang {
-    if text.chars().any(is_han) {
+/// Language of one token: `ja` with Kana or Japanese-context/exclusive Han, `ko` with Hangul,
+/// `zh` with Han, `en` with another alphabetic letter, otherwise `und`.
+pub(super) fn token_lang(text: &str, ja_context: bool) -> Lang {
+    if text.chars().any(segment::is_kana)
+        || (text.chars().any(is_han)
+            && (ja_context || text.chars().any(segment::is_ja_exclusive_kanji)))
+    {
+        Lang::Ja
+    } else if text.chars().any(segment::is_hangul) {
+        Lang::Ko
+    } else if text.chars().any(is_han) {
         Lang::Zh
     } else if text.chars().any(char::is_alphabetic) {
         Lang::En
@@ -716,18 +736,22 @@ impl SurfaceTerms {
     }
 }
 
-type CachedAutomata = (
-    Vec<String>,
-    bool,
-    Arc<AhoCorasick>,
-    Option<Arc<AhoCorasick>>,
-);
+struct CachedAutomata {
+    extra: Vec<String>,
+    ja_ko_terms: Vec<String>,
+    normalize_traditional: bool,
+    surf_ac: Option<Arc<AhoCorasick>>,
+    simp_ac: Option<Arc<AhoCorasick>>,
+    ja_ko_ac: Option<Arc<AhoCorasick>>,
+}
 
 pub(super) struct TokenMatcher {
     surface: SurfaceTerms,
     simp_extra: Option<Arc<AhoCorasick>>,
+    ja_ko_extra: Option<Arc<AhoCorasick>>,
     normalize_traditional: bool,
     use_doc_jieba: bool,
+    first_party_zh_segmenter: bool,
 }
 
 impl TokenMatcher {
@@ -736,8 +760,10 @@ impl TokenMatcher {
         Self {
             surface: SurfaceTerms::Default(terms()),
             simp_extra: None,
+            ja_ko_extra: None,
             normalize_traditional: false,
             use_doc_jieba: false,
+            first_party_zh_segmenter: false,
         }
     }
 
@@ -751,43 +777,71 @@ impl TokenMatcher {
             .collect();
         extra.sort();
         extra.dedup();
-        if extra.is_empty() {
+
+        let mut ja_ko_terms: Vec<String> = options
+            .lexicon
+            .iter()
+            .chain(options.names.iter())
+            .filter(|w| {
+                !w.is_empty()
+                    && !w.chars().any(char::is_whitespace)
+                    && w.chars()
+                        .any(|ch| is_han(ch) || segment::is_kana(ch) || segment::is_hangul(ch))
+            })
+            .cloned()
+            .collect();
+        ja_ko_terms.sort();
+        ja_ko_terms.dedup();
+
+        if extra.is_empty() && ja_ko_terms.is_empty() {
             return Self {
                 surface: SurfaceTerms::Default(terms()),
                 simp_extra: None,
+                ja_ko_extra: None,
                 normalize_traditional: options.normalize_traditional,
                 use_doc_jieba: true,
+                first_party_zh_segmenter: options.first_party_zh_segmenter,
             };
         }
 
         static CACHE: OnceLock<Mutex<Option<CachedAutomata>>> = OnceLock::new();
         let mutex = CACHE.get_or_init(|| Mutex::new(None));
         if let Ok(guard) = mutex.lock()
-            && let Some((cached_extra, cached_norm, surf_ac, simp_ac)) = guard.as_ref()
-            && *cached_extra == extra
-            && *cached_norm == options.normalize_traditional
+            && let Some(cached) = guard.as_ref()
+            && cached.extra == extra
+            && cached.ja_ko_terms == ja_ko_terms
+            && cached.normalize_traditional == options.normalize_traditional
         {
             return Self {
-                surface: SurfaceTerms::Custom(Arc::clone(surf_ac)),
-                simp_extra: simp_ac.as_ref().map(Arc::clone),
+                surface: match &cached.surf_ac {
+                    Some(ac) => SurfaceTerms::Custom(Arc::clone(ac)),
+                    None => SurfaceTerms::Default(terms()),
+                },
+                simp_extra: cached.simp_ac.as_ref().map(Arc::clone),
+                ja_ko_extra: cached.ja_ko_ac.as_ref().map(Arc::clone),
                 normalize_traditional: options.normalize_traditional,
                 use_doc_jieba: true,
+                first_party_zh_segmenter: options.first_party_zh_segmenter,
             };
         }
 
-        let mut patterns: Vec<String> = TAIWAN_TERMS.iter().map(|&s| s.to_owned()).collect();
-        for w in &extra {
-            if !patterns.contains(w) {
-                patterns.push(w.clone());
+        let surf_ac = if extra.is_empty() {
+            None
+        } else {
+            let mut patterns: Vec<String> = TAIWAN_TERMS.iter().map(|&s| s.to_owned()).collect();
+            for w in &extra {
+                if !patterns.contains(w) {
+                    patterns.push(w.clone());
+                }
             }
-        }
-        let surf_ac = Arc::new(
-            AhoCorasick::builder()
-                .match_kind(MatchKind::LeftmostLongest)
-                .build(&patterns)
-                .expect("surface term automaton builds"),
-        );
-        let simp_ac = if options.normalize_traditional {
+            Some(Arc::new(
+                AhoCorasick::builder()
+                    .match_kind(MatchKind::LeftmostLongest)
+                    .build(&patterns)
+                    .expect("surface term automaton builds"),
+            ))
+        };
+        let simp_ac = if options.normalize_traditional && !extra.is_empty() {
             let mut simp_pats: Vec<String> = extra
                 .iter()
                 .map(|w| w.chars().map(t2s::to_simplified_char).collect())
@@ -803,28 +857,52 @@ impl TokenMatcher {
         } else {
             None
         };
+        let ja_ko_ac = if ja_ko_terms.is_empty() {
+            None
+        } else {
+            Some(Arc::new(
+                AhoCorasick::builder()
+                    .match_kind(MatchKind::LeftmostLongest)
+                    .build(&ja_ko_terms)
+                    .expect("ja/ko term automaton builds"),
+            ))
+        };
 
         if let Ok(mut guard) = mutex.lock() {
-            *guard = Some((
+            *guard = Some(CachedAutomata {
                 extra,
-                options.normalize_traditional,
-                Arc::clone(&surf_ac),
-                simp_ac.as_ref().map(Arc::clone),
-            ));
+                ja_ko_terms,
+                normalize_traditional: options.normalize_traditional,
+                surf_ac: surf_ac.as_ref().map(Arc::clone),
+                simp_ac: simp_ac.as_ref().map(Arc::clone),
+                ja_ko_ac: ja_ko_ac.as_ref().map(Arc::clone),
+            });
         }
 
         Self {
-            surface: SurfaceTerms::Custom(surf_ac),
+            surface: match surf_ac {
+                Some(ac) => SurfaceTerms::Custom(ac),
+                None => SurfaceTerms::Default(terms()),
+            },
             simp_extra: simp_ac,
+            ja_ko_extra: ja_ko_ac,
             normalize_traditional: options.normalize_traditional,
             use_doc_jieba: true,
+            first_party_zh_segmenter: options.first_party_zh_segmenter,
         }
     }
 }
 
 /// Split one sentence into tokens with default options.
 pub(super) fn tokenize(c: &[char], sentence: Span, inline: &[(Span, OpaqueKind)]) -> Vec<Piece> {
-    tokenize_with_matcher(c, sentence, inline, &[], &TokenMatcher::default_matcher())
+    tokenize_with_matcher(
+        c,
+        sentence,
+        false,
+        inline,
+        &[],
+        &TokenMatcher::default_matcher(),
+    )
 }
 
 /// Split one sentence into tokens using caller `TokenMatcher`. `inline` holds the visible inline
@@ -834,6 +912,7 @@ pub(super) fn tokenize(c: &[char], sentence: Span, inline: &[(Span, OpaqueKind)]
 pub(super) fn tokenize_with_matcher(
     c: &[char],
     sentence: Span,
+    ja_context: bool,
     inline: &[(Span, OpaqueKind)],
     silent: &[Span],
     matcher: &TokenMatcher,
@@ -866,20 +945,28 @@ pub(super) fn tokenize_with_matcher(
         if span.start_char < cursor {
             continue;
         }
-        text_pieces(c, cursor, span.start_char, matcher, &mut out);
+        text_pieces(c, cursor, span.start_char, ja_context, matcher, &mut out);
         if let Some(kind) = kind {
             out.push(Piece {
                 span,
                 opaque: Some(kind),
+                ja_lex: None,
             });
         }
         cursor = span.end_char;
     }
-    text_pieces(c, cursor, sentence.end_char, matcher, &mut out);
+    text_pieces(c, cursor, sentence.end_char, ja_context, matcher, &mut out);
     out
 }
 
-fn text_pieces(c: &[char], start: usize, end: usize, matcher: &TokenMatcher, out: &mut Vec<Piece>) {
+fn text_pieces(
+    c: &[char],
+    start: usize,
+    end: usize,
+    ja_context: bool,
+    matcher: &TokenMatcher,
+    out: &mut Vec<Piece>,
+) {
     if start >= end {
         return;
     }
@@ -893,35 +980,137 @@ fn text_pieces(c: &[char], start: usize, end: usize, matcher: &TokenMatcher, out
     }
     index[s.len()] = n;
 
-    let mut ranges = Vec::new();
-    for (a, b, han) in runs(&s) {
-        if han {
-            han_tokens(&s, a, b, matcher, &mut ranges);
-        } else {
-            word_ranges(&s, a, b, &mut ranges);
+    let mut ja_ranges: Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)> = Vec::new();
+    let mut simple_ranges: Vec<(usize, usize)> = Vec::new();
+    for (a, b, kind) in runs(&s, ja_context) {
+        match kind {
+            RunKind::Ja => ja_tokens(&s, a, b, matcher, &mut ja_ranges),
+            RunKind::Zh => {
+                simple_ranges.clear();
+                han_tokens(&s, a, b, matcher, &mut simple_ranges);
+                ja_ranges.extend(simple_ranges.drain(..).map(|(x, y)| (x, y, None)));
+            }
+            RunKind::Other => {
+                simple_ranges.clear();
+                other_tokens(&s, a, b, matcher, &mut simple_ranges);
+                ja_ranges.extend(simple_ranges.drain(..).map(|(x, y)| (x, y, None)));
+            }
         }
     }
-    out.extend(ranges.into_iter().map(|(a, b)| Piece {
+    out.extend(ja_ranges.into_iter().map(|(a, b, ja_lex)| Piece {
         span: Span {
             start_char: start + index[a],
             end_char: start + index[b],
         },
         opaque: None,
+        ja_lex,
     }));
 }
 
-/// Maximal runs of Han characters and of everything else, as (start, end, is_han) bytes.
-fn runs(s: &str) -> Vec<(usize, usize, bool)> {
-    let mut out: Vec<(usize, usize, bool)> = Vec::new();
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RunKind {
+    Ja,
+    Zh,
+    Other,
+}
+
+/// Partition `s` into Japanese CJK+Kana runs, Chinese Han runs, and everything else.
+fn runs(s: &str, ja_context: bool) -> Vec<(usize, usize, RunKind)> {
+    let mut raw: Vec<(usize, usize, bool)> = Vec::new();
     for (b, ch) in s.char_indices() {
-        let han = is_han(ch);
+        let cjk_kana = is_han(ch) || segment::is_kana(ch);
         let end = b + ch.len_utf8();
-        match out.last_mut() {
-            Some(last) if last.2 == han => last.1 = end,
-            _ => out.push((b, end, han)),
+        match raw.last_mut() {
+            Some(last) if last.2 == cjk_kana => last.1 = end,
+            _ => raw.push((b, end, cjk_kana)),
         }
     }
-    out
+    raw.into_iter()
+        .map(|(a, b, cjk_kana)| {
+            let kind = if !cjk_kana {
+                RunKind::Other
+            } else if ja_context
+                || s[a..b]
+                    .chars()
+                    .any(|ch| segment::is_kana(ch) || segment::is_ja_exclusive_kanji(ch))
+            {
+                RunKind::Ja
+            } else {
+                RunKind::Zh
+            };
+            (a, b, kind)
+        })
+        .collect()
+}
+
+/// Japanese CJK+Kana text: caller lexicon/names terms first, then first-party Japanese Viterbi segmentation.
+fn ja_tokens(
+    s: &str,
+    a: usize,
+    b: usize,
+    matcher: &TokenMatcher,
+    out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
+) {
+    let run = &s[a..b];
+    if let Some(ac) = &matcher.ja_ko_extra {
+        let mut at = 0;
+        for m in ac.find_iter(run) {
+            ja_words(&run[at..m.start()], a + at, out);
+            out.push((a + m.start(), a + m.end(), None));
+            at = m.end();
+        }
+        ja_words(&run[at..], a + at, out);
+    } else {
+        ja_words(run, a, out);
+    }
+}
+
+fn ja_words(
+    stretch: &str,
+    base: usize,
+    out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
+) {
+    if stretch.is_empty() {
+        return;
+    }
+    let chars: Vec<char> = stretch.chars().collect();
+    let mut byte_offs = Vec::with_capacity(chars.len() + 1);
+    for (b, _) in stretch.char_indices() {
+        byte_offs.push(b);
+    }
+    byte_offs.push(stretch.len());
+
+    for seg in crate::lexicon::ja::segment_ja(&chars, 0) {
+        let start_b = base + byte_offs[seg.span.start_char];
+        let end_b = base + byte_offs[seg.span.end_char];
+        out.push((start_b, end_b, Some(seg)));
+    }
+}
+
+/// Non-CJK/Kana text: protect Hangul caller terms first when Hangul is present, then `word_ranges`.
+fn other_tokens(
+    s: &str,
+    a: usize,
+    b: usize,
+    matcher: &TokenMatcher,
+    out: &mut Vec<(usize, usize)>,
+) {
+    let run = &s[a..b];
+    if let Some(ac) = &matcher.ja_ko_extra
+        && run.chars().any(segment::is_hangul)
+    {
+        let mut at = 0;
+        for m in ac.find_iter(run) {
+            if run[m.start()..m.end()].chars().any(segment::is_hangul) {
+                word_ranges(s, a + at, a + m.start(), out);
+                out.push((a + m.start(), a + m.end()));
+                at = m.end();
+            }
+        }
+        word_ranges(s, a + at, b, out);
+    } else {
+        word_ranges(s, a, b, out);
+    }
 }
 
 /// Han text: Taiwan + caller lexicon/names terms first, then jieba on the stretches between them.
@@ -938,6 +1127,21 @@ fn han_tokens(s: &str, a: usize, b: usize, matcher: &TokenMatcher, out: &mut Vec
 
 fn han_words(text: &str, base: usize, matcher: &TokenMatcher, out: &mut Vec<(usize, usize)>) {
     if text.is_empty() {
+        return;
+    }
+    if matcher.first_party_zh_segmenter {
+        let chars: Vec<char> = text.chars().collect();
+        let mut byte_offs = Vec::with_capacity(chars.len() + 1);
+        for (b, _) in text.char_indices() {
+            byte_offs.push(b);
+        }
+        byte_offs.push(text.len());
+        for sp in crate::lexicon::zh::segment_zh(&chars, 0, &[]) {
+            out.push((
+                base + byte_offs[sp.start_char],
+                base + byte_offs[sp.end_char],
+            ));
+        }
         return;
     }
     if !matcher.normalize_traditional {
@@ -1130,13 +1334,24 @@ fn should_split_coverb_or_dem(w: &str, w_chars: usize) -> bool {
     true
 }
 
+fn is_abbreviated_month(w: &str) -> bool {
+    const MONTHS: &[&str] = &[
+        "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+    ];
+    w.as_bytes().first().is_some_and(|b| b.is_ascii_uppercase())
+        && MONTHS.iter().any(|m| w.eq_ignore_ascii_case(m))
+}
+
 /// Non-Han text: UAX 29 words, then clitics, hyphens, abbreviation dots and repeated marks.
 fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
+    if a0 >= b0 {
+        return;
+    }
     let mut raw = Vec::new();
     for (i, w) in s[a0..b0].split_word_bound_indices() {
         let a = a0 + i;
         if !w.chars().all(char::is_whitespace) {
-            split_clitic(s, a, a + w.len(), &mut raw);
+            push_uax_segment(s, a, a + w.len(), &mut raw);
         }
     }
 
@@ -1156,6 +1371,8 @@ fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
             && has_letter(prev_text)
             && let Some(&(na, nb)) = raw.get(i).filter(|&&(na, _)| na == b)
             && has_letter(&s[na..nb])
+            && prev_text.chars().any(segment::is_hangul)
+                == s[na..nb].chars().any(segment::is_hangul)
         {
             if let Some(last) = merged.last_mut() {
                 last.1 = nb;
@@ -1163,11 +1380,16 @@ fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
             i += 1;
             continue;
         }
-        // A dot after a listed abbreviation, a single capital, `etc`, or a word with an inner dot.
+        // A dot after a listed abbreviation, a single capital, `etc`, a word with an inner dot,
+        // or an abbreviated month followed by a token starting with an ASCII digit (`Nov. 13`).
         if text == "."
             && (segment::is_abbreviation(prev_text)
                 || prev_text.eq_ignore_ascii_case("etc")
-                || (has_letter(prev_text) && prev_text.contains('.') && !prev_text.ends_with('.')))
+                || (has_letter(prev_text) && prev_text.contains('.') && !prev_text.ends_with('.'))
+                || (is_abbreviated_month(prev_text)
+                    && raw.get(i).is_some_and(|&(na, nb)| {
+                        s[na..nb].starts_with(|c: char| c.is_ascii_digit())
+                    })))
         {
             if let Some(last) = merged.last_mut() {
                 last.1 = b;
@@ -1188,6 +1410,42 @@ fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
         merged.push((a, b));
     }
     out.extend(merged);
+}
+
+fn push_uax_segment(s: &str, a: usize, b: usize, raw: &mut Vec<(usize, usize)>) {
+    let seg = &s[a..b];
+    if !seg.chars().any(segment::is_hangul) {
+        split_clitic(s, a, b, raw);
+        return;
+    }
+    // UAX #29 treats Hangul as `ALetter` (WB9/WB10), gluing digits/Latin to Hangul (`3권의`).
+    // Split at Hangul script transitions so `3` tags as `NUM` and `권의` as `Ko`.
+    let mut sub_start = 0;
+    let mut sub_hangul: Option<bool> = None;
+    for (idx, ch) in seg.char_indices() {
+        let h = segment::is_hangul(ch);
+        if let Some(prev_h) = sub_hangul
+            && prev_h != h
+        {
+            let slice_a = a + sub_start;
+            let slice_b = a + idx;
+            if prev_h {
+                raw.push((slice_a, slice_b));
+            } else {
+                split_clitic(s, slice_a, slice_b, raw);
+            }
+            sub_start = idx;
+        }
+        sub_hangul = Some(h);
+    }
+    if sub_start < seg.len() {
+        let slice_a = a + sub_start;
+        if sub_hangul == Some(true) {
+            raw.push((slice_a, b));
+        } else {
+            split_clitic(s, slice_a, b, raw);
+        }
+    }
 }
 
 fn has_letter(text: &str) -> bool {

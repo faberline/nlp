@@ -644,6 +644,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "faberline-nlp-translate"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "anyhow",
+ "clap",
+ "faberline-nlp",
+ "faberline-nlp-narrative",
+ "objc2",
+ "objc2-core-ml",
+ "objc2-foundation",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokenizers",
+ "tract-onnx",
+]
+
+[[package]]
 name = "fancy-regex"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

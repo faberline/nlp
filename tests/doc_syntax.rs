@@ -548,17 +548,45 @@ fn unsupported_language_sentence_is_skipped_cleanly() {
         }
     });
 
-    let text = "안녕하세요 감사합니다.\n\n小甲走了。";
-    let mut doc = analyze_document(text, &Options::default());
-    annotate_with_encoder(&mut doc, text, &model, char_subword_encode).expect("annotate");
+    for (text, expect_seg_unknown) in [
+        ("안녕하세요 감사합니다.\n\n小甲走了。", false),
+        ("東京駅に着いた。\n\n小甲走了。", false),
+        ("Привет, мир.\n\n小甲走了。", true),
+    ] {
+        let mut doc = analyze_document(text, &Options::default());
+        annotate_with_encoder(&mut doc, text, &model, char_subword_encode).expect("annotate");
 
-    assert!(doc.syntax.iter().all(|s| s.sentence == 1));
-    assert!(!doc.syntax.is_empty());
-    assert!(
-        !doc.unknown
-            .iter()
-            .any(|u| u.layer == "syntax" && u.span == doc.segmentation.sentences[0].span)
-    );
+        assert!(doc.syntax.iter().all(|s| s.sentence == 1), "{text}");
+        assert!(!doc.syntax.is_empty(), "{text}");
+        assert!(
+            !doc.unknown.iter().any(|u| {
+                u.layer == "syntax"
+                    && u.span.end_char <= doc.segmentation.sentences[0].span.end_char
+            }),
+            "{text}: {:?}",
+            doc.unknown
+        );
+        if expect_seg_unknown {
+            assert!(
+                doc.unknown
+                    .iter()
+                    .any(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage),
+                "{text}"
+            );
+        } else {
+            assert!(
+                !doc.unknown.iter().any(|u| u.layer == "segmentation"),
+                "{text}"
+            );
+            assert!(
+                !doc.unknown
+                    .iter()
+                    .any(|u| u.reason == Reason::UnsupportedLanguage),
+                "{text}"
+            );
+            assert!(doc.tokens.iter().any(|t| t.upos.is_some()), "{text}");
+        }
+    }
 }
 
 #[test]
@@ -698,13 +726,13 @@ fn analyze_document_with_model_reports_no_model_and_propagates_integrity_errors(
     } else {
         repo_models
     };
-    let text = "小甲走進木屋。We measured the data.\n\n안녕하세요.";
+    let text = "小甲走進木屋。We measured the data.\n\n안녕하세요.\n\nこんにちは。\n\nПривет.";
     // Without gitignored `models/doc-syntax-v1/` weights, `manifest.json` cleanly maps to `no_model`.
     for backend in [Backend::Onnx, Backend::Coreml] {
         let doc =
             analyze_document_with_model(text, &Options::default(), &models_dir, backend).unwrap();
         assert!(doc.syntax.is_empty());
-        // Supported sentences 0 and 1 get `no_model` for "syntax"; unsupported sentence 2 does not.
+        // Supported sentences 0 and 1 get `no_model` for "syntax"; JA/KO/unsupported sentences 2..=4 do not.
         assert!(doc.unknown.contains(&Unknown {
             layer: "syntax".to_owned(),
             span: doc.segmentation.sentences[0].span,
@@ -715,11 +743,11 @@ fn analyze_document_with_model_reports_no_model_and_propagates_integrity_errors(
             span: doc.segmentation.sentences[1].span,
             reason: Reason::NoModel,
         }));
-        assert!(
-            !doc.unknown
-                .iter()
-                .any(|u| u.layer == "syntax" && u.span == doc.segmentation.sentences[2].span)
-        );
+        for skipped_idx in 2..=4 {
+            assert!(!doc.unknown.iter().any(|u| {
+                u.layer == "syntax" && u.span == doc.segmentation.sentences[skipped_idx].span
+            }));
+        }
     }
 
     // Missing directory also maps to `no_model`.

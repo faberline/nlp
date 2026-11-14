@@ -126,6 +126,8 @@ const TEXTS: &[&str] = &[
     "See [1] and https://example.com/3 for 2 cats.",
     "# Plan 2026\n\nWe go on 5 May.",
     "こんにちは、3個です。",
+    "안녕하세요, 2026년 11월 13일 3개입니다.",
+    "Привет мир, 3.",
     "10 Nov. 2026 was fine.",
     "5 Sept. 2026 was fine.",
     "Due 0/5/2026.",
@@ -492,10 +494,41 @@ fn opaque_is_skipped() {
 
 #[test]
 fn unsupported_sentence() {
-    let text = "こんにちは、3個です。";
-    let doc = analyze(text);
-    assert!(doc.entities.is_empty());
-    assert!(doc.unknown.iter().all(|u| u.layer != "entities"));
+    use faberline_nlp::doc::{Lang, Reason};
+
+    // Japanese and Korean sentences segment, tokenize, and POS-tag in Layers 1–2 (no
+    // `UnsupportedLanguage`), while Layer 3 skips them so no false-positive entities are emitted.
+    for (text, expected_lang) in [
+        ("こんにちは、3個です。", Lang::Ja),
+        ("안녕하세요, 2026년 11월 13일 3개입니다.", Lang::Ko),
+    ] {
+        let doc = analyze(text);
+        assert_eq!(doc.segmentation.sentences[0].lang, expected_lang);
+        assert!(doc.entities.is_empty());
+        assert!(
+            doc.unknown
+                .iter()
+                .all(|u| u.layer != "entities" && u.layer != "segmentation")
+        );
+        assert!(
+            doc.unknown
+                .iter()
+                .all(|u| u.reason != Reason::UnsupportedLanguage)
+        );
+        assert!(doc.tokens.iter().any(|t| t.upos.is_some()));
+    }
+
+    // Truly unsupported script (Cyrillic) emits `segmentation` `UnsupportedLanguage` and no entities.
+    let cyr = "Привет мир, 3.";
+    let doc_cyr = analyze(cyr);
+    assert!(doc_cyr.entities.is_empty());
+    assert!(doc_cyr.unknown.iter().all(|u| u.layer != "entities"));
+    assert!(
+        doc_cyr
+            .unknown
+            .iter()
+            .any(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
+    );
 }
 
 #[test]

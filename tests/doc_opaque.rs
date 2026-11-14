@@ -1019,3 +1019,291 @@ fn inline_pirate_watermarks_preserve_story_paragraphs_and_standalone_footers_sta
             .all(|o| o.kind == OpaqueKind::Code)
     );
 }
+
+#[test]
+fn japanese_headings_and_prose_guards() {
+    let pos_headings = [
+        "プロローグ",
+        "プロローグ：旅立ちの朝",
+        "第1話",
+        "第１２話　雨の東京駅",
+        "第二巻：約束",
+        "第3話・旅立ち",
+        "第4章 ― 新たなる戦い",
+        "第壱幕 開演",
+        "第1話東京駅",
+        "第2巻約束の日",
+        "12話 雨の駅",
+        "１話：始まり",
+        "三話・夜の森",
+        "幕間 静かな夜",
+        "序章",
+        "終章",
+        "最終話 約束の場所",
+        "最終章",
+        "エピローグ ― 帰還",
+        "番外編 夏休み",
+    ];
+    let text = format!("{}\n\n電車が静かに到着した。", pos_headings.join("\n\n"));
+    let doc = analyze(&text);
+    let found: Vec<String> = doc
+        .segmentation
+        .opaque
+        .iter()
+        .filter(|o| o.kind == OpaqueKind::Heading)
+        .map(|o| slice(&text, o.span))
+        .collect();
+    assert_eq!(found, owned(&pos_headings));
+    assert_eq!(
+        sentence_texts(&text, &doc),
+        owned(&["電車が静かに到着した。"])
+    );
+
+    let over_60 = format!("第1話 {}", "遠い山並みと静かな駅の風景".repeat(5));
+    assert!(over_60.chars().count() > 60);
+    for non_heading in [
+        over_60.as_str(),
+        "第1話は面白い。",
+        "第1話は面白い",
+        "第2巻を読んだ",
+        "第3章について説明する",
+        "第4話から始まる物語",
+        "第5話まで読んだ",
+        "プロローグは短い",
+        "番外編を読んだ。",
+        "3話見た",
+    ] {
+        assert!(
+            analyze(non_heading).segmentation.opaque.is_empty(),
+            "unexpected JA heading match for: {non_heading}"
+        );
+    }
+}
+
+#[test]
+fn korean_headings_and_prose_guards() {
+    let pos_headings = [
+        "프롤로그",
+        "프롤로그: 시작의 날",
+        "제1장",
+        "제 1 장",
+        "제1장 시작",
+        "제12화: 비 오는 서울",
+        "제3절 실험 방법",
+        "제이권 - 새로운 길",
+        "제1장. 시작",
+        "제１０화　약속",
+        "1화",
+        "12화 서울의 밤",
+        "3화. 비 오는 날",
+        "105화: 재회",
+        "2장",
+        "2장 - 푸른 언덕",
+        "서장",
+        "종장",
+        "에필로그 — 귀환",
+        "외전 여름 이야기",
+    ];
+    let text = format!("{}\n\n회의가 조용히 시작되었다.", pos_headings.join("\n\n"));
+    let doc = analyze(&text);
+    let found: Vec<String> = doc
+        .segmentation
+        .opaque
+        .iter()
+        .filter(|o| o.kind == OpaqueKind::Heading)
+        .map(|o| slice(&text, o.span))
+        .collect();
+    assert_eq!(found, owned(&pos_headings));
+    assert_eq!(
+        sentence_texts(&text, &doc),
+        owned(&["회의가 조용히 시작되었다."])
+    );
+
+    let over_60 = format!("제1장 {}", "푸른 하늘과 조용한 바다의 이야기 ".repeat(4));
+    assert!(over_60.chars().count() > 60);
+    for non_heading in [
+        over_60.as_str(),
+        "제1장은 중요하다.",
+        "제1장은 중요하다",
+        "제2화에서 주인공이 등장한다",
+        "제3권을 읽었다",
+        "오늘 3화 봤다",
+        "3화 봤다",
+        "12화 재밌어요",
+        "5화 대박이죠",
+        "4화 볼까",
+        "2화 재밌네",
+        "프롤로그는 짧다",
+        "외전을 읽었다.",
+        "프롤로그 봤다",
+        "외전 재밌어요",
+    ] {
+        assert!(
+            analyze(non_heading).segmentation.opaque.is_empty(),
+            "unexpected KO heading match for: {non_heading}"
+        );
+    }
+}
+
+#[test]
+fn japanese_and_korean_citations_and_komejirushi_lists() {
+    let cite_text = "先行研究（田中・佐藤、2020）および（たなか，2020a）や（スミス・リー　2019；佐々木、2020）を参照。선행 연구(김철수, 2020)와 (박지민·최유진, 2021b) 및 (김철수, 2019; 이영희, 2020)를 참고한다.";
+    let cite_doc = analyze(cite_text);
+    assert_eq!(
+        opaque_pairs(cite_text, &cite_doc),
+        vec![
+            (OpaqueKind::Citation, "（田中・佐藤、2020）".to_owned()),
+            (OpaqueKind::Citation, "（たなか，2020a）".to_owned()),
+            (
+                OpaqueKind::Citation,
+                "（スミス・リー　2019；佐々木、2020）".to_owned()
+            ),
+            (OpaqueKind::Citation, "(김철수, 2020)".to_owned()),
+            (OpaqueKind::Citation, "(박지민·최유진, 2021b)".to_owned()),
+            (
+                OpaqueKind::Citation,
+                "(김철수, 2019; 이영희, 2020)".to_owned()
+            ),
+        ]
+    );
+    assert_eq!(
+        sentence_texts(cite_text, &cite_doc),
+        owned(&[
+            "先行研究（田中・佐藤、2020）および（たなか，2020a）や（スミス・リー　2019；佐々木、2020）を参照。",
+            "선행 연구(김철수, 2020)와 (박지민·최유진, 2021b) 및 (김철수, 2019; 이영희, 2020)를 참고한다.",
+        ])
+    );
+    // Citations mask internal `、` and `,` so clauses never split inside a citation.
+    assert_eq!(clause_texts(cite_text, &cite_doc).len(), 2);
+
+    for non_cite in [
+        "明日の予定（たぶん明日）を確認する。",
+        "자세한 내용은 (참고 자료)와 (2020년 결과)를 보라.",
+    ] {
+        assert!(
+            analyze(non_cite).segmentation.opaque.is_empty(),
+            "unexpected citation match for: {non_cite}"
+        );
+    }
+
+    let list_text = "※ 注意事項を確認してください。\n※　全角スペースの項目\n※ 주의사항을 확인하세요.\n\n詳細は※1を参照。\n\n※1 脚注の説明である。";
+    let list_doc = analyze(list_text);
+    assert_eq!(
+        opaque_pairs(list_text, &list_doc),
+        vec![
+            (
+                OpaqueKind::ListItem,
+                "※ 注意事項を確認してください。".to_owned()
+            ),
+            (OpaqueKind::ListItem, "※　全角スペースの項目".to_owned()),
+            (OpaqueKind::ListItem, "※ 주의사항을 확인하세요.".to_owned()),
+        ]
+    );
+    assert_eq!(
+        sentence_texts(list_text, &list_doc),
+        owned(&["詳細は※1を参照。", "※1 脚注の説明である。"])
+    );
+
+    // Ensure "2020. The year began." stays prose (never matched as list or bare KO heading).
+    let year_prose = "2020. The year began.";
+    let year_doc = analyze(year_prose);
+    assert!(year_doc.segmentation.opaque.is_empty());
+    assert_eq!(
+        sentence_texts(year_prose, &year_doc),
+        owned(&["2020.", "The year began."])
+    );
+}
+
+#[test]
+fn academic_numbered_headings_and_fullwidth_period_guards() {
+    // 1. Multi-level numbered section headings across EN/JA/KO/ZH.
+    let multi = [
+        "2.1 Related Work",
+        "3.1.2 Experimental Setup",
+        "2.1 関連研究",
+        "2.1 관련 연구",
+        "1.2.3. 結果與討論",
+    ]
+    .join("\n\n");
+    let multi_doc = analyze(&multi);
+    assert_eq!(
+        opaque_pairs(&multi, &multi_doc),
+        vec![
+            (OpaqueKind::Heading, "2.1 Related Work".to_owned()),
+            (OpaqueKind::Heading, "3.1.2 Experimental Setup".to_owned()),
+            (OpaqueKind::Heading, "2.1 関連研究".to_owned()),
+            (OpaqueKind::Heading, "2.1 관련 연구".to_owned()),
+            (OpaqueKind::Heading, "1.2.3. 結果與討論".to_owned()),
+        ]
+    );
+
+    // Multi-level lines ending in sentence punctuation or lacking letters stay non-heading.
+    for non_heading in ["2.1 This is a sentence.", "2.1 12345"] {
+        let d = analyze(non_heading);
+        assert!(
+            !d.segmentation
+                .opaque
+                .iter()
+                .any(|o| o.kind == OpaqueKind::Heading),
+            "unexpected heading for {non_heading:?}"
+        );
+    }
+
+    // 2. Block-isolated single-integer academic headings vs contiguous list items.
+    let isolated = [
+        "1. Introduction",
+        "Body sentence.",
+        "1. はじめに",
+        "本文。",
+        "1. 서론",
+        "본문.",
+        "1. 緒論",
+        "正文。",
+        "1. 結論與未來展望",
+        "尾聲。",
+    ]
+    .join("\n\n");
+    let iso_doc = analyze(&isolated);
+    assert_eq!(
+        opaque_pairs(&isolated, &iso_doc),
+        vec![
+            (OpaqueKind::Heading, "1. Introduction".to_owned()),
+            (OpaqueKind::Heading, "1. はじめに".to_owned()),
+            (OpaqueKind::Heading, "1. 서론".to_owned()),
+            (OpaqueKind::Heading, "1. 緒論".to_owned()),
+            (OpaqueKind::Heading, "1. 結論與未來展望".to_owned()),
+        ]
+    );
+
+    // Contiguous list items must remain ListItem even if the title matches an academic heading.
+    let contiguous = "- second item\n1. Introduction\n2) Fourth item";
+    let cont_doc = analyze(contiguous);
+    assert_eq!(
+        opaque_pairs(contiguous, &cont_doc),
+        vec![
+            (OpaqueKind::ListItem, "- second item".to_owned()),
+            (OpaqueKind::ListItem, "1. Introduction".to_owned()),
+            (OpaqueKind::ListItem, "2) Fourth item".to_owned()),
+        ]
+    );
+
+    // 3. Fullwidth period `．` (U+FF0E) sentence-end guard in ZH/JA headings.
+    assert!(
+        !analyze("第1章 今日は晴れた．")
+            .segmentation
+            .opaque
+            .iter()
+            .any(|o| o.kind == OpaqueKind::Heading)
+    );
+    assert!(
+        !analyze("第一章 今日は晴れた．次の日")
+            .segmentation
+            .opaque
+            .iter()
+            .any(|o| o.kind == OpaqueKind::Heading)
+    );
+    assert_eq!(
+        opaque_pairs("第1章 3．5", &analyze("第1章 3．5")),
+        vec![(OpaqueKind::Heading, "第1章 3．5".to_owned())]
+    );
+}

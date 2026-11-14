@@ -32,6 +32,10 @@ const CASES: &[&str] = &[
     "三",
     "one two",
     "こんにちは。",
+    "こんにちは",
+    "東京駅で3冊の本を買った。",
+    "서울역에서 3권의 책을 샀다.",
+    "Привет, мир.",
     "# Title here\n\nThe cat sat.",
     "I'm sure I'll go. I've done it, I'd say.",
     "Wait... what?!! No!!!",
@@ -60,7 +64,8 @@ fn pos_reason(doc: &Document, span: Span) -> Option<Reason> {
         .map(|u| u.reason)
 }
 
-/// Each token as `text/TAG`: the UPOS, `A` when ambiguous, `M` when no model decides it.
+/// Each token as `text/TAG`: the UPOS, `A` when ambiguous, `M` when no model decides it,
+/// `U` when its language is unsupported by layer-2 POS rules.
 fn show(text: &str) -> Vec<String> {
     let doc = analyze(text);
     doc.tokens
@@ -70,6 +75,7 @@ fn show(text: &str) -> Vec<String> {
                 (Some(upos), _) => format!("{upos:?}").to_uppercase(),
                 (None, Some(Reason::Ambiguous)) => "A".to_owned(),
                 (None, Some(Reason::NoModel)) => "M".to_owned(),
+                (None, Some(Reason::UnsupportedLanguage)) => "U".to_owned(),
                 (None, other) => panic!(
                     "token {:?} has no tag and reason {other:?}",
                     slice(text, t.span)
@@ -297,7 +303,7 @@ fn unknown_entries() {
 
 #[test]
 fn unsupported_sentence_has_no_tokens() {
-    let t = "こんにちは。";
+    let t = "Привет, мир.";
     let doc = analyze(t);
     assert!(doc.tokens.is_empty());
     assert!(
@@ -535,7 +541,7 @@ fn check_invariants(text: &str) {
     let unsupported: Vec<Span> = doc
         .unknown
         .iter()
-        .filter(|u| u.reason == Reason::UnsupportedLanguage)
+        .filter(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
         .map(|u| u.span)
         .collect();
 
@@ -1124,5 +1130,237 @@ fn ws2_ws3_v3_infix_projection_degluing_and_decided_lexicon() {
             .find(|t| slice(decided_sent, t.span) == word)
             .unwrap_or_else(|| panic!("missing token {word}"));
         assert_eq!(tok.upos, Some(expected_upos), "{word} upos mismatch");
+    }
+}
+
+#[test]
+fn ja_tokenization_and_pos() {
+    let hello = "こんにちは。";
+    let doc_hello = analyze(hello);
+    assert_eq!(doc_hello.segmentation.sentences[0].lang, Lang::Ja);
+    assert!(doc_hello.unknown.iter().all(|u| u.layer != "segmentation"));
+    assert_eq!(show(hello), ["こんにちは/INTJ", "。/PUNCT"]);
+    assert_eq!(doc_hello.tokens[0].lang, Lang::Ja);
+    assert_eq!(doc_hello.tokens[1].lang, Lang::Und);
+    check_invariants(hello);
+
+    let t = "東京駅で3冊の本を買った。";
+    let doc = analyze(t);
+    assert_eq!(doc.segmentation.sentences[0].lang, Lang::Ja);
+    assert!(doc.entities.is_empty());
+    assert!(doc.relations.is_empty());
+    check_invariants(t);
+
+    let num_tok = doc
+        .tokens
+        .iter()
+        .find(|tok| slice(t, tok.span) == "3")
+        .expect("3 token");
+    assert_eq!(num_tok.upos, Some(Upos::Num));
+    assert_eq!(num_tok.lang, Lang::Und);
+
+    let punct_tok = doc.tokens.last().expect("trailing punct");
+    assert_eq!(slice(t, punct_tok.span), "。");
+    assert_eq!(punct_tok.upos, Some(Upos::Punct));
+
+    for tok in &doc.tokens {
+        if tok.upos.is_none() {
+            assert_eq!(tok.lang, Lang::Ja);
+            assert!(matches!(
+                pos_reason(&doc, tok.span),
+                Some(Reason::Ambiguous | Reason::NoModel)
+            ));
+        }
+    }
+
+    // Custom `options.names` and `options.lexicon` LeftmostLongest protection on Japanese runs.
+    let opts = Options {
+        names: vec!["東京駅".to_owned()],
+        lexicon: vec!["魔導書".to_owned(), "買った".to_owned()],
+        ..Options::default()
+    };
+    let custom_text = "東京駅で3冊の魔導書を買った。";
+    let doc_custom = analyze_document(custom_text, &opts);
+    let surfaces: Vec<String> = doc_custom
+        .tokens
+        .iter()
+        .map(|tok| slice(custom_text, tok.span))
+        .collect();
+    assert!(surfaces.contains(&"東京駅".to_owned()), "{surfaces:?}");
+    assert!(surfaces.contains(&"魔導書".to_owned()), "{surfaces:?}");
+    assert!(surfaces.contains(&"買った".to_owned()), "{surfaces:?}");
+    assert!(surfaces.contains(&"3".to_owned()), "{surfaces:?}");
+    assert!(surfaces.contains(&"。".to_owned()), "{surfaces:?}");
+
+    // Pure-Kanji sentence in a Japanese paragraph inherits `Lang::Ja` on tokens and skips Layer 3.
+    let para = "「約束。」彼は言った。";
+    let doc_para = analyze(para);
+    let yakusoku = doc_para
+        .tokens
+        .iter()
+        .find(|tok| slice(para, tok.span) == "約束")
+        .expect("約束 token");
+    assert_eq!(yakusoku.lang, Lang::Ja);
+    assert_eq!(yakusoku.upos, None);
+    assert_eq!(
+        pos_reason(&doc_para, yakusoku.span),
+        Some(Reason::Ambiguous)
+    );
+    assert!(doc_para.entities.is_empty());
+    check_invariants(para);
+
+    // Expanded Japanese punctuation, fullwidth symbols, and repeatable marks.
+    let marks = "価格は￥1,000――安い‥‥！";
+    let shown_marks = show(marks);
+    assert!(
+        shown_marks.contains(&"￥/SYM".to_owned()),
+        "{shown_marks:?}"
+    );
+    assert!(
+        shown_marks.contains(&"1,000/NUM".to_owned()),
+        "{shown_marks:?}"
+    );
+    assert!(
+        shown_marks.contains(&"――/PUNCT".to_owned()),
+        "{shown_marks:?}"
+    );
+    assert!(
+        shown_marks.contains(&"‥‥/PUNCT".to_owned()),
+        "{shown_marks:?}"
+    );
+    check_invariants(marks);
+}
+
+#[test]
+fn ko_tokenization_and_pos() {
+    let t = "서울역에서 3권의 책을 샀다.";
+    let doc = analyze(t);
+    assert_eq!(doc.segmentation.sentences[0].lang, Lang::Ko);
+    assert!(doc.entities.is_empty());
+    assert!(doc.relations.is_empty());
+    assert_eq!(
+        show(t),
+        [
+            "서울역에서/PROPN",
+            "3/NUM",
+            "권의/NOUN",
+            "책을/NOUN",
+            "샀다/VERB",
+            "./PUNCT",
+        ]
+    );
+    for tok in &doc.tokens {
+        let surf = slice(t, tok.span);
+        if matches!(surf.as_str(), "3" | ".") {
+            assert_eq!(tok.lang, Lang::Und);
+        } else {
+            assert_eq!(tok.lang, Lang::Ko);
+            assert!(tok.upos.is_some());
+            assert_eq!(pos_reason(&doc, tok.span), None);
+        }
+    }
+    check_invariants(t);
+
+    // Custom `options.names` and `options.lexicon` protection on Korean text.
+    let opts = Options {
+        names: vec![
+            "서울역".to_owned(),
+            "김철수".to_owned(),
+            "김 영희".to_owned(),
+        ],
+        lexicon: vec!["마도서".to_owned()],
+        ..Options::default()
+    };
+    let custom_text = "서울역에서 김철수가 김 영희와 3권의 마도서를 샀다.";
+    let doc_custom = analyze_document(custom_text, &opts);
+    let surfaces: Vec<String> = doc_custom
+        .tokens
+        .iter()
+        .map(|tok| slice(custom_text, tok.span))
+        .collect();
+    assert_eq!(
+        surfaces,
+        [
+            "서울역",
+            "에서",
+            "김철수",
+            "가",
+            "김",
+            "영희와",
+            "3",
+            "권의",
+            "마도서",
+            "를",
+            "샀다",
+            ".",
+        ]
+    );
+    for tok in &doc_custom.tokens {
+        assert!(
+            !slice(custom_text, tok.span)
+                .chars()
+                .any(char::is_whitespace)
+        );
+    }
+
+    // Fullwidth Won symbol and Hangul counter separation.
+    let price = "가격은 ￦1,000이다.";
+    assert_eq!(
+        show(price),
+        ["가격은/NOUN", "￦/SYM", "1,000/NUM", "이다/A", "./PUNCT"]
+    );
+    check_invariants(price);
+}
+
+#[test]
+fn fullwidth_period_langji_abbrev_months_and_ja_demerging() {
+    // 1. Fullwidth academic period `．` (U+FF0E) tags as PUNCT.
+    let ja_acad = "提案手法は有効である．";
+    let ja_acad_tokens = show(ja_acad);
+    assert_eq!(ja_acad_tokens.last().map(String::as_str), Some("．/PUNCT"));
+    check_invariants(ja_acad);
+
+    // 2. `狼藉` and `狼籍` stay whole under `normalize_traditional: true`.
+    let norm_opts = Options {
+        normalize_traditional: true,
+        ..Options::default()
+    };
+    for text in ["場內一片狼藉。", "场内一片狼籍。"] {
+        let d = analyze_document(text, &norm_opts);
+        let surfs: Vec<String> = d.tokens.iter().map(|t| slice(text, t.span)).collect();
+        assert!(
+            surfs.iter().any(|s| s == "狼藉" || s == "狼籍"),
+            "expected whole 狼藉/狼籍 in {surfs:?}"
+        );
+    }
+
+    // 3. Abbreviated months followed by an ASCII digit keep `.` attached.
+    let date_text = "On Nov. 13, 2026 and Sept. 5, we met.";
+    let date_doc = analyze(date_text);
+    let date_surfs: Vec<String> = date_doc
+        .tokens
+        .iter()
+        .map(|t| slice(date_text, t.span))
+        .collect();
+    assert!(date_surfs.contains(&"Nov.".to_owned()), "{date_surfs:?}");
+    assert!(date_surfs.contains(&"Sept.".to_owned()), "{date_surfs:?}");
+    check_invariants(date_text);
+
+    // 4. Japanese Hiragana particle + adverb/demonstrative de-merging.
+    for (text, expected) in [
+        (
+            "名前はまだ無い。",
+            &["名前", "は", "まだ", "無い", "。"][..],
+        ),
+        ("私はただ歩く。", &["私", "は", "ただ", "歩く", "。"][..]),
+        (
+            "聞くとそれは本当だ。",
+            &["聞く", "と", "それ", "は", "本当", "だ", "。"][..],
+        ),
+    ] {
+        let d = analyze(text);
+        let surfs: Vec<String> = d.tokens.iter().map(|t| slice(text, t.span)).collect();
+        assert_eq!(surfs, expected, "input: {text}");
+        check_invariants(text);
     }
 }

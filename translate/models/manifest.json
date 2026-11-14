@@ -1,0 +1,66 @@
+{
+  "schema": "nlp.models.seq2seq.v1",
+  "models": [
+    {
+      "id": "translate-test-tiny",
+      "licence": "CC0-1.0",
+      "dir": "translate-test-tiny",
+      "src_max_len": 80,
+      "tgt_max_len": 32,
+      "d_model": 8,
+      "vocab": 260,
+      "pad_id": 0,
+      "bos_id": 2,
+      "eos_id": 3,
+      "supported_variants": [
+        "zh-Hant",
+        "zh-Hans",
+        "en-US",
+        "en-GB",
+        "ja",
+        "ko"
+      ],
+      "encoder_onnx": "encoder.onnx",
+      "decoder_onnx": "decoder_step.onnx",
+      "tokenizer": "tokenizer.json",
+      "expected": "expected.json",
+      "coreml": {
+        "encoder": "encoder.mlmodel",
+        "decoder": "decoder_step.mlmodel"
+      },
+      "files": [
+        {
+          "path": "encoder.onnx",
+          "sha256": "80d98ade6f1bf0a74c48bf74a4062d559612971862c4238a2f44554e17cdb5a9",
+          "bytes": 8932
+        },
+        {
+          "path": "decoder_step.onnx",
+          "sha256": "41cd3a8785ed756479263d21d2e16913b5d449039f8b86c9759fbe7ade5f2e71",
+          "bytes": 28403
+        },
+        {
+          "path": "encoder.mlmodel",
+          "sha256": "00d6696859f5b468f1e294c7f2c8d1390d97459349cec0b754e23de30df9c7ba",
+          "bytes": 8819
+        },
+        {
+          "path": "decoder_step.mlmodel",
+          "sha256": "6511cdd9387a19ac512303bab107ee2fb88134f3ecd9b64d0e14878398045b1b",
+          "bytes": 28289
+        },
+        {
+          "path": "tokenizer.json",
+          "sha256": "68f40ae5347977c5400bb1306995abd390dae60251d105520940d46d30dd2a6f",
+          "bytes": 5602
+        },
+        {
+          "path": "expected.json",
+          "sha256": "8f2f106db668cb974332aa893c152c06e0d6159bb015e46a4efc4d9b2a057289",
+          "bytes": 13538
+        }
+      ],
+      "receipt": null
+    }
+  ]
+}

@@ -7,7 +7,7 @@ repository = "https://github.com/faberline/nlp"
 publish = false
 
 [workspace]
-members = ["cnl", "narrative"]
+members = ["cnl", "narrative", "translate"]
 
 [features]
 model-tokenizer = ["dep:tiktoken-rs"]

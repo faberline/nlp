@@ -1,0 +1,135 @@
+{
+  "arch": "arm64",
+  "backends": [
+    "onnx (tract-onnx)",
+    "coreml (objc2-core-ml, CPU only)"
+  ],
+  "files": [
+    {
+      "bytes": 8932,
+      "path": "encoder.onnx",
+      "sha256": "80d98ade6f1bf0a74c48bf74a4062d559612971862c4238a2f44554e17cdb5a9"
+    },
+    {
+      "bytes": 28403,
+      "path": "decoder_step.onnx",
+      "sha256": "41cd3a8785ed756479263d21d2e16913b5d449039f8b86c9759fbe7ade5f2e71"
+    },
+    {
+      "bytes": 8819,
+      "path": "encoder.mlmodel",
+      "sha256": "00d6696859f5b468f1e294c7f2c8d1390d97459349cec0b754e23de30df9c7ba"
+    },
+    {
+      "bytes": 28289,
+      "path": "decoder_step.mlmodel",
+      "sha256": "6511cdd9387a19ac512303bab107ee2fb88134f3ecd9b64d0e14878398045b1b"
+    }
+  ],
+  "fixtures": [
+    {
+      "decoded_tokens": 6,
+      "id": "fx01",
+      "max_encoder_abs_diff": 1.1920928955078125e-7,
+      "max_logit_abs_diff": 1.9073486328125e-6,
+      "src_tokens": 57,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 6,
+      "id": "fx02",
+      "max_encoder_abs_diff": 1.1920928955078125e-7,
+      "max_logit_abs_diff": 1.9073486328125e-6,
+      "src_tokens": 39,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 6,
+      "id": "fx03",
+      "max_encoder_abs_diff": 1.1920928955078125e-7,
+      "max_logit_abs_diff": 3.814697265625e-6,
+      "src_tokens": 47,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 6,
+      "id": "fx04",
+      "max_encoder_abs_diff": 1.1920928955078125e-7,
+      "max_logit_abs_diff": 1.9073486328125e-6,
+      "src_tokens": 28,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 6,
+      "id": "fx05",
+      "max_encoder_abs_diff": 1.1920928955078125e-7,
+      "max_logit_abs_diff": 3.814697265625e-6,
+      "src_tokens": 50,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 6,
+      "id": "fx06",
+      "max_encoder_abs_diff": 5.960464477539063e-8,
+      "max_logit_abs_diff": 1.9073486328125e-6,
+      "src_tokens": 46,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 6,
+      "id": "fx07",
+      "max_encoder_abs_diff": 1.1920928955078125e-7,
+      "max_logit_abs_diff": 1.9073486328125e-6,
+      "src_tokens": 39,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 6,
+      "id": "fx08",
+      "max_encoder_abs_diff": 5.960464477539063e-8,
+      "max_logit_abs_diff": 1.9073486328125e-6,
+      "src_tokens": 47,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 6,
+      "id": "fx09",
+      "max_encoder_abs_diff": 5.960464477539063e-8,
+      "max_logit_abs_diff": 1.9073486328125e-6,
+      "src_tokens": 45,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 0,
+      "id": "fx10",
+      "max_encoder_abs_diff": 0.0,
+      "max_logit_abs_diff": 4.76837158203125e-7,
+      "src_tokens": 0,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 6,
+      "id": "fx11",
+      "max_encoder_abs_diff": 1.1920928955078125e-7,
+      "max_logit_abs_diff": 3.814697265625e-6,
+      "src_tokens": 80,
+      "tokens_equal": true
+    },
+    {
+      "decoded_tokens": 6,
+      "id": "fx12",
+      "max_encoder_abs_diff": 2.9802322387695312e-8,
+      "max_logit_abs_diff": 9.5367431640625e-7,
+      "src_tokens": 3,
+      "tokens_equal": true
+    }
+  ],
+  "macos": "26.5.2",
+  "max_encoder_abs_diff": 1.1920928955078125e-7,
+  "max_logit_abs_diff": 3.814697265625e-6,
+  "model": "translate-test-tiny",
+  "rust": "rustc 1.96.1 (31fca3adb 2026-06-26) (Homebrew)",
+  "schema": "nlp.receipt.translate-model-runtime.v1",
+  "tokens_equal": true,
+  "tolerance": 0.0001
+}

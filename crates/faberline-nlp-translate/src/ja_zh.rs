@@ -50,27 +50,23 @@ fn is_han(ch: char) -> bool {
     )
 }
 
-/// Lookup Japanese gloss in `faberline_nlp::lexicon`, preferring lemma fallback when surface misses.
+/// Lookup Japanese gloss in `faberline_nlp::lexicon::ja::lookup_ja_gloss`, preferring lemma fallback when surface misses.
 fn lookup_ja_lexicon_gloss(
     surface: &str,
     lemma: Option<&str>,
     upos: Option<Upos>,
 ) -> Option<String> {
-    // TODO(jz-verifier): prefer lookup_ja_gloss(s, upos)
-    let _ = upos;
-    if let Some(hit) = faberline_nlp::lexicon::lookup_ja(surface)
-        && let Some(cp) = hit.counterpart
+    if let Some(cp) = faberline_nlp::lexicon::ja::lookup_ja_gloss(surface, upos)
         && !cp.is_empty()
     {
-        return Some(cp);
+        return Some(cp.to_owned());
     }
     if let Some(lem) = lemma
         && lem != surface
-        && let Some(hit) = faberline_nlp::lexicon::lookup_ja(lem)
-        && let Some(cp) = hit.counterpart
+        && let Some(cp) = faberline_nlp::lexicon::ja::lookup_ja_gloss(lem, upos)
         && !cp.is_empty()
     {
-        return Some(cp);
+        return Some(cp.to_owned());
     }
     None
 }
@@ -1541,7 +1537,7 @@ fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upo
         return cur.to_owned();
     }
 
-    // 2. Embedded lexicon lookup (`lookup_ja` -> future `lookup_ja_gloss`).
+    // 2. Embedded lexicon lookup (`lookup_ja_gloss` with UPOS disambiguation).
     if let Some(gloss) = lookup_ja_lexicon_gloss(surface, lemma, upos) {
         return gloss;
     }

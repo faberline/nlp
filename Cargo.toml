@@ -11,7 +11,6 @@ repository = "https://github.com/faberline/nlp"
 [workspace.dependencies]
 faberline-nlp = { path = "crates/faberline-nlp" }
 faberline-nlp-narrative = { path = "crates/faberline-nlp-narrative" }
-faberline-nlp-translate = { path = "crates/faberline-nlp-translate" }
 
 aho-corasick = "1"
 anyhow = "1"

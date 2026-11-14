@@ -362,8 +362,8 @@ fn extract_np_span(head: usize, doc: &Document, graph: &SyntaxGraph<'_>) -> Opti
 
     // Verify strictly one token in start..=end has its head outside start..=end.
     let mut ext_heads = 0usize;
-    for k in start..=end {
-        let outside = match graph.heads[k] {
+    for &head_opt in &graph.heads[start..=end] {
+        let outside = match head_opt {
             None => true,
             Some(p) => p < start || p > end,
         };
@@ -994,10 +994,7 @@ fn modifiers_conflict(m1: &MentionInfo, m2: &MentionInfo, graph: &SyntaxGraph<'_
                 .find(|&c| graph.canons[i].contains(c))
         })
         .collect();
-    if !colors1.is_empty() && !colors2.is_empty() && colors1 != colors2 {
-        return true;
-    }
-    false
+    !colors1.is_empty() && !colors2.is_empty() && colors1 != colors2
 }
 
 fn is_generic_head_stopword(head_canon: &str) -> bool {

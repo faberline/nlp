@@ -2,34 +2,34 @@
   "schema": "nlp.lexicon.receipt.v1",
   "date": "2026-11-14",
   "binary_format": "FNLPLX01",
-  "binary_bytes": 15103508,
-  "total_entries": 350187,
-  "total_rules": 1195,
+  "binary_bytes": 15123128,
+  "total_entries": 350303,
+  "total_rules": 1389,
   "variants": {
-    "zh-Hant": 69454,
-    "zh-Hans": 73703,
+    "zh-Hant": 69474,
+    "zh-Hans": 73722,
     "en-US": 12591,
     "en-GB": 12648,
     "en": 41158,
-    "ja": 70650,
+    "ja": 70727,
     "ko": 69983
   },
   "rules": {
-    "ja_inflect": 1054,
+    "ja_inflect": 1248,
     "ko_morph": 141
   },
   "tsv_files": [
     {
       "path": "lexicon/data/zh_hant.tsv",
-      "entries": 69454,
-      "bytes": 3066302,
-      "sha256": "c26827a1be6188d1e45e21d59640472a2361590cf583af5a5486e276311117d4"
+      "entries": 69474,
+      "bytes": 3067272,
+      "sha256": "7fe39affdfe85597f31003234e9349ec0ca4919fc7cb49f4b622804f3f16752a"
     },
     {
       "path": "lexicon/data/zh_hans.tsv",
-      "entries": 73703,
-      "bytes": 3268685,
-      "sha256": "c27d478c51a2c91df340b4291e374a094cc85ee0ab1ce1e32b8e3a45d1da8d32"
+      "entries": 73722,
+      "bytes": 3269612,
+      "sha256": "fb0f7202cd2eb61d855fc697ebbb122548e045c90d7b350f509ead1dabaf4120"
     },
     {
       "path": "lexicon/data/en.tsv",
@@ -39,15 +39,15 @@
     },
     {
       "path": "lexicon/data/ja.tsv",
-      "entries": 70650,
-      "bytes": 2876800,
-      "sha256": "be2374dc70f8445509e480f6ace4e0d42cdae770fe4cb99d7730d04b5139b73e"
+      "entries": 70727,
+      "bytes": 2913421,
+      "sha256": "d257bef6f2d262d018532bc03a8d4413c73c3d32f8df3950da554be0cde8a99c"
     },
     {
       "path": "lexicon/data/ja_inflect.tsv",
-      "entries": 1054,
-      "bytes": 84528,
-      "sha256": "8bb0be0c17a6d8893514869ecbb9b3ac0364e7e7486552ab6cf303cb25a39dbb"
+      "entries": 1248,
+      "bytes": 102075,
+      "sha256": "99d38574dca069b622eba9ca67f731215b4a421eeb740d64feccd62e35d8963f"
     },
     {
       "path": "lexicon/data/ko.tsv",
@@ -127,6 +127,6 @@
       "license_file": "LICENSE-FABERLINE-FIRST-PARTY-MIT.txt"
     }
   ],
-  "lexicon_bin_bytes": 15103508,
-  "lexicon_bin_sha256": "5878c51af543cdda2052f5016d9a415d36e1d4ba6166afef946859b0772f7320"
+  "lexicon_bin_bytes": 15123128,
+  "lexicon_bin_sha256": "ac178d55bac733540b5ae5b2dbef09232ab84b929408353cc632765e026049a9"
 }

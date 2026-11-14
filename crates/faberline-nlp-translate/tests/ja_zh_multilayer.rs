@@ -264,3 +264,209 @@ fn content_neutral_adult_erotic_and_anatomical_ja_to_zh() {
         assert!(hs.contains(expected), "hans missing '{expected}' in: {hs}");
     }
 }
+
+#[test]
+fn polish_multilayer_quotes_acl_genitive_passive_and_obliques() {
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        (
+            "「だめ…っ、そんなに見ないで…」彼女は恥ずかしそうに顔を赤くした。",
+            &["「", "」", "不要那樣看", "害羞地"],
+            &["“", "”", "不要那样看", "害羞地"],
+        ),
+        (
+            "意識が飛ぶほどの快感に震えた。",
+            &["神智飛散", "快感", "顫抖"],
+            &["神智飞散", "快感", "颤抖"],
+        ),
+        (
+            "彼の机の上には3冊の本が残っている。",
+            &["3本書", "留著"],
+            &["3本书", "留着"],
+        ),
+        (
+            "彼女の胸に優しいキスをした。",
+            &["溫柔的親吻"],
+            &["温柔的亲吻"],
+        ),
+        (
+            "雨が降っているから、諦めなかった。",
+            &["因為正在下雨", "沒有放棄"],
+            &["因为正在下雨", "没有放弃"],
+        ),
+    ];
+
+    for (src, hant_expected, hans_expected) in cases {
+        let hant = analyze_and_translate(
+            src,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &hant);
+        for pat in *hant_expected {
+            assert!(
+                hant.target_text.contains(pat),
+                "hant missing '{pat}' in: {}",
+                hant.target_text
+            );
+        }
+
+        let hans = analyze_and_translate(
+            src,
+            &TranslateOptions::new(TargetVariant::ZhHans),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &hans);
+        for pat in *hans_expected {
+            assert!(
+                hans.target_text.contains(pat),
+                "hans missing '{pat}' in: {}",
+                hans.target_text
+            );
+        }
+    }
+}
+
+#[test]
+fn formal_exam_benchmarks_chuken_catti_and_diplomatic_service() {
+    let cases: &[(&str, &[&str], &[&str])] = &[
+        (
+            "姉は音楽を聴きながら宿題をしています。",
+            &["姊姊一邊聽音樂，一邊做作業"],
+            &["姐姐一边听音乐，一边做作业"],
+        ),
+        ("彼の財布が盗まれた。", &["被偷了"], &["被偷了"]),
+        (
+            "先生は私たちに明日早く来るように言いました。",
+            &["老師要我們明天早點來"],
+            &["老师要我们明天早点来"],
+        ),
+        (
+            "彼は自分のミスに気づくとすぐに、みんなに謝罪した。",
+            &["一發現自己的失誤，就立刻向大家道歉了"],
+            &["一发现自己的失误，就立刻向大家道歉了"],
+        ),
+        (
+            "どんなに忙しくても、彼は毎日必ず読書をする。",
+            &["無論多麼忙碌", "他每天都一定閱讀"],
+            &["无论多么忙碌", "他每天都一定阅读"],
+        ),
+        (
+            "彼は長年努力を重ねた末に、ついに目標を達成した。",
+            &["經過多年累積努力之後", "終於達成了目標"],
+            &["经过多年累积努力之后", "终于达成了目标"],
+        ),
+        (
+            "計画の成否は、今後のチーム全体の緊密な協力にかかっている。",
+            &["取決於", "緊密的合作"],
+            &["取决于", "紧密的合作"],
+        ),
+        (
+            concat!(
+                "円安の流れが加速している。",
+                "輸入価格の上昇が物価高に拍車をかけ、家計の負担は一段と重くなっている。",
+                "政府・日銀は知恵を集めて暮らしを守らねばならない。"
+            ),
+            &[
+                "日圓貶值",
+                "加劇",
+                "進一步變重",
+                "政府、日本央行匯集智慧，必須守護民生",
+            ],
+            &[
+                "日元贬值",
+                "加剧",
+                "进一步变重",
+                "政府、日本央行汇集智慧，必须守护民生",
+            ],
+        ),
+        (
+            concat!(
+                "テクノロジーすなわち国力の時代には「国力がスポーツ競技を左右する」と言っても過言ではない。",
+                "競技場は各国がテクノロジーを競う場ともなっているのだ。",
+                "テクノロジーは今や選手のトレーニングや競技審判に欠かせず、スマートスタジアムまで登場している。",
+                "位置情報システム、センサー、画像機器、AI 技術、通信技術の活用はスポーツ界では世界的な流れとなっている。"
+            ),
+            &[
+                "在科技亦即國力的時代",
+                "國力左右體育賽事",
+                "也不為過",
+                "也成為了",
+                "不可或缺",
+                "連智慧體育場都已登場",
+                "定位資訊系統",
+                "感測器",
+                "通訊技術",
+                "已成為世界性的趨勢",
+            ],
+            &[
+                "在科技亦即国力的时代",
+                "国力左右体育赛事",
+                "也不为过",
+                "也成为了",
+                "不可或缺",
+                "连智能体育场都已登场",
+                "定位信息系统",
+                "传感器",
+                "通信技术",
+                "已成为世界性的趋势",
+            ],
+        ),
+        (
+            "彼は100メートル泳げるようになりました。",
+            &["他能游泳100公尺了"],
+            &["他能游泳100米了"],
+        ),
+        (
+            "彼の説得によって、彼女はついにこれまでの頑なな態度を改めた。",
+            &["在他的勸說下", "改變了以往頑固的態度"],
+            &["在他的劝说下", "改变了以往顽固的态度"],
+        ),
+        (
+            "日本では少子高齢化が急速に進み、観光客の増加やデジタル技術の導入が地域経済を支えている。",
+            &["觀光客", "數位技術", "正在支撐地方經濟"],
+            &["观光客", "数字技术", "正在支撑地方经济"],
+        ),
+    ];
+
+    for (src, hant_expected, hans_expected) in cases {
+        let hant = analyze_and_translate(
+            src,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &hant);
+        for pat in *hant_expected {
+            assert!(
+                hant.target_text.contains(pat),
+                "hant missing '{pat}' in: {}",
+                hant.target_text
+            );
+        }
+
+        let hans = analyze_and_translate(
+            src,
+            &TranslateOptions::new(TargetVariant::ZhHans),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &hans);
+        for pat in *hans_expected {
+            assert!(
+                hans.target_text.contains(pat),
+                "hans missing '{pat}' in: {}",
+                hans.target_text
+            );
+        }
+    }
+}

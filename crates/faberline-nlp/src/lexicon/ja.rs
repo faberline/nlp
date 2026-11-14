@@ -333,9 +333,6 @@ pub fn segment_ja_with_lexicon(
                     if stem_len == 0 && inf.rule.stem_drop_chars < 2 {
                         continue;
                     }
-                    if stem_len > 0 && inf.rule.stem_drop_chars >= 2 {
-                        continue;
-                    }
 
                     let dict_form = if stem_len == 0 {
                         inf.dict_ending.to_owned()
@@ -343,10 +340,14 @@ pub fn segment_ja_with_lexicon(
                         format!("{stem_str}{}", inf.dict_ending)
                     };
 
-                    // Also handle くる for kahen when hiragana.
+                    // Also handle くる for kahen when hiragana (standalone or compound).
                     let hit = lookup_ja(&dict_form).or_else(|| {
-                        if inf.paradigm == "kahen" && stem_len == 0 {
-                            lookup_ja("くる")
+                        if inf.paradigm == "kahen" {
+                            if stem_len == 0 {
+                                lookup_ja("くる")
+                            } else {
+                                lookup_ja(&format!("{stem_str}くる"))
+                            }
                         } else {
                             None
                         }

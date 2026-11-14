@@ -308,6 +308,13 @@ pub fn convert_zh_word(
     }
 
     // Multi-char OOV compound: convert character-by-character with internal neighbor context.
+    if target == TargetVariant::ZhHans
+        && let Some(num_prefix) = surface.strip_suffix("公尺")
+        && !num_prefix.is_empty()
+        && num_prefix.chars().all(|c| c.is_ascii_digit() || c == '.')
+    {
+        return format!("{num_prefix}米");
+    }
     let wchars: Vec<char> = surface.chars().collect();
     let mut out = String::with_capacity(surface.len());
     for (i, &ch) in wchars.iter().enumerate() {
@@ -536,12 +543,26 @@ fn curated_to_zh_hant(surface: &str) -> Option<&'static str> {
         "系统" => "系統",
         "系列" => "系列",
         "体系" => "體系",
+        // Tech / media cross-strait terms
+        "数字技术" => "數位技術",
+        "数字化" => "數位化",
+        "智能体育场" => "智慧體育場",
+        "智能手机" => "智慧型手機",
+        "传感器" => "感測器",
         _ => return None,
     })
 }
 
 fn curated_to_zh_hans(surface: &str) -> Option<&'static str> {
     Some(match surface {
+        "公尺" => "米",
+        "數位" => "数字",
+        "數位技術" => "数字技术",
+        "數位化" => "数字化",
+        "智慧體育場" => "智能体育场",
+        "智慧型手機" => "智能手机",
+        "感測器" => "传感器",
+        "姊姊" => "姐姐",
         "軟體" => "软件",
         "硬體" => "硬件",
         "記憶體" => "内存",

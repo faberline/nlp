@@ -129,42 +129,35 @@ pub fn resolve_chains(
         if !is_third_person_singular_pronoun(&surf) {
             continue;
         }
+        let pro_gender = pronoun_gender(&surf);
 
         let m_sent = mentions[m_idx].sentence;
         let m_para = sentence_paragraph(doc, m_sent);
 
         // Collect preceding distinct narrative actor antecedents in active window.
-        let mut window_cands: Vec<(Span, Option<String>, String)> = Vec::new();
-        for prev in &mentions[..m_idx] {
-            if prev.span.end_char > m_span.start_char {
-                continue;
-            }
-            if !matches!(zone_for_span(dialogues, prev.span), ContextZone::Narrative) {
-                continue;
-            }
-            if matches!(prev.kind, MentionKind::ZeroPronounProDrop) {
-                continue;
-            }
-            if prev.kind == MentionKind::Pronoun {
-                continue;
-            }
-            let prev_para = sentence_paragraph(doc, prev.sentence);
-            if prev_para != m_para {
-                continue;
-            }
-            if prev.sentence != m_sent && prev.sentence + 1 != m_sent {
-                continue;
-            }
-            let key = prev
-                .canonical
-                .clone()
-                .unwrap_or_else(|| span_text(&chars, prev.span));
-            if let Some(existing) = window_cands.iter_mut().find(|(_, _, k)| k == &key) {
-                // Keep most recent span for that actor identity.
-                existing.0 = prev.span;
-            } else {
-                window_cands.push((prev.span, prev.canonical.clone(), key));
-            }
+        let mut window_cands = collect_gendered_window_cands(
+            &mentions[..m_idx],
+            &chars,
+            dialogues,
+            doc,
+            m_span,
+            m_sent,
+            m_para,
+            pro_gender,
+            true,
+        );
+        if window_cands.is_empty() && matches!(surf.as_str(), "彼" | "彼女") {
+            window_cands = collect_gendered_window_cands(
+                &mentions[..m_idx],
+                &chars,
+                dialogues,
+                doc,
+                m_span,
+                m_sent,
+                m_para,
+                pro_gender,
+                false,
+            );
         }
 
         if window_cands.len() >= 2 {
@@ -359,6 +352,10 @@ fn is_third_person_singular_pronoun(surf: &str) -> bool {
             | "它"
             | "牠"
             | "其"
+            | "彼"
+            | "彼女"
+            | "あいつ"
+            | "こいつ"
             | "he"
             | "him"
             | "his"
@@ -368,6 +365,106 @@ fn is_third_person_singular_pronoun(surf: &str) -> bool {
             | "it"
             | "its"
     )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum JaGender {
+    Male,
+    Female,
+    Unknown,
+}
+
+fn pronoun_gender(surf: &str) -> JaGender {
+    match surf {
+        "彼" | "他" => JaGender::Male,
+        "彼女" | "她" => JaGender::Female,
+        _ => JaGender::Unknown,
+    }
+}
+
+fn actor_gender(surf: &str, canon: Option<&str>) -> JaGender {
+    let check = |s: &str| -> JaGender {
+        if s.contains("ちゃん")
+            || s.contains("嬢")
+            || s.contains("お嬢様")
+            || s.contains("少女")
+            || s.contains("姉")
+            || s.contains("妹")
+            || s.contains("妻")
+            || s.contains("彼女")
+            || s.contains("女")
+        {
+            JaGender::Female
+        } else if s.contains("くん")
+            || s.contains("氏")
+            || s.contains("少年")
+            || s.contains("兄")
+            || s.contains("弟")
+            || s.contains("夫")
+            || s.contains("男")
+        {
+            JaGender::Male
+        } else {
+            JaGender::Unknown
+        }
+    };
+    let g = check(surf);
+    if g != JaGender::Unknown {
+        return g;
+    }
+    canon.map_or(JaGender::Unknown, check)
+}
+
+fn genders_compatible(ant: JaGender, pro: JaGender) -> bool {
+    ant == JaGender::Unknown || pro == JaGender::Unknown || ant == pro
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_gendered_window_cands(
+    prev_mentions: &[ActorMention],
+    chars: &[char],
+    dialogues: &[DialogueSpan],
+    doc: &Document,
+    m_span: Span,
+    m_sent: usize,
+    m_para: usize,
+    pro_gender: JaGender,
+    strict_adjacent_sent: bool,
+) -> Vec<(Span, Option<String>, String)> {
+    let mut window_cands: Vec<(Span, Option<String>, String)> = Vec::new();
+    for prev in prev_mentions {
+        if prev.span.end_char > m_span.start_char {
+            continue;
+        }
+        if !matches!(zone_for_span(dialogues, prev.span), ContextZone::Narrative) {
+            continue;
+        }
+        if matches!(
+            prev.kind,
+            MentionKind::ZeroPronounProDrop | MentionKind::Pronoun
+        ) {
+            continue;
+        }
+        let prev_para = sentence_paragraph(doc, prev.sentence);
+        if prev_para != m_para {
+            continue;
+        }
+        if strict_adjacent_sent && prev.sentence != m_sent && prev.sentence + 1 != m_sent {
+            continue;
+        }
+        let prev_surf = span_text(chars, prev.span);
+        let ant_gender = actor_gender(&prev_surf, prev.canonical.as_deref());
+        if !genders_compatible(ant_gender, pro_gender) {
+            continue;
+        }
+        let key = prev.canonical.clone().unwrap_or(prev_surf);
+        if let Some(existing) = window_cands.iter_mut().find(|(_, _, k)| k == &key) {
+            existing.0 = prev.span;
+        } else {
+            window_cands.push((prev.span, prev.canonical.clone(), key));
+        }
+    }
+    window_cands
 }
 
 fn locate_sent_clause(doc: &Document, span: Span) -> (usize, usize) {

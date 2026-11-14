@@ -119,6 +119,7 @@ pub fn annotate(doc: &mut Document, text: &str) {
         let p_low = &lowers[p];
 
         let passive = is_passive(p, p_lang, p_surf, p_low, &syn, &children, &lowers);
+        let causative = is_causative(p, p_lang, &syn, &children, &lowers);
         pred_passive.insert(p, passive);
 
         let has_disposal = children[p].iter().any(|&c| {
@@ -197,16 +198,47 @@ pub fn annotate(doc: &mut Document, text: &str) {
                 }
                 "iobj" => {
                     if is_valid_arg_head(c, p, sent, doc, &syn) {
-                        args.insert((FrameRole::Arg1, c));
+                        if passive
+                            && p_lang == Lang::Ja
+                            && is_passive_agent_obl(
+                                c,
+                                p_lang,
+                                &children,
+                                &syn,
+                                &lowers,
+                                &surfaces,
+                                &tok_entity,
+                                doc,
+                            )
+                        {
+                            args.insert((FrameRole::Arg0, c));
+                        } else {
+                            args.insert((FrameRole::Arg1, c));
+                        }
                     }
                 }
                 "obl" => {
                     if is_valid_arg_head(c, p, sent, doc, &syn) {
                         if passive
-                            && is_passive_agent_obl(c, p_lang, &children, &syn, &lowers, &surfaces)
+                            && is_passive_agent_obl(
+                                c,
+                                p_lang,
+                                &children,
+                                &syn,
+                                &lowers,
+                                &surfaces,
+                                &tok_entity,
+                                doc,
+                            )
                         {
                             args.insert((FrameRole::Arg0, c));
-                        } else if has_case_in(c, &children, &syn, &lowers, &["把", "將", "将"]) {
+                        } else if (!passive
+                            && causative
+                            && p_lang == Lang::Ja
+                            && has_case_in(c, &children, &syn, &lowers, &["に"])
+                            && is_ja_animate_arg(c, doc, &tok_entity, &surfaces))
+                            || has_case_in(c, &children, &syn, &lowers, &["把", "將", "将"])
+                        {
                             args.insert((FrameRole::Arg1, c));
                         } else {
                             args.insert((FrameRole::Argm, c));
@@ -508,7 +540,7 @@ fn is_passive(
             syn[c].as_ref().is_some_and(|s| s.deprel == "aux")
                 && matches!(
                     lowers[c].as_str(),
-                    "れる" | "られる" | "れ" | "られ" | "れた" | "られた"
+                    "れる" | "られる" | "れ" | "られ" | "れた" | "られた" | "れて" | "られて"
                 )
         });
         if ja_aux {
@@ -539,6 +571,97 @@ fn is_passive(
     false
 }
 
+fn is_causative(
+    p: usize,
+    lang: Lang,
+    syn: &[Option<SynInfo<'_>>],
+    children: &[Vec<usize>],
+    lowers: &[String],
+) -> bool {
+    if lang != Lang::Ja {
+        return false;
+    }
+    children[p].iter().any(|&c| {
+        syn[c].as_ref().is_some_and(|s| s.deprel == "aux")
+            && matches!(
+                lowers[c].as_str(),
+                "せる" | "させる" | "せ" | "させ" | "せた" | "させた" | "せて" | "させて"
+            )
+    })
+}
+
+fn is_ja_animate_arg(
+    tok_idx: usize,
+    doc: &Document,
+    tok_entity: &[Option<EntityKind>],
+    surfaces: &[String],
+) -> bool {
+    if matches!(
+        tok_entity[tok_idx],
+        Some(EntityKind::Date | EntityKind::RelativeDate | EntityKind::Time)
+    ) {
+        return false;
+    }
+    if tok_entity[tok_idx] == Some(EntityKind::Name) {
+        return true;
+    }
+    let tok = &doc.tokens[tok_idx];
+    if matches!(tok.upos, Some(Upos::Propn | Upos::Pron)) {
+        return true;
+    }
+    let surf = &surfaces[tok_idx];
+    if let Some(hit) = crate::lexicon::lookup_ja(surf) {
+        if matches!(
+            hit.sem_class,
+            Some(
+                crate::lexicon::SemanticClass::Location
+                    | crate::lexicon::SemanticClass::Time
+                    | crate::lexicon::SemanticClass::Artifact
+            )
+        ) {
+            return false;
+        }
+        if hit.sem_class == Some(crate::lexicon::SemanticClass::Person) {
+            return true;
+        }
+    }
+    surf.ends_with("さん")
+        || surf.ends_with("くん")
+        || surf.ends_with("ちゃん")
+        || surf.ends_with("様")
+        || surf.ends_with("さま")
+        || surf.ends_with("先生")
+        || surf.ends_with("先輩")
+        || surf.ends_with("殿")
+        || surf.ends_with("氏")
+        || surf.ends_with("嬢")
+        || matches!(
+            surf.as_str(),
+            "人" | "男"
+                | "女"
+                | "少年"
+                | "少女"
+                | "子供"
+                | "子ども"
+                | "母"
+                | "父"
+                | "兄"
+                | "姉"
+                | "弟"
+                | "妹"
+                | "夫"
+                | "妻"
+                | "友達"
+                | "友人"
+                | "医者"
+                | "警察"
+                | "犯人"
+                | "犬"
+                | "猫"
+        )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn is_passive_agent_obl(
     obl: usize,
     lang: Lang,
@@ -546,15 +669,20 @@ fn is_passive_agent_obl(
     syn: &[Option<SynInfo<'_>>],
     lowers: &[String],
     surfaces: &[String],
+    tok_entity: &[Option<EntityKind>],
+    doc: &Document,
 ) -> bool {
     if has_case_in(
         obl,
         children,
         syn,
         lowers,
-        &["被", "由", "by", "によって", "により", "に"],
+        &["被", "由", "by", "によって", "により"],
     ) {
         return true;
+    }
+    if has_case_in(obl, children, syn, lowers, &["に"]) {
+        return lang != Lang::Ja || is_ja_animate_arg(obl, doc, tok_entity, surfaces);
     }
     if lang == Lang::Ko {
         let s = &surfaces[obl];

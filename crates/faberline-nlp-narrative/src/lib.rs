@@ -224,6 +224,27 @@ pub(crate) fn is_personal_pronoun(surf: &str) -> bool {
             | "吾"
             | "余"
             | "予"
+            | "私"
+            | "わたし"
+            | "あたし"
+            | "わたくし"
+            | "僕"
+            | "ぼく"
+            | "俺"
+            | "おれ"
+            | "あなた"
+            | "あんた"
+            | "君"
+            | "きみ"
+            | "お前"
+            | "おまえ"
+            | "彼"
+            | "彼女"
+            | "彼ら"
+            | "彼女ら"
+            | "あいつ"
+            | "こいつ"
+            | "自分"
             | "he"
             | "him"
             | "his"
@@ -245,6 +266,46 @@ pub(crate) fn is_personal_pronoun(surf: &str) -> bool {
             | "you"
             | "your"
     )
+}
+
+const JA_ACTOR_HONORIFIC_SUFFIXES: &[&str] = &[
+    "お嬢様",
+    "先輩",
+    "先生",
+    "ちゃん",
+    "さん",
+    "くん",
+    "さま",
+    "様",
+    "殿",
+    "氏",
+    "嬢",
+];
+
+pub(crate) fn strip_ja_honorific(s: &str) -> &str {
+    for &suffix in JA_ACTOR_HONORIFIC_SUFFIXES {
+        if let Some(stem) = s.strip_suffix(suffix)
+            && !stem.is_empty()
+        {
+            return stem;
+        }
+    }
+    s
+}
+
+pub(crate) fn normalize_ja_actor_key(vocab: &WorkVocabulary, surf: &str) -> Option<String> {
+    if let Some(canon) = vocab.lookup_actor(surf) {
+        return Some(canon.to_owned());
+    }
+    let stripped = strip_ja_honorific(surf);
+    if stripped != surf {
+        return Some(
+            vocab
+                .lookup_actor(stripped)
+                .map_or_else(|| stripped.to_owned(), str::to_owned),
+        );
+    }
+    None
 }
 
 pub(crate) fn collect_actor_candidates(
@@ -269,7 +330,7 @@ pub(crate) fn collect_actor_candidates(
         let surf = span_text(chars, ent.span);
         out.push(ActorCandidate {
             span: ent.span,
-            canonical: vocab.lookup_actor(&surf).map(str::to_owned),
+            canonical: normalize_ja_actor_key(vocab, &surf),
             is_explicit_name: true,
         });
     }
@@ -313,7 +374,7 @@ pub(crate) fn collect_actor_candidates(
         let surf = span_text(chars, tok.span);
         out.push(ActorCandidate {
             span: tok.span,
-            canonical: vocab.lookup_actor(&surf).map(str::to_owned),
+            canonical: normalize_ja_actor_key(vocab, &surf),
             is_explicit_name: true,
         });
     }

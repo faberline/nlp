@@ -38,16 +38,20 @@ using no network:
     Korean (`제1장`, `제12화`, `1화`, `프롤로그`, excluding particle-attached prose such as
     `제1장은...`) headings, multilingual author-year citations (`（田中・佐藤、2020）`,
     `(김철수, 2020a)`), and `※ ` list items.
-- **Layer 2 (`tokens` & `upos`)**:
-  - Tokenizes Chinese (`jieba` + Taiwan lexicon + optional `t2s` projection), English (UAX #29 +
-    clitics and abbreviations), Japanese (`icu_segmenter` compiled dictionary + longest-first
-    `options.names`/`lexicon`), and Korean (longest-first `options.names`/`lexicon` + UAX #29
-    *eojeol* 어절 boundaries).
+- **Layer 2 (`tokens`, `upos` & first-party `lexicon`)**:
+  - Tokenizes Chinese (`jieba` + Taiwan lexicon + optional `t2s` projection, or opt-in
+    `--first-party-dict` / `options.first_party_zh_segmenter` using our compiled `zh-Hant` +
+    `zh-Hans` lexicon), English (UAX #29 + clitics and abbreviations), Japanese (first-party
+    Viterbi segmenter `lexicon::ja::segment_ja` with inflectional stem+tail splitting +
+    longest-first `options.names`/`lexicon`), and Korean (longest-first `options.names`/`lexicon`
+    + UAX #29 *eojeol* 어절 boundaries).
   - Punctuation, numbers, symbols, and inline opaque spans receive rule-decided `upos` tags across
-    all four languages; undecided Japanese and Korean lexical/particle tokens emit
-    `{"layer": "pos", "span": token.span, "reason": "unsupported_language"}` (1-to-1 with
-    `upos: null`), while scripts outside Han/Kana/Hangul/Latin emit
-    `{"layer": "segmentation", "reason": "unsupported_language"}`.
+    all four languages; Japanese and Korean tokens receive real UD v2 `upos` tags from the embedded
+    first-party lexicon (emitting `ambiguous` or `no_model` when undecided), while scripts outside
+    Han/Kana/Hangul/Latin emit `{"layer": "segmentation", "reason": "unsupported_language"}`.
+  - Opt-in `--morphology` / `options.enrich_morphology` populates `lemma`, `canonical_variant`
+    (`zh-Hant` ↔ `zh-Hans`, `en-US` ↔ `en-GB`), `upos_candidates`, `sem_class`, and Korean
+    `morphemes` on `Token`.
 - **Downstream layers (`entities`, `syntax`, `relations`)**:
   - Rule-based Layer 3 (`entities`) and Layer 7 (`relations`), plus optional model-backed Layer 4
     (`analyze_document_with_model` / `nlp_doc --models <DIR>`), operate on `zh`, `en`, and `zh`/`en`

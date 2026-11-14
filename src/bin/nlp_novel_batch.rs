@@ -182,6 +182,14 @@ struct Args {
     /// Include unitless `EntityKind::Number` records in `entities_timeline_cues.jsonl` (filtered out by default).
     #[arg(long)]
     include_bare_numbers: bool,
+
+    /// Enrich tokens with morphology and semantic fields (`options.enrich_morphology`).
+    #[arg(long)]
+    morphology: bool,
+
+    /// Use the first-party `zh-Hant` + `zh-Hans` lexicon segmenter for Chinese runs (`options.first_party_zh_segmenter`).
+    #[arg(long)]
+    first_party_dict: bool,
 }
 
 /// Exact Unicode scalar (`start_char..end_char`) and UTF-8 byte (`start_byte..end_byte`) span within `source_file`.
@@ -2902,12 +2910,16 @@ fn build_doc_options(
     mask_editorial: bool,
     normalize_traditional: bool,
     lexicon: Vec<String>,
+    enrich_morphology: bool,
+    first_party_zh_segmenter: bool,
 ) -> Options {
     Options {
         names,
         mask_editorial,
         normalize_traditional,
         lexicon,
+        enrich_morphology,
+        first_party_zh_segmenter,
     }
 }
 
@@ -3053,6 +3065,8 @@ fn run() -> Result<()> {
         mask_editorial,
         normalize_traditional,
         merged_lexicon,
+        args.morphology,
+        args.first_party_dict,
     );
     let expected_options_sha256 = sha256_hex(&serde_json::to_vec(&doc_options)?);
 

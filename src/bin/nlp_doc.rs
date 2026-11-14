@@ -55,6 +55,14 @@ struct Args {
     /// Project Traditional Han characters 1:1 onto Simplified equivalents during dictionary lookup (`options.normalize_traditional`).
     #[arg(long)]
     normalize_traditional: bool,
+
+    /// Enrich tokens with morphology and semantic fields (`options.enrich_morphology`).
+    #[arg(long)]
+    morphology: bool,
+
+    /// Use the first-party `zh-Hant` + `zh-Hans` lexicon segmenter for Chinese runs (`options.first_party_zh_segmenter`).
+    #[arg(long)]
+    first_party_dict: bool,
 }
 
 fn main() {
@@ -69,6 +77,8 @@ fn main() {
         mask_editorial: args.mask_editorial,
         normalize_traditional: args.normalize_traditional,
         lexicon: args.lexicon,
+        enrich_morphology: args.morphology,
+        first_party_zh_segmenter: args.first_party_dict,
     };
     let doc = match &args.models {
         Some(models_dir) => {

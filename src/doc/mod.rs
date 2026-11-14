@@ -11,6 +11,7 @@ mod t2s;
 mod token;
 
 use crate::Span;
+pub use crate::lexicon::{Morpheme, SemanticClass};
 pub(crate) use entity::NameRule;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -42,6 +43,14 @@ pub struct Options {
     /// Extra domain vocabulary matched leftmost-longest before Chinese word segmentation.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lexicon: Vec<String>,
+    /// Enrich `Token`s with optional morphology and semantic fields (`lemma`, `canonical_variant`,
+    /// `upos_candidates`, `sem_class`, and Korean `morphemes`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub enrich_morphology: bool,
+    /// Use the first-party `zh-Hant` + `zh-Hans` lexicon Viterbi segmenter for Chinese runs
+    /// instead of `jieba-rs`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub first_party_zh_segmenter: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +157,16 @@ pub struct Token {
     pub sentence: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upos: Option<Upos>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lemma: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_variant: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub upos_candidates: Vec<Upos>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sem_class: Option<SemanticClass>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub morphemes: Vec<Morpheme>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -310,12 +329,26 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
                     .iter()
                     .collect();
                 let lang = token::token_lang(&text, sent_ja);
+                let ko_analysis = if lang == Lang::Ko && piece.opaque.is_none() {
+                    Some(crate::lexicon::ko::analyze_ko_eojeol(
+                        &c[piece.span.start_char..piece.span.end_char],
+                        piece.span.start_char,
+                    ))
+                } else {
+                    None
+                };
                 let undecided = |reason| Unknown {
                     layer: "pos".to_owned(),
                     span: piece.span,
                     reason,
                 };
-                let upos = match pos::tag(&text, lang, piece.opaque) {
+                let upos = match pos::tag_with_lex(
+                    &text,
+                    lang,
+                    piece.opaque,
+                    piece.ja_lex.as_ref(),
+                    ko_analysis.as_ref(),
+                ) {
                     pos::Tag::Decided(upos) => Some(upos),
                     pos::Tag::Ambiguous => {
                         unknown.push(undecided(Reason::Ambiguous));
@@ -330,11 +363,64 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
                         None
                     }
                 };
+                let (lemma, canonical_variant, upos_candidates, sem_class, morphemes) =
+                    if options.enrich_morphology && piece.opaque.is_none() {
+                        let analysis = match lang {
+                            Lang::Zh => crate::lexicon::zh::analyze_zh_token(&text),
+                            Lang::En => crate::lexicon::en::analyze_en_token(&text),
+                            Lang::Ja => {
+                                if let Some(seg) = piece.ja_lex {
+                                    crate::lexicon::LexTokenAnalysis {
+                                        decided_upos: seg.decided_upos,
+                                        upos_mask: seg.upos_mask,
+                                        upos_candidates: seg.upos_candidates,
+                                        lemma: seg.lemma,
+                                        canonical_variant: None,
+                                        sem_class: seg.sem_class,
+                                        morphemes: Vec::new(),
+                                    }
+                                } else if let Some(hit) = crate::lexicon::lookup_ja(&text) {
+                                    crate::lexicon::LexTokenAnalysis {
+                                        decided_upos: hit.decided_upos,
+                                        upos_mask: hit.upos_mask,
+                                        upos_candidates: hit.upos_candidates,
+                                        lemma: hit.lemma,
+                                        canonical_variant: None,
+                                        sem_class: hit.sem_class,
+                                        morphemes: Vec::new(),
+                                    }
+                                } else {
+                                    crate::lexicon::LexTokenAnalysis::default()
+                                }
+                            }
+                            Lang::Ko => ko_analysis.unwrap_or_default(),
+                            Lang::Mixed | Lang::Und => crate::lexicon::LexTokenAnalysis::default(),
+                        };
+                        let cands = if upos.is_none() && analysis.upos_candidates.len() > 1 {
+                            analysis.upos_candidates
+                        } else {
+                            Vec::new()
+                        };
+                        (
+                            analysis.lemma,
+                            analysis.canonical_variant,
+                            cands,
+                            analysis.sem_class,
+                            analysis.morphemes,
+                        )
+                    } else {
+                        (None, None, Vec::new(), None, Vec::new())
+                    };
                 tokens.push(Token {
                     span: piece.span,
                     lang,
                     sentence: sentence_index,
                     upos,
+                    lemma,
+                    canonical_variant,
+                    upos_candidates,
+                    sem_class,
+                    morphemes,
                 });
             }
         }

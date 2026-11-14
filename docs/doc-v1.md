@@ -7,8 +7,9 @@ network.
 
 CLI: `nlp_doc` reads UTF-8 text from stdin and prints one JSON document plus a newline. With no
 flags it runs `analyze_document` (rules only, no model). Optional flags `--name <SURFACE>` and
-`--lexicon <SURFACE>` (repeatable), `--mask-editorial`, and `--normalize-traditional` populate
-`Options`. With `--models <DIR>` and optional `--backend <coreml|coreml-fast|onnx>` (defaulting to
+`--lexicon <SURFACE>` (repeatable), `--mask-editorial`, `--normalize-traditional`,
+`--morphology`, and `--first-party-dict` populate `Options`. With `--models <DIR>` and optional
+`--backend <coreml|coreml-fast|onnx>` (defaulting to
 `coreml` on macOS when compiled in, otherwise `onnx`), it runs `analyze_document_with_model` to
 populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prints
 `nlp_doc: <error>` to stderr and exits with 1.
@@ -36,17 +37,18 @@ populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prin
 ```
 
 - `options.names` and `options.lexicon` are optional (`Vec<String>`, omitted when empty);
-  `options.mask_editorial` and `options.normalize_traditional` are optional booleans (`false` by
-  default, omitted when `false`), so `Options::default()` serializes to `{}`.
+  `options.mask_editorial`, `options.normalize_traditional`, `options.enrich_morphology`, and
+  `options.first_party_zh_segmenter` are optional booleans (`false` by default, omitted when
+  `false`), so `Options::default()` serializes to `{}`.
 - `lang` is one of `zh`, `en`, `ja`, `ko`, `mixed`, `und`.
 - `reason` is one of `no_model`, `ambiguous`, `low_confidence`, `unsupported_language`,
   `not_applicable`. Layer 1 produces `unsupported_language` (`layer: "segmentation"`) when
   unsupported-script letters are at least as numerous as supported-script (`han + kana + hangul +
-  latin`) letters. Layer 2 produces `no_model`, `ambiguous`, and `unsupported_language` (for
-  undecided `ja` and `ko` lexical/particle tokens), plus `low_confidence` when a syntax model runs
-  with UPOS confidence `< 0.50`, all with `layer: "pos"`. Layer 3 produces `ambiguous`, with
-  `layer: "entities"`. Layer 4 produces `no_model`, `low_confidence` and `not_applicable`, with
-  `layer: "syntax"`. Layer 7 produces `ambiguous`, with `layer: "relations"`.
+  latin`) letters. Layer 2 produces `no_model` and `ambiguous` (including for undecided `ja` and
+  `ko` tokens), plus `low_confidence` when a syntax model runs with UPOS confidence `< 0.50`, all
+  with `layer: "pos"`. Layer 3 produces `ambiguous`, with `layer: "entities"`. Layer 4 produces
+  `no_model`, `low_confidence` and `not_applicable`, with `layer: "syntax"`. Layer 7 produces
+  `ambiguous`, with `layer: "relations"`.
 - `sentence.paragraph` indexes `paragraphs`; `clause.sentence` indexes `sentences`.
   `entity.sentence` and `syntax.sentence` index `sentences`. `syntax.token` and `syntax.head`
   index `tokens` (`head` is `null` for `"root"`).
@@ -295,6 +297,12 @@ Known limits of opaque spans:
 
 `tokens` is a list of tokens in text order, sorted by start. A token has a `span`, a `lang`,
 the index of its `sentence`, and an optional `upos` (Universal POS, UD v2 names in upper case).
+When `options.enrich_morphology` is `true`, tokens also carry optional `lemma`,
+`canonical_variant` (`zh-Hant` ↔ `zh-Hans`, `en-US` ↔ `en-GB`), `upos_candidates` (when
+`upos` is `None` and the first-party lexicon has >1 candidate), `sem_class` (`person`,
+`location`, `organization`, `time`, `quantity`, `artifact`), and `morphemes` (Korean *eojeol*
+sub-token stem + josa/eomi spans). When `options.enrich_morphology` is `false` (default), all
+five morphology/semantic fields are omitted from JSON.
 A token's `lang` is `ja` when it has a Kana char, a Japanese-exclusive Kanji, or a Han char inside a
 Japanese-context sentence (`sent_ja`), `ko` when it has a Hangul char, `zh` when it has a Han char
 (outside Japanese context), `en` when it has a Latin letter, and `und` otherwise. `upos` is absent
@@ -309,16 +317,17 @@ Each supported sentence is split by these rules, in order:
 2. **Japanese Han+Kana runs** (maximal contiguous runs of `is_han || is_kana` when the sentence has
    Japanese context `sent_ja` or the run contains Kana or Japanese-exclusive Kanji) are matched
    leftmost-longest against `options.names` and `options.lexicon` first, and the text between
-   matches is segmented by `icu_segmenter::WordSegmenter::new_dictionary` (ICU4X compiled `cjdict`
-   dictionary, offline with zero offset drift), followed by a particle+function-word de-merging
-   guard that splits false merges across a non-initial Japanese particle (`は が を に で と も`)
-   and high-frequency Hiragana adverbs/demonstratives (`まだ`, `ただ`, `それ`, `これ`, etc.).
+   matches is segmented by the first-party Japanese lexicon Viterbi segmenter
+   (`faberline_nlp::lexicon::ja::segment_ja`, using `ja.tsv` + `ja_inflect.tsv` to split
+   conjugated verbs/adjectives into UD-aligned morpheme tokens such as `買っ` + `た`).
 3. **Chinese Han runs** (maximal runs of `is_han` outside Japanese context) are matched against the
    Taiwan term list (`臺灣`, `資料庫`, `記憶體` and so on) plus pure-Han entries of
-   `options.lexicon` and `options.names`, longest match first. The text between matches is segmented
-   by `doc_jieba()` (jieba with HMM plus classical self-pronouns and generic genre nouns such as
+   `options.lexicon` and `options.names`, longest match first. When `options.first_party_zh_segmenter`
+   is `true`, the text between matches is segmented by `faberline_nlp::lexicon::zh::segment_zh`
+   (first-party `zh-Hant` + `zh-Hans` Viterbi DP); otherwise it is segmented by `doc_jieba()`
+   (jieba with HMM plus classical self-pronouns and generic genre nouns such as
    `在下`, `妾身`, `老夫`, `老身`, `貧道`, `本座`, `儲物袋`, `築基丹`). When
-   `options.normalize_traditional` is `true`, unmatched Han slices are projected through `t2s` to
+   `options.normalize_traditional` is `true` (and `first_party_zh_segmenter` is `false`), unmatched Han slices are projected through `t2s` to
    Simplified characters for dictionary lookup (skipping a single scraper anti-censorship infix in
    `['丅', '丵', '灬', '堊', '冇']` when sandwiched between two Han chars so `少丅女` / `長堊老` stays
    one contiguous original-text span with zero offset drift), sliced back by exact scalar index onto
@@ -354,17 +363,19 @@ The tag of each token is decided by the first rule that matches:
    `＄ ％ ＋ ＜ ＝ ＞ ＠ ￥ ￦`) are `SYM`.
 4. A number is `NUM`: ASCII digits, with `.` or `,` allowed between them (`3.5`, `1,000`), or
    a run of Chinese numerals (`〇零一二三四五六七八九十百千萬万億亿兩两`).
-5. A token whose `lang` is `ja` or `ko` (not already tagged by rules 1–4) gets no tag, with reason
-   `unsupported_language`.
-6. The lexicon (`zh` and `en`). English words are looked up in lower case, Chinese words exactly. A
+5. A token whose `lang` is `ja` or `ko` (not already tagged by rules 1–4) is tagged using the
+   first-party lexicon (`faberline_nlp::lexicon::ja` / `ko`): unambiguous entries receive their
+   UD v2 `Upos`, multi-POS entries emit `ambiguous`, and OOV entries emit `no_model`.
+6. The closed-class lexicon (`zh` and `en`). English words are looked up in lower case, Chinese words exactly. A
    word has one tag.
 7. A word in the ambiguous list (`zh` and `en`) gets no tag, with reason `ambiguous`.
 8. Anything else gets no tag, with reason `no_model`.
 
 Every undecided token has exactly one `unknown` entry with `layer: "pos"` and the token's span.
-The lexicon is hand-written and small, covering Chinese and English closed-class words. Most Chinese
-and English content words (nouns, verbs, adjectives) are `no_model`, while undecided Japanese and
-Korean lexical/particle tokens are `unsupported_language`.
+For `zh` and `en`, the Layer-2 POS lexicon is hand-written and small, covering closed-class words
+(most `zh`/`en` content words are `no_model` until Layer 4). For `ja` and `ko`, the embedded
+first-party lexicon assigns UPOS to unambiguous entries and emits `ambiguous` or `no_model`
+for undecided tokens.
 
 Sentences with Layer-1 `segmentation` `unsupported_language` (scripts outside Han, Kana, Hangul, and
 Latin, such as Cyrillic or Arabic) have no tokens, and the sentence's `pos` entries are absent.
@@ -383,8 +394,8 @@ Known limits of tokens and POS:
 - `&` is `und` by the token language rule, so it never matches the CCONJ entry in the
   lexicon. The entry stays, and it is a known spec issue.
 - Korean UAX #29 tokenization cuts at *eojeol* (whitespace/punctuation) boundaries unless split by
-  `options.names` or `options.lexicon`; attached Korean case/topic particles stay with their stem,
-  and neither Japanese nor Korean has a Layer-2 POS lexicon (`pos: unsupported_language`).
+  `options.names` or `options.lexicon`; attached Korean case/topic particles stay with their stem
+  at the token level, while `options.enrich_morphology` decomposes them in `Token.morphemes`.
 - Scripts outside Han, Kana, Hangul, and Latin get no tokens (`segmentation: unsupported_language`).
 
 ## Relations

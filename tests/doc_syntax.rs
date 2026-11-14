@@ -579,11 +579,12 @@ fn unsupported_language_sentence_is_skipped_cleanly() {
                 "{text}"
             );
             assert!(
-                doc.unknown
+                !doc.unknown
                     .iter()
-                    .any(|u| u.layer == "pos" && u.reason == Reason::UnsupportedLanguage),
+                    .any(|u| u.reason == Reason::UnsupportedLanguage),
                 "{text}"
             );
+            assert!(doc.tokens.iter().any(|t| t.upos.is_some()), "{text}");
         }
     }
 }

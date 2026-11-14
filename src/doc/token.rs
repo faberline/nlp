@@ -6,7 +6,6 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use aho_corasick::{AhoCorasick, MatchKind};
-use icu_segmenter::{WordSegmenter, WordSegmenterBorrowed, options::WordBreakInvariantOptions};
 use jieba_rs::Jieba;
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -18,6 +17,7 @@ use crate::text::{TAIWAN_TERMS, default_jieba};
 pub(super) struct Piece {
     pub span: Span,
     pub opaque: Option<OpaqueKind>,
+    pub ja_lex: Option<crate::lexicon::ja::JaSegment>,
 }
 
 const CLITICS: &[&str] = &["'s", "'ll", "'re", "'ve", "'m", "'d"];
@@ -696,11 +696,6 @@ pub(super) fn token_lang(text: &str, ja_context: bool) -> Lang {
     }
 }
 
-fn ja_segmenter() -> WordSegmenterBorrowed<'static> {
-    static SEG: OnceLock<WordSegmenterBorrowed<'static>> = OnceLock::new();
-    *SEG.get_or_init(|| WordSegmenter::new_dictionary(WordBreakInvariantOptions::default()))
-}
-
 fn doc_jieba() -> &'static Jieba {
     static DOC_JIEBA: OnceLock<Jieba> = OnceLock::new();
     DOC_JIEBA.get_or_init(|| {
@@ -756,6 +751,7 @@ pub(super) struct TokenMatcher {
     ja_ko_extra: Option<Arc<AhoCorasick>>,
     normalize_traditional: bool,
     use_doc_jieba: bool,
+    first_party_zh_segmenter: bool,
 }
 
 impl TokenMatcher {
@@ -767,6 +763,7 @@ impl TokenMatcher {
             ja_ko_extra: None,
             normalize_traditional: false,
             use_doc_jieba: false,
+            first_party_zh_segmenter: false,
         }
     }
 
@@ -803,6 +800,7 @@ impl TokenMatcher {
                 ja_ko_extra: None,
                 normalize_traditional: options.normalize_traditional,
                 use_doc_jieba: true,
+                first_party_zh_segmenter: options.first_party_zh_segmenter,
             };
         }
 
@@ -823,6 +821,7 @@ impl TokenMatcher {
                 ja_ko_extra: cached.ja_ko_ac.as_ref().map(Arc::clone),
                 normalize_traditional: options.normalize_traditional,
                 use_doc_jieba: true,
+                first_party_zh_segmenter: options.first_party_zh_segmenter,
             };
         }
 
@@ -889,6 +888,7 @@ impl TokenMatcher {
             ja_ko_extra: ja_ko_ac,
             normalize_traditional: options.normalize_traditional,
             use_doc_jieba: true,
+            first_party_zh_segmenter: options.first_party_zh_segmenter,
         }
     }
 }
@@ -950,6 +950,7 @@ pub(super) fn tokenize_with_matcher(
             out.push(Piece {
                 span,
                 opaque: Some(kind),
+                ja_lex: None,
             });
         }
         cursor = span.end_char;
@@ -979,20 +980,30 @@ fn text_pieces(
     }
     index[s.len()] = n;
 
-    let mut ranges = Vec::new();
+    let mut ja_ranges: Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)> = Vec::new();
+    let mut simple_ranges: Vec<(usize, usize)> = Vec::new();
     for (a, b, kind) in runs(&s, ja_context) {
         match kind {
-            RunKind::Ja => ja_tokens(&s, a, b, matcher, &mut ranges),
-            RunKind::Zh => han_tokens(&s, a, b, matcher, &mut ranges),
-            RunKind::Other => other_tokens(&s, a, b, matcher, &mut ranges),
+            RunKind::Ja => ja_tokens(&s, a, b, matcher, &mut ja_ranges),
+            RunKind::Zh => {
+                simple_ranges.clear();
+                han_tokens(&s, a, b, matcher, &mut simple_ranges);
+                ja_ranges.extend(simple_ranges.drain(..).map(|(x, y)| (x, y, None)));
+            }
+            RunKind::Other => {
+                simple_ranges.clear();
+                other_tokens(&s, a, b, matcher, &mut simple_ranges);
+                ja_ranges.extend(simple_ranges.drain(..).map(|(x, y)| (x, y, None)));
+            }
         }
     }
-    out.extend(ranges.into_iter().map(|(a, b)| Piece {
+    out.extend(ja_ranges.into_iter().map(|(a, b, ja_lex)| Piece {
         span: Span {
             start_char: start + index[a],
             end_char: start + index[b],
         },
         opaque: None,
+        ja_lex,
     }));
 }
 
@@ -1032,14 +1043,20 @@ fn runs(s: &str, ja_context: bool) -> Vec<(usize, usize, RunKind)> {
         .collect()
 }
 
-/// Japanese CJK+Kana text: caller lexicon/names terms first, then ICU4X dictionary segmentation.
-fn ja_tokens(s: &str, a: usize, b: usize, matcher: &TokenMatcher, out: &mut Vec<(usize, usize)>) {
+/// Japanese CJK+Kana text: caller lexicon/names terms first, then first-party Japanese Viterbi segmentation.
+fn ja_tokens(
+    s: &str,
+    a: usize,
+    b: usize,
+    matcher: &TokenMatcher,
+    out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
+) {
     let run = &s[a..b];
     if let Some(ac) = &matcher.ja_ko_extra {
         let mut at = 0;
         for m in ac.find_iter(run) {
             ja_words(&run[at..m.start()], a + at, out);
-            out.push((a + m.start(), a + m.end()));
+            out.push((a + m.start(), a + m.end(), None));
             at = m.end();
         }
         ja_words(&run[at..], a + at, out);
@@ -1048,104 +1065,26 @@ fn ja_tokens(s: &str, a: usize, b: usize, matcher: &TokenMatcher, out: &mut Vec<
     }
 }
 
-fn is_hiragana(ch: char) -> bool {
-    ('\u{3040}'..='\u{309F}').contains(&ch)
-}
-
-const JA_PARTICLES: &[char] = &['は', 'が', 'を', 'に', 'で', 'と', 'も'];
-const JA_STOLEN_ADVERBS_DEMONSTRATIVES: &[&str] = &[
-    "まるで",
-    "まさに",
-    "まだ",
-    "ただ",
-    "それ",
-    "これ",
-    "あれ",
-    "どれ",
-    "そこ",
-    "ここ",
-    "どこ",
-    "そう",
-    "こう",
-    "どう",
-    "なぜ",
-    "すぐ",
-    "もう",
-    "みな",
-    "まず",
-    "また",
-];
-
-fn ja_words(stretch: &str, base: usize, out: &mut Vec<(usize, usize)>) {
+fn ja_words(
+    stretch: &str,
+    base: usize,
+    out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
+) {
     if stretch.is_empty() {
         return;
     }
-    let mut initial: Vec<(usize, usize)> = Vec::new();
-    let mut prev = 0;
-    for end in ja_segmenter().segment_str(stretch) {
-        if end > prev {
-            initial.push((prev, end));
-            prev = end;
-        }
+    let chars: Vec<char> = stretch.chars().collect();
+    let mut byte_offs = Vec::with_capacity(chars.len() + 1);
+    for (b, _) in stretch.char_indices() {
+        byte_offs.push(b);
     }
-    if prev < stretch.len() {
-        initial.push((prev, stretch.len()));
-    }
+    byte_offs.push(stretch.len());
 
-    let mut i = 0;
-    let out_start = out.len();
-    while i < initial.len() {
-        if i > 0
-            && i + 1 < initial.len()
-            && stretch[initial[i - 1].0..initial[i - 1].1]
-                .chars()
-                .any(char::is_alphanumeric)
-        {
-            let (a0, b0) = initial[i];
-            let (a1, b1) = initial[i + 1];
-            let t0 = &stretch[a0..b0];
-            let t1 = &stretch[a1..b1];
-            let mut t0_chars = t0.chars();
-            if let (Some(p_char), Some(c1), None) =
-                (t0_chars.next(), t0_chars.next(), t0_chars.next())
-                && JA_PARTICLES.contains(&p_char)
-                && is_hiragana(c1)
-                && t1.chars().next().is_some_and(is_hiragana)
-            {
-                let mid = a0 + p_char.len_utf8();
-                let rest = &stretch[mid..b1];
-                if let Some(&kw) = JA_STOLEN_ADVERBS_DEMONSTRATIVES
-                    .iter()
-                    .find(|&&w| rest.starts_with(w))
-                {
-                    out.push((base + a0, base + mid));
-                    let kw_end = mid + kw.len();
-                    out.push((base + mid, base + kw_end));
-                    if kw_end < b1 {
-                        let tail = &stretch[kw_end..b1];
-                        let mut tail_prev = 0;
-                        for end in ja_segmenter().segment_str(tail) {
-                            if end > tail_prev {
-                                out.push((base + kw_end + tail_prev, base + kw_end + end));
-                                tail_prev = end;
-                            }
-                        }
-                        if tail_prev < tail.len() {
-                            out.push((base + kw_end + tail_prev, base + b1));
-                        }
-                    }
-                    i += 2;
-                    continue;
-                }
-            }
-        }
-        let (a, b) = initial[i];
-        out.push((base + a, base + b));
-        i += 1;
+    for seg in crate::lexicon::ja::segment_ja(&chars, 0) {
+        let start_b = base + byte_offs[seg.span.start_char];
+        let end_b = base + byte_offs[seg.span.end_char];
+        out.push((start_b, end_b, Some(seg)));
     }
-    debug_assert_eq!(out[out_start].0, base);
-    debug_assert_eq!(out.last().unwrap().1, base + stretch.len());
-    debug_assert!(out[out_start..].windows(2).all(|w| w[0].1 == w[1].0));
 }
 
 /// Non-CJK/Kana text: protect Hangul caller terms first when Hangul is present, then `word_ranges`.
@@ -1188,6 +1127,21 @@ fn han_tokens(s: &str, a: usize, b: usize, matcher: &TokenMatcher, out: &mut Vec
 
 fn han_words(text: &str, base: usize, matcher: &TokenMatcher, out: &mut Vec<(usize, usize)>) {
     if text.is_empty() {
+        return;
+    }
+    if matcher.first_party_zh_segmenter {
+        let chars: Vec<char> = text.chars().collect();
+        let mut byte_offs = Vec::with_capacity(chars.len() + 1);
+        for (b, _) in text.char_indices() {
+            byte_offs.push(b);
+        }
+        byte_offs.push(text.len());
+        for sp in crate::lexicon::zh::segment_zh(&chars, 0, &[]) {
+            out.push((
+                base + byte_offs[sp.start_char],
+                base + byte_offs[sp.end_char],
+            ));
+        }
         return;
     }
     if !matcher.normalize_traditional {

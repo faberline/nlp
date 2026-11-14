@@ -496,8 +496,8 @@ fn opaque_is_skipped() {
 fn unsupported_sentence() {
     use faberline_nlp::doc::{Lang, Reason};
 
-    // Japanese and Korean sentences segment and tokenize in Layers 1–2 (`pos` unsupported on
-    // lexical tokens), while Layer 3 skips them so no false-positive entities are emitted.
+    // Japanese and Korean sentences segment, tokenize, and POS-tag in Layers 1–2 (no
+    // `UnsupportedLanguage`), while Layer 3 skips them so no false-positive entities are emitted.
     for (text, expected_lang) in [
         ("こんにちは、3個です。", Lang::Ja),
         ("안녕하세요, 2026년 11월 13일 3개입니다.", Lang::Ko),
@@ -513,8 +513,9 @@ fn unsupported_sentence() {
         assert!(
             doc.unknown
                 .iter()
-                .any(|u| u.layer == "pos" && u.reason == Reason::UnsupportedLanguage)
+                .all(|u| u.reason != Reason::UnsupportedLanguage)
         );
+        assert!(doc.tokens.iter().any(|t| t.upos.is_some()));
     }
 
     // Truly unsupported script (Cyrillic) emits `segmentation` `UnsupportedLanguage` and no entities.

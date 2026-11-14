@@ -463,12 +463,12 @@ fn chains_scope_and_opaque() {
     assert!(
         !doc.unknown
             .iter()
-            .any(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
+            .any(|u| u.reason == Reason::UnsupportedLanguage)
     );
     assert!(
-        doc.unknown
+        doc.tokens
             .iter()
-            .any(|u| u.layer == "pos" && u.reason == Reason::UnsupportedLanguage)
+            .any(|t| t.lang == faberline_nlp::doc::Lang::Ja && t.upos.is_some())
     );
     assert!(rels(text).is_empty());
     assert_eq!(rel_unknown(text), ["But"]);
@@ -495,24 +495,19 @@ fn chains_scope_and_opaque() {
     );
     assert!(rel_unknown(text).is_empty());
     // A mixed JA sentence starting with an English connector is skipped by Layer 7:
-    // no relation, no `relations` unknown, and `pos` (not `segmentation`) unsupported unknowns.
+    // no relation, no `relations` unknown, and no `UnsupportedLanguage` unknowns.
     let text = "It works. But これはテストです。";
     let doc = analyze(text);
     assert!(
         !doc.unknown
             .iter()
-            .any(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
+            .any(|u| u.reason == Reason::UnsupportedLanguage)
     );
-    let pos_unsupported: Vec<Span> = doc
-        .unknown
-        .iter()
-        .filter(|u| u.layer == "pos" && u.reason == Reason::UnsupportedLanguage)
-        .map(|u| u.span)
-        .collect();
-    assert!(!pos_unsupported.is_empty());
-    assert!(pos_unsupported.iter().all(|sp| {
-        sp.start_char >= doc.segmentation.sentences[1].span.start_char
-            && sp.end_char <= doc.segmentation.sentences[1].span.end_char
+    assert!(doc.tokens.iter().any(|t| {
+        t.lang == faberline_nlp::doc::Lang::Ja
+            && t.upos.is_some()
+            && t.span.start_char >= doc.segmentation.sentences[1].span.start_char
+            && t.span.end_char <= doc.segmentation.sentences[1].span.end_char
     }));
     assert!(rels(text).is_empty());
     assert!(rel_unknown(text).is_empty());

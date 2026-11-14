@@ -427,6 +427,7 @@ fn options_serde_backwards_compatibility() {
         mask_editorial: true,
         normalize_traditional: true,
         lexicon: vec!["青竹木劍".to_owned()],
+        ..Options::default()
     };
     let val = serde_json::to_value(&full).unwrap();
     assert_eq!(

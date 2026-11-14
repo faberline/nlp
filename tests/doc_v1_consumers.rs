@@ -210,12 +210,13 @@ fn ja_and_ko_segment_in_doc_v1_while_zh_consumers_stay_unchanged() {
         );
         assert!(!doc.tokens.is_empty());
         assert!(
-            doc.unknown
+            !doc.unknown
                 .iter()
-                .any(|u| u.layer == "pos" && u.reason == Reason::UnsupportedLanguage),
+                .any(|u| u.reason == Reason::UnsupportedLanguage),
             "{:?}",
             doc.unknown
         );
+        assert!(doc.tokens.iter().any(|t| t.upos.is_some()));
         let result = analyzer.analyze(text, "");
         assert!(result.events.is_empty());
         let plain = analyze(text, "", &lexicon);

@@ -1139,7 +1139,7 @@ fn ja_tokenization_and_pos() {
     let doc_hello = analyze(hello);
     assert_eq!(doc_hello.segmentation.sentences[0].lang, Lang::Ja);
     assert!(doc_hello.unknown.iter().all(|u| u.layer != "segmentation"));
-    assert_eq!(show(hello), ["こんにちは/U", "。/PUNCT"]);
+    assert_eq!(show(hello), ["こんにちは/INTJ", "。/PUNCT"]);
     assert_eq!(doc_hello.tokens[0].lang, Lang::Ja);
     assert_eq!(doc_hello.tokens[1].lang, Lang::Und);
     check_invariants(hello);
@@ -1166,10 +1166,10 @@ fn ja_tokenization_and_pos() {
     for tok in &doc.tokens {
         if tok.upos.is_none() {
             assert_eq!(tok.lang, Lang::Ja);
-            assert_eq!(
+            assert!(matches!(
                 pos_reason(&doc, tok.span),
-                Some(Reason::UnsupportedLanguage)
-            );
+                Some(Reason::Ambiguous | Reason::NoModel)
+            ));
         }
     }
 
@@ -1204,7 +1204,7 @@ fn ja_tokenization_and_pos() {
     assert_eq!(yakusoku.upos, None);
     assert_eq!(
         pos_reason(&doc_para, yakusoku.span),
-        Some(Reason::UnsupportedLanguage)
+        Some(Reason::Ambiguous)
     );
     assert!(doc_para.entities.is_empty());
     check_invariants(para);
@@ -1241,11 +1241,11 @@ fn ko_tokenization_and_pos() {
     assert_eq!(
         show(t),
         [
-            "서울역에서/U",
+            "서울역에서/PROPN",
             "3/NUM",
-            "권의/U",
-            "책을/U",
-            "샀다/U",
+            "권의/NOUN",
+            "책을/NOUN",
+            "샀다/VERB",
             "./PUNCT",
         ]
     );
@@ -1255,11 +1255,8 @@ fn ko_tokenization_and_pos() {
             assert_eq!(tok.lang, Lang::Und);
         } else {
             assert_eq!(tok.lang, Lang::Ko);
-            assert_eq!(tok.upos, None);
-            assert_eq!(
-                pos_reason(&doc, tok.span),
-                Some(Reason::UnsupportedLanguage)
-            );
+            assert!(tok.upos.is_some());
+            assert_eq!(pos_reason(&doc, tok.span), None);
         }
     }
     check_invariants(t);
@@ -1310,7 +1307,7 @@ fn ko_tokenization_and_pos() {
     let price = "가격은 ￦1,000이다.";
     assert_eq!(
         show(price),
-        ["가격은/U", "￦/SYM", "1,000/NUM", "이다/U", "./PUNCT"]
+        ["가격은/NOUN", "￦/SYM", "1,000/NUM", "이다/A", "./PUNCT"]
     );
     check_invariants(price);
 }

@@ -2,8 +2,8 @@
   "schema": "nlp.lexicon.receipt.v1",
   "date": "2026-11-14",
   "binary_format": "FNLPLX01",
-  "binary_bytes": 15124952,
-  "total_entries": 350341,
+  "binary_bytes": 15125939,
+  "total_entries": 350361,
   "total_rules": 1389,
   "variants": {
     "zh-Hant": 69474,
@@ -11,7 +11,7 @@
     "en-US": 12591,
     "en-GB": 12648,
     "en": 41158,
-    "ja": 70765,
+    "ja": 70785,
     "ko": 69983
   },
   "rules": {
@@ -39,9 +39,9 @@
     },
     {
       "path": "lexicon/data/ja.tsv",
-      "entries": 70765,
-      "bytes": 2915135,
-      "sha256": "15273124a8524e52a9f7c058a0a1011c9d7751cc44da3aa45a88e27d69f65808"
+      "entries": 70785,
+      "bytes": 2916152,
+      "sha256": "c8796e7e2c6e02b25f848816ce2dd6263be7c5be5b88573bd050e639f3574331"
     },
     {
       "path": "lexicon/data/ja_inflect.tsv",
@@ -127,6 +127,6 @@
       "license_file": "LICENSE-FABERLINE-FIRST-PARTY-MIT.txt"
     }
   ],
-  "lexicon_bin_bytes": 15124952,
-  "lexicon_bin_sha256": "4ebbff88f97df862a16022b69cb7b4997748061ce742bb5dc7b8e35a7477b852"
+  "lexicon_bin_bytes": 15125939,
+  "lexicon_bin_sha256": "0dfe8abc48d12494bf6066da45e926ecc1f7f4cf3ceceb0e664292a883a45d94"
 }

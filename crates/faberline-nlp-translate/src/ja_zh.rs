@@ -150,8 +150,13 @@ pub(crate) fn translate_ja_sentence(
     let mut prev_concessive_dou = false;
     let mut in_kuseni_follow = false;
     let mut in_toshitemo_follow = false;
+    let mut in_noni_follow = false;
+    let mut had_noni_in_sentence = false;
     let mut had_comm_event_in_sentence = false;
+    let sentence_has_work_return = atoms_has_any(&atoms, &["帰る", "帰っ", "帰り"])
+        && atoms_has_any(&atoms, &["仕事", "残業", "会社", "会議"]);
     let mut mirative_opening = false;
+    let mut in_proportional_follow = false;
     let mut sentence_topic_pronoun: Option<&'static str> = None;
     let mut sonomono_antecedent: Option<String> = None;
     let mut skip_next_seg = false;
@@ -397,6 +402,9 @@ pub(crate) fn translate_ja_sentence(
                     && trimmed_atoms
                         .last()
                         .is_some_and(|a| !a.is_locked && a.surface == "のに");
+                if cur_ends_noni {
+                    had_noni_in_sentence = true;
+                }
                 let cur_is_subordinate = !cur_ends_kuseni
                     && !cur_ends_noni
                     && trimmed_atoms.last().is_some_and(|a| {
@@ -449,6 +457,7 @@ pub(crate) fn translate_ja_sentence(
                     if let Some(p) = trailing_punct {
                         out.push_str(&localize_punct(p));
                     }
+                    in_proportional_follow = true;
                     let tgt_end = out.chars().count();
                     seg_target_spans.push((
                         *span,
@@ -502,8 +511,12 @@ pub(crate) fn translate_ja_sentence(
                     in_concessive_follow: prev_concessive_dou,
                     in_kuseni_follow,
                     in_toshitemo_follow,
+                    in_noni_follow,
+                    had_noni_in_sentence,
                     had_comm_event_in_sentence,
+                    sentence_has_work_return,
                     mirative_opening,
+                    in_proportional_follow,
                     sentence_topic_pronoun,
                     sonomono_antecedent: sonomono_antecedent.clone(),
                 };
@@ -536,7 +549,9 @@ pub(crate) fn translate_ja_sentence(
                 } else if !cur_is_subordinate {
                     in_kuseni_follow = false;
                 }
+                in_noni_follow = cur_ends_noni;
                 in_toshitemo_follow = cur_ends_toshitemo;
+                in_proportional_follow = false;
 
                 let next_starts_with_contrast =
                     segments.get(seg_idx + 1).is_some_and(|nx| match nx {
@@ -1345,10 +1360,22 @@ struct ClauseDiscourseCtx {
     in_concessive_follow: bool,
     in_kuseni_follow: bool,
     in_toshitemo_follow: bool,
+    in_noni_follow: bool,
+    had_noni_in_sentence: bool,
     had_comm_event_in_sentence: bool,
+    sentence_has_work_return: bool,
     mirative_opening: bool,
+    in_proportional_follow: bool,
     sentence_topic_pronoun: Option<&'static str>,
     sonomono_antecedent: Option<String>,
+}
+
+fn atoms_has_any(atoms: &[Atom], targets: &[&str]) -> bool {
+    atoms.iter().any(|a| {
+        !a.is_locked
+            && (targets.contains(&a.surface.as_str())
+                || a.lemma.as_deref().is_some_and(|l| targets.contains(&l)))
+    })
 }
 
 fn detect_clause_topic_pronoun(atoms: &[Atom]) -> Option<&'static str> {
@@ -3559,7 +3586,11 @@ fn translate_clause_bunsetsus(
                 "ながら" | "つつ" => sconj_prefix = Some("一邊"),
                 "ても" | "でも" => sconj_prefix = Some("即使"),
                 "としても" => {
-                    sconj_prefix = Some("就算");
+                    sconj_prefix = Some(if raw_clause.contains("仮に") {
+                        "即使"
+                    } else {
+                        "就算"
+                    });
                     is_toshitemo_clause = true;
                 }
                 "くせに" => sconj_prefix = Some("明明"),
@@ -3718,7 +3749,7 @@ fn translate_clause_bunsetsus(
     }
 
     if is_toshitemo_clause {
-        adverbs.retain(|a| !matches!(a.as_str(), "如果" | "就算" | "萬一"));
+        adverbs.retain(|a| !matches!(a.as_str(), "如果" | "就算" | "萬一" | "即使"));
         connectors.retain(|c| !matches!(c.as_str(), "如果" | "就算" | "萬一" | "即使"));
     }
 
@@ -4012,9 +4043,52 @@ fn translate_clause_bunsetsus(
         verb_core = "感到驚訝".to_owned();
     }
 
-    // Passive patient promotion: when passive has no overt subject and has an `を` object, promote `objs` before `被`.
-    if passive_agent_needed && subjects.is_empty() && !objs.is_empty() {
+    // Passive patient promotion: when passive has no overt subject and has an `を` object, promote `objs` before `被`,
+    // except for ditransitive / assignment verbs (`仕事を頼まれる` -> `被交代工作`, `会議を入れられる` -> `被安排會議`).
+    let is_ditransitive_assign = predicates.iter().any(|b| {
+        b.atoms.iter().any(|a| {
+            !a.is_locked
+                && matches!(
+                    a.lemma.as_deref().unwrap_or(a.surface.as_str()),
+                    "頼む" | "入れる" | "任せる" | "命じる" | "指示する" | "求める"
+                )
+        })
+    });
+    if passive_agent_needed && !is_ditransitive_assign && subjects.is_empty() && !objs.is_empty() {
         subjects.append(&mut objs);
+    }
+    if passive_agent_needed {
+        let has_tanomu = predicates.iter().any(|b| {
+            b.atoms.iter().any(|a| {
+                !a.is_locked && (a.lemma.as_deref() == Some("頼む") || a.surface.starts_with("頼"))
+            })
+        });
+        let has_ireru = predicates.iter().any(|b| {
+            b.atoms.iter().any(|a| {
+                !a.is_locked
+                    && (a.lemma.as_deref() == Some("入れる") || a.surface.starts_with("入れ"))
+            })
+        });
+        if has_tanomu
+            && objs
+                .iter()
+                .any(|o| o.contains("工作") || o.contains("業務") || o.contains("事"))
+        {
+            verb_core = "交代".to_owned();
+        } else if has_ireru
+            && objs.iter().any(|o| {
+                o.contains("會議") || o.contains("預定") || o.contains("行程") || o.contains("班")
+            })
+        {
+            verb_core = "安排".to_owned();
+        }
+    }
+    if verb_core == "進展"
+        && subjects
+            .iter()
+            .any(|s| s.contains("計畫") || s.contains("計画"))
+    {
+        verb_core = "進行".to_owned();
     }
 
     // Purpose-of-motion `[ActionNoun に] + [出かける / 行く / 来る]` -> `出門旅行` / `去購物`
@@ -4165,16 +4239,19 @@ fn translate_clause_bunsetsus(
         iobjs = kept_iobjs;
     }
 
-    // Promote `に` complements to direct objects for verbs like `気づく` (`發現`), `かかる` (`取決於`), `拍車をかける` (`加劇`).
-    let promotes_ni_to_obj = matches!(verb_core.as_str(), "取決於" | "加劇")
+    // Promote `に` complements to direct objects for verbs like `気づく` (`發現`), `かかる` (`取決於`), `拍車をかける` (`加劇`), `つながる` (`帶來`), `対応` (`應對`).
+    let promotes_ni_to_obj = matches!(verb_core.as_str(), "取決於" | "加劇" | "帶來" | "應對")
         || predicates.iter().any(|b| {
             b.atoms.iter().any(|a| {
                 !a.is_locked
                     && (matches!(
                         a.lemma.as_deref().unwrap_or(a.surface.as_str()),
-                        "気づく" | "気付く"
+                        "気づく" | "気付く" | "つながる" | "繋がる" | "対応" | "対応する"
                     ) || a.surface.starts_with("気づ")
-                        || a.surface.starts_with("気付"))
+                        || a.surface.starts_with("気付")
+                        || a.surface.starts_with("つなが")
+                        || a.surface.starts_with("繋が")
+                        || a.surface.starts_with("対応"))
             })
         });
     if promotes_ni_to_obj && !passive_agent_needed {
@@ -4243,6 +4320,40 @@ fn translate_clause_bunsetsus(
         }
     }
 
+    if obliques
+        .iter()
+        .any(|o| o.case_particle.as_deref() == Some("より"))
+        && (verb_core.starts_with("變得") || verb_core.starts_with('變'))
+    {
+        let stem = verb_core
+            .strip_prefix("變得")
+            .or_else(|| verb_core.strip_prefix('變'))
+            .unwrap_or(&verb_core);
+        if stem == "忙碌" && obliques.iter().any(|o| o.text == "比平常") {
+            verb_core = "更忙".to_owned();
+        } else {
+            verb_core = format!("更{stem}");
+        }
+        if ctx.sentence_has_work_return && verb_core == "更晚" {
+            verb_core = "更晚下班".to_owned();
+        }
+    }
+    if ctx.had_noni_in_sentence {
+        for adv in &mut adverbs {
+            if adv == "結果" {
+                *adv = "結果反而".to_owned();
+            }
+        }
+        for conn in &mut connectors {
+            if conn == "結果" {
+                *conn = "結果反而".to_owned();
+            }
+        }
+    }
+    if ctx.in_proportional_follow && verb_core.starts_with("容易") {
+        verb_core = format!("就越{verb_core}");
+    }
+
     // Assemble SVO order:
     let mut parts: Vec<String> = Vec::new();
     if matches!(sconj_prefix, Some("一邊" | "一" | "明明")) {
@@ -4259,8 +4370,26 @@ fn translate_clause_bunsetsus(
         parts.extend(subjects);
     }
 
-    if ctx.in_kuseni_follow && sconj_prefix.is_none() {
+    if (ctx.in_kuseni_follow || ctx.in_noni_follow) && sconj_prefix.is_none() {
         parts.push("卻".to_owned());
+    }
+
+    let has_front_modal = !front_modals.is_empty();
+    let mut manner_adverbs = Vec::new();
+    if !has_front_modal {
+        parts.append(&mut temporal_others);
+        for adv in adverbs {
+            if matches!(
+                adv.as_str(),
+                "突然" | "結果" | "結果反而" | "終究" | "最後" | "總算"
+            ) {
+                parts.push(adv);
+            } else {
+                manner_adverbs.push(adv);
+            }
+        }
+    } else {
+        manner_adverbs = adverbs;
     }
 
     if passive_agent_needed && !iobjs.is_empty() {
@@ -4277,7 +4406,6 @@ fn translate_clause_bunsetsus(
     }
 
     // Place front modals (`請不要` / `不要` / `請` / `讓`), attaching causative causee right after `讓`.
-    let has_front_modal = !front_modals.is_empty();
     parts.extend(front_modals);
     if has_causative && !passive_agent_needed && !iobjs.is_empty() {
         for io in iobjs.drain(..) {
@@ -4307,8 +4435,9 @@ fn translate_clause_bunsetsus(
         }
     }
 
-    let _ = has_front_modal;
-    parts.extend(temporal_others);
+    if has_front_modal {
+        parts.extend(temporal_others);
+    }
     for o in obliques {
         let _ = o.is_instrument_de;
         if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
@@ -4320,12 +4449,12 @@ fn translate_clause_bunsetsus(
     }
     parts.extend(cause_prefixes);
     if ctx.in_concessive_follow
-        && !adverbs.iter().any(|x| x == "都")
+        && !manner_adverbs.iter().any(|x| x == "都")
         && !inner_pre_mods.iter().any(|x| x == "都")
     {
         parts.push("都".to_owned());
     }
-    parts.extend(adverbs);
+    parts.extend(manner_adverbs);
     parts.extend(pre_iobjs);
     parts.extend(others);
     parts.extend(inner_pre_mods);
@@ -4972,7 +5101,17 @@ fn normalize_ja_atoms(atoms: &[Atom]) -> Vec<Atom> {
                 let stem = a.surface.strip_suffix('く').unwrap_or(&a.surface);
                 format!("{stem}い")
             });
-            let adj_zh = translate_single_ja_term(&dict_form, Some(&dict_form), Some(Upos::Adj));
+            let adj_zh = if dict_form == "遅い"
+                && atoms.iter().any(|x| {
+                    matches!(
+                        x.surface.as_str(),
+                        "いつも" | "普段" | "より" | "時間" | "今日"
+                    ) || x.surface.starts_with('帰')
+                }) {
+                "晚".to_owned()
+            } else {
+                translate_single_ja_term(&dict_form, Some(&dict_form), Some(Upos::Adj))
+            };
             let zh = if adj_zh.chars().count() == 1 {
                 format!("變{adj_zh}")
             } else {
@@ -5084,6 +5223,356 @@ fn normalize_ja_atoms(atoms: &[Atom]) -> Vec<Atom> {
                 is_locked: true,
             });
             i += 1;
+            continue;
+        }
+
+        // 5a. Keigo humble `["ご"|"お", VN, "いたし"|"いたす"|"致し"|"致す", ("まし", "た" | "た")?]` -> `"向您{vn_zh}"` (+ `"た"`).
+        if !a.is_locked
+            && matches!(a.surface.as_str(), "ご" | "お")
+            && let Some(vn) = atoms.get(i + 1)
+            && !vn.is_locked
+            && matches!(vn.upos, Some(Upos::Noun | Upos::Verb))
+            && let Some(ita) = atoms.get(i + 2)
+            && !ita.is_locked
+            && matches!(ita.surface.as_str(), "いたし" | "いたす" | "致し" | "致す")
+        {
+            let vn_zh =
+                translate_single_ja_term(&vn.surface, vn.lemma.as_deref(), Some(Upos::Noun));
+            let (consumed, emit_past) = if atoms
+                .get(i + 3)
+                .is_some_and(|x| !x.is_locked && x.surface == "まし")
+                && atoms
+                    .get(i + 4)
+                    .is_some_and(|x| !x.is_locked && x.surface == "た")
+            {
+                (5usize, true)
+            } else if atoms
+                .get(i + 3)
+                .is_some_and(|x| !x.is_locked && x.surface == "た")
+            {
+                (4usize, true)
+            } else {
+                (3usize, false)
+            };
+            let v_zh = format!("向您{vn_zh}");
+            out.push(Atom {
+                span: Span {
+                    start_char: a.span.start_char,
+                    end_char: ita.span.end_char,
+                },
+                surface: v_zh.clone(),
+                lemma: Some(v_zh),
+                upos: Some(Upos::Verb),
+                doc_tok_idx: ita.doc_tok_idx,
+                head: ita.head,
+                deprel: ita.deprel.clone(),
+                is_locked: true,
+            });
+            if emit_past {
+                let ta_span = atoms[i + consumed - 1].span;
+                out.push(Atom {
+                    span: ta_span,
+                    surface: "た".to_owned(),
+                    lemma: Some("た".to_owned()),
+                    upos: Some(Upos::Aux),
+                    doc_tok_idx: None,
+                    head: None,
+                    deprel: String::new(),
+                    is_locked: false,
+                });
+            }
+            i += consumed;
+            continue;
+        }
+
+        // 5b. `[Noun, "そのもの", "の", "優劣"]` and `[Noun, "そのもの"]`.
+        if !a.is_locked
+            && a.upos == Some(Upos::Noun)
+            && let Some(s1) = atoms.get(i + 1)
+            && !s1.is_locked
+            && s1.surface == "そのもの"
+        {
+            let n_zh = translate_single_ja_term(&a.surface, a.lemma.as_deref(), a.upos);
+            if let Some(s2) = atoms.get(i + 2)
+                && !s2.is_locked
+                && s2.surface == "の"
+                && let Some(s3) = atoms.get(i + 3)
+                && !s3.is_locked
+                && s3.surface == "優劣"
+            {
+                let zh = format!("{n_zh}本身孰優孰劣");
+                out.push(Atom {
+                    span: Span {
+                        start_char: a.span.start_char,
+                        end_char: s3.span.end_char,
+                    },
+                    surface: zh.clone(),
+                    lemma: Some(zh),
+                    upos: Some(Upos::Noun),
+                    doc_tok_idx: a.doc_tok_idx,
+                    head: a.head,
+                    deprel: a.deprel.clone(),
+                    is_locked: true,
+                });
+                i += 4;
+                continue;
+            }
+            let zh = format!("{n_zh}本身");
+            out.push(Atom {
+                span: Span {
+                    start_char: a.span.start_char,
+                    end_char: s1.span.end_char,
+                },
+                surface: zh.clone(),
+                lemma: Some(zh),
+                upos: Some(Upos::Noun),
+                doc_tok_idx: a.doc_tok_idx,
+                head: a.head,
+                deprel: a.deprel.clone(),
+                is_locked: true,
+            });
+            i += 2;
+            continue;
+        }
+
+        // 5c. `[Noun|Adv, "的", "に"|"な"]` (`全面的に`->`完全`, `意図的に`->`刻意`, `長期的な`->`長期的`).
+        if !a.is_locked
+            && matches!(a.upos, Some(Upos::Noun | Upos::Adv))
+            && !matches!(a.surface.as_str(), "私" | "彼" | "彼女" | "あなた")
+            && let Some(teki) = atoms.get(i + 1)
+            && !teki.is_locked
+            && teki.surface == "的"
+            && let Some(tail) = atoms.get(i + 2)
+            && !tail.is_locked
+            && matches!(tail.surface.as_str(), "に" | "な")
+        {
+            let base_zh = translate_single_ja_term(&a.surface, a.lemma.as_deref(), a.upos);
+            if tail.surface == "に" {
+                let zh = if a.surface == "全面" {
+                    "完全".to_owned()
+                } else if a.surface == "意図" {
+                    "刻意".to_owned()
+                } else if base_zh.ends_with('地') {
+                    base_zh
+                } else {
+                    format!("{base_zh}地")
+                };
+                out.push(Atom {
+                    span: Span {
+                        start_char: a.span.start_char,
+                        end_char: tail.span.end_char,
+                    },
+                    surface: zh.clone(),
+                    lemma: Some(zh),
+                    upos: Some(Upos::Adv),
+                    doc_tok_idx: a.doc_tok_idx,
+                    head: a.head,
+                    deprel: a.deprel.clone(),
+                    is_locked: true,
+                });
+            } else {
+                let zh = if base_zh.ends_with('的') {
+                    base_zh
+                } else {
+                    format!("{base_zh}的")
+                };
+                out.push(Atom {
+                    span: Span {
+                        start_char: a.span.start_char,
+                        end_char: tail.span.end_char,
+                    },
+                    surface: zh.clone(),
+                    lemma: Some(zh),
+                    upos: Some(Upos::Adj),
+                    doc_tok_idx: a.doc_tok_idx,
+                    head: a.head,
+                    deprel: a.deprel.clone(),
+                    is_locked: true,
+                });
+            }
+            i += 3;
+            continue;
+        }
+
+        // 5d. `[Noun, "どおり"|"通り"]` (`予定どおり`->`如期`, else `按照{N}`).
+        if !a.is_locked
+            && a.upos == Some(Upos::Noun)
+            && let Some(next) = atoms.get(i + 1)
+            && !next.is_locked
+            && matches!(next.surface.as_str(), "どおり" | "通り")
+        {
+            let zh = if a.surface == "予定" {
+                "如期".to_owned()
+            } else {
+                let n_zh = translate_single_ja_term(&a.surface, a.lemma.as_deref(), a.upos);
+                format!("按照{n_zh}")
+            };
+            out.push(Atom {
+                span: Span {
+                    start_char: a.span.start_char,
+                    end_char: next.span.end_char,
+                },
+                surface: zh.clone(),
+                lemma: Some(zh),
+                upos: Some(Upos::Adv),
+                doc_tok_idx: a.doc_tok_idx,
+                head: a.head,
+                deprel: a.deprel.clone(),
+                is_locked: true,
+            });
+            i += 2;
+            continue;
+        }
+
+        // 5e. `["その", Adj, "さ"]` -> `"其珍貴"`/`"其{adj}"`, and `[Adj, "さ"]` -> `"珍貴"`/`"{adj}"`.
+        if !a.is_locked
+            && a.surface == "その"
+            && let Some(adj) = atoms.get(i + 1)
+            && !adj.is_locked
+            && adj.upos == Some(Upos::Adj)
+            && let Some(sa) = atoms.get(i + 2)
+            && !sa.is_locked
+            && sa.surface == "さ"
+        {
+            let zh = if adj.surface == "大切" {
+                "其珍貴".to_owned()
+            } else {
+                let adj_zh =
+                    translate_single_ja_term(&adj.surface, adj.lemma.as_deref(), Some(Upos::Adj));
+                format!("其{adj_zh}")
+            };
+            out.push(Atom {
+                span: Span {
+                    start_char: a.span.start_char,
+                    end_char: sa.span.end_char,
+                },
+                surface: zh.clone(),
+                lemma: Some(zh),
+                upos: Some(Upos::Noun),
+                doc_tok_idx: adj.doc_tok_idx,
+                head: adj.head,
+                deprel: adj.deprel.clone(),
+                is_locked: true,
+            });
+            i += 3;
+            continue;
+        }
+        if !a.is_locked
+            && a.upos == Some(Upos::Adj)
+            && let Some(sa) = atoms.get(i + 1)
+            && !sa.is_locked
+            && sa.surface == "さ"
+        {
+            let zh = if a.surface == "大切" {
+                "珍貴".to_owned()
+            } else {
+                translate_single_ja_term(&a.surface, a.lemma.as_deref(), Some(Upos::Adj))
+            };
+            out.push(Atom {
+                span: Span {
+                    start_char: a.span.start_char,
+                    end_char: sa.span.end_char,
+                },
+                surface: zh.clone(),
+                lemma: Some(zh),
+                upos: Some(Upos::Noun),
+                doc_tok_idx: a.doc_tok_idx,
+                head: a.head,
+                deprel: a.deprel.clone(),
+                is_locked: true,
+            });
+            i += 2;
+            continue;
+        }
+
+        // 5f. Contextual `"件"` (preceded by Verb/Aux/Det/`の`, not Num) -> `"事項"`.
+        if !a.is_locked && a.surface == "件" && i > 0 {
+            let prev = &atoms[i - 1];
+            let preceded_by_num = prev.upos == Some(Upos::Num)
+                || (!prev.is_locked && prev.surface.chars().all(|c| c.is_ascii_digit()));
+            let preceded_by_clause_or_det =
+                matches!(prev.upos, Some(Upos::Verb | Upos::Aux | Upos::Det))
+                    || matches!(
+                        prev.surface.as_str(),
+                        "の" | "た" | "だ" | "この" | "その" | "あの" | "例"
+                    )
+                    || out
+                        .last()
+                        .is_some_and(|x| matches!(x.upos, Some(Upos::Verb | Upos::Aux)));
+            if !preceded_by_num && preceded_by_clause_or_det {
+                out.push(Atom {
+                    span: a.span,
+                    surface: "事項".to_owned(),
+                    lemma: Some("事項".to_owned()),
+                    upos: Some(Upos::Noun),
+                    doc_tok_idx: a.doc_tok_idx,
+                    head: a.head,
+                    deprel: a.deprel.clone(),
+                    is_locked: true,
+                });
+                i += 1;
+                continue;
+            }
+        }
+
+        // 5g. `["手遅れ", "に", "なっ", "て", "いる"|"いた"]` -> locked Verb `"太遲了"`.
+        if i + 4 < atoms.len()
+            && !atoms[i..i + 5].iter().any(|x| x.is_locked)
+            && atoms[i].surface == "手遅れ"
+            && atoms[i + 1].surface == "に"
+            && atoms[i + 2].surface == "なっ"
+            && atoms[i + 3].surface == "て"
+            && matches!(atoms[i + 4].surface.as_str(), "いる" | "いた")
+        {
+            out.push(Atom {
+                span: Span {
+                    start_char: a.span.start_char,
+                    end_char: atoms[i + 4].span.end_char,
+                },
+                surface: "太遲了".to_owned(),
+                lemma: Some("太遲".to_owned()),
+                upos: Some(Upos::Verb),
+                doc_tok_idx: atoms[i + 2].doc_tok_idx,
+                head: atoms[i + 2].head,
+                deprel: atoms[i + 2].deprel.clone(),
+                is_locked: true,
+            });
+            i += 5;
+            continue;
+        }
+
+        // 5h. `[Verb, "がち", "だ"|"です"]` -> locked Verb `"容易{v_zh}"`.
+        if !a.is_locked
+            && a.upos == Some(Upos::Verb)
+            && let Some(gachi) = atoms.get(i + 1)
+            && !gachi.is_locked
+            && gachi.surface == "がち"
+            && let Some(cop) = atoms.get(i + 2)
+            && !cop.is_locked
+            && matches!(cop.surface.as_str(), "だ" | "です")
+        {
+            let v_zh = if a.surface == "やめ"
+                || matches!(a.lemma.as_deref(), Some("やめる" | "やむ"))
+            {
+                "停止".to_owned()
+            } else {
+                translate_single_ja_term(&a.surface, a.lemma.as_deref(), Some(Upos::Verb))
+            };
+            let zh = format!("容易{v_zh}");
+            out.push(Atom {
+                span: Span {
+                    start_char: a.span.start_char,
+                    end_char: cop.span.end_char,
+                },
+                surface: zh.clone(),
+                lemma: Some(zh),
+                upos: Some(Upos::Verb),
+                doc_tok_idx: a.doc_tok_idx,
+                head: a.head,
+                deprel: a.deprel.clone(),
+                is_locked: true,
+            });
+            i += 3;
             continue;
         }
 
@@ -5313,10 +5802,12 @@ fn is_embedded_acl_arg(b: &Bunsetsu) -> bool {
     if b.atoms.is_empty() {
         return false;
     }
-    if b.case_particle
-        .as_deref()
-        .is_some_and(|cp| matches!(cp, "が" | "を" | "で" | "に" | "へ" | "から" | "まで"))
-    {
+    if b.case_particle.as_deref().is_some_and(|cp| {
+        matches!(
+            cp,
+            "が" | "を" | "で" | "に" | "へ" | "から" | "まで" | "より"
+        )
+    }) {
         return true;
     }
     if b.case_particle.as_deref() == Some("も")
@@ -5502,9 +5993,11 @@ fn merge_adnominal_bunsetsus(
                         continue;
                     }
 
-                    // Pure `N の` modifier (e.g. `美咲の`, `机の`, `3冊の`).
+                    // Pure `N の` modifier (e.g. `美咲の`, `机の`, `3冊の`, `今回の`).
                     mod_b.atoms.pop();
-                    let omit_de = starts_with_num_counter(&mod_b) || is_spatial_head_bunsetsu(&b);
+                    let omit_de = starts_with_num_counter(&mod_b)
+                        || is_spatial_head_bunsetsu(&b)
+                        || mod_b.atoms.first().is_some_and(|a| a.surface == "今回");
                     let mut mod_str = render_bunsetsu_np(&mod_b, target);
                     if !mod_str.is_empty() && !omit_de && !mod_str.ends_with('的') {
                         mod_str.push('的');
@@ -5543,7 +6036,14 @@ fn merge_adnominal_bunsetsus(
                         .any(|a| !a.surface.starts_with("[[PH") && a.upos == Some(Upos::Verb));
                     if !has_verb {
                         // Simple prenominal adjective / determiner (`優しいキス`, `甘い吐息`, `これまでの`).
-                        let mut adj_str = render_bunsetsu_np(&pred_b, target);
+                        let mut adj_str = if pred_b.atoms.len() == 1
+                            && !pred_b.atoms[0].is_locked
+                            && pred_b.atoms[0].surface == "新しい"
+                        {
+                            "新".to_owned()
+                        } else {
+                            render_bunsetsu_np(&pred_b, target)
+                        };
                         if adj_str == "以往的"
                             && b.atoms.first().is_some_and(|a| {
                                 a.is_locked
@@ -5551,6 +6051,11 @@ fn merge_adnominal_bunsetsus(
                             })
                         {
                             adj_str = "以往".to_owned();
+                        } else if pred_b.atoms.len() == 1
+                            && !pred_b.atoms[0].is_locked
+                            && pred_b.atoms[0].surface == "新しい"
+                        {
+                            // Keep concise `新` before noun (`新技術`).
                         } else if !adj_str.is_empty() && !adj_str.ends_with('的') {
                             adj_str.push('的');
                         }
@@ -5579,6 +6084,23 @@ fn merge_adnominal_bunsetsus(
                     );
                     while inner.ends_with('了') {
                         inner.pop();
+                    }
+                    if b.atoms.len() >= 2
+                        && !b.atoms[0].is_locked
+                        && b.atoms[0].surface == "こと"
+                        && matches!(b.case_particle.as_deref(), Some("を" | "が" | "は" | "も"))
+                    {
+                        b.atoms[0] = Atom {
+                            span: b.atoms[0].span,
+                            surface: inner.clone(),
+                            lemma: Some(inner),
+                            upos: Some(Upos::Noun),
+                            doc_tok_idx: None,
+                            head: None,
+                            deprel: String::new(),
+                            is_locked: true,
+                        };
+                        continue;
                     }
                     if !inner.is_empty() && !inner.ends_with('的') {
                         inner.push('的');
@@ -5689,10 +6211,10 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
                 if matches!(a.surface.as_str(), "は" | "も")
                     && matches!(
                         case_particle.as_deref(),
-                        Some("に" | "で" | "へ" | "から" | "まで" | "と")
+                        Some("に" | "で" | "へ" | "から" | "まで" | "と" | "より")
                     )
                 {
-                    // Preserve semantic case marker when focused by topic/inclusive particle (`日本では`, `場とも`).
+                    // Preserve semantic case marker when focused by topic/inclusive particle (`日本では`, `場とも`, `以前よりも`).
                 } else if matches!(
                     a.surface.as_str(),
                     "が" | "は"
@@ -5708,6 +6230,10 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
                         | "の"
                         | "も"
                         | "によって"
+                        | "につきまして"
+                        | "につきましては"
+                        | "について"
+                        | "に関して"
                 ) {
                     case_particle = Some(a.surface.clone());
                 }
@@ -5826,7 +6352,16 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
                     BunsetsuRole::IObj
                 }
             }
-            "で" | "から" | "まで" | "へ" | "より" | "によって" => BunsetsuRole::Obl,
+            "で"
+            | "から"
+            | "まで"
+            | "へ"
+            | "より"
+            | "によって"
+            | "につきまして"
+            | "につきましては"
+            | "について"
+            | "に関して" => BunsetsuRole::Obl,
             "と" | "とも" => BunsetsuRole::Other,
             _ => BunsetsuRole::Other,
         }
@@ -6121,8 +6656,23 @@ fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant) -> String {
         Some("から") => format!("從{core}"),
         Some("まで") => format!("到{core}"),
         Some("へ") => format!("往{core}"),
-        Some("より") => format!("比{core}"),
+        Some("より") => {
+            let has_mo = b
+                .atoms
+                .iter()
+                .any(|a| !a.is_locked && matches!(a.surface.as_str(), "も" | "よりも"));
+            if matches!(core.as_str(), "總是" | "平常") {
+                "比平常".to_owned()
+            } else if has_mo {
+                format!("比{core}更加")
+            } else {
+                format!("比{core}")
+            }
+        }
         Some("によって") => format!("在{core}下"),
+        Some("につきまして" | "につきましては" | "について" | "に関して") => {
+            format!("關於{core}")
+        }
         _ => core,
     }
 }
@@ -6146,6 +6696,10 @@ fn is_case_or_sfp_to_strip(s: &str) -> bool {
             | "とも"
             | "や"
             | "によって"
+            | "につきまして"
+            | "につきましては"
+            | "について"
+            | "に関して"
             | "から"
             | "まで"
             | "へ"
@@ -6320,7 +6874,23 @@ fn synthesize_predicate_complex(
             !a.is_locked
                 && matches!(
                     a.lemma.as_deref().unwrap_or(a.surface.as_str()),
-                    "残る" | "知る" | "持つ" | "住む" | "着る" | "似る" | "結婚する"
+                    "残る"
+                        | "知る"
+                        | "持つ"
+                        | "住む"
+                        | "着る"
+                        | "似る"
+                        | "結婚する"
+                        | "間違う"
+                        | "間違える"
+                )
+        });
+    let is_stative_cogn_neg_past = has_neg_past
+        && all_atoms.iter().any(|a| {
+            !a.is_locked
+                && matches!(
+                    a.lemma.as_deref().unwrap_or(a.surface.as_str()),
+                    "知る" | "わかる" | "分かる"
                 )
         });
     let is_progress_suppress_te_iru = has_te_iru
@@ -6366,6 +6936,8 @@ fn synthesize_predicate_complex(
     }
     if is_copula_neg {
         pre.push("不是".to_owned());
+    } else if is_stative_cogn_neg_past {
+        pre.push("不".to_owned());
     } else if has_neg_past || (has_te_iru && has_neg) {
         pre.push("沒有".to_owned());
     } else if has_neg {
@@ -6446,11 +7018,16 @@ fn synthesize_predicate_complex(
         }
     }
 
-    if is_stative_te_iru
-        && let Some(last) = cores.last_mut()
-        && last == "留下"
-    {
-        *last = "留".to_owned();
+    if is_stative_te_iru && let Some(last) = cores.last_mut() {
+        if last == "留下" {
+            *last = "留".to_owned();
+        } else if all_atoms.iter().any(|a| {
+            !a.is_locked
+                && (a.lemma.as_deref() == Some("間違う")
+                    || (a.surface.starts_with("間違っ") && a.lemma.as_deref() != Some("間違える")))
+        }) {
+            *last = "有錯".to_owned();
+        }
     }
 
     let is_sole_existential_neg = cores.is_empty()
@@ -6480,13 +7057,20 @@ fn synthesize_predicate_complex(
     }
 
     if has_te_shimau {
-        post.push("掉了".to_owned());
+        if all_atoms
+            .iter()
+            .any(|a| matches!(a.lemma.as_deref(), Some("なる" | "なる_adj")))
+        {
+            post.push("了".to_owned());
+        } else {
+            post.push("掉了".to_owned());
+        }
     } else if is_stative_te_iru
         && !has_neg
         && !has_neg_past
         && !matches!(
             cores.last().map(String::as_str),
-            Some("知道" | "認識" | "了解" | "像" | "相似" | "結婚")
+            Some("知道" | "認識" | "了解" | "像" | "相似" | "結婚" | "有錯" | "錯" | "弄錯")
         )
     {
         post.push(if target == TargetVariant::ZhHans {
@@ -6635,6 +7219,7 @@ fn is_discourse_connector(s: &str) -> bool {
             | "けど"
             | "ところが"
             | "だから"
+            | "それなのに"
             | "そのため"
             | "したがって"
             | "ゆえに"
@@ -6690,6 +7275,11 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
         // Formal / literary collocations
         "努力を重ねる" | "努力を重ね" => "累積努力",
         "拍車をかける" | "拍車をかけ" => "加劇",
+        // Spoken & analytical idioms
+        "嘘をつく" | "嘘をつき" | "嘘をつい" => "說謊",
+        "電話する" | "電話し" => "打電話",
+        "ゲームする" | "ゲームし" | "ゲームをする" => "玩遊戲",
+        "責任を持つ" | "責任を持っ" | "責任を持ち" => "承擔責任",
         // Everyday greetings & idioms
         "おはようございます" => "早安",
         "おはよう" => "早安",

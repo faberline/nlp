@@ -1,0 +1,42 @@
+[package]
+name = "faberline-nlp-translate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Offline deterministic and seq2seq post-NLP translation over nlp.doc.v1 and nlp.narrative.v1"
+publish = false
+
+[features]
+default = ["narrative"]
+narrative = ["dep:faberline-nlp-narrative"]
+onnx = ["faberline-nlp/onnx", "dep:tract-onnx", "dep:tokenizers"]
+coreml = [
+    "faberline-nlp/coreml",
+    "dep:tokenizers",
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-core-ml",
+    "dep:tempfile",
+]
+
+[dependencies]
+aho-corasick.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+faberline-nlp.workspace = true
+faberline-nlp-narrative = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+tract-onnx = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true, optional = true }
+objc2-core-ml = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -26,7 +26,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-MANIFEST_PATH = ROOT / "models/manifest.json"
+MODELS_DIR = ROOT / "crates" / "faberline-nlp" / "models"
+MANIFEST_PATH = MODELS_DIR / "manifest.json"
 MODEL_ID = "doc-syntax-v1"
 REQUIRED_FILES = ["model.onnx", "model.mlmodel", "tokenizer.json", "expected.json"]
 
@@ -135,7 +136,7 @@ def main() -> None:
         out["pinned"] = pin_manifest(args.stage_dir, args.receipt)
     if args.install:
         src = args.stage_dir / MODEL_ID
-        dst = ROOT / "models" / MODEL_ID
+        dst = MODELS_DIR / MODEL_ID
         dst.mkdir(parents=True, exist_ok=True)
         for name in REQUIRED_FILES:
             shutil.copy2(src / name, dst / name)

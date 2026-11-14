@@ -1,0 +1,25 @@
+[package]
+name = "faberline-nlp-narrative"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Source-linked narrative event and timeline graph over nlp.doc.v1"
+publish = false
+
+[features]
+default = []
+onnx = ["faberline-nlp/onnx"]
+coreml = ["faberline-nlp/coreml"]
+
+[dependencies]
+aho-corasick.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+faberline-nlp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

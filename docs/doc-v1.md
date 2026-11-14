@@ -6,13 +6,17 @@ emoji) that sentences never split, and the entities found by rules. It uses no m
 network.
 
 CLI: `nlp_doc` reads UTF-8 text from stdin and prints one JSON document plus a newline. With no
-flags it runs `analyze_document` (rules only, no model). Optional flags `--name <SURFACE>` and
-`--lexicon <SURFACE>` (repeatable), `--mask-editorial`, `--normalize-traditional`,
-`--morphology`, and `--first-party-dict` populate `Options`. With `--models <DIR>` and optional
-`--backend <coreml|coreml-fast|onnx>` (defaulting to
-`coreml` on macOS when compiled in, otherwise `onnx`), it runs `analyze_document_with_model` to
-populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prints
-`nlp_doc: <error>` to stderr and exits with 1.
+flags it runs `analyze_document` (Layers 1–3 and 7, rules only, no model). With `--all-layers`
+(alias `--cpu-syntax`), it sets `options.cpu_syntax = true` and runs the pure-Rust CPU pipeline for
+Layers 1–7 (`syntax`, `frames`, `coref`, `zero_mentions`) without external model files. Optional
+flags `--name <SURFACE>` and `--lexicon <SURFACE>` (repeatable), `--mask-editorial`,
+`--normalize-traditional`, `--morphology`, `--legacy-jieba`, and `--first-party-dict` (compatible
+flag; first-party Chinese lexicon segmentation is now the default) populate `Options`. With
+`--models <DIR>` and optional `--backend <coreml|coreml-fast|onnx>` (defaulting to `coreml` on macOS
+when compiled in, otherwise `onnx`), it runs `analyze_document_with_model` to populate Layer 4
+(`syntax`) and automatically runs Layers 5–6 (`frames`, `coref`, `zero_mentions`) whenever
+`syntax` is non-empty. On a read or model integrity/runtime error, it prints `nlp_doc: <error>` to
+stderr and exits with 1.
 
 ## Schema
 
@@ -31,15 +35,20 @@ populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prin
   "tokens": [{"span": {...}, "lang": "en", "sentence": 0, "upos": "PRON"}],
   "entities": [{"kind": "date", "span": {...}, "sentence": 0, "value": "2026-11-10"}],
   "syntax": [{"token": 0, "sentence": 0, "span": {...}, "head": null, "deprel": "root", "score": 0.94}],
+  "frames": [{"predicate": 0, "sentence": 0, "span": {...}, "args": [{"role": "ARG0", "head": 1, "span": {...}}]}],
+  "coref": [[{"start_token": 1, "end_token": 1, "head_token": 1, "sentence": 0, "span": {...}}]],
+  "zero_mentions": [{"zero_at": 4, "sentence": 1, "span": {...}, "role": "nsubj", "antecedent": {...}}],
   "relations": [{"kind": "sequence", "level": "clause", "connector": {...}, "arg1": {...}, "arg2": {...}}],
   "unknown": [{"layer": "segmentation", "span": {...}, "reason": "unsupported_language"}]
 }
 ```
 
 - `options.names` and `options.lexicon` are optional (`Vec<String>`, omitted when empty);
-  `options.mask_editorial`, `options.normalize_traditional`, `options.enrich_morphology`, and
-  `options.first_party_zh_segmenter` are optional booleans (`false` by default, omitted when
-  `false`), so `Options::default()` serializes to `{}`.
+  `options.mask_editorial`, `options.normalize_traditional`, `options.enrich_morphology`,
+  `options.first_party_zh_segmenter`, `options.legacy_jieba`, and `options.cpu_syntax` are optional
+  booleans (`false` by default, omitted when `false`), so `Options::default()` serializes to `{}`.
+  First-party `zh-Hant` + `zh-Hans` lexicon Viterbi segmentation is enabled by default unless
+  `legacy_jieba` is `true` (`first_party_zh_segmenter` is retained as a backwards-compatible flag).
 - `lang` is one of `zh`, `en`, `ja`, `ko`, `mixed`, `und`.
 - `reason` is one of `no_model`, `ambiguous`, `low_confidence`, `unsupported_language`,
   `not_applicable`. Layer 1 produces `unsupported_language` (`layer: "segmentation"`) when
@@ -53,15 +62,17 @@ populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prin
   `entity.sentence` and `syntax.sentence` index `sentences`. `syntax.token` and `syntax.head`
   index `tokens` (`head` is `null` for `"root"`).
 - All lists are sorted by start. `unknown` is sorted by span start, then end, then layer.
-- `entities` and `relations` are always present, `[]` when nothing is found. `syntax` is omitted
-  when empty (`analyze_document` never emits it). When present, the order of the lists is
-  `segmentation`, `tokens`, `entities`, `syntax`, `relations`, `unknown`.
+- `entities` and `relations` are always present, `[]` when nothing is found. `syntax`, `frames`,
+  `coref`, and `zero_mentions` are omitted when empty (`analyze_document` with
+  `Options::default()` never emits them). When present, the order of the lists is `segmentation`,
+  `tokens`, `entities`, `syntax`, `frames`, `coref`, `zero_mentions`, `relations`, `unknown`.
 
 ## Offsets
 
 Spans count Unicode scalar values from the start of the exact input. `start_char` is included
-and `end_char` is excluded. Every span is trimmed of whitespace at both ends (`char::is_whitespace`),
-and empty spans are dropped. `\r` is only whitespace. A line ends at `\n`.
+and `end_char` is excluded. Every span is trimmed at both ends of whitespace (`char::is_whitespace`)
+and invisible format spaces (`U+200B`, `U+2060`, `U+FEFF`, while preserving `U+200D` ZWJ and
+`U+FE0F` VS16), and empty spans are dropped. `\r` is only whitespace. A line ends at `\n`.
 
 ## Rules
 
@@ -91,8 +102,10 @@ Scan each paragraph left to right. A sentence ends after the characters named be
      `"Really?" She left.` splits).
    - Otherwise, a CJK terminator in the run always ends the sentence, and an ASCII-only run ends
      the sentence only if the next char is whitespace or the paragraph ends.
-2. A single ASCII `.`, then any closers `」』”’）)"'»]】〕〉》］｝`. The sentence ends only if the
-   next char is whitespace or the paragraph ends, and none of the following non-split guards hold:
+2. A single ASCII `.`, then any closers `」』”’）)"'»]】〕〉》］｝`. The sentence ends if it is a
+   tight halfwidth dot between a Han char or CJK closer (`） ) 】 ］ 〕 〉 》 」 』`) and a Han
+   char or CJK opener (`「 『 （ ( 【`, such as `项目.它主要`), or if the next char is whitespace or
+   the paragraph ends and none of the following non-split guards hold:
    - **Korean dotted dates**: `<1..=4 ASCII digits>. <1..=2 ASCII digits>.` (and
      `<1..=4 ASCII digits>. <1..=2 ASCII digits>. <1..=2 ASCII digits>.`, such as `2026. 11. 13.`
      or `11. 13.`). An inner dot between `<1..=4 digits>` and `' '` + `<1..=2 digits>.` never ends
@@ -157,18 +170,23 @@ Let `sup = han + kana + hangul + latin`:
 - `sup + other == 0`: `und`, no `unknown`.
 - `other >= sup`: `und`, and the sentence gets
   `{"layer": "segmentation", "span": sentence.span, "reason": "unsupported_language"}`.
-- Otherwise (`other < sup`), active language families are:
-  - `has_ja = kana > 0 || (han > 0 && (has_ja_exclusive || (context_ja && hangul == 0)))`
-  - `has_zh = han > 0 && !has_ja`
+- Otherwise (`other < sup`), let `eff_han = han - han_in_parens` when `hangul > 0` (so Korean
+  parenthetical `(Hanja)` glosses such as `도덕성(道德性)` do not trigger Han), and `han`
+  otherwise. Active language families are:
+  - `has_ja = kana > 0 || (eff_han > 0 && (has_ja_exclusive || (context_ja && hangul == 0)))`
+  - `has_zh = eff_han > 0 && !has_ja`
   - `has_ko = hangul > 0`
   - `has_en = latin > 0`
-- If 2 or more families are active: `mixed`; otherwise `ja`, `ko`, `zh`, or `en`.
+- If 2 or more families are active: `mixed`, **except** that isolated 1-letter ASCII Latin
+  variables in `ja`- or `ko`-dominant prose (`速さが V である`, `점 P 에서`, with `latin <= 2`,
+  `latin * 5 <= han + kana + hangul`, and `han + kana >= 4` for `ja` or `hangul >= 4` for `ko`)
+  keep `ja` or `ko`; otherwise `ja`, `ko`, `zh`, or `en`.
 - **Paragraph-context disambiguation (`context_ja`)**: a paragraph containing any Kana or
   Japanese-exclusive Kanji sets `para_ja = true`, so pure-Kanji sentences inside that paragraph
   (such as `「約束。」` in `「約束。」彼は言った。`) and pure-Kanji clauses inside a Japanese
   sentence inherit `ja` instead of flipping to `zh`. Standalone pure-Han paragraphs without a
-  Japanese cue default to `zh`. Hangul + Hanja without Kana (`한국어(韓國語)`) has `hangul > 0`, so
-  `context_ja && hangul == 0` is false and it tags as `mixed`.
+  Japanese cue default to `zh`. Hangul + non-parenthetical Hanja without Kana (`한국어 韓國語`) has
+  `hangul > 0` and `eff_han > 0`, so it tags as `mixed`.
 
 ## Opaque spans
 
@@ -259,7 +277,9 @@ order, and a match continues after its span:
    line, with at least one char between (without that closing run, the whole backtick run is plain
    text); plus raw/unclosed inline HTML/SGML tags (`<P`, `</P`, `<p>`, `</p>`, `<br/>`, `<!go`,
    `<!over`), raw/corrupted HTML entities (`&qut;`, `&quot;`, `&nbsp;`, `&amp;`, `&lt;`, `&gt;`),
-   Unicode Private Use Area runs (`U+E000..=U+F8FF`), and — when `options.mask_editorial` is
+   Unicode Private Use Area runs (`U+E000..=U+F8FF`, length `>= 1` when `options.mask_editorial` is
+   `true`, or length `>= 2` when `false` so single-char PUA gaiji stay plain text instead of `code`),
+   and — when `options.mask_editorial` is
    `true` — inline scraper tags and mixed-bracket/trailing editorial postscripts (`/首/發`,
    `(..#..#..)`, `(…求月票…）`). When `options.mask_editorial` is `true`, inline HTML/entity/PUA
    and editorial noise spans are masked silently to spaces (`silent_noise`) so they do not emit
@@ -322,12 +342,13 @@ Each supported sentence is split by these rules, in order:
    conjugated verbs/adjectives into UD-aligned morpheme tokens such as `買っ` + `た`).
 3. **Chinese Han runs** (maximal runs of `is_han` outside Japanese context) are matched against the
    Taiwan term list (`臺灣`, `資料庫`, `記憶體` and so on) plus pure-Han entries of
-   `options.lexicon` and `options.names`, longest match first. When `options.first_party_zh_segmenter`
-   is `true`, the text between matches is segmented by `faberline_nlp::lexicon::zh::segment_zh`
-   (first-party `zh-Hant` + `zh-Hans` Viterbi DP); otherwise it is segmented by `doc_jieba()`
+   `options.lexicon` and `options.names`, longest match first. By default (when `options.legacy_jieba`
+   is `false`), the text between matches is segmented by `faberline_nlp::lexicon::zh::segment_zh`
+   (first-party `zh-Hant` + `zh-Hans` lexicon Viterbi DP); when `options.legacy_jieba` is `true`
+   (`--legacy-jieba`), it falls back to `doc_jieba()`
    (jieba with HMM plus classical self-pronouns and generic genre nouns such as
    `在下`, `妾身`, `老夫`, `老身`, `貧道`, `本座`, `儲物袋`, `築基丹`). When
-   `options.normalize_traditional` is `true` (and `first_party_zh_segmenter` is `false`), unmatched Han slices are projected through `t2s` to
+   `options.normalize_traditional` is `true` (and `options.legacy_jieba` is `true`), unmatched Han slices are projected through `t2s` to
    Simplified characters for dictionary lookup (skipping a single scraper anti-censorship infix in
    `['丅', '丵', '灬', '堊', '冇']` when sandwiched between two Han chars so `少丅女` / `長堊老` stays
    one contiguous original-text span with zero offset drift), sliced back by exact scalar index onto
@@ -442,6 +463,17 @@ follows). Multi-word English entries use exactly one space.
 | sequence | arg1 | 先 (correlate 然後 然后 接著 接着 再 隨後 随后 隨即 随即 緊接著 紧接着 旋即) | none |
 | parallel | arg1 | 一方面 (correlate 另一方面) | none |
 
+Japanese and Korean explicit discourse connectors are also supported (requiring token/particle boundary checks after the connector):
+
+| kind | connector sits in | ja | ko |
+|---|---|---|---|
+| sequence | arg2 | それから その後 次いで 続いて やがて 次に | 그러고 나서 다음으로 이어서 그 후 그 뒤 |
+| cause (result) | arg2 | したがって そのため ゆえに だから よって | 그러므로 따라서 그래서 그 결과 이로 인해 |
+| contrast | arg2 | それにもかかわらず にもかかわらず しかしながら けれども ところが しかし けれど 一方で だが とはいえ | 그럼에도 불구하고 그렇지만 그러나 하지만 반면에 그럼에도 |
+| parallel | arg2 | ならびに さらに しかも 加えて その上 また | 뿐만 아니라 게다가 더구나 아울러 또한 |
+| cause (reason) | arg1 | なぜなら というのも | 왜냐하면 |
+| condition | arg1 | 万が一 もしも もし 仮に | 만약에 만일에 만약 만일 가령 |
+
 The correlate lists are shared by both languages. Every cause opener (`因為`, `因为`, `because`) takes
 `所以 因此 so therefore thus`, and every condition opener (`如果 假如 要是 若是 若`, `if`) takes
 `就 那麼 那么 便 then`.
@@ -522,9 +554,9 @@ connector's span, and no relation, in these cases:
   on its own: `先，然後吃飯。` gives a sequence for `然後` with `arg1` = `先`.
 - A discourse marker: `So,`.
 
-A sentence with Layer-1 `unsupported_language` or containing Japanese or Korean script (`lang` of
-`ja` or `ko`, or Kana / Hangul / Japanese-exclusive Kanji) has no relations, and no relation uses
-it as an argument. A new paragraph also breaks the sentence relation.
+A sentence with Layer-1 `unsupported_language` has no relations, and no relation uses it as an
+argument. A new paragraph also breaks the sentence relation. Japanese (`ja`) and Korean (`ko`)
+sentences are supported by the explicit discourse connector scanner above.
 
 ### Relations limits
 
@@ -557,9 +589,8 @@ it as an argument. A new paragraph also breaks the sentence relation.
 
 ## Entities (layer 3)
 
-`entities` lists entities found by rules in `zh`, `en`, and `zh`/`en` `mixed` sentences. A sentence
-with Layer-1 `unsupported_language` or containing Japanese or Korean script gets no entities (so
-Chinese measure-word and date rules never fire on Japanese Kanji or Korean text). Each entity has a
+`entities` lists entities found by rules in `zh`, `en`, `ja`, `ko`, and `mixed` sentences. Only a
+sentence with Layer-1 `unsupported_language` gets no entities. Each entity has a
 `kind`, a `span`, the `sentence` index, and `value` and `unit` when the kind has them. Kinds:
 `number`, `date`, `relative_date`, `time`, `quantity`, `url`, `email`, `name`. The list is sorted
 by start.
@@ -663,6 +694,14 @@ Scanners, run at each position of a supported sentence:
 - Name: each entry of `options.names`, matched exactly and case-sensitively, leftmost-longest. An
   ASCII name must not touch an ASCII letter or digit on either side. An entry that contains a
   line feed or NUL (`\u{0}`) is ignored.
+- Japanese and Korean (`ja` / `ko`) scanners: sentences tagged `ja` or `ko` (or containing Kana,
+  Hangul, or Japanese-exclusive Kanji) run dedicated `ja`/`ko` scanners for `Date` (Japanese
+  imperial eras `明治`/`大正`/`昭和`/`平成`/`令和` and `Y年M月D日`, Korean `Y년 M월 D일` and
+  dotted dates `YYYY. MM. DD.`), `RelativeDate` (`ja`/`ko` relative date expressions), `Time`
+  (`午前`/`午後` + `時`/`分`, `오전`/`오후` + `시`/`분`), `Quantity` (including Korean particle
+  trimming so attached particles such as `에서`/`을`/`를` do not block units), `Number`, `Url`,
+  `Email`, and `Name` (from `options.names` plus `PROPN` lexicon semantic classes on `ja`/`ko`
+  tokens).
 
 Overlap: entities never start or end inside an inline opaque span. Candidates are sorted by
 start, then longer first, then by priority: `name` 0, `email` and `url` 1, `quantity` 2, `time`
@@ -700,10 +739,10 @@ Known limits of entities:
 
 - Hard-wrapped Chinese text splits at each line break. Rule 4 only keeps a wrap when the next
   line starts lowercase Latin, so Chinese line wraps become sentence boundaries.
-- Japanese (`ja`) and Korean (`ko`) are segmented and tokenized in Layers 1–2 (`pos:
-  unsupported_language` on undecided lexical/particle tokens), and are skipped by Layers 3
-  (`entities`), 4 (`syntax`), and 7 (`relations`). Scripts outside Han, Kana, Hangul, and Latin are
-  `und` with `segmentation: unsupported_language`.
+- Japanese (`ja`) and Korean (`ko`) are supported in Layers 1–2, Layer 3 (`entities`), and Layer 7
+  (`relations`), and are skipped by Layer 4 (`syntax`, which targets `zh`, `en`, and `zh`/`en`
+  `mixed`). Scripts outside Han, Kana, Hangul, and Latin are `und` with
+  `segmentation: unsupported_language`.
 - Layer 2 has no statistical tagger. Its UPOS comes from the rules and the lexicon in
   "Tokens and POS". There is no model and no network.
 - Layer 7 (Relations) sees only connectors at the start of a clause. See "Relations limits".
@@ -891,12 +930,27 @@ manifest by a script (a later issue).
 
 ## Syntax (layer 4)
 
-`analyze_document_with_model(text, options, models_dir, backend)` runs Layers 1–3 and 7 first, then
-loads `SYNTAX_MODEL_ID` (`"doc-syntax-v1"`) on `backend` to decode Universal Dependencies v2 trees
-into `Document.syntax` and upgrade undecided Layer-2 `upos` tags. Callers that run many documents
-can verify and load the model once and call `analyze_document_with_loaded_model(text, options,
-model, tokenizer)` (or `doc::syntax::annotate`). Calling `analyze_document(text, options)` never
-runs a model and leaves `syntax` empty (omitted from JSON).
+There are two ways to populate Layer 4 (`Document.syntax` and upgraded `Token.upos`), both of
+which also automatically populate Layer 5 (`frames`) and Layer 6 (`coref`, `zero_mentions`)
+whenever `Document.syntax` is non-empty:
+
+1. **Pure-Rust CPU (`options.cpu_syntax = true` / `analyze_document_all_layers`)**:
+   `analyze_document_all_layers(text, options)` (or `analyze_document` with `cpu_syntax: true`, or
+   `nlp_doc --all-layers` / `nlp_novel_batch --all-layers`) runs `doc::syntax_cpu::annotate` on CPU
+   with zero external models. It disambiguates undecided `Token.upos` tags (clearing resolved
+   `"pos"` entries from `doc.unknown`) and emits single-root acyclic UD v2 trees via
+   `chu_liu_edmonds` across `zh` (`zh-Hant` + `zh-Hans`), `en`, `ja`, `ko`, and `mixed` (`zh/en`,
+   `ja/en`, `ko/en`), routing `ja`, `ko`, and Kana/Hangul-containing `mixed` sentences to
+   `doc::syntax_cpu_jako::annotate_sentence`.
+2. **Neural model (`analyze_document_with_model`)**:
+   `analyze_document_with_model(text, options, models_dir, backend)` runs Layers 1–3 and 7 first,
+   then loads `SYNTAX_MODEL_ID` (`"doc-syntax-v1"`) on `backend` to decode Universal Dependencies v2
+   trees into `Document.syntax` and upgrade undecided Layer-2 `upos` tags. Callers that run many
+   documents can verify and load the model once and call `analyze_document_with_loaded_model(text,
+   options, model, tokenizer)` (or `doc::syntax::annotate`).
+
+Calling `analyze_document(text, &Options::default())` leaves `syntax`, `frames`, `coref`, and
+`zero_mentions` empty (omitted from JSON).
 
 ### Language coverage (`en`, `zh-TW`, `zh-CN`, and `mixed`)
 
@@ -1000,8 +1054,9 @@ tensor with `C = 17 + max_len + 148` (`421` when `max_len = 256`):
 `nlp_novel_batch` runs resumable multi-worker `nlp.doc.v1` analysis over chapter bundles or a
 chapter manifest:
 
-- **Defaults**: enables `Options { mask_editorial: true, normalize_traditional: true, lexicon, .. }`
-  and pure-statistical two-pass corpus compound discovery (`--auto-lexicon`, opt-out
+- **Defaults**: enables `Options { mask_editorial: true, normalize_traditional: true, lexicon, .. }`,
+  optional `--all-layers` (alias `--cpu-syntax`, setting `options.cpu_syntax = true` for CPU Layers
+  4–6), and pure-statistical two-pass corpus compound discovery (`--auto-lexicon`, opt-out
   `--no-auto-lexicon`), scanning frequent high-PMI / high-accessor-variety 2–5 character Han
   compounds across chapters (`MIN_FREQ = 10` for 3–4 char proper names and `15` otherwise,
   `MIN_CHAP_DF = 3`, `MIN_AV = 3` at `min_pmi >= 5.5` else `4`) while pruning scraper anti-censorship
@@ -1018,6 +1073,34 @@ chapter manifest:
 - **Receipt structural counters**: `book_manifest_receipt.json` records `auto_lexicon_enabled`,
   `discovered_lexicon_count`, `zero_root_sentences`, and `orphan_syntax_arcs` alongside token,
   UPOS, syntax, entity, relation, and SHA-256 provenance metrics.
+
+## Semantic Frames (layer 5)
+
+`doc::frame::annotate(doc, text)` extracts deterministic predicate-argument `SemanticFrame`s into
+`Document.frames` across `zh`, `en`, `ja`, `ko`, and `mixed` whenever `Document.syntax` is
+non-empty:
+
+- **Predicates**: `VERB` and predicative `ADJ` tokens (excluding copular nominal heads, `amod`,
+  `aux`, `cop`, and `compound` verb/adjective pieces).
+- **Roles (`FrameRole`)**: `ARG0` (agent/subject, or agentive `obl` in passives), `ARG1`
+  (patient/object, `把`/`將` disposal `obl`, passive `nsubj`, unaccusative/predicative `nsubj`), and
+  `ARGM` (adjuncts such as `advmod`, `obl`, `advcl`, `xcomp`, `ccomp`, and extent/duration `obj`).
+- **Invariants**: each `FrameArg.head` is in the same sentence as `predicate`, `head != predicate`,
+  no `ADP`/`PART`/`case`/`mark` heads are emitted, and frames/args are deduplicated and sorted.
+
+## Coreference and Zero Mentions (layer 6)
+
+`doc::coref::annotate(doc, text)` runs a deterministic multi-sieve entity coreference resolver
+(`Document.coref`) and pro-drop zero-mention resolver (`Document.zero_mentions`) across `zh`, `en`,
+`ja`, `ko`, and `mixed` whenever `Document.syntax` is non-empty:
+
+- **Coreference (`Document.coref`)**: extracts maximal constituent NP mentions (`CorefMention` with
+  `start_token`, `end_token`, `head_token`, `sentence`, `span`) and clusters them via exact/canonical
+  head match, proper-name/alias match, and anaphoric pronoun/demonstrative resolution with Binding
+  Condition B and animacy/number/person agreement.
+- **Pro-drop zero mentions (`Document.zero_mentions`)**: resolves omitted `ZeroRole::Nsubj` and
+  `ZeroRole::Obj` arguments on `zh`, `ja`, `ko`, and `mixed` predicates (`zero_at`) to a prior
+  `CorefMention` `antecedent`.
 
 ## Readers of `nlp.doc.v1`
 

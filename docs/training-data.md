@@ -154,7 +154,7 @@ Notes:
 - **Result: 30 of 30 items valid, 0 invalid** (first run, no repair needed). Counts: 30 items,
   30 dependency trees valid, 0 invalid trees, 0 invalid frames, 0 invalid coreference clusters.
 - sha256 of `training/probe/probe_texts.jsonl`: 96e8a4e31daf36cb90024b619cf85fe1686f835f366b92b9a83b7742de5f6d0f
-- sha256 of `training/probe/annotations.jsonl`: 9c9c3bbe3e609e29126c0a0f9f4020051e5db61a278aa90ece677b86ac7e5ef7
+- sha256 of `training/probe/annotations.jsonl`: 7a7ddd82d63965c7a9565612758c9e529dbc3770a1ea3b7a4bfd48e0a3cb4f87
 
 Findings from the annotation work:
 
@@ -166,12 +166,11 @@ Findings from the annotation work:
   content part, so a model trained on these tokens learns the layer 2 errors. Issue #27 and the
   model issues should decide whether the training tokens are the layer 2 tokens as they are or
   corrected tokens.
-- p17 is the worst case. Layer 2 made `阿芳訂` one token, so the verb `訂` has no ARG0 frame
-  argument (the name is inside the verb token) and the coref mention `阿芳訂` spans a name and a
-  verb. I did not change layer 2 or the tokens. The item is flagged `layer2_token_error` with a
-  note, its dependency labels follow the token as given, and its frame and coref must not be
-  used for training. Other items with a bad token have a milder effect (the coref mention of p03
-  is `他馬上`, of p06 `它會`); they are not flagged.
+- p17 originally had `阿芳訂` merged as one token under legacy jieba-rs; after switching the
+  default Chinese segmenter to the first-party lexicon segmenter (`阿芳` | `訂`), p17 was
+  re-aligned with its `ARG0` frame and `coref` restored, and the `layer2_token_error` flag was
+  removed (0 flagged items remain). Other items were likewise re-aligned to the first-party
+  segmenter tokens.
 - Review of the first version (a second Sonnet session, all 30 items read, 14 zh, 11 en and 6
   mixed checked sentence by sentence): head and label errors were found in none of the checked
   sentences. About 9% of the frames (5 of about 58 predicates) were doubtful, mostly as a side

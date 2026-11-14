@@ -719,13 +719,14 @@ def main() -> None:
 
     # Also stage `test-tiny` alongside `doc-syntax-v1` in `/tmp/nlp-models-stage/` so any test
     # loading from `stage_dir` sees the complete repo manifest!
-    repo_manifest = json.loads((ROOT / "models/manifest.json").read_text(encoding="utf-8"))
+    nlp_models_dir = ROOT / "crates" / "faberline-nlp" / "models"
+    repo_manifest = json.loads((nlp_models_dir / "manifest.json").read_text(encoding="utf-8"))
     test_tiny_entry = next(m for m in repo_manifest["models"] if m["id"] == "test-tiny")
-    if (ROOT / "models/test-tiny").is_dir():
+    if (nlp_models_dir / "test-tiny").is_dir():
         dst_tiny = args.stage_dir / "test-tiny"
         if dst_tiny.exists():
             shutil.rmtree(dst_tiny)
-        shutil.copytree(ROOT / "models/test-tiny", dst_tiny)
+        shutil.copytree(nlp_models_dir / "test-tiny", dst_tiny)
 
     syntax_entry = build_doc_syntax_manifest_entry(model_out, args.receipt)
     staged_manifest = {

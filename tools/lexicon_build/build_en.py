@@ -28,10 +28,11 @@ WN_DICT_DIR = BUILD_TMP_DIR / "dict"
 VARCON_PATH = BUILD_TMP_DIR / "varcon.txt"
 CORPUS_PATH = SCRATCH_DIR / "corpora" / "en" / "en_corpus.jsonl"
 
-POS_RS_PATH = REPO_ROOT / "src" / "doc" / "pos.rs"
-POS_GOLD_PATH = REPO_ROOT / "tests" / "data" / "pos_gold.json"
-GOLD_LAYERS_PATH = REPO_ROOT / "tests" / "data" / "gold_layers4_6_v1.jsonl"
-OUT_TSV_PATH = REPO_ROOT / "lexicon" / "data" / "en.tsv"
+NLP_CRATE_ROOT = REPO_ROOT / "crates" / "faberline-nlp"
+POS_RS_PATH = NLP_CRATE_ROOT / "src" / "doc" / "pos.rs"
+POS_GOLD_PATH = NLP_CRATE_ROOT / "tests" / "data" / "pos_gold.json"
+GOLD_LAYERS_PATH = NLP_CRATE_ROOT / "tests" / "data" / "gold_layers4_6_v1.jsonl"
+OUT_TSV_PATH = NLP_CRATE_ROOT / "lexicon" / "data" / "en.tsv"
 
 WORD_RE = re.compile(r"^[a-z]+(?:[-'][a-z]+)*$")
 CLITICS = {"n't", "'ll", "'ve", "'re", "'m", "'s", "'d"}

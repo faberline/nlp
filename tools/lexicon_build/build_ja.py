@@ -21,8 +21,9 @@ SCRATCH_DIR = Path(
     "/Users/chrischeng/.gemini/antigravity/brain/"
     "fcdf5ec7-a63d-4308-93f6-0436229a04ea/scratch/lex_build_ja"
 )
-OUT_JA_TSV = REPO_ROOT / "lexicon" / "data" / "ja.tsv"
-OUT_INFLECT_TSV = REPO_ROOT / "lexicon" / "data" / "ja_inflect.tsv"
+NLP_CRATE_ROOT = REPO_ROOT / "crates" / "faberline-nlp"
+OUT_JA_TSV = NLP_CRATE_ROOT / "lexicon" / "data" / "ja.tsv"
+OUT_INFLECT_TSV = NLP_CRATE_ROOT / "lexicon" / "data" / "ja_inflect.tsv"
 
 TARGET_TOTAL_ENTRIES = 68000
 

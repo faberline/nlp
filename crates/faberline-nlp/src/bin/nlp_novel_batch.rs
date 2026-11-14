@@ -2742,7 +2742,7 @@ fn extract_timeline_cues(
             connector: Some(rel.connector),
             connector_text: text_for(rel.connector),
             correlate: rel.correlate,
-            correlate_text: rel.correlate.and_then(&text_for),
+            correlate_text: rel.correlate.and_then(text_for),
             arg1: Some(rel.arg1),
             arg2: Some(rel.arg2),
             clean_arg1_span: Some(clean_arg1),

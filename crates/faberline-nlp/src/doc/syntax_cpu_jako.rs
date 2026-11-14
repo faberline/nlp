@@ -334,6 +334,10 @@ const JA_CASE_PARTICLES: &[&str] = &[
     "ばかり",
     "など",
     "とか",
+    "につきまして",
+    "につきましては",
+    "について",
+    "に関して",
 ];
 
 const JA_DISCOURSE_PARTS: &[&str] = &[
@@ -402,6 +406,12 @@ const JA_AUX_WORDS: &[&str] = &[
     "なくちゃ",
     "すぎ",
     "ほしい",
+    "だった",
+    "じゃなかった",
+    "ではなかった",
+    "がち",
+    "にくい",
+    "やすい",
 ];
 
 const JA_COPULA_WORDS: &[&str] = &["だ", "です", "である", "でした", "でし", "だっ", "であり"];
@@ -510,6 +520,16 @@ const JA_ADVS: &[&str] = &[
     "激しく",
     "深く",
     "優しく",
+    "どうやって",
+    "どこまで",
+    "実際には",
+    "事前に",
+    "故意に",
+    "てっきり",
+    "せめて",
+    "別に",
+    "先日",
+    "改めて",
 ];
 
 const JA_CCONJS: &[&str] = &[
@@ -530,6 +550,7 @@ const JA_CCONJS: &[&str] = &[
     "ならびに",
     "ただし",
     "なお",
+    "それなのに",
 ];
 
 const JA_TRANSFER_VERBS: &[&str] = &[
@@ -669,6 +690,12 @@ fn infer_ja_upos(
         if prev_upos.is_none() || prev_upos == Some(Upos::Punct) {
             return Upos::Cconj;
         }
+        return Upos::Part;
+    }
+    if surf == "ものの" && matches!(prev_upos, Some(Upos::Verb | Upos::Adj | Upos::Aux)) {
+        return Upos::Sconj;
+    }
+    if matches!(surf, "んじゃない" | "んじゃないか") {
         return Upos::Part;
     }
 

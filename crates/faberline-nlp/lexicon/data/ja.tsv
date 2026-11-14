@@ -619,14 +619,14 @@
 いたい	ja	1161	ADJ	ADJ	-	-	infl=adj_i
 いたいたしい	ja	1017	ADJ	ADJ	-	-	infl=adj_i
 いたく	ja	878	ADV	ADV	-	-	-
-いたす	ja	1415	VERB	VERB	-	-	infl=godan_sa
+いたす	ja	450	VERB	VERB	-	-	infl=godan_sa
 いたずらっぽい	ja	1017	ADJ	ADJ	-	-	infl=adj_i
 いたずらに	ja	933	ADV	ADV	-	-	-
 いたたまらない	ja	1018	ADJ	ADJ	-	-	infl=adj_i
 いたたまれない	ja	1018	ADJ	ADJ	-	-	infl=adj_i
 いただきます	ja	927	INTJ	INTJ	-	-	-
-いただく	ja	1404	VERB	VERB	-	-	infl=godan_ka
-いただける	ja	1412	VERB	VERB	-	-	infl=ichidan
+いただく	ja	450	VERB	VERB	-	-	infl=godan_ka
+いただける	ja	450	VERB	VERB	-	-	infl=ichidan
 いたって	ja	934	ADV	ADV	-	-	-
 いたぶる	ja	1439	VERB	VERB	-	-	infl=godan_ra
 いたましい	ja	1017	ADJ	ADJ	-	-	infl=adj_i
@@ -4334,7 +4334,7 @@
 すておく	ja	1439	VERB	VERB	-	-	infl=godan_ka
 すてさる	ja	1439	VERB	VERB	-	-	infl=godan_ra
 すてる	ja	1440	VERB	VERB	-	-	infl=ichidan
-すでに	ja	791	ADV	ADV	-	已經	-
+すでに	ja	480	ADV	ADV	-	已經	-
 すなどる	ja	1439	VERB	VERB	-	-	infl=godan_ra
 すなわち	ja	780	-	ADV|CCONJ	-	亦即	-
 すねる	ja	1418	VERB	VERB	-	-	infl=ichidan
@@ -4554,7 +4554,7 @@
 せめさいなむ	ja	1439	VERB	VERB	-	-	infl=godan_ma
 せめたてる	ja	1439	VERB	VERB	-	-	infl=ichidan
 せめつける	ja	1439	VERB	VERB	-	-	infl=ichidan
-せめて	ja	669	ADV	ADV	-	-	-
+せめて	ja	500	ADV	ADV	-	至少	-
 せめのぼる	ja	1439	VERB	VERB	-	-	infl=godan_ra
 せめよせる	ja	1439	VERB	VERB	-	-	infl=ichidan
 せめよる	ja	1439	VERB	VERB	-	-	infl=godan_ra
@@ -4789,7 +4789,7 @@
 それとなく	ja	875	ADV	ADV	-	-	-
 それとも	ja	480	CCONJ	CCONJ	-	還是	-
 それどころか	ja	801	CCONJ	CCONJ	-	-	-
-それなのに	ja	480	CCONJ	CCONJ	-	儘管如此	-
+それなのに	ja	430	CCONJ	CCONJ	-	可是	-
 それなら	ja	789	CCONJ	CCONJ	-	-	-
 それなり	ja	875	ADV	ADV	-	-	-
 それに	ja	480	CCONJ	CCONJ	-	而且	-
@@ -5598,7 +5598,7 @@
 つとめる	ja	1437	VERB	VERB	-	-	infl=ichidan
 つどう	ja	1439	VERB	VERB	-	-	infl=godan_wa
 つどえる	ja	1439	VERB	VERB	-	-	infl=ichidan
-つながる	ja	1492	VERB	VERB	-	-	infl=godan_ra
+つながる	ja	550	VERB	VERB	-	帶來	infl=godan_ra
 つなぎとめる	ja	1439	VERB	VERB	-	-	infl=ichidan
 つなぎ止める	ja	1439	VERB	VERB	-	-	infl=ichidan
 つなぐ	ja	1430	VERB	VERB	-	-	infl=godan_ga
@@ -5764,7 +5764,7 @@
 てこずる	ja	1439	VERB	VERB	-	-	infl=godan_ra
 てごわい	ja	1018	ADJ	ADJ	-	-	infl=adj_i
 てずから	ja	875	ADV	ADV	-	-	-
-てっきり	ja	875	ADV	ADV	-	-	-
+てっきり	ja	500	ADV	ADV	-	一直以為	-
 てっす	ja	1439	VERB	VERB	-	-	infl=godan_sa
 てっする	ja	1436	VERB	VERB	-	-	infl=sahen
 てっとうてつび	ja	875	ADV	ADV	-	-	-
@@ -5920,7 +5920,7 @@
 とがめる	ja	1439	VERB	VERB	-	-	infl=ichidan
 とがらす	ja	1447	VERB	VERB	-	-	infl=godan_sa
 とがる	ja	1429	VERB	VERB	-	-	infl=godan_ra
-とき	ja	1553	-	NOUN|PROPN	-	-	-
+とき	ja	450	NOUN	NOUN	-	時	-
 ときあかす	ja	1439	VERB	VERB	-	-	infl=godan_sa
 ときあるく	ja	1439	VERB	VERB	-	-	infl=godan_ka
 ときおこす	ja	1439	VERB	VERB	-	-	infl=godan_sa
@@ -5930,7 +5930,7 @@
 ときとして	ja	873	ADV	ADV	-	-	-
 ときどき	ja	867	ADV	ADV	-	-	-
 ときに	ja	859	ADV	ADV	-	-	-
-ときには	ja	873	ADV	ADV	-	-	-
+ときには	ja	460	SCONJ	ADV|SCONJ	-	時	-
 ときはなす	ja	1439	VERB	VERB	-	-	infl=godan_sa
 ときはなつ	ja	1439	VERB	VERB	-	-	infl=godan_ta
 ときふせる	ja	1439	VERB	VERB	-	-	infl=ichidan
@@ -6263,7 +6263,7 @@
 どうや	ja	1207	-	ADV|NOUN	-	-	-
 どうやら	ja	745	ADV	ADV	-	-	-
 どぉ	ja	588	ADV	ADV	-	-	-
-どおり	ja	1112	-	ADV|NOUN	-	-	-
+どおり	ja	520	PART	NOUN|PART	-	按照	-
 どかす	ja	1439	VERB	VERB	-	-	infl=godan_sa
 どかっと	ja	875	ADV	ADV	-	-	-
 どかどか	ja	875	ADV	ADV	-	-	-
@@ -6684,7 +6684,7 @@
 にぎわす	ja	1440	VERB	VERB	-	-	infl=godan_sa
 にぎわせる	ja	1437	VERB	VERB	-	-	infl=ichidan
 にぎわわす	ja	1439	VERB	VERB	-	-	infl=godan_sa
-にくい	ja	867	ADJ	ADJ	-	-	infl=adj_i
+にくい	ja	520	AUX	ADJ|AUX	-	很難	infl=adj_i
 にくがる	ja	1439	VERB	VERB	-	-	infl=godan_ra
 にくたらしい	ja	1018	ADJ	ADJ	-	-	infl=adj_i
 にくにくしい	ja	1018	ADJ	ADJ	-	-	infl=adj_i
@@ -6742,10 +6742,10 @@
 にっちもさっちも	ja	875	ADV	ADV	-	-	-
 にっちゅう	ja	1228	-	ADV|NOUN	-	-	-
 にっと	ja	875	ADV	ADV	-	-	-
-について	ja	335	ADP	ADP	-	-	-
+について	ja	335	ADP	ADP	-	關於	-
 につかわしい	ja	1018	ADJ	ADJ	-	-	infl=adj_i
 につき	ja	878	ADP	ADP	-	-	-
-につきまして	ja	746	ADP	ADP	-	-	-
+につきまして	ja	450	ADP	ADP	-	關於	-
 につく	ja	1485	VERB	VERB	-	-	infl=godan_ka
 につけ	ja	901	ADP	ADP	-	-	-
 につける	ja	1396	VERB	VERB	-	-	infl=ichidan
@@ -6814,7 +6814,7 @@
 に従って	ja	711	ADP	ADP	-	-	-
 に詰まる	ja	1439	VERB	VERB	-	-	infl=godan_ra
 に関し	ja	701	ADP	ADP	-	-	-
-に関して	ja	666	ADP	ADP	-	-	-
+に関して	ja	480	ADP	ADP	-	關於	-
 に関しまして	ja	746	ADP	ADP	-	-	-
 に関します	ja	746	ADP	ADP	-	-	-
 に関する	ja	514	ADP	ADP	-	-	-
@@ -8326,7 +8326,7 @@
 へいそ	ja	1123	-	ADV|NOUN	-	-	-
 へいへい	ja	875	ADV	ADV	-	-	-
 へぇ	ja	875	INTJ	INTJ	-	-	-
-へえ	ja	875	INTJ	INTJ	-	-	-
+へえ	ja	500	INTJ	INTJ	-	喔	-
 へええ	ja	875	INTJ	INTJ	-	-	-
 へえッ	ja	875	INTJ	INTJ	-	-	-
 へえー	ja	875	INTJ	INTJ	-	-	-
@@ -9405,7 +9405,7 @@
 ものたらない	ja	1018	ADJ	ADJ	-	-	infl=adj_i
 ものたりない	ja	1017	ADJ	ADJ	-	-	infl=adj_i
 ものなれる	ja	1439	VERB	VERB	-	-	infl=ichidan
-ものの	ja	831	-	ADV|SCONJ	-	-	-
+ものの	ja	420	SCONJ	ADV|SCONJ	-	雖然	-
 ものみだかい	ja	1018	ADJ	ADJ	-	-	infl=adj_i
 ものめずらしい	ja	1018	ADJ	ADJ	-	-	infl=adj_i
 ものもうす	ja	1439	VERB	VERB	-	-	infl=godan_sa
@@ -9510,7 +9510,7 @@
 やじる	ja	1439	VERB	VERB	-	-	infl=godan_ra
 やじれる	ja	1439	VERB	VERB	-	-	infl=ichidan
 やす	ja	1044	AUX	AUX	-	-	-
-やすい	ja	757	ADJ	ADJ	-	-	infl=adj_i
+やすい	ja	520	AUX	ADJ|AUX	-	容易	infl=adj_i
 やすっぽい	ja	1018	ADJ	ADJ	-	-	infl=adj_i
 やすまる	ja	1439	VERB	VERB	-	-	infl=godan_ra
 やすまれる	ja	1439	VERB	VERB	-	-	infl=ichidan
@@ -9576,7 +9576,7 @@
 やむを得ない	ja	769	ADJ	ADJ	-	-	infl=adj_i
 やむを得る	ja	1543	VERB	VERB	-	-	infl=ichidan
 やむ無い	ja	1018	ADJ	ADJ	-	-	infl=adj_i
-やめる	ja	1323	VERB	VERB	-	-	infl=ichidan
+やめる	ja	560	VERB	VERB	-	停止	infl=ichidan
 やや	ja	684	ADV	ADV	-	-	-
 ややこしい	ja	1017	ADJ	ADJ	-	-	infl=adj_i
 ややもすれば	ja	875	ADV	ADV	-	-	-
@@ -16227,7 +16227,7 @@
 ゲート	ja	538	NOUN	NOUN	-	-	-
 ゲートボール	ja	530	NOUN	NOUN	-	-	-
 ゲートル	ja	533	NOUN	NOUN	-	-	-
-ゲーム	ja	383	NOUN	NOUN	-	-	-
+ゲーム	ja	383	NOUN	NOUN	-	遊戲	-
 ゲームセット	ja	522	NOUN	NOUN	-	-	-
 ゲームセンター	ja	447	NOUN	NOUN	-	-	-
 ゲームテック	ja	782	PROPN	PROPN	-	-	sem=organization
@@ -33768,7 +33768,7 @@
 一親等	ja	765	NOUN	NOUN	-	-	-
 一角	ja	559	-	ADV|NOUN	-	一角	-
 一角獣	ja	765	NOUN	NOUN	-	-	-
-一言	ja	467	-	NOUN|VERB	-	-	-
+一言	ja	467	NOUN	NOUN	-	一句	-
 一計	ja	765	NOUN	NOUN	-	-	-
 一語	ja	765	NOUN	NOUN	-	-	-
 一誠社	ja	933	PROPN	PROPN	-	-	sem=organization
@@ -34992,7 +34992,7 @@
 予め	ja	857	ADV	ADV	-	-	-
 予告	ja	763	-	NOUN|VERB	-	-	-
 予報	ja	763	-	NOUN|VERB	-	-	-
-予定	ja	756	-	NOUN|VERB	-	-	-
+予定	ja	560	-	NOUN|VERB	-	預定	-
 予察	ja	763	-	NOUN|VERB	-	-	-
 予想	ja	778	-	NOUN|VERB	-	-	-
 予感	ja	763	-	NOUN|VERB	-	-	-
@@ -35404,7 +35404,7 @@
 今ゆう	ja	893	-	ADV|NOUN	-	-	-
 今よい	ja	893	-	ADV|NOUN	-	-	-
 今冬	ja	893	-	ADV|NOUN	-	-	-
-今回	ja	698	-	ADV|NOUN	-	-	-
+今回	ja	520	NOUN	ADV|NOUN	-	這次	-
 今夏	ja	887	-	ADV|NOUN	-	今夏	-
 今夕	ja	890	-	ADV|NOUN	-	今夕	-
 今夜	ja	908	-	ADV|NOUN	-	今夜	-
@@ -35665,7 +35665,7 @@
 以西	ja	1028	NOUN	NOUN	-	以西	-
 以降	ja	883	-	ADV|NOUN	-	-	-
 仮す	ja	1175	VERB	VERB	-	-	infl=godan_sa
-仮に	ja	703	ADV	ADV	-	-	-
+仮に	ja	500	ADV	ADV	-	即使	-
 仮令	ja	858	ADV	ADV	-	-	-
 仮住い	ja	763	-	NOUN|VERB	-	-	-
 仮作	ja	763	-	NOUN|VERB	-	-	-
@@ -36317,7 +36317,7 @@
 便り	ja	961	NOUN	NOUN	-	-	-
 便る	ja	1168	VERB	VERB	-	-	infl=godan_ra
 便乗	ja	754	-	NOUN|VERB	-	-	-
-便利	ja	810	ADJ	ADJ	-	便利	-
+便利	ja	600	ADJ	ADJ	-	方便	-
 便宜	ja	853	-	ADJ|NOUN	-	方便	-
 便宜上	ja	857	ADV	ADV	-	-	-
 便所	ja	1026	NOUN	NOUN	-	-	-
@@ -36852,7 +36852,7 @@
 先手	ja	1032	NOUN	NOUN	-	-	-
 先攻	ja	759	-	NOUN|VERB	-	-	-
 先方	ja	1032	NOUN	NOUN	-	-	-
-先日	ja	741	-	ADV|NOUN	-	-	-
+先日	ja	520	ADV	ADV|NOUN	-	前幾天	-
 先晩	ja	913	-	ADV|NOUN	-	-	-
 先月	ja	866	-	ADV|NOUN	-	-	-
 先決	ja	762	-	NOUN|VERB	-	-	-
@@ -38189,7 +38189,7 @@
 初々しい	ja	755	ADJ	ADJ	-	-	infl=adj_i
 初ういしい	ja	755	ADJ	ADJ	-	-	infl=adj_i
 初め	ja	555	-	ADV|NOUN	-	-	-
-初めて	ja	298	ADV	ADV	-	-	-
+初めて	ja	298	ADV	ADV	-	才	-
 初める	ja	1370	VERB	VERB	-	-	infl=ichidan
 初代	ja	965	NOUN	NOUN	-	-	-
 初任	ja	1013	NOUN	NOUN	-	初任	-
@@ -38246,7 +38246,7 @@
 別ける	ja	1162	VERB	VERB	-	-	infl=ichidan
 別して	ja	857	ADV	ADV	-	-	-
 別つ	ja	1164	VERB	VERB	-	-	infl=godan_ta
-別に	ja	607	ADV	ADV	-	-	-
+別に	ja	500	ADV	ADV	-	並不是	-
 別る	ja	1182	VERB	VERB	-	-	infl=godan_ra
 別れぎわ	ja	893	-	ADV|NOUN	-	-	-
 別れる	ja	1137	VERB	VERB	-	分手	infl=ichidan
@@ -43716,7 +43716,7 @@
 対峠	ja	760	-	NOUN|VERB	-	-	-
 対座	ja	763	-	NOUN|VERB	-	-	-
 対当	ja	736	-	NOUN|VERB	-	-	-
-対応	ja	761	-	NOUN|VERB	-	對應	-
+対応	ja	580	-	NOUN|VERB	-	應對	-
 対応付ける	ja	1162	VERB	VERB	-	-	infl=ichidan
 対応付る	ja	1162	VERB	VERB	-	-	infl=ichidan
 対戦	ja	751	-	NOUN|VERB	-	-	-
@@ -44859,7 +44859,7 @@
 年頭	ja	1036	NOUN	NOUN	-	年頭	-
 年齢	ja	1023	NOUN	NOUN	-	年齡	-
 幸	ja	1139	NOUN	NOUN	-	-	-
-幸い	ja	614	-	ADJ|ADV	-	-	-
+幸い	ja	560	ADJ	ADJ|ADV	-	不勝感激	-
 幸いする	ja	1162	VERB	VERB	-	-	infl=sahen
 幸せ	ja	719	ADJ	ADJ	-	幸福	-
 幸先	ja	1040	NOUN	NOUN	-	-	-
@@ -46648,7 +46648,7 @@
 性根	ja	1024	NOUN	NOUN	-	-	-
 性格	ja	1028	NOUN	NOUN	-	性格	-
 性的	ja	806	ADJ	ADJ	-	-	-
-性能	ja	1033	NOUN	NOUN	-	-	-
+性能	ja	600	NOUN	NOUN	-	性能	-
 性行為	ja	763	-	NOUN|VERB	-	性行為	-
 性質	ja	1038	NOUN	NOUN	-	性質	-
 怨する	ja	1162	VERB	VERB	-	-	infl=sahen
@@ -46704,7 +46704,7 @@
 恐れおおい	ja	755	ADJ	ADJ	-	-	infl=adj_i
 恐れながら	ja	618	CCONJ	CCONJ	-	-	-
 恐れる	ja	1122	VERB	VERB	-	-	infl=ichidan
-恐れ入る	ja	1161	VERB	VERB	-	-	infl=godan_ra
+恐れ入る	ja	550	VERB	VERB	-	不好意思	infl=godan_ra
 恐れ多い	ja	755	ADJ	ADJ	-	-	infl=adj_i
 恐ろしい	ja	742	ADJ	ADJ	-	恐怖	infl=adj_i
 恐ろしく	ja	883	ADV	ADV	-	-	-
@@ -49748,7 +49748,7 @@
 改ざん	ja	763	-	NOUN|VERB	-	-	-
 改そう	ja	765	-	NOUN|VERB	-	-	-
 改まる	ja	1162	VERB	VERB	-	-	infl=godan_ra
-改めて	ja	422	ADV	ADV	-	-	-
+改めて	ja	422	ADV	ADV	-	再次	-
 改める	ja	1210	VERB	VERB	-	改變	infl=ichidan
 改作	ja	763	-	NOUN|VERB	-	改作	-
 改修	ja	763	-	NOUN|VERB	-	-	-
@@ -50351,7 +50351,7 @@
 旗手	ja	1029	NOUN	NOUN	-	旗手	-
 旗揚げ	ja	760	-	NOUN|VERB	-	-	-
 旗艦	ja	955	NOUN	NOUN	-	旗艦	-
-既に	ja	582	ADV	ADV	-	-	-
+既に	ja	520	ADV	ADV	-	已經	-
 既出	ja	763	-	NOUN|VERB	-	-	-
 既刊	ja	955	NOUN	NOUN	-	-	-
 既存	ja	761	-	NOUN|VERB	-	-	-
@@ -51650,7 +51650,7 @@
 案じる	ja	1160	VERB	VERB	-	-	infl=ichidan
 案のじょう	ja	857	ADV	ADV	-	-	-
 案の定	ja	857	ADV	ADV	-	-	-
-案内	ja	759	-	NOUN|VERB	-	導覽	-
+案内	ja	580	-	NOUN|VERB	-	說明	-
 案出	ja	763	-	NOUN|VERB	-	-	-
 案分	ja	763	-	NOUN|VERB	-	-	-
 案外	ja	812	-	ADJ|ADV	-	-	-
@@ -51776,7 +51776,7 @@
 検算	ja	763	-	NOUN|VERB	-	-	-
 検索	ja	762	-	NOUN|VERB	-	檢索	-
 検視	ja	760	-	NOUN|VERB	-	檢視	-
-検討	ja	541	-	NOUN|VERB	-	研議	-
+検討	ja	541	-	NOUN|VERB	-	審閱	-
 検診	ja	763	-	NOUN|VERB	-	-	-
 検証	ja	759	-	NOUN|VERB	-	-	-
 検針	ja	763	-	NOUN|VERB	-	-	-
@@ -51833,13 +51833,13 @@
 極道	ja	812	-	ADJ|NOUN	-	-	-
 極限	ja	1040	NOUN	NOUN	-	極限	-
 楼主	ja	1037	NOUN	NOUN	-	-	-
-楽	ja	897	-	ADJ|NOUN|VERB	-	-	-
+楽	ja	600	ADJ	ADJ|NOUN	-	輕鬆	-
 楽々	ja	857	ADV	ADV	-	-	-
 楽い	ja	791	ADJ	ADJ	-	-	infl=adj_i
 楽しい	ja	699	ADJ	ADJ	-	快樂	infl=adj_i
 楽しむ	ja	1156	VERB	VERB	-	-	infl=godan_ma
 楽しめる	ja	1156	VERB	VERB	-	-	infl=ichidan
-楽に	ja	901	ADV	ADV	-	-	-
+楽に	ja	500	ADV	ADV	-	輕鬆	-
 楽む	ja	1161	VERB	VERB	-	-	infl=godan_ma
 楽める	ja	1161	VERB	VERB	-	-	infl=ichidan
 楽勝	ja	760	-	NOUN|VERB	-	-	-
@@ -52688,7 +52688,7 @@
 汁	ja	995	NOUN	NOUN	-	-	-
 求まる	ja	1162	VERB	VERB	-	-	infl=godan_ra
 求む	ja	1225	VERB	VERB	-	-	infl=godan_ma
-求める	ja	1036	VERB	VERB	-	-	infl=ichidan
+求める	ja	560	VERB	VERB	-	要求	infl=ichidan
 求め行く	ja	1162	VERB	VERB	-	-	infl=godan_iku
 求る	ja	1163	VERB	VERB	-	-	infl=ichidan
 求人	ja	760	-	NOUN|VERB	-	求人	-
@@ -53124,7 +53124,7 @@
 活気	ja	1039	NOUN	NOUN	-	-	-
 活気づく	ja	1162	VERB	VERB	-	-	infl=godan_ka
 活溌	ja	811	ADJ	ADJ	-	-	-
-活用	ja	790	-	NOUN|VERB	-	-	-
+活用	ja	580	-	NOUN|VERB	-	運用	-
 活発	ja	761	-	ADJ|NOUN	-	-	-
 活着	ja	763	-	NOUN|VERB	-	活著	-
 活路	ja	1037	NOUN	NOUN	-	活路	-
@@ -55325,7 +55325,7 @@
 生みだす	ja	1161	VERB	VERB	-	-	infl=godan_sa
 生みつける	ja	1162	VERB	VERB	-	-	infl=ichidan
 生み付ける	ja	1162	VERB	VERB	-	-	infl=ichidan
-生み出す	ja	1159	VERB	VERB	-	-	infl=godan_sa
+生み出す	ja	560	VERB	VERB	-	帶來	infl=godan_sa
 生み出せる	ja	1162	VERB	VERB	-	-	infl=ichidan
 生み落す	ja	1162	VERB	VERB	-	-	infl=godan_sa
 生む	ja	1289	VERB	VERB	-	-	infl=godan_ma
@@ -58506,7 +58506,7 @@
 結婚	ja	823	-	NOUN|VERB	-	結婚	-
 結実	ja	761	-	NOUN|VERB	-	結實	-
 結審	ja	763	-	NOUN|VERB	-	-	-
-結局	ja	857	-	ADV|NOUN	-	結局	-
+結局	ja	520	ADV	ADV|NOUN	-	結果	-
 結成	ja	758	-	NOUN|VERB	-	結成	-
 結晶	ja	762	-	NOUN|VERB	-	結晶	-
 結末	ja	1038	NOUN	NOUN	-	-	-
@@ -59012,7 +59012,7 @@
 繊手	ja	994	NOUN	NOUN	-	纖手	-
 繊細	ja	811	ADJ	ADJ	-	纖細	-
 繋	ja	1035	NOUN	NOUN	-	-	-
-繋がる	ja	1161	VERB	VERB	-	-	infl=godan_ra
+繋がる	ja	550	VERB	VERB	-	帶來	infl=godan_ra
 繋ぎ	ja	1037	NOUN	NOUN	-	-	-
 繋ぎ止める	ja	1162	VERB	VERB	-	-	infl=ichidan
 繋ぐ	ja	1160	VERB	VERB	-	-	infl=godan_ga
@@ -61535,7 +61535,7 @@
 見栄え	ja	763	-	NOUN|VERB	-	-	-
 見棄てる	ja	1162	VERB	VERB	-	-	infl=ichidan
 見棄る	ja	1162	VERB	VERB	-	-	infl=ichidan
-見極める	ja	1162	VERB	VERB	-	-	infl=ichidan
+見極める	ja	560	VERB	VERB	-	判斷	infl=ichidan
 見極る	ja	1162	VERB	VERB	-	-	infl=ichidan
 見比べる	ja	1162	VERB	VERB	-	-	infl=ichidan
 見比る	ja	1162	VERB	VERB	-	-	infl=ichidan
@@ -61869,7 +61869,7 @@
 言い兼ねる	ja	1162	VERB	VERB	-	-	infl=ichidan
 言い出す	ja	1201	VERB	VERB	-	-	infl=godan_sa
 言い出せる	ja	1162	VERB	VERB	-	-	infl=ichidan
-言い切る	ja	1248	VERB	VERB	-	-	infl=godan_ra
+言い切る	ja	580	VERB	VERB	-	斷言	infl=godan_ra
 言い募る	ja	1162	VERB	VERB	-	-	infl=godan_ra
 言い及す	ja	1162	VERB	VERB	-	-	infl=godan_sa
 言い古す	ja	1162	VERB	VERB	-	-	infl=godan_sa
@@ -62579,7 +62579,7 @@
 課税	ja	793	-	NOUN|VERB	-	課稅	-
 課金	ja	763	-	NOUN|VERB	-	-	-
 課長	ja	987	NOUN	NOUN	-	-	-
-課題	ja	420	NOUN	NOUN	-	課題	-
+課題	ja	420	NOUN	NOUN	-	挑戰	-
 誹る	ja	1162	VERB	VERB	-	-	infl=godan_ra
 誹謗	ja	763	-	NOUN|VERB	-	誹謗	-
 誹議	ja	763	-	NOUN|VERB	-	-	-
@@ -63254,7 +63254,7 @@
 賛助	ja	785	-	NOUN|VERB	-	贊助	-
 賛同	ja	748	-	NOUN|VERB	-	贊同	-
 賛嘆	ja	763	-	NOUN|VERB	-	-	-
-賛成	ja	741	-	NOUN|VERB	-	贊成	-
+賛成	ja	580	-	NOUN|VERB	-	贊同	-
 賛美	ja	763	-	NOUN|VERB	-	-	-
 賛辞	ja	751	-	NOUN|VERB	-	-	-
 賜	ja	1044	NOUN	NOUN	-	-	-
@@ -64411,7 +64411,7 @@
 送り返せる	ja	1162	VERB	VERB	-	-	infl=ichidan
 送る	ja	650	VERB	VERB	-	寄送	infl=godan_ra
 送れる	ja	1152	VERB	VERB	-	-	infl=ichidan
-送付	ja	763	-	NOUN|VERB	-	-	-
+送付	ja	580	-	NOUN|VERB	-	寄送	-
 送信	ja	756	-	NOUN|VERB	-	送信	-
 送像	ja	765	-	NOUN|VERB	-	-	-
 送出	ja	763	-	NOUN|VERB	-	-	-
@@ -64775,7 +64775,7 @@
 連立	ja	741	-	NOUN|VERB	-	-	-
 連立つ	ja	1162	VERB	VERB	-	-	infl=godan_ta
 連結	ja	763	-	NOUN|VERB	-	連結	-
-連絡	ja	596	-	NOUN|VERB	-	-	-
+連絡	ja	560	-	NOUN|VERB	-	聯絡	-
 連続	ja	739	-	NOUN|VERB	-	連續	-
 連繋	ja	763	-	NOUN|VERB	-	-	-
 連署	ja	763	-	NOUN|VERB	-	-	-
@@ -65976,8 +65976,8 @@
 間諜	ja	1038	NOUN	NOUN	-	間諜	-
 間近	ja	812	ADJ	ADJ	-	-	-
 間近い	ja	755	ADJ	ADJ	-	-	infl=adj_i
-間違う	ja	1204	VERB	VERB	-	-	infl=godan_wa
-間違える	ja	1146	VERB	VERB	-	-	infl=ichidan
+間違う	ja	580	VERB	VERB	-	錯	infl=godan_wa
+間違える	ja	580	VERB	VERB	-	弄錯	infl=ichidan
 間違る	ja	1211	VERB	VERB	-	-	infl=ichidan
 間遠	ja	812	ADJ	ADJ	-	-	-
 間遠い	ja	755	ADJ	ADJ	-	-	infl=adj_i
@@ -66319,7 +66319,7 @@
 隠し持つ	ja	1161	VERB	VERB	-	-	infl=godan_ta
 隠し持てる	ja	1162	VERB	VERB	-	-	infl=ichidan
 隠し持る	ja	1162	VERB	VERB	-	-	infl=ichidan
-隠す	ja	1117	VERB	VERB	-	隱藏	infl=godan_sa
+隠す	ja	580	VERB	VERB	-	隱瞞	infl=godan_sa
 隠せい	ja	763	-	NOUN|VERB	-	-	-
 隠せる	ja	1155	VERB	VERB	-	-	infl=ichidan
 隠とん	ja	763	-	NOUN|VERB	-	-	-
@@ -68273,7 +68273,7 @@
 納得する	ja	780	VERB	VERB	-	信服	infl=sahen
 同意する	ja	780	VERB	VERB	-	同意	infl=sahen
 反対する	ja	780	VERB	VERB	-	反對	infl=sahen
-賛成する	ja	780	VERB	VERB	-	贊成	infl=sahen
+賛成する	ja	580	VERB	VERB	-	贊同	infl=sahen
 議論する	ja	780	VERB	VERB	-	討論	infl=sahen
 交渉する	ja	780	VERB	VERB	-	交涉	infl=sahen
 契約する	ja	780	VERB	VERB	-	簽約	infl=sahen
@@ -70765,3 +70765,23 @@
 ご飯	ja	460	NOUN	NOUN	-	飯	-
 ご馳走	ja	500	NOUN	NOUN	-	大餐	-
 ご褒美	ja	500	NOUN	NOUN	-	獎勵	-
+だった	ja	360	AUX	AUX	だ	-	-
+じゃなかった	ja	400	AUX	AUX	じゃない	不是	-
+ではなかった	ja	400	AUX	AUX	ではない	不是	-
+べき	ja	400	AUX	AUX	-	應當	-
+がち	ja	440	AUX	AUX	-	容易	-
+手遅れ	ja	460	NOUN	NOUN	-	太遲	-
+そのもの	ja	450	NOUN	NOUN	-	本身	-
+優劣	ja	500	NOUN	NOUN	-	優劣	-
+どのように	ja	420	ADV	ADV	-	如何	-
+どうやって	ja	420	ADV	ADV	-	如何	-
+どこまで	ja	430	ADV	ADV	-	到什麼程度	-
+んじゃない	ja	420	PART	PART	-	吧	-
+んじゃないか	ja	420	PART	PART	-	吧	-
+につきましては	ja	440	ADP	ADP	-	關於	-
+実際には	ja	440	ADV	ADV	-	實際上	-
+普段	ja	500	NOUN	ADV|NOUN	-	平常	-
+急に	ja	460	ADV	ADV	-	突然	-
+事前に	ja	460	ADV	ADV	-	事先	-
+故意に	ja	460	ADV	ADV	-	故意	-
+道具	ja	520	NOUN	NOUN	-	工具	-

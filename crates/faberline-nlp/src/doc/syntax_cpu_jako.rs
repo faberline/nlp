@@ -460,6 +460,7 @@ const JA_DETS: &[&str] = &[
     "あらゆる",
     "すべての",
     "各",
+    "同じ",
 ];
 
 const JA_ADVS: &[&str] = &[
@@ -620,6 +621,32 @@ fn infer_ja_upos(
         return Upos::Pron;
     }
     if JA_DETS.contains(&surf) {
+        if surf == "ある"
+            && (prev_upos == Some(Upos::Adp)
+                || next_surf.is_some_and(|ns| {
+                    JA_SCONJ_MARKS.contains(&ns)
+                        || JA_AUX_WORDS.contains(&ns)
+                        || matches!(
+                            ns,
+                            "からといって"
+                                | "ため"
+                                | "はず"
+                                | "わけ"
+                                | "ので"
+                                | "から"
+                                | "けど"
+                                | "けれど"
+                                | "けれども"
+                                | "と"
+                                | "。"
+                                | "、"
+                                | "が"
+                                | "し"
+                        )
+                }))
+        {
+            return Upos::Verb;
+        }
         return Upos::Det;
     }
     if JA_CCONJS.contains(&surf) {
@@ -637,6 +664,12 @@ fn infer_ja_upos(
             return Upos::Sconj;
         }
         return Upos::Adp;
+    }
+    if surf == "だって" {
+        if prev_upos.is_none() || prev_upos == Some(Upos::Punct) {
+            return Upos::Cconj;
+        }
+        return Upos::Part;
     }
 
     if JA_DISCOURSE_PARTS.contains(&surf) {
@@ -664,6 +697,30 @@ fn infer_ja_upos(
             return Upos::Adj;
         }
         return Upos::Aux;
+    }
+
+    if surf == "し"
+        && matches!(prev_upos, Some(Upos::Verb | Upos::Adj | Upos::Aux))
+        && !next_surf.is_some_and(|ns| {
+            JA_AUX_WORDS.contains(&ns)
+                || matches!(
+                    ns,
+                    "て" | "た"
+                        | "ない"
+                        | "なかっ"
+                        | "なかった"
+                        | "ます"
+                        | "まし"
+                        | "ません"
+                        | "よう"
+                        | "しろ"
+                        | "せよ"
+                        | "に"
+                        | "ながら"
+                )
+        })
+    {
+        return Upos::Sconj;
     }
 
     if matches!(
@@ -696,7 +753,8 @@ fn infer_ja_upos(
         return Upos::Verb;
     }
 
-    if let Some(hit) = lookup_ja(surf)
+    let lex_hit = lookup_ja(surf);
+    if let Some(hit) = lex_hit.as_ref()
         && let Some(u) = hit.decided_upos
     {
         return u;
@@ -714,22 +772,46 @@ fn infer_ja_upos(
         return Upos::Noun;
     }
 
-    // Context-guided selection from lexicon candidates.
-    if !candidates.is_empty() {
-        if next_surf.is_some_and(|ns| JA_CASE_PARTICLES.contains(&ns))
-            && candidates.contains(&Upos::Noun)
+    // Context-guided selection from lexicon candidates (falling back to lexicon lookup when L2 morph was disabled).
+    let lex_cands;
+    let cands: &[Upos] = if !candidates.is_empty() {
+        candidates
+    } else if let Some(hit) = lex_hit {
+        lex_cands = hit.upos_candidates;
+        &lex_cands
+    } else {
+        &[]
+    };
+    if !cands.is_empty() {
+        if cands.contains(&Upos::Adv)
+            && !next_surf.is_some_and(|ns| {
+                matches!(
+                    ns,
+                    "な" | "だって" | "だけ" | "ばかり" | "など" | "くらい" | "ぐらい"
+                ) || JA_CASE_PARTICLES.contains(&ns)
+                    || JA_COPULA_WORDS.contains(&ns)
+            })
+        {
+            return Upos::Adv;
+        }
+        if next_surf.is_some_and(|ns| {
+            matches!(
+                ns,
+                "だって" | "だけ" | "ばかり" | "など" | "くらい" | "ぐらい"
+            ) || JA_CASE_PARTICLES.contains(&ns)
+        }) && cands.contains(&Upos::Noun)
         {
             return Upos::Noun;
         }
         if next_surf.is_some_and(|ns| JA_AUX_WORDS.contains(&ns) || JA_SCONJ_MARKS.contains(&ns)) {
-            if candidates.contains(&Upos::Verb) {
+            if cands.contains(&Upos::Verb) {
                 return Upos::Verb;
             }
-            if candidates.contains(&Upos::Adj) {
+            if cands.contains(&Upos::Adj) {
                 return Upos::Adj;
             }
         }
-        return candidates[0];
+        return cands[0];
     }
 
     // Okurigana / script heuristics.

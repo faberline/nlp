@@ -470,3 +470,130 @@ fn formal_exam_benchmarks_chuken_catti_and_diplomatic_service() {
         }
     }
 }
+
+#[test]
+fn conversational_and_n3_n2_discourse_patterns_and_holdouts() {
+    let paragraph = concat!(
+        "昨日、久しぶりに友達と会ったんだけど、昔と全然変わっていなくて驚いた。",
+        "彼は「最近、仕事が忙しくて休む暇もない」と言っていたくせに、週末になると必ず旅行に出かけているらしい。",
+        "正直、羨ましくないと言えば嘘になるけど、だからといって自分も同じ生活を送りたいわけではない。",
+        "もし時間とお金に余裕があったとしても、私は家でのんびり過ごすほうが好きだ。",
+        "それに、何もしない時間だって、決して無駄とは限らないと思う。"
+    );
+
+    let hant = analyze_and_translate(
+        paragraph,
+        &TranslateOptions::new(TargetVariant::ZhHant),
+        &TranslationGlossary::new(),
+        None,
+        Backend::Onnx,
+    )
+    .unwrap();
+    assert_valid_ja_zh_doc(paragraph, &hant);
+    for pat in [
+        "久違地跟朋友見面了",
+        "跟以前完全沒有改變",
+        "感到驚訝了",
+        "他明明說著「最近，工作忙碌，連休息的空閒都沒有」",
+        "一到週末，卻聽說一定會出門旅行",
+        "老實說，要說不羨慕，那是騙人的",
+        "但話雖如此自己也並不是想過同樣的生活",
+        "就算時間和金錢有餘裕，我也比較喜歡在家悠閒地度過",
+        "而且，就算是什麼都不做的時間，我覺得絕不見得是浪費",
+    ] {
+        assert!(
+            hant.target_text.contains(pat),
+            "hant missing '{pat}' in: {}",
+            hant.target_text
+        );
+    }
+
+    let hans = analyze_and_translate(
+        paragraph,
+        &TranslateOptions::new(TargetVariant::ZhHans),
+        &TranslationGlossary::new(),
+        None,
+        Backend::Onnx,
+    )
+    .unwrap();
+    assert_valid_ja_zh_doc(paragraph, &hans);
+    for pat in [
+        "久违地跟朋友见面了",
+        "跟以前完全没有改变",
+        "感到惊讶了",
+        "他明明说着“最近，工作忙碌，连休息的空闲都没有”",
+        "一到周末，却听说一定会出门旅行",
+        "老实说，要说不羡慕，那是骗人的",
+        "但话虽如此自己也并不是想过同样的生活",
+        "就算时间和金钱有余裕，我也比较喜欢在家悠闲地度过",
+        "而且，就算是什么都不做的时间，我觉得绝不见得是浪费",
+    ] {
+        assert!(
+            hans.target_text.contains(pat),
+            "hans missing '{pat}' in: {}",
+            hans.target_text
+        );
+    }
+
+    let holdouts: &[(&str, &[&str], &[&str])] = &[
+        (
+            "彼は本当のことを知っているくせに、何も言っていないらしい。",
+            &["他明明知道真的事情", "卻聽說什麼都沒有說"],
+            &["他明明知道真的事情", "却听说什么都没有说"],
+        ),
+        (
+            "もし今日雨が降ったとしても、電車で行くほうがいいと思う。",
+            &["就算今天下雨", "我覺得坐電車去比較好"],
+            &["就算今天下雨", "我觉得坐电车去比较好"],
+        ),
+        (
+            "お金があるからといって、必ずしも幸せになれるとは限らないし、贅沢な生活を送りたいわけでもない。",
+            &[
+                "即便因為有金錢",
+                "未必能變得幸福",
+                "而且也並不是想過奢侈的生活",
+            ],
+            &[
+                "即便因为有金钱",
+                "未必能变得幸福",
+                "而且也并不是想过奢侈的生活",
+            ],
+        ),
+    ];
+
+    for (src, hant_expected, hans_expected) in holdouts {
+        let h_hant = analyze_and_translate(
+            src,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &h_hant);
+        for pat in *hant_expected {
+            assert!(
+                h_hant.target_text.contains(pat),
+                "holdout hant missing '{pat}' in: {}",
+                h_hant.target_text
+            );
+        }
+
+        let h_hans = analyze_and_translate(
+            src,
+            &TranslateOptions::new(TargetVariant::ZhHans),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &h_hans);
+        for pat in *hans_expected {
+            assert!(
+                h_hans.target_text.contains(pat),
+                "holdout hans missing '{pat}' in: {}",
+                h_hans.target_text
+            );
+        }
+    }
+}

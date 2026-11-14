@@ -5,6 +5,7 @@
 pub mod batch;
 pub mod conditioning;
 pub mod glossary;
+pub mod ja_zh;
 pub mod lock;
 pub mod model;
 pub mod opaque;
@@ -33,8 +34,8 @@ use crate::opaque::{
     classify_opaque_policy, is_block_opaque, render_heading, unwrap_heading, unwrap_list_item,
 };
 use crate::postprocess::{
-    apply_cjk_latin_spacing, fix_english_articles_and_case, fix_korean_particles,
-    localize_quotation_marks,
+    apply_cjk_latin_spacing, cleanup_cjk_translation_spacing, fix_english_articles_and_case,
+    fix_korean_particles, localize_quotation_marks,
 };
 pub use crate::render::{
     OutputFormat, render_bilingual_jsonl, render_bilingual_markdown, render_output,
@@ -97,6 +98,7 @@ pub fn doc_options_for_translate(
         lexicon,
         enrich_morphology: true,
         first_party_zh_segmenter: true,
+        cpu_syntax: true,
         ..DocOptions::default()
     }
 }
@@ -619,7 +621,8 @@ fn translate_single_sentence(
         return outcome;
     }
 
-    // Cross-language track (Track B: NLP-Conditioned Seq2Seq).
+    // Cross-language track (Track B: NLP-Conditioned Seq2Seq, or deterministic Ja->Zh when no
+    // neural model is provided).
     let mut conditioning = build_sentence_conditioning(
         sentence_idx,
         sent_span,
@@ -628,6 +631,37 @@ fn translate_single_sentence(
         glossary,
         options.target,
     );
+
+    let is_ja_to_zh = seq2seq.is_none()
+        && options.target.is_zh()
+        && (sent.lang == Lang::Ja
+            || (sent.lang == Lang::Mixed && ja_zh::has_kana_no_hangul(&raw_sent)));
+    if is_ja_to_zh {
+        let (masked_zh, clause_alignments) = ja_zh::translate_ja_sentence(
+            sentence_idx,
+            chars,
+            doc,
+            sent_tokens,
+            &lock_table,
+            &conditioning,
+            options.target,
+        );
+        let report = lock_table.restore(&masked_zh);
+        let mut outcome = finalize_sentence_outcome(
+            sentence_idx,
+            chars,
+            doc,
+            sent_span,
+            report,
+            TranslationTrack::VariantRule,
+            Some(Score(900)),
+            conditioning,
+            options,
+            Vec::new(),
+        );
+        outcome.clause_alignments = clause_alignments;
+        return outcome;
+    }
 
     if let Some(loaded) = seq2seq {
         let max_win_chars = (loaded.info().src_max_len / 2).max(32);
@@ -822,6 +856,19 @@ fn finalize_sentence_outcome(
             })
             .collect();
         text = localize_quotation_marks(&text, options.target, &verbatim_prot);
+    }
+
+    if options.target.is_zh() {
+        let verbatim_prot: Vec<Span> = report
+            .restored
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| match r.origin {
+                LockOrigin::InlineOpaque(_) => Some(tracked_spans[i]),
+                _ => None,
+            })
+            .collect();
+        text = cleanup_cjk_translation_spacing(&text, &verbatim_prot, &mut tracked_spans);
     }
 
     if options.cjk_latin_spacing {
@@ -1144,32 +1191,34 @@ fn translate_inline_fragment(
     let ascii_only = body.is_ascii();
     let mut unks = Vec::new();
 
-    let converted = if (has_han && options.target.is_zh()) || (ascii_only && options.target.is_en())
-    {
-        convert_fragment_preserving_placeholders(&masked, options.target)
-    } else if let Some(loaded) = seq2seq {
-        let inp = format!("{} {masked}", options.target.control_tag());
-        match run_seq2seq_window(loaded, &inp, options.beam_size) {
-            Ok((dec, _)) => dec,
-            Err(e) => {
-                unks.push(TranslateUnknown {
-                    kind: TranslateUnknownKind::LowConfidence,
-                    source_span: body_span,
-                    sentence: None,
-                    detail: Some(e.to_string()),
-                });
-                masked
+    let converted =
+        if seq2seq.is_none() && options.target.is_zh() && ja_zh::has_kana_no_hangul(body) {
+            ja_zh::translate_ja_fragment(&masked, options.target)
+        } else if (has_han && options.target.is_zh()) || (ascii_only && options.target.is_en()) {
+            convert_fragment_preserving_placeholders(&masked, options.target)
+        } else if let Some(loaded) = seq2seq {
+            let inp = format!("{} {masked}", options.target.control_tag());
+            match run_seq2seq_window(loaded, &inp, options.beam_size) {
+                Ok((dec, _)) => dec,
+                Err(e) => {
+                    unks.push(TranslateUnknown {
+                        kind: TranslateUnknownKind::LowConfidence,
+                        source_span: body_span,
+                        sentence: None,
+                        detail: Some(e.to_string()),
+                    });
+                    masked
+                }
             }
-        }
-    } else {
-        unks.push(TranslateUnknown {
-            kind: TranslateUnknownKind::NoModel,
-            source_span: body_span,
-            sentence: None,
-            detail: None,
-        });
-        convert_fragment_preserving_placeholders(&masked, options.target)
-    };
+        } else {
+            unks.push(TranslateUnknown {
+                kind: TranslateUnknownKind::NoModel,
+                source_span: body_span,
+                sentence: None,
+                detail: None,
+            });
+            convert_fragment_preserving_placeholders(&masked, options.target)
+        };
 
     let report = lock_table.restore(&converted);
     let hits = report

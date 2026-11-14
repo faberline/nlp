@@ -58,6 +58,49 @@ VALID_UPOS = frozenset(
 
 ZH_NUMERALS = set("〇零一二三四五六七八九十百千萬万億亿兩两")
 
+# Function/particle/coverb/pronoun chars that should not appear in NPMI-mined multi-char n-grams.
+NPMI_STOP_CHARS = set(
+    "的得地了著着過过嗎吗呢吧啊呀一不沒没都也就還还很太更最"
+    "把被將将對对從从向往給给在有是這这那其你我他她它們们與与和跟或而"
+)
+
+# False coverb/particle/adverbial merges that must split into separate tokens.
+EXCLUDED_WORDS = {
+    "對此", "对此",
+    "把門", "把门",
+    "把它", "把他",
+    "將他", "将他",
+    "慢慢地",
+    "實驗結果", "实验结果",
+    "大家都",
+    "還好", "还好",
+    "提出了",
+    "買了一", "买了一",
+    "停了下來", "停了下来",
+    "有一座",
+    "天晚上",
+}
+
+# Curated person names (PROPN, sem=person) that should stay whole.
+CURATED_PERSON_NAMES = {
+    "阿芳", "阿杰", "小芸", "小林", "老王",
+}
+
+# Curated domain/classical/Taiwan terms that must have low enough cost to stay whole
+# (e.g. 在下 cost < cost(在)+cost(下), while 還在下雨 still keeps 在 + 下雨).
+CURATED_BOOST_WORDS = {
+    "在下", "妾身", "老夫", "老身", "貧道", "贫道", "本座", "晚輩", "晚辈",
+    "前輩", "前辈", "道友", "元嬰", "元婴", "筑基", "築基", "筑基丹", "築基丹",
+    "結丹", "结丹", "化神", "煉虛", "炼虚", "大乘", "神識", "神识", "靈力", "灵力",
+    "法寶", "法宝", "靈寶", "灵宝", "儲物袋", "储物袋", "丹藥", "丹药", "功法",
+    "口訣", "口诀", "陣法", "阵法", "老者", "大漢", "大汉", "婦人", "妇人",
+    "狼藉", "狼籍", "狼借",
+    "中年", "中品", "中階", "中阶", "中計", "中计", "激射", "奧秘", "奥秘", "護具", "护具", "工坊",
+    "這麼晚", "这么晚", "馬車", "马车", "隊列", "队列",
+    "我們", "你們", "他們", "她們", "它們",
+    "我们", "你们", "他们", "她们", "它们",
+}
+
 # Verbal-noun / open-class homographs that MUST stay ambiguous (NOUN|VERB)
 NOUN_VERB_WORDS = {
     "研究", "发展", "發展", "开始", "開始", "工作", "学习", "學習", "训练", "訓練",
@@ -405,6 +448,8 @@ def mine_corpora_npmi(pattern: str, min_count: int = 6, min_pmi: float = 4.5) ->
     for ng, cnt in ngrams.items():
         if cnt < min_count:
             continue
+        if any(c in NPMI_STOP_CHARS for c in ng):
+            continue
         # Compute minimum split PMI across all binary splits
         p_ng = cnt / total_chars
         min_split_pmi = float("inf")
@@ -665,8 +710,8 @@ def main() -> None:
     print(f"  ZH_DECIDED={len(zh_decided)}, ZH_AMBIGUOUS={len(zh_ambiguous)}, gold_tokens={len(gold_pos)}")
 
     print("Mining CC0/PD zh corpora (NPMI + unigram counts)...")
-    hans_uni, hans_mined = mine_corpora_npmi("zh_hans_*.jsonl", min_count=5, min_pmi=4.5)
-    hant_uni, hant_mined = mine_corpora_npmi("zh_hant_*.jsonl", min_count=5, min_pmi=4.5)
+    hans_uni, hans_mined = mine_corpora_npmi("zh_hans_*.jsonl", min_count=10, min_pmi=5.5)
+    hant_uni, hant_mined = mine_corpora_npmi("zh_hant_*.jsonl", min_count=10, min_pmi=5.5)
     print(f"  zh-Hans mined={len(hans_mined)}, zh-Hant mined={len(hant_mined)}")
 
     print("Loading jieba-rs dict.txt...")
@@ -761,6 +806,33 @@ def main() -> None:
             tag = jieba_entries[hans_eq][1] if hans_eq in jieba_entries else "n"
             freq = float(jieba_entries[hans_eq][0]) if hans_eq in jieba_entries else 500.0
             hant_pool[w] = (freq, tag)
+
+    # Boost curated domain/classical/Taiwan terms & plural pronouns so they stay whole,
+    # and add curated person names.
+    boost_set = set(CURATED_BOOST_WORDS)
+    for hant, hans in CROSS_STRAIT_PAIRS:
+        boost_set.add(hant)
+        boost_set.add(hans)
+    for w in boost_set:
+        if is_clean_han(w):
+            w_hans = conv.hant_to_hans(w)
+            w_hant = conv.hans_to_hant(w)
+            for target_w, pool in ((w, hans_pool), (w_hans, hans_pool), (w, hant_pool), (w_hant, hant_pool)):
+                if is_clean_han(target_w):
+                    old_sc, old_tag = pool.get(target_w, (0.0, "n"))
+                    pool[target_w] = (max(old_sc, 12000.0), old_tag)
+    for name in CURATED_PERSON_NAMES:
+        for target_w, pool in ((name, hant_pool), (conv.hant_to_hans(name), hans_pool)):
+            if is_clean_han(target_w):
+                old_sc, _ = pool.get(target_w, (0.0, "nr"))
+                pool[target_w] = (max(old_sc, 8000.0), "nr")
+
+    # Remove excluded false merges from pools & mandatory sets.
+    for w in EXCLUDED_WORDS:
+        mandatory_hans.discard(w)
+        mandatory_hant.discard(w)
+        hans_pool.pop(w, None)
+        hant_pool.pop(w, None)
 
     def select_top(
         pool: dict[str, tuple[float, str]],

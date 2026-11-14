@@ -1,5 +1,7 @@
 use faberline_nlp::Span;
-use faberline_nlp::doc::{Document, Lang, OpaqueKind, Options, Reason, Upos, analyze_document};
+use faberline_nlp::doc::{
+    Document, Lang, OpaqueKind, Options, Reason, RelationLevel, Upos, analyze_document,
+};
 
 fn slice(text: &str, s: Span) -> String {
     text.chars()
@@ -236,7 +238,7 @@ const CELLS: &[CorpusCell] = &[
         id: "ko_social",
         variant: "ko",
         genre: "social",
-        dominant_lang: Lang::Mixed,
+        dominant_lang: Lang::Ko,
         allowed_langs: &[Lang::Ko, Lang::Mixed],
         text: "지루하지는 않은데 완전 막장임... 돈주고 보기에는....\n3D만 아니었어도 별 다섯 개 줬을텐데.. 왜 3D로 나와서 제 심기를 불편하게 하죠??\n별 재미도없는거 우려먹어 .... 챔프에서 방송 몇번했더라 ? ㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋ\n설마 ㅈ 현정 작가 아니지??\n일베충들 ㅂㄷ거리는것봐라 ㅉㅉ",
     },
@@ -402,6 +404,93 @@ fn verify_cell_invariants(cell: &CorpusCell, options: &Options) {
         "[{}] mismatch between upos==None tokens and layer==\"pos\" unknowns",
         cell.id
     );
+
+    // 4. Layer 3 (entities) invariants: valid spans, sentence bounds, sorted non-overlapping
+    for e in &doc.entities {
+        assert_valid_span(cell.id, "entity", e.span, doc.text_chars);
+        assert!(
+            e.sentence < doc.segmentation.sentences.len(),
+            "[{}] entity sentence index {} out of bounds",
+            cell.id,
+            e.sentence
+        );
+        let s_span = doc.segmentation.sentences[e.sentence].span;
+        assert!(
+            e.span.start_char >= s_span.start_char && e.span.end_char <= s_span.end_char,
+            "[{}] entity {:?} outside its sentence {:?}",
+            cell.id,
+            e.span,
+            s_span
+        );
+    }
+    for w in doc.entities.windows(2) {
+        assert!(
+            w[0].span.end_char <= w[1].span.start_char,
+            "[{}] entities overlap or unsorted: {:?} vs {:?}",
+            cell.id,
+            w[0],
+            w[1]
+        );
+    }
+
+    // 5. Layer 7 (relations) invariants: valid spans, unit membership, non-overlapping args, sorted
+    let sent_spans: Vec<Span> = doc.segmentation.sentences.iter().map(|s| s.span).collect();
+    let clause_spans: Vec<Span> = doc.segmentation.clauses.iter().map(|c| c.span).collect();
+    for r in &doc.relations {
+        assert_valid_span(cell.id, "relation.connector", r.connector, doc.text_chars);
+        assert_valid_span(cell.id, "relation.arg1", r.arg1, doc.text_chars);
+        assert_valid_span(cell.id, "relation.arg2", r.arg2, doc.text_chars);
+        if let Some(corr) = r.correlate {
+            assert_valid_span(cell.id, "relation.correlate", corr, doc.text_chars);
+        }
+        let unit_spans = match r.level {
+            RelationLevel::Clause => &clause_spans,
+            RelationLevel::Sentence => &sent_spans,
+        };
+        assert!(
+            unit_spans.contains(&r.arg1),
+            "[{}] relation arg1 {:?} is not a {:?} unit",
+            cell.id,
+            r.arg1,
+            r.level
+        );
+        assert!(
+            unit_spans.contains(&r.arg2),
+            "[{}] relation arg2 {:?} is not a {:?} unit",
+            cell.id,
+            r.arg2,
+            r.level
+        );
+        assert!(
+            r.arg1.end_char <= r.arg2.start_char || r.arg2.end_char <= r.arg1.start_char,
+            "[{}] relation args overlap: {:?} vs {:?}",
+            cell.id,
+            r.arg1,
+            r.arg2
+        );
+    }
+    for w in doc.relations.windows(2) {
+        assert!(
+            w[0].connector.start_char <= w[1].connector.start_char,
+            "[{}] relations unsorted: {:?} vs {:?}",
+            cell.id,
+            w[0],
+            w[1]
+        );
+    }
+
+    // 6. ja/ko cells must have 0 UnsupportedLanguage unknowns
+    if matches!(cell.variant, "ja" | "ko") {
+        assert!(
+            !doc.unknown
+                .iter()
+                .any(|u| u.reason == Reason::UnsupportedLanguage),
+            "[{}] unexpected UnsupportedLanguage unknown on {} cell: {:?}",
+            cell.id,
+            cell.variant,
+            doc.unknown
+        );
+    }
 }
 
 #[test]
@@ -428,6 +517,25 @@ fn multilingual_24_cell_matrix_invariants() {
     for cell in CELLS {
         verify_cell_invariants(cell, &default_opts);
         verify_cell_invariants(cell, &norm_trad_opts);
+    }
+
+    // Verify Layer 3 (entities) and Layer 7 (relations) extract non-zero results across ja and ko
+    for variant in ["ja", "ko"] {
+        let mut entity_count = 0usize;
+        let mut relation_count = 0usize;
+        for cell in CELLS.iter().filter(|c| c.variant == variant) {
+            let doc = analyze_document(cell.text, &default_opts);
+            entity_count += doc.entities.len();
+            relation_count += doc.relations.len();
+        }
+        assert!(
+            entity_count > 0,
+            "expected non-zero Layer 3 entities across {variant} real-corpus cells"
+        );
+        assert!(
+            relation_count > 0,
+            "expected non-zero Layer 7 relations across {variant} real-corpus cells"
+        );
     }
 }
 

@@ -2,7 +2,7 @@
   "schema": "nlp.lexicon.receipt.v1",
   "date": "2026-11-14",
   "binary_format": "FNLPLX01",
-  "binary_bytes": 14768085,
+  "binary_bytes": 14722615,
   "total_entries": 342333,
   "total_rules": 649,
   "variants": {
@@ -22,18 +22,18 @@
     {
       "path": "lexicon/data/zh_hant.tsv",
       "entries": 66850,
-      "bytes": 2939126,
-      "sha256": "df91027eeb3bc0a99f74270bfdac847b8809640c58394e2d2e8c5daadad9bc61"
+      "bytes": 2948559,
+      "sha256": "2fd758eb2efbdcdae67945c7af8fb4c07158ab82c9cd277f2fe18cbf41519e11"
     },
     {
       "path": "lexicon/data/zh_hans.tsv",
       "entries": 71103,
-      "bytes": 3143744,
-      "sha256": "92d96c8472efa047c62a09da3112606296e88bf4a57c88159c8b7c77cce6cc0c"
+      "bytes": 3151113,
+      "sha256": "ae2dd6888e346ef0ae2f9372e5276a5469c7b2c2a2768689b8f9934bcdaf4636"
     },
     {
       "path": "lexicon/data/en.tsv",
-      "entries": 66397,
+      "entries": 66395,
       "bytes": 2846120,
       "sha256": "ad16a3493296839b9899bc1a62aa7877e2157dc27bd7753d87e7401bf142b1e0"
     },
@@ -53,7 +53,7 @@
       "path": "lexicon/data/ko.tsv",
       "entries": 69983,
       "bytes": 3767544,
-      "sha256": "3b2d43a1b288260c68958c17b8b7c2420424c30406cfa7e758bcfc592a74c11c4"
+      "sha256": "3b2d43a1b288260c68958c17b8b72420424c30406cfa7e758bcfc592a74c11c4"
     },
     {
       "path": "lexicon/data/ko_morph.tsv",
@@ -65,37 +65,54 @@
   "sources": [
     {
       "name": "jieba",
-      "variants": ["zh-Hans", "zh-Hant"],
+      "variants": [
+        "zh-Hans",
+        "zh-Hant"
+      ],
       "license": "MIT",
       "license_file": "LICENSE-JIEBA-MIT.txt"
     },
     {
       "name": "OpenCC",
-      "variants": ["zh-Hant", "zh-Hans"],
+      "variants": [
+        "zh-Hant",
+        "zh-Hans"
+      ],
       "license": "Apache-2.0",
       "license_file": "LICENSE-OPENCC-APACHE-2.0.txt"
     },
     {
       "name": "Princeton WordNet 3.1",
-      "variants": ["en-US", "en-GB", "en"],
+      "variants": [
+        "en-US",
+        "en-GB",
+        "en"
+      ],
       "license": "WordNet BSD-style",
       "license_file": "LICENSE-WORDNET.txt"
     },
     {
       "name": "SCOWL / VarCon",
-      "variants": ["en-US", "en-GB"],
+      "variants": [
+        "en-US",
+        "en-GB"
+      ],
       "license": "SCOWL Permissive",
       "license_file": "LICENSE-SCOWL.txt"
     },
     {
       "name": "mecab-naist-jdic 0.6.3b-20111013",
-      "variants": ["ja"],
+      "variants": [
+        "ja"
+      ],
       "license": "BSD-3-Clause",
       "license_file": "LICENSE-NAIST-JDIC-BSD.txt"
     },
     {
       "name": "mecab-ko-dic 2.1.1-20180720",
-      "variants": ["ko"],
+      "variants": [
+        "ko"
+      ],
       "license": "Apache-2.0",
       "license_file": "LICENSE-MECAB-KO-DIC-APACHE-2.0.txt"
     }

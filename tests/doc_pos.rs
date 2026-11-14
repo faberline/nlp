@@ -181,14 +181,13 @@ fn zh_novel() {
         show("他沒有回頭，只是把門關上了。"),
         [
             "他/PRON",
-            "沒/A",
-            "有/VERB",
+            "沒有/A",
             "回頭/M",
             "，/PUNCT",
             "只是/M",
             "把/ADP",
-            "門關/M",
-            "上/M",
+            "門/M",
+            "關上/M",
             "了/PART",
             "。/PUNCT",
         ]
@@ -1147,7 +1146,7 @@ fn ja_tokenization_and_pos() {
     let t = "東京駅で3冊の本を買った。";
     let doc = analyze(t);
     assert_eq!(doc.segmentation.sentences[0].lang, Lang::Ja);
-    assert!(doc.entities.is_empty());
+    assert!(!doc.entities.is_empty());
     assert!(doc.relations.is_empty());
     check_invariants(t);
 
@@ -1236,7 +1235,7 @@ fn ko_tokenization_and_pos() {
     let t = "서울역에서 3권의 책을 샀다.";
     let doc = analyze(t);
     assert_eq!(doc.segmentation.sentences[0].lang, Lang::Ko);
-    assert!(doc.entities.is_empty());
+    assert!(!doc.entities.is_empty());
     assert!(doc.relations.is_empty());
     assert_eq!(
         show(t),

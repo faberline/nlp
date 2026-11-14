@@ -7,7 +7,7 @@ mod pos;
 mod relation;
 mod segment;
 pub mod syntax;
-mod t2s;
+pub(crate) mod t2s;
 mod token;
 
 use crate::Span;
@@ -47,10 +47,14 @@ pub struct Options {
     /// `upos_candidates`, `sem_class`, and Korean `morphemes`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub enrich_morphology: bool,
-    /// Use the first-party `zh-Hant` + `zh-Hans` lexicon Viterbi segmenter for Chinese runs
-    /// instead of `jieba-rs`.
+    /// Backwards-compatible flag: first-party `zh-Hant` + `zh-Hans` lexicon Viterbi
+    /// segmentation is now enabled by default unless `legacy_jieba` is `true`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub first_party_zh_segmenter: bool,
+    /// Fall back to legacy `jieba-rs` for Chinese runs instead of the first-party
+    /// `zh-Hant` + `zh-Hans` lexicon Viterbi segmenter.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub legacy_jieba: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,8 +281,8 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         .filter(|f| !f.block && f.silent_noise)
         .map(|f| f.item.span)
         .collect();
-    // Supported sentences only, as (sentence index, span). Unsupported text gets no entities.
-    let mut scanned = Vec::new();
+    // Supported sentences only, as (sentence index, span, lang). Unsupported text gets no entities.
+    let mut scanned: Vec<(usize, Span, Lang)> = Vec::new();
 
     for paragraph in segment::paragraphs(&m) {
         let paragraph_index = seg.paragraphs.len();
@@ -301,8 +305,8 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
                     span,
                     reason: Reason::UnsupportedLanguage,
                 });
-            } else if !matches!(lang, Lang::Ja | Lang::Ko) && !segment::has_ja_or_ko(&c, span) {
-                scanned.push((sentence_index, span));
+            } else {
+                scanned.push((sentence_index, span, lang));
             }
             seg.sentences.push(Sentence {
                 span,
@@ -435,7 +439,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         options.normalize_traditional,
     );
     unknown.extend(entity_unknown);
-    let (relations, relation_unknown) = relation::relations(&c, &seg);
+    let (relations, relation_unknown) = relation::relations(&c, &seg, &tokens);
     unknown.extend(relation_unknown);
     sort_unknown(&mut unknown);
 

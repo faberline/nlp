@@ -470,13 +470,21 @@ fn chains_scope_and_opaque() {
             .iter()
             .any(|t| t.lang == faberline_nlp::doc::Lang::Ja && t.upos.is_some())
     );
-    assert!(rels(text).is_empty());
-    assert_eq!(rel_unknown(text), ["But"]);
+    assert_eq!(
+        rels(text),
+        [rel(
+            K::Contrast,
+            L::Sentence,
+            "But",
+            None,
+            "これはテストです。",
+            "But it works."
+        )]
+    );
+    assert!(rel_unknown(text).is_empty());
     assert!(rels("We ran it. これはテストです。").is_empty());
     assert!(rel_unknown("We ran it. これはテストです。").is_empty());
-    // A JA/KO sentence after a connector sentence is not used as an argument.
     let text = "It works. But it is slow. これはテストです。";
-    let japanese = "これはテストです。";
     assert_eq!(
         rels(text),
         [rel(
@@ -488,14 +496,7 @@ fn chains_scope_and_opaque() {
             "But it is slow."
         )]
     );
-    assert!(
-        rels(text)
-            .iter()
-            .all(|r| r.4 != japanese && r.5 != japanese)
-    );
     assert!(rel_unknown(text).is_empty());
-    // A mixed JA sentence starting with an English connector is skipped by Layer 7:
-    // no relation, no `relations` unknown, and no `UnsupportedLanguage` unknowns.
     let text = "It works. But これはテストです。";
     let doc = analyze(text);
     assert!(
@@ -509,15 +510,45 @@ fn chains_scope_and_opaque() {
             && t.span.start_char >= doc.segmentation.sentences[1].span.start_char
             && t.span.end_char <= doc.segmentation.sentences[1].span.end_char
     }));
-    assert!(rels(text).is_empty());
+    assert_eq!(
+        rels(text),
+        [rel(
+            K::Contrast,
+            L::Sentence,
+            "But",
+            None,
+            "It works.",
+            "But これはテストです。"
+        )]
+    );
     assert!(rel_unknown(text).is_empty());
 
-    // Korean sentences are likewise skipped by Layer 7 while emitting `pos` unsupported unknowns.
+    // Korean sentences are likewise supported in Layer 7.
     let ko_before = "안녕하세요. But it works.";
-    assert!(rels(ko_before).is_empty());
-    assert_eq!(rel_unknown(ko_before), ["But"]);
+    assert_eq!(
+        rels(ko_before),
+        [rel(
+            K::Contrast,
+            L::Sentence,
+            "But",
+            None,
+            "안녕하세요.",
+            "But it works."
+        )]
+    );
+    assert!(rel_unknown(ko_before).is_empty());
     let ko_mixed = "It works. But 안녕하세요.";
-    assert!(rels(ko_mixed).is_empty());
+    assert_eq!(
+        rels(ko_mixed),
+        [rel(
+            K::Contrast,
+            L::Sentence,
+            "But",
+            None,
+            "It works.",
+            "But 안녕하세요."
+        )]
+    );
     assert!(rel_unknown(ko_mixed).is_empty());
 
     // Truly unsupported script (Cyrillic) still emits `segmentation` `UnsupportedLanguage`.
@@ -621,6 +652,163 @@ fn because_pairs_with_so_and_therefore() {
 fn then_after_if_is_not_a_sequence() {
     assert!(rels("If, then we go.").is_empty());
     assert_eq!(rel_unknown("If, then we go."), ["If"]);
+}
+
+#[test]
+fn ja_discourse_relations() {
+    assert_eq!(
+        rels("雨が降った。しかし、試合は続いた。"),
+        [rel(
+            K::Contrast,
+            L::Sentence,
+            "しかし",
+            None,
+            "雨が降った。",
+            "しかし、試合は続いた。"
+        )]
+    );
+    assert_eq!(
+        rels("彼は努力した。それにもかかわらず、失敗した。"),
+        [rel(
+            K::Contrast,
+            L::Sentence,
+            "それにもかかわらず",
+            None,
+            "彼は努力した。",
+            "それにもかかわらず、失敗した。"
+        )]
+    );
+    assert_eq!(
+        rels("雨が降った。したがって、試合は中止になった。"),
+        [rel(
+            K::Cause,
+            L::Sentence,
+            "したがって",
+            None,
+            "雨が降った。",
+            "したがって、試合は中止になった。"
+        )]
+    );
+    assert_eq!(
+        rels("もし雨が降ったら、家にいます。"),
+        [rel(
+            K::Condition,
+            L::Clause,
+            "もし",
+            None,
+            "もし雨が降ったら",
+            "家にいます。"
+        )]
+    );
+    assert_eq!(
+        rels("鍵をかけた。それから、寝た。"),
+        [rel(
+            K::Sequence,
+            L::Sentence,
+            "それから",
+            None,
+            "鍵をかけた。",
+            "それから、寝た。"
+        )]
+    );
+    assert_eq!(
+        rels("速度が上がった。さらに、精度も向上した。"),
+        [rel(
+            K::Parallel,
+            L::Sentence,
+            "さらに",
+            None,
+            "速度が上がった。",
+            "さらに、精度も向上した。"
+        )]
+    );
+    // Negative prefix guards: または / またがる / もしもし must NOT trigger.
+    for text in [
+        "リンゴを買った。または、バナナを買う。",
+        "橋がある。またがる問題だ。",
+        "電話が鳴った。もしもし、元気ですか。",
+    ] {
+        assert!(rels(text).is_empty(), "{text}");
+        assert!(rel_unknown(text).is_empty(), "{text}");
+    }
+}
+
+#[test]
+fn ko_discourse_relations() {
+    assert_eq!(
+        rels("비가 왔다. 하지만 경기는 계속되었다."),
+        [rel(
+            K::Contrast,
+            L::Sentence,
+            "하지만",
+            None,
+            "비가 왔다.",
+            "하지만 경기는 계속되었다."
+        )]
+    );
+    assert_eq!(
+        rels("비가 왔다. 그럼에도 불구하고 출발했다."),
+        [rel(
+            K::Contrast,
+            L::Sentence,
+            "그럼에도 불구하고",
+            None,
+            "비가 왔다.",
+            "그럼에도 불구하고 출발했다."
+        )]
+    );
+    assert_eq!(
+        rels("비가 왔다. 그러므로 경기는 취소되었다."),
+        [rel(
+            K::Cause,
+            L::Sentence,
+            "그러므로",
+            None,
+            "비가 왔다.",
+            "그러므로 경기는 취소되었다."
+        )]
+    );
+    assert_eq!(
+        rels("만약 비가 오면, 집에 있겠다."),
+        [rel(
+            K::Condition,
+            L::Clause,
+            "만약",
+            None,
+            "만약 비가 오면",
+            "집에 있겠다."
+        )]
+    );
+    assert_eq!(
+        rels("문을 잠갔다. 그러고 나서 잠들었다."),
+        [rel(
+            K::Sequence,
+            L::Sentence,
+            "그러고 나서",
+            None,
+            "문을 잠갔다.",
+            "그러고 나서 잠들었다."
+        )]
+    );
+    assert_eq!(
+        rels("속도가 빨라졌다. 게다가 정확도도 높아졌다."),
+        [rel(
+            K::Parallel,
+            L::Sentence,
+            "게다가",
+            None,
+            "속도가 빨라졌다.",
+            "게다가 정확도도 높아졌다."
+        )]
+    );
+    // Negative prefix guards: unspaced Hangul continuation must NOT trigger.
+    for text in [
+        "비가 왔다. 만약의 경우를 대비하자.",
+        "그가 왔다. 그러나저러나 집에 가자.",
+    ] {
+        assert!(rels(text).is_empty(), "{text}");
+        assert!(rel_unknown(text).is_empty(), "{text}");
+    }
 }
 
 #[test]
@@ -1647,4 +1835,11 @@ fn ws6_v3_kinship_spatial_after_guard_and_parallel_variants() {
             "石室四角亮起微光。"
         )]
     );
+}
+
+#[test]
+fn ja_proper_name_does_not_match_zh_connectors() {
+    let text = "若菜貞爾は東京へ向かった。彼は静かに笑った。";
+    assert_eq!(rels(text), []);
+    assert_eq!(rel_unknown(text), Vec::<String>::new());
 }

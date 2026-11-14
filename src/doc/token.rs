@@ -800,7 +800,7 @@ impl TokenMatcher {
                 ja_ko_extra: None,
                 normalize_traditional: options.normalize_traditional,
                 use_doc_jieba: true,
-                first_party_zh_segmenter: options.first_party_zh_segmenter,
+                first_party_zh_segmenter: !options.legacy_jieba,
             };
         }
 
@@ -821,7 +821,7 @@ impl TokenMatcher {
                 ja_ko_extra: cached.ja_ko_ac.as_ref().map(Arc::clone),
                 normalize_traditional: options.normalize_traditional,
                 use_doc_jieba: true,
-                first_party_zh_segmenter: options.first_party_zh_segmenter,
+                first_party_zh_segmenter: !options.legacy_jieba,
             };
         }
 
@@ -888,7 +888,7 @@ impl TokenMatcher {
             ja_ko_extra: ja_ko_ac,
             normalize_traditional: options.normalize_traditional,
             use_doc_jieba: true,
-            first_party_zh_segmenter: options.first_party_zh_segmenter,
+            first_party_zh_segmenter: !options.legacy_jieba,
         }
     }
 }
@@ -1130,17 +1130,100 @@ fn han_words(text: &str, base: usize, matcher: &TokenMatcher, out: &mut Vec<(usi
         return;
     }
     if matcher.first_party_zh_segmenter {
-        let chars: Vec<char> = text.chars().collect();
-        let mut byte_offs = Vec::with_capacity(chars.len() + 1);
-        for (b, _) in text.char_indices() {
-            byte_offs.push(b);
+        if !matcher.normalize_traditional {
+            let chars: Vec<char> = text.chars().collect();
+            let mut byte_offs = Vec::with_capacity(chars.len() + 1);
+            for (b, _) in text.char_indices() {
+                byte_offs.push(b);
+            }
+            byte_offs.push(text.len());
+            for sp in crate::lexicon::zh::segment_zh(&chars, 0, &[]) {
+                out.push((
+                    base + byte_offs[sp.start_char],
+                    base + byte_offs[sp.end_char],
+                ));
+            }
+            return;
         }
-        byte_offs.push(text.len());
-        for sp in crate::lexicon::zh::segment_zh(&chars, 0, &[]) {
-            out.push((
-                base + byte_offs[sp.start_char],
-                base + byte_offs[sp.end_char],
-            ));
+
+        let chars: Vec<(usize, char)> = text.char_indices().collect();
+        let m_len = chars.len();
+        let mut orig_bytes = Vec::with_capacity(m_len + 1);
+        for &(b, _) in &chars {
+            orig_bytes.push(b);
+        }
+        orig_bytes.push(text.len());
+
+        let mut proj_orig = Vec::with_capacity(m_len);
+        let mut clean_chars = Vec::with_capacity(m_len);
+        let mut simp = String::with_capacity(text.len());
+        for i in 0..m_len {
+            let ch = chars[i].1;
+            let skip = i > 0
+                && i + 1 < m_len
+                && is_scraper_infix(ch)
+                && !is_scraper_infix(chars[i - 1].1)
+                && !is_scraper_infix(chars[i + 1].1);
+            if !skip {
+                proj_orig.push(i);
+                clean_chars.push(ch);
+                simp.push(t2s::to_simplified_char(ch));
+            }
+        }
+
+        if let Some(simp_ac) = &matcher.simp_extra {
+            let mut simp_byte_to_char = vec![0usize; simp.len() + 1];
+            let mut ci = 0usize;
+            for (sb, sch) in simp.char_indices() {
+                simp_byte_to_char[sb..sb + sch.len_utf8()].fill(ci);
+                ci += 1;
+            }
+            simp_byte_to_char[simp.len()] = ci;
+
+            let mut at_byte = 0usize;
+            for m in simp_ac.find_iter(&simp) {
+                let cs_prev = simp_byte_to_char[at_byte];
+                let cs = simp_byte_to_char[m.start()];
+                let ce = simp_byte_to_char[m.end()];
+                if cs_prev < cs {
+                    for sp in crate::lexicon::zh::segment_zh(&clean_chars[cs_prev..cs], 0, &[]) {
+                        emit_projected_span(
+                            cs_prev + sp.start_char,
+                            cs_prev + sp.end_char,
+                            &proj_orig,
+                            &orig_bytes,
+                            base,
+                            out,
+                        );
+                    }
+                }
+                emit_projected_span(cs, ce, &proj_orig, &orig_bytes, base, out);
+                at_byte = m.end();
+            }
+            let cs_tail = simp_byte_to_char[at_byte];
+            if cs_tail < clean_chars.len() {
+                for sp in crate::lexicon::zh::segment_zh(&clean_chars[cs_tail..], 0, &[]) {
+                    emit_projected_span(
+                        cs_tail + sp.start_char,
+                        cs_tail + sp.end_char,
+                        &proj_orig,
+                        &orig_bytes,
+                        base,
+                        out,
+                    );
+                }
+            }
+        } else {
+            for sp in crate::lexicon::zh::segment_zh(&clean_chars, 0, &[]) {
+                emit_projected_span(
+                    sp.start_char,
+                    sp.end_char,
+                    &proj_orig,
+                    &orig_bytes,
+                    base,
+                    out,
+                );
+            }
         }
         return;
     }
@@ -1342,6 +1425,16 @@ fn is_abbreviated_month(w: &str) -> bool {
         && MONTHS.iter().any(|m| w.eq_ignore_ascii_case(m))
 }
 
+#[inline]
+fn is_invisible_format_char(ch: char) -> bool {
+    matches!(ch, '\u{200B}' | '\u{2060}' | '\u{FEFF}')
+}
+
+#[inline]
+fn is_ws_or_invisible(ch: char) -> bool {
+    ch.is_whitespace() || is_invisible_format_char(ch)
+}
+
 /// Non-Han text: UAX 29 words, then clitics, hyphens, abbreviation dots and repeated marks.
 fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
     if a0 >= b0 {
@@ -1350,8 +1443,12 @@ fn word_ranges(s: &str, a0: usize, b0: usize, out: &mut Vec<(usize, usize)>) {
     let mut raw = Vec::new();
     for (i, w) in s[a0..b0].split_word_bound_indices() {
         let a = a0 + i;
-        if !w.chars().all(char::is_whitespace) {
-            push_uax_segment(s, a, a + w.len(), &mut raw);
+        let b = a + w.len();
+        let trimmed = w.trim_matches(is_ws_or_invisible);
+        if !trimmed.is_empty() {
+            let lead = w.len() - w.trim_start_matches(is_ws_or_invisible).len();
+            let trail = w.len() - w.trim_end_matches(is_ws_or_invisible).len();
+            push_uax_segment(s, a + lead, b - trail, &mut raw);
         }
     }
 

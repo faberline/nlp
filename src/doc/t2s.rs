@@ -2925,7 +2925,7 @@ const T2S_TABLE: &[(char, char)] = &[
 /// Map one Traditional or variant Han character to its 1-to-1 Simplified character.
 /// Characters without a 1-to-1 Simplified mapping are returned unchanged.
 #[inline]
-pub(super) fn to_simplified_char(ch: char) -> char {
+pub(crate) fn to_simplified_char(ch: char) -> char {
     if (ch as u32) < 0x3400 {
         return ch;
     }

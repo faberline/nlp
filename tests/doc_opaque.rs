@@ -1307,3 +1307,27 @@ fn academic_numbered_headings_and_fullwidth_period_guards() {
         vec![(OpaqueKind::Heading, "第1章 3．5".to_owned())]
     );
 }
+
+#[test]
+fn isolated_pua_and_invisible_trim_spaces() {
+    // Isolated PUA char (e.g. \u{F815} gaiji in zh-Hant/paper) must NOT trigger OpaqueKind::Code.
+    let gaiji = "此字作\u{F815}解，見於古籍。";
+    let gaiji_doc = analyze(gaiji);
+    assert!(
+        gaiji_doc.segmentation.opaque.is_empty(),
+        "isolated PUA must not be opaque: {:?}",
+        opaque_pairs(gaiji, &gaiji_doc)
+    );
+
+    // Leading/trailing \u{200B}, \u{2060}, \u{FEFF} are trimmed from opaque line spans,
+    // while emoji ZWJ (\u{200D}) and VS16 (\u{FE0F}) stay intact.
+    let heading_zwsp = "\u{FEFF}# Title\u{200B}\n\nBody \u{1F469}\u{200D}\u{1F52C}\u{2060}";
+    let doc = analyze(heading_zwsp);
+    assert_eq!(
+        opaque_pairs(heading_zwsp, &doc),
+        vec![
+            (OpaqueKind::Heading, "# Title".to_owned()),
+            (OpaqueKind::Emoji, "\u{1F469}\u{200D}\u{1F52C}".to_owned()),
+        ]
+    );
+}

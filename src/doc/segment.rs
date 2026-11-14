@@ -113,12 +113,16 @@ const MONTH_NAMES: &[&str] = &[
     "december",
 ];
 
+pub(crate) fn is_trim_space(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '\u{200B}' | '\u{2060}' | '\u{FEFF}')
+}
+
 pub(super) fn paragraphs(c: &[char]) -> Vec<Span> {
     let mut out = Vec::new();
     let mut open: Option<Span> = None;
     let mut prev = (0, 0);
     for (ls, le) in lines(c) {
-        if c[ls..le].iter().all(|ch| ch.is_whitespace()) {
+        if c[ls..le].iter().all(|&ch| is_trim_space(ch)) {
             out.extend(open.take().and_then(|s| trim(c, s)));
             continue;
         }
@@ -205,10 +209,10 @@ pub(super) fn clauses_with_lang(c: &[char], sentence: Span, sent_ja: bool) -> Ve
                 && !is_us_date_comma(c, sentence.start_char, i, sentence.end_char) =>
             {
                 i + 1 == sentence.end_char
-                    || c[i + 1].is_whitespace()
+                    || is_trim_space(c[i + 1])
                     || (i > sentence.start_char && is_hangul(c[i - 1]) && is_hangul(c[i + 1]))
             }
-            ';' | ':' => i + 1 == sentence.end_char || c[i + 1].is_whitespace(),
+            ';' | ':' => i + 1 == sentence.end_char || is_trim_space(c[i + 1]),
             _ => false,
         };
         if split {
@@ -237,7 +241,8 @@ pub(super) fn lang(c: &[char], span: Span) -> (Lang, bool) {
 }
 
 pub(super) fn lang_in_context(c: &[char], span: Span, context_ja: bool) -> (Lang, bool) {
-    let s = counts(&c[span.start_char..span.end_char]);
+    let slice = &c[span.start_char..span.end_char];
+    let s = counts(slice);
     let sup = s.han + s.kana + s.hangul + s.latin;
     if sup + s.other == 0 {
         return (Lang::Und, false);
@@ -245,14 +250,31 @@ pub(super) fn lang_in_context(c: &[char], span: Span, context_ja: bool) -> (Lang
     if s.other >= sup {
         return (Lang::Und, true);
     }
-    let has_ja = s.kana > 0 || (s.han > 0 && (s.has_ja_exclusive || (context_ja && s.hangul == 0)));
-    let has_zh = s.han > 0 && !has_ja;
+    let eff_han = if s.hangul > 0 {
+        s.han.saturating_sub(s.han_in_parens)
+    } else {
+        s.han
+    };
+    let has_ja =
+        s.kana > 0 || (eff_han > 0 && (s.has_ja_exclusive || (context_ja && s.hangul == 0)));
+    let has_zh = eff_han > 0 && !has_ja;
     let has_ko = s.hangul > 0;
     let has_en = s.latin > 0;
     let families =
         usize::from(has_ja) + usize::from(has_zh) + usize::from(has_ko) + usize::from(has_en);
     let lang = if families >= 2 {
-        Lang::Mixed
+        if has_en
+            && !has_zh
+            && ((has_ja && !has_ko && (s.han + s.kana) >= 4)
+                || (has_ko && !has_ja && s.hangul >= 4))
+            && s.latin <= 2
+            && s.latin * 5 <= (s.han + s.kana + s.hangul)
+            && all_single_ascii_latin_vars(slice)
+        {
+            if has_ja { Lang::Ja } else { Lang::Ko }
+        } else {
+            Lang::Mixed
+        }
     } else if has_ja {
         Lang::Ja
     } else if has_ko {
@@ -298,10 +320,10 @@ fn lines(c: &[char]) -> Vec<(usize, usize)> {
 fn trim(c: &[char], s: Span) -> Option<Span> {
     let mut start = s.start_char;
     let mut end = s.end_char;
-    while start < end && c[start].is_whitespace() {
+    while start < end && is_trim_space(c[start]) {
         start += 1;
     }
-    while end > start && c[end - 1].is_whitespace() {
+    while end > start && is_trim_space(c[end - 1]) {
         end -= 1;
     }
     (start < end).then_some(Span {
@@ -316,7 +338,7 @@ fn starts_block(line: &[char]) -> bool {
 
 /// A line ends a block with a CJK/Japanese terminator when Han + Kana outnumber Latin + other.
 fn ends_block(line: &[char]) -> bool {
-    let Some(last) = line.iter().rev().find(|ch| !ch.is_whitespace()) else {
+    let Some(last) = line.iter().rev().find(|ch| !is_trim_space(**ch)) else {
         return false;
     };
     let s = counts(line);
@@ -325,6 +347,7 @@ fn ends_block(line: &[char]) -> bool {
 
 struct ScriptCounts {
     han: usize,
+    han_in_parens: usize,
     kana: usize,
     hangul: usize,
     latin: usize,
@@ -335,15 +358,30 @@ struct ScriptCounts {
 fn counts(chars: &[char]) -> ScriptCounts {
     let mut out = ScriptCounts {
         han: 0,
+        han_in_parens: 0,
         kana: 0,
         hangul: 0,
         latin: 0,
         other: 0,
         has_ja_exclusive: false,
     };
-    for &ch in chars {
+    let mut paren_depth: usize = 0;
+    for (i, &ch) in chars.iter().enumerate() {
+        if matches!(ch, '(' | '（') {
+            if has_matching_close_paren(chars, i, chars.len()) {
+                paren_depth += 1;
+            }
+            continue;
+        }
+        if matches!(ch, ')' | '）') {
+            paren_depth = paren_depth.saturating_sub(1);
+            continue;
+        }
         if is_han(ch) {
             out.han += 1;
+            if paren_depth > 0 {
+                out.han_in_parens += 1;
+            }
             if is_ja_exclusive_kanji(ch) {
                 out.has_ja_exclusive = true;
             }
@@ -361,6 +399,23 @@ fn counts(chars: &[char]) -> ScriptCounts {
         out.has_ja_exclusive = true;
     }
     out
+}
+
+fn all_single_ascii_latin_vars(chars: &[char]) -> bool {
+    let mut run = 0usize;
+    for &ch in chars {
+        if ch.is_ascii_alphabetic() {
+            run += 1;
+            if run > 1 {
+                return false;
+            }
+        } else if is_latin(ch) {
+            return false;
+        } else {
+            run = 0;
+        }
+    }
+    true
 }
 
 fn has_ja_slang_tag(chars: &[char]) -> bool {
@@ -522,11 +577,11 @@ fn skip_closers(c: &[char], from: usize, end: usize) -> usize {
 }
 
 fn at_break(c: &[char], at: usize, end: usize) -> bool {
-    at == end || c[at].is_whitespace()
+    at == end || is_trim_space(c[at])
 }
 
 fn next_nonspace(c: &[char], from: usize, end: usize) -> Option<char> {
-    c[from..end].iter().copied().find(|ch| !ch.is_whitespace())
+    c[from..end].iter().copied().find(|&ch| !is_trim_space(ch))
 }
 
 fn next_nonspace_same_line(c: &[char], from: usize, end: usize) -> Option<char> {
@@ -534,7 +589,7 @@ fn next_nonspace_same_line(c: &[char], from: usize, end: usize) -> Option<char> 
         if ch == '\n' || ch == '\r' {
             return None;
         }
-        if !ch.is_whitespace() {
+        if !is_trim_space(ch) {
             return Some(ch);
         }
     }
@@ -547,7 +602,7 @@ fn next_word_same_line(c: &[char], from: usize, end: usize) -> Option<String> {
         if c[i] == '\n' || c[i] == '\r' {
             return None;
         }
-        if !c[i].is_whitespace() {
+        if !is_trim_space(c[i]) {
             break;
         }
         i += 1;
@@ -703,6 +758,9 @@ fn dots(c: &[char], paragraph: Span, i: usize) -> (Option<(usize, usize)>, usize
     }
     let k = skip_closers(c, j, end);
     if !at_break(c, k, end) {
+        if is_tight_cjk_dot(c, paragraph.start_char, i, k, end) {
+            return (Some((k, k)), k);
+        }
         return (None, j);
     }
     if k > j
@@ -763,6 +821,21 @@ fn dots(c: &[char], paragraph: Span, i: usize) -> (Option<(usize, usize)>, usize
         return (None, j);
     }
     (Some((k, k)), k)
+}
+
+fn is_tight_cjk_dot(c: &[char], bound: usize, i: usize, k: usize, end: usize) -> bool {
+    if i <= bound || k >= end {
+        return false;
+    }
+    let prev = c[i - 1];
+    let prev_cjk = is_han(prev)
+        || matches!(
+            prev,
+            '）' | ')' | '】' | '］' | '〕' | '〉' | '》' | '」' | '』'
+        );
+    let next = c[k];
+    let next_cjk = is_han(next) || matches!(next, '「' | '『' | '（' | '(' | '【');
+    prev_cjk && next_cjk
 }
 
 /// Scans a maximal ASCII digit run ending at `dot_at` within `bound..dot_at`, returning its start

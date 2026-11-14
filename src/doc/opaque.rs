@@ -3,6 +3,7 @@
 //! Opaque spans are found by rules and then masked before sentence and clause splitting, so no
 //! boundary can fall inside one. All spans are offsets into the original text.
 
+use super::segment::is_trim_space;
 use super::{Opaque, OpaqueKind};
 use crate::Span;
 
@@ -99,8 +100,8 @@ pub(super) fn mask(c: &[char], found: &[Found]) -> Vec<char> {
 
 /// Attached to the text before it, and followed by whitespace or the end of the text.
 fn ends_sentence(c: &[char], s: usize, e: usize) -> bool {
-    let attached = s > 0 && !c[s - 1].is_whitespace();
-    attached && (e == c.len() || c[e].is_whitespace())
+    let attached = s > 0 && !is_trim_space(c[s - 1]);
+    attached && (e == c.len() || is_trim_space(c[e]))
 }
 
 /// Returns (kind, end, index of the next line) for a fenced code block or a display formula.
@@ -1031,13 +1032,13 @@ fn is_raw_noise_only_line(
     let mut i = s;
     let mut any = false;
     while i < t_end {
-        if c[i].is_whitespace() {
+        if is_trim_space(c[i]) {
             i += 1;
             continue;
         }
         let next = raw_html_tag(c, i, ls, le)
             .or_else(|| html_entity(c, i, le))
-            .or_else(|| pua_run(c, i, le))
+            .or_else(|| pua_run(c, i, le, mask_editorial))
             .or_else(|| {
                 if mask_editorial {
                     editorial_inline_at(c, i, ls, le)
@@ -1550,7 +1551,7 @@ fn inline_at(
     raw_html_tag(c, i, ls, le)
         .map(|end| (OpaqueKind::Code, end, true))
         .or_else(|| html_entity(c, i, le).map(|end| (OpaqueKind::Code, end, true)))
-        .or_else(|| pua_run(c, i, le).map(|end| (OpaqueKind::Code, end, true)))
+        .or_else(|| pua_run(c, i, le, mask_editorial).map(|end| (OpaqueKind::Code, end, true)))
         .or_else(|| {
             if mask_editorial {
                 editorial_inline_at(c, i, ls, le).map(|end| (OpaqueKind::Code, end, true))
@@ -1686,15 +1687,22 @@ fn html_entity(c: &[char], i: usize, le: usize) -> Option<usize> {
     None
 }
 
-/// Run of Unicode Private Use Area chars (`\u{E000}..=\u{F8FF}`), plus an optional attached 1-2
-/// char ASCII alphanumeric scraper tail when the PUA run has `>= 10` chars.
-fn pua_run(c: &[char], i: usize, le: usize) -> Option<usize> {
+/// Run of Unicode Private Use Area chars (`\u{E000}..=\u{F8FF}`) of length `>= 1` when
+/// `mask_editorial` is `true` (so scraped web-novel PUA noise such as `\u{e201}` is suppressed),
+/// or length `>= 2` when `mask_editorial` is `false` (so isolated single-char academic gaiji such
+/// as `\u{F815}` are preserved as normal text), plus an optional attached 1-2 char ASCII
+/// alphanumeric scraper tail when the PUA run has `>= 10` chars.
+fn pua_run(c: &[char], i: usize, le: usize, mask_editorial: bool) -> Option<usize> {
     if !is_pua(c[i]) {
         return None;
     }
     let mut end = i + 1;
     while end < le && is_pua(c[end]) {
         end += 1;
+    }
+    let min_len = if mask_editorial { 1 } else { 2 };
+    if end - i < min_len {
+        return None;
     }
     if end - i >= 10 {
         let tail = (end..le.min(end + 3))
@@ -2264,14 +2272,14 @@ fn lines(c: &[char]) -> Vec<(usize, usize)> {
 }
 
 fn first_non_ws(c: &[char], from: usize, to: usize) -> Option<usize> {
-    (from..to).find(|&j| !c[j].is_whitespace())
+    (from..to).find(|&j| !is_trim_space(c[j]))
 }
 
 /// Index after the last non-whitespace char in `c[from..to]`, or `from` if there is none.
 fn trimmed_end(c: &[char], from: usize, to: usize) -> usize {
     (from..to)
         .rev()
-        .find(|&j| !c[j].is_whitespace())
+        .find(|&j| !is_trim_space(c[j]))
         .map_or(from, |j| j + 1)
 }
 
@@ -2280,17 +2288,17 @@ fn run_len(c: &[char], from: usize, to: usize, ch: char) -> usize {
 }
 
 fn has_text(chars: &[char]) -> bool {
-    chars.iter().any(|ch| !ch.is_whitespace())
+    chars.iter().any(|&ch| !is_trim_space(ch))
 }
 
 fn trim(chars: &[char]) -> &[char] {
     let start = chars
         .iter()
-        .position(|ch| !ch.is_whitespace())
+        .position(|&ch| !is_trim_space(ch))
         .unwrap_or(chars.len());
     let end = chars
         .iter()
-        .rposition(|ch| !ch.is_whitespace())
+        .rposition(|&ch| !is_trim_space(ch))
         .map_or(start, |j| j + 1);
     &chars[start..end]
 }

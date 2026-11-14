@@ -3,7 +3,8 @@
 
 use super::segment;
 use super::{
-    Opaque, OpaqueKind, Reason, Relation, RelationKind, RelationLevel, Segmentation, Unknown,
+    Lang, Opaque, OpaqueKind, Reason, Relation, RelationKind, RelationLevel, Segmentation, Token,
+    Unknown,
 };
 use crate::Span;
 use RelationKind as K;
@@ -172,26 +173,102 @@ const ENTRIES: &[(&str, Role)] = &[
     ("同时", Ambiguous),
     ("while", Ambiguous),
     ("since", Ambiguous),
+    // Japanese
+    ("それにもかかわらず", Back(K::Contrast)),
+    ("にもかかわらず", Back(K::Contrast)),
+    ("しかしながら", Back(K::Contrast)),
+    ("けれども", Back(K::Contrast)),
+    ("ところが", Back(K::Contrast)),
+    ("しかし", Back(K::Contrast)),
+    ("けれど", Back(K::Contrast)),
+    ("一方で", Back(K::Contrast)),
+    ("だが", Back(K::Contrast)),
+    ("とはいえ", Back(K::Contrast)),
+    ("したがって", Back(K::Cause)),
+    ("そのため", Back(K::Cause)),
+    ("ゆえに", Back(K::Cause)),
+    ("だから", Back(K::Cause)),
+    ("よって", Back(K::Cause)),
+    ("なぜなら", Open(K::Cause, CAUSE_RESULT)),
+    ("というのも", Open(K::Cause, CAUSE_RESULT)),
+    ("万が一", Open(K::Condition, COND_RESULT)),
+    ("もしも", Open(K::Condition, COND_RESULT)),
+    ("もし", Open(K::Condition, COND_RESULT)),
+    ("仮に", Open(K::Condition, COND_RESULT)),
+    ("それから", Back(K::Sequence)),
+    ("その後", Back(K::Sequence)),
+    ("次いで", Back(K::Sequence)),
+    ("続いて", Back(K::Sequence)),
+    ("やがて", Back(K::Sequence)),
+    ("次に", Back(K::Sequence)),
+    ("ならびに", Back(K::Parallel)),
+    ("さらに", Back(K::Parallel)),
+    ("しかも", Back(K::Parallel)),
+    ("加えて", Back(K::Parallel)),
+    ("その上", Back(K::Parallel)),
+    ("また", Back(K::Parallel)),
+    // Korean
+    ("그럼에도 불구하고", Back(K::Contrast)),
+    ("그렇지만", Back(K::Contrast)),
+    ("그러나", Back(K::Contrast)),
+    ("하지만", Back(K::Contrast)),
+    ("반면에", Back(K::Contrast)),
+    ("그럼에도", Back(K::Contrast)),
+    ("그러므로", Back(K::Cause)),
+    ("따라서", Back(K::Cause)),
+    ("그래서", Back(K::Cause)),
+    ("그 결과", Back(K::Cause)),
+    ("이로 인해", Back(K::Cause)),
+    ("왜냐하면", Open(K::Cause, CAUSE_RESULT)),
+    ("만약에", Open(K::Condition, COND_RESULT)),
+    ("만일에", Open(K::Condition, COND_RESULT)),
+    ("만약", Open(K::Condition, COND_RESULT)),
+    ("만일", Open(K::Condition, COND_RESULT)),
+    ("가령", Open(K::Condition, COND_RESULT)),
+    ("그러고 나서", Back(K::Sequence)),
+    ("다음으로", Back(K::Sequence)),
+    ("이어서", Back(K::Sequence)),
+    ("그 후", Back(K::Sequence)),
+    ("그 뒤", Back(K::Sequence)),
+    ("뿐만 아니라", Back(K::Parallel)),
+    ("게다가", Back(K::Parallel)),
+    ("더구나", Back(K::Parallel)),
+    ("아울러", Back(K::Parallel)),
+    ("또한", Back(K::Parallel)),
 ];
 
 /// Relations and the `relations` unknowns (connector spans), before the caller sorts them.
-pub(super) fn relations(c: &[char], seg: &Segmentation) -> (Vec<Relation>, Vec<Unknown>) {
+pub(super) fn relations(
+    c: &[char],
+    seg: &Segmentation,
+    tokens: &[Token],
+) -> (Vec<Relation>, Vec<Unknown>) {
     let unsupported: Vec<bool> = seg
         .sentences
         .iter()
-        .map(|s| {
-            segment::lang(c, s.span).1
-                || matches!(s.lang, super::Lang::Ja | super::Lang::Ko)
-                || segment::has_ja_or_ko(c, s.span)
-        })
+        .map(|s| segment::lang(c, s.span).1)
         .collect();
     let mut units = vec![Vec::new(); seg.sentences.len()];
     for (i, clause) in seg.clauses.iter().enumerate() {
         units[clause.sentence].push(i);
     }
+    let mut sent_tok_ranges = vec![0..0; seg.sentences.len()];
+    let mut tok_cursor = 0usize;
+    for (s, range) in sent_tok_ranges.iter_mut().enumerate() {
+        while tok_cursor < tokens.len() && tokens[tok_cursor].sentence < s {
+            tok_cursor += 1;
+        }
+        let start = tok_cursor;
+        while tok_cursor < tokens.len() && tokens[tok_cursor].sentence == s {
+            tok_cursor += 1;
+        }
+        *range = start..tok_cursor;
+    }
     let mut pass = Pass {
         c,
         seg,
+        tokens,
+        sent_tok_ranges,
         rels: Vec::new(),
         unknown: Vec::new(),
         used: vec![false; seg.clauses.len()],
@@ -212,6 +289,8 @@ pub(super) fn relations(c: &[char], seg: &Segmentation) -> (Vec<Relation>, Vec<U
 struct Pass<'a> {
     c: &'a [char],
     seg: &'a Segmentation,
+    tokens: &'a [Token],
+    sent_tok_ranges: Vec<std::ops::Range<usize>>,
     rels: Vec<Relation>,
     unknown: Vec<Unknown>,
     /// Clauses consumed as the correlate of an opener.
@@ -223,18 +302,29 @@ impl Pass<'_> {
         self.seg.clauses[i].span
     }
 
+    fn sent_tokens(&self, s: usize) -> &[Token] {
+        &self.tokens[self.sent_tok_ranges[s].clone()]
+    }
+
     /// Whether the last clause of sentence `s` opens with an `if` opener.
     fn last_opens_if(&self, s: usize) -> bool {
+        let toks = self.sent_tokens(s);
+        let sent_lang = self.seg.sentences[s].lang;
         self.seg
             .clauses
             .iter()
             .rposition(|c| c.sentence == s)
             .is_some_and(|i| {
+                let clause = self.clause(i);
+                let lang =
+                    effective_clause_lang(self.c, sent_lang, clause, self.seg.clauses[i].lang);
                 opens_if(
                     self.c,
                     &self.seg.opaque,
-                    self.clause(i),
+                    clause,
                     self.seg.sentences[s].span.end_char,
+                    toks,
+                    lang,
                 )
             })
     }
@@ -269,14 +359,25 @@ impl Pass<'_> {
     /// Sentence `s` with clauses `ids`; `prev` is the previous sentence in the same paragraph.
     fn sentence(&mut self, s: usize, prev: Option<usize>, ids: &[usize]) {
         let sentence = self.seg.sentences[s].span;
+        let sent_lang = self.seg.sentences[s].lang;
+        let toks = &self.tokens[self.sent_tok_ranges[s].clone()];
         for k in 0..ids.len() {
             let ci = ids[k];
             if self.used[ci] {
                 continue;
             }
             let clause = self.clause(ci);
+            let clause_lang =
+                effective_clause_lang(self.c, sent_lang, clause, self.seg.clauses[ci].lang);
             let next = ids.get(k + 1).copied();
-            let initial = connector(self.c, &self.seg.opaque, clause, sentence.end_char);
+            let initial = connector(
+                self.c,
+                &self.seg.opaque,
+                clause,
+                sentence.end_char,
+                toks,
+                clause_lang,
+            );
             if let Some((role, conn)) = initial {
                 let bare = is_bare(self.c, conn.end_char, clause.end_char);
                 match role {
@@ -290,6 +391,13 @@ impl Pass<'_> {
                                 &self.seg.opaque,
                                 self.clause(ids[k - 1]),
                                 sentence.end_char,
+                                toks,
+                                effective_clause_lang(
+                                    self.c,
+                                    sent_lang,
+                                    self.clause(ids[k - 1]),
+                                    self.seg.clauses[ids[k - 1]].lang,
+                                ),
                             ) => {}
                     Back(kind) if k == 0 => match prev {
                         // `then` that starts a sentence after an `if` clause is that `if`'s correlate.
@@ -336,18 +444,41 @@ impl Pass<'_> {
                             continue;
                         };
                         let n_span = self.clause(n);
+                        let n_lang = effective_clause_lang(
+                            self.c,
+                            sent_lang,
+                            n_span,
+                            self.seg.clauses[n].lang,
+                        );
                         let opaque = &self.seg.opaque;
-                        match correlate(self.c, opaque, n_span, sentence.end_char, results) {
+                        match correlate(
+                            self.c,
+                            opaque,
+                            n_span,
+                            sentence.end_char,
+                            results,
+                            toks,
+                            n_lang,
+                        ) {
                             Some(cor) => {
                                 self.used[n] = true;
                                 // A bare correlate (`then,`) takes the clause after it as arg2.
                                 let arg2 = if is_bare(self.c, cor.end_char, n_span.end_char) {
                                     let after = ids.get(k + 2).copied().filter(|&n2| {
+                                        let n2_span = self.clause(n2);
+                                        let n2_lang = effective_clause_lang(
+                                            self.c,
+                                            sent_lang,
+                                            n2_span,
+                                            self.seg.clauses[n2].lang,
+                                        );
                                         connector(
                                             self.c,
                                             opaque,
-                                            self.clause(n2),
+                                            n2_span,
                                             sentence.end_char,
+                                            toks,
+                                            n2_lang,
                                         )
                                         .is_none()
                                     });
@@ -365,8 +496,15 @@ impl Pass<'_> {
                                 self.emit(kind, Cl, conn, Some(cor), clause, arg2);
                             }
                             None if silent => {}
-                            None if connector(self.c, opaque, n_span, sentence.end_char)
-                                .is_some() =>
+                            None if connector(
+                                self.c,
+                                opaque,
+                                n_span,
+                                sentence.end_char,
+                                toks,
+                                n_lang,
+                            )
+                            .is_some() =>
                             {
                                 self.unknown(conn);
                             }
@@ -384,9 +522,19 @@ impl Pass<'_> {
                 && let Some(frame_conn) = post_temporal_frame(self.c, &self.seg.opaque, clause)
             {
                 let n_span = self.clause(n);
+                let n_lang =
+                    effective_clause_lang(self.c, sent_lang, n_span, self.seg.clauses[n].lang);
                 let n_start = skip_opening(self.c, &self.seg.opaque, n_span);
                 if !is_bare(self.c, n_start, n_span.end_char)
-                    && connector(self.c, &self.seg.opaque, n_span, sentence.end_char).is_none()
+                    && connector(
+                        self.c,
+                        &self.seg.opaque,
+                        n_span,
+                        sentence.end_char,
+                        toks,
+                        n_lang,
+                    )
+                    .is_none()
                 {
                     self.emit(K::Sequence, Cl, frame_conn, None, clause, n_span);
                 }
@@ -395,19 +543,58 @@ impl Pass<'_> {
     }
 }
 
+fn effective_clause_lang(c: &[char], sent_lang: Lang, clause: Span, clause_lang: Lang) -> Lang {
+    if clause_lang == Lang::Ja || (sent_lang == Lang::Ja && clause_lang != Lang::Zh) {
+        return Lang::Ja;
+    }
+    if clause_lang == Lang::Ko || (sent_lang == Lang::Ko && clause_lang != Lang::Zh) {
+        return Lang::Ko;
+    }
+    if sent_lang == Lang::Mixed || clause_lang == Lang::Mixed {
+        let slice = &c[clause.start_char..clause.end_char];
+        if slice
+            .iter()
+            .any(|&ch| matches!(ch, '\u{3040}'..='\u{30FF}'))
+        {
+            return Lang::Ja;
+        }
+        if slice
+            .iter()
+            .any(|&ch| matches!(ch, '\u{AC00}'..='\u{D7A3}'))
+        {
+            return Lang::Ko;
+        }
+    }
+    clause_lang
+}
+
 /// The first connector of a clause, with its role. Special cases are applied here.
 fn connector(
     c: &[char],
     opaque: &[Opaque],
     clause: Span,
     sentence_end: usize,
+    sent_tokens: &[Token],
+    lang: Lang,
 ) -> Option<(Role, Span)> {
     let from = skip_opening(c, opaque, clause);
     // A connector never starts inside code, a citation or another opaque span.
     if hides(opaque, from) {
         return None;
     }
-    let (text, span) = longest(c, from, clause.end_char, ENTRIES.iter().map(|e| e.0))?;
+    let (text, span) = longest(
+        c,
+        from,
+        clause.end_char,
+        ENTRIES
+            .iter()
+            .filter(|&&(entry, _)| match lang {
+                Lang::Ja => is_ja_entry(entry) || entry.is_ascii(),
+                Lang::Ko => is_ko_entry(entry) || entry.is_ascii(),
+                _ => true,
+            })
+            .map(|e| e.0),
+    )?;
     let role = ENTRIES.iter().find(|e| e.0 == text)?.1;
     let end = span.end_char;
     let next = next_nonspace(c, end, sentence_end);
@@ -434,7 +621,79 @@ fn connector(
         "so" if next == Some(',') => Ambiguous,
         _ => role,
     };
+    if is_ko_entry(text) && !ko_boundary_ok(c, end, clause.end_char) {
+        return None;
+    }
+    if is_ja_entry(text) {
+        if text == "また"
+            && c.get(end)
+                .is_some_and(|&ch| matches!(ch, 'は' | 'が' | 'だ'))
+        {
+            return None;
+        }
+        if text == "もし" && starts_after(end, "もし") {
+            return None;
+        }
+        if !ja_boundary_ok(c, end, clause.end_char, sent_tokens) {
+            return None;
+        }
+    }
     Some((role, span))
+}
+
+fn is_ko_entry(s: &str) -> bool {
+    s.chars().any(|ch| matches!(ch, '\u{AC00}'..='\u{D7A3}'))
+}
+
+fn ko_boundary_ok(c: &[char], end: usize, clause_end: usize) -> bool {
+    end == clause_end
+        || c.get(end).is_some_and(|&ch| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    ',' | '，'
+                        | '、'
+                        | '.'
+                        | '。'
+                        | '!'
+                        | '！'
+                        | '?'
+                        | '？'
+                        | ';'
+                        | '；'
+                        | ':'
+                        | '：'
+                )
+                || CLOSING.contains(&ch)
+        })
+}
+
+fn is_ja_entry(s: &str) -> bool {
+    s.chars().any(|ch| matches!(ch, '\u{3040}'..='\u{30FF}')) || s == "その後"
+}
+
+fn ja_boundary_ok(c: &[char], end: usize, clause_end: usize, sent_tokens: &[Token]) -> bool {
+    end == clause_end
+        || c.get(end).is_some_and(|&ch| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '、' | ','
+                        | '，'
+                        | '.'
+                        | '。'
+                        | '!'
+                        | '！'
+                        | '?'
+                        | '？'
+                        | ';'
+                        | '；'
+                        | ':'
+                        | '：'
+                )
+                || CLOSING.contains(&ch)
+        })
+        || sent_tokens.iter().any(|tok| tok.span.end_char == end)
 }
 
 /// A post-positional temporal frame (`之後`, `之后`, `之際`, `之际`, `之時`, `之时`) ending a clause
@@ -520,6 +779,8 @@ fn correlate(
     clause: Span,
     sentence_end: usize,
     texts: &'static [&'static str],
+    sent_tokens: &[Token],
+    lang: Lang,
 ) -> Option<Span> {
     let from = skip_opening(c, opaque, clause);
     if hides(opaque, from) {
@@ -528,7 +789,7 @@ fn correlate(
     let (text, span) = longest(c, from, clause.end_char, texts.iter().copied())?;
     let ok = text != "so"
         || matches!(
-            connector(c, opaque, clause, sentence_end),
+            connector(c, opaque, clause, sentence_end, sent_tokens, lang),
             Some((Back(K::Cause), _))
         );
     let part_of_word = CORRELATE_STOP.iter().any(|&(word, stop)| {
@@ -546,9 +807,16 @@ fn is_then(c: &[char], conn: Span) -> bool {
 }
 
 /// Whether the clause starts with an `if` opener.
-fn opens_if(c: &[char], opaque: &[Opaque], clause: Span, sentence_end: usize) -> bool {
+fn opens_if(
+    c: &[char],
+    opaque: &[Opaque],
+    clause: Span,
+    sentence_end: usize,
+    sent_tokens: &[Token],
+    lang: Lang,
+) -> bool {
     matches!(
-        connector(c, opaque, clause, sentence_end),
+        connector(c, opaque, clause, sentence_end, sent_tokens, lang),
         Some((Open(K::Condition, _), _))
     )
 }

@@ -187,9 +187,14 @@ struct Args {
     #[arg(long)]
     morphology: bool,
 
-    /// Use the first-party `zh-Hant` + `zh-Hans` lexicon segmenter for Chinese runs (`options.first_party_zh_segmenter`).
+    /// Backwards-compatible flag: the first-party `zh-Hant` + `zh-Hans` lexicon segmenter
+    /// is now enabled by default unless `--legacy-jieba` is passed.
     #[arg(long)]
     first_party_dict: bool,
+
+    /// Fall back to legacy `jieba-rs` for Chinese runs (`options.legacy_jieba`).
+    #[arg(long)]
+    legacy_jieba: bool,
 }
 
 /// Exact Unicode scalar (`start_char..end_char`) and UTF-8 byte (`start_byte..end_byte`) span within `source_file`.
@@ -2912,6 +2917,7 @@ fn build_doc_options(
     lexicon: Vec<String>,
     enrich_morphology: bool,
     first_party_zh_segmenter: bool,
+    legacy_jieba: bool,
 ) -> Options {
     Options {
         names,
@@ -2920,6 +2926,7 @@ fn build_doc_options(
         lexicon,
         enrich_morphology,
         first_party_zh_segmenter,
+        legacy_jieba,
     }
 }
 
@@ -3066,7 +3073,8 @@ fn run() -> Result<()> {
         normalize_traditional,
         merged_lexicon,
         args.morphology,
-        args.first_party_dict,
+        args.first_party_dict && !args.legacy_jieba,
+        args.legacy_jieba,
     );
     let expected_options_sha256 = sha256_hex(&serde_json::to_vec(&doc_options)?);
 

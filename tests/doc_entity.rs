@@ -496,27 +496,33 @@ fn opaque_is_skipped() {
 fn unsupported_sentence() {
     use faberline_nlp::doc::{Lang, Reason};
 
-    // Japanese and Korean sentences segment, tokenize, and POS-tag in Layers 1–2 (no
-    // `UnsupportedLanguage`), while Layer 3 skips them so no false-positive entities are emitted.
-    for (text, expected_lang) in [
-        ("こんにちは、3個です。", Lang::Ja),
-        ("안녕하세요, 2026년 11월 13일 3개입니다.", Lang::Ko),
-    ] {
-        let doc = analyze(text);
-        assert_eq!(doc.segmentation.sentences[0].lang, expected_lang);
-        assert!(doc.entities.is_empty());
-        assert!(
-            doc.unknown
-                .iter()
-                .all(|u| u.layer != "entities" && u.layer != "segmentation")
-        );
-        assert!(
-            doc.unknown
-                .iter()
-                .all(|u| u.reason != Reason::UnsupportedLanguage)
-        );
-        assert!(doc.tokens.iter().any(|t| t.upos.is_some()));
-    }
+    // Japanese and Korean sentences now extract Layer 3 entities without `UnsupportedLanguage`.
+    let ja_text = "こんにちは、3個です。";
+    let doc_ja = analyze(ja_text);
+    assert_eq!(doc_ja.segmentation.sentences[0].lang, Lang::Ja);
+    assert_eq!(rows(ja_text, &doc_ja), vec![qty("3個", "3", "個")]);
+    assert!(
+        doc_ja
+            .unknown
+            .iter()
+            .all(|u| u.reason != Reason::UnsupportedLanguage)
+    );
+    assert!(doc_ja.tokens.iter().any(|t| t.upos.is_some()));
+
+    let ko_text = "안녕하세요, 2026년 11월 13일 3개입니다.";
+    let doc_ko = analyze(ko_text);
+    assert_eq!(doc_ko.segmentation.sentences[0].lang, Lang::Ko);
+    assert_eq!(
+        rows(ko_text, &doc_ko),
+        vec![d("2026년 11월 13일", "2026-11-13"), qty("3개", "3", "개"),]
+    );
+    assert!(
+        doc_ko
+            .unknown
+            .iter()
+            .all(|u| u.reason != Reason::UnsupportedLanguage)
+    );
+    assert!(doc_ko.tokens.iter().any(|t| t.upos.is_some()));
 
     // Truly unsupported script (Cyrillic) emits `segmentation` `UnsupportedLanguage` and no entities.
     let cyr = "Привет мир, 3.";
@@ -528,6 +534,162 @@ fn unsupported_sentence() {
             .unknown
             .iter()
             .any(|u| u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage)
+    );
+}
+
+#[test]
+fn ja_entities_dates_times_quantities_numbers_propn() {
+    assert_eq!(
+        ents("会議は2026年11月14日に開かれます。"),
+        vec![d("2026年11月14日", "2026-11-14")]
+    );
+    assert_eq!(
+        ents("令和6年5月1日と令和元年5月1日と昭和64年1月7日。"),
+        vec![
+            d("令和6年5月1日", "2024-05-01"),
+            d("令和元年5月1日", "2019-05-01"),
+            d("昭和64年1月7日", "1989-01-07"),
+        ]
+    );
+    assert_eq!(
+        ents("平成30年12月と11月14日と2026-11-14。"),
+        vec![
+            d("平成30年12月", "2018-12"),
+            d("11月14日", "--11-14"),
+            d("2026-11-14", "2026-11-14"),
+        ]
+    );
+    assert_eq!(
+        ents("令和6年2月30日は無効です。"),
+        vec![n("6", "6"), n("2", "2"), n("30", "30")]
+    );
+    assert_eq!(
+        ents("今日と明日と昨日の予定。"),
+        vec![r("今日"), r("明日"), r("昨日")]
+    );
+    assert_eq!(
+        ents("午後3時30分に会いましょう。"),
+        vec![t("午後3時30分", "15:30")]
+    );
+    assert_eq!(
+        ents("午前9時半と午前12時と午後12時と15時45分10秒。"),
+        vec![
+            t("午前9時半", "09:30"),
+            t("午前12時", "00:00"),
+            t("午後12時", "12:00"),
+            t("15時45分10秒", "15:45"),
+        ]
+    );
+    assert_eq!(ents("3時に会いましょう。"), vec![]);
+    assert_eq!(ent_unknown("3時に会いましょう。"), vec!["3時"]);
+
+    assert_eq!(
+        ents("100円と100万円と3億円と3.5kgと50％と20パーセントと5m。"),
+        vec![
+            qty("100円", "100", "円"),
+            qty("100万円", "1000000", "円"),
+            qty("3億円", "300000000", "円"),
+            qty("3.5kg", "3.5", "kg"),
+            qty("50％", "50", "%"),
+            qty("20パーセント", "20", "%"),
+            qty("5m", "5", "m"),
+        ]
+    );
+    assert_eq!(ents("5 mのロープ。"), vec![n("5", "5")]);
+    assert_eq!(
+        ents("参加者は百二十人と三千と一万です。"),
+        vec![
+            qty("百二十人", "120", "人"),
+            n("三千", "3000"),
+            n("一万", "10000")
+        ]
+    );
+    // Negative lexical guards: common adverbs/nouns must not emit Number.
+    for text in [
+        "一つだけあります。",
+        "一緒に行きましょう。",
+        "一般的な話です。",
+        "一旦止まります。",
+        "一番好きです。",
+        "十分です。",
+        "万一の時は。",
+        "千万気をつけて。",
+    ] {
+        assert_eq!(ents(text), vec![], "{text}");
+    }
+    // Lexicon PROPN (Location / Organization / Person) -> EntityKind::Name.
+    assert_eq!(
+        ents("東京から大阪へ行きます。"),
+        vec![
+            row(EntityKind::Name, "東京", None),
+            row(EntityKind::Name, "大阪", None),
+        ]
+    );
+}
+
+#[test]
+fn ko_entities_dates_times_quantities_numbers_propn() {
+    assert_eq!(
+        ents("2026년 11월 14일과 2026년 11월과 11월 14일입니다."),
+        vec![
+            d("2026년 11월 14일", "2026-11-14"),
+            d("2026년 11월", "2026-11"),
+            d("11월 14일", "--11-14"),
+        ]
+    );
+    assert_eq!(
+        ents("2026. 11. 14.과 2026.11.14과 2026-11-14."),
+        vec![
+            d("2026. 11. 14.", "2026-11-14"),
+            d("2026.11.14", "2026-11-14"),
+            d("2026-11-14", "2026-11-14"),
+        ]
+    );
+    assert_eq!(
+        ents("2026. 2. 30.은 잘못된 날짜입니다."),
+        vec![n("2026", "2026"), n("2", "2"), n("30", "30")]
+    );
+    assert_eq!(
+        ents("오늘과 내일과 어제."),
+        vec![r("오늘"), r("내일"), r("어제")]
+    );
+    assert_eq!(
+        ents("오후 3시 30분과 오전 9시 반과 밤 11시와 14시 20분."),
+        vec![
+            t("오후 3시 30분", "15:30"),
+            t("오전 9시 반", "09:30"),
+            t("밤 11시", "23:00"),
+            t("14시 20분", "14:20"),
+        ]
+    );
+    assert_eq!(ents("3시에 만나요."), vec![]);
+    assert_eq!(ent_unknown("3시에 만나요."), vec!["3시"]);
+
+    // Trailing Korean case particle is trimmed off Quantity span.
+    assert_eq!(ents("책 3권을 샀습니다."), vec![qty("3권", "3", "권")]);
+    assert_eq!(
+        ents("5000원과 1,000 달러와 30퍼센트와 50％와 3 km와 5m."),
+        vec![
+            qty("5000원", "5000", "원"),
+            qty("1,000 달러", "1000", "달러"),
+            qty("30퍼센트", "30", "%"),
+            qty("50％", "50", "%"),
+            qty("3 km", "3", "km"),
+            qty("5m", "5", "m"),
+        ]
+    );
+    // Negative counter/unit guards.
+    assert_eq!(
+        ents("3개국과 1세대와 5meters."),
+        vec![n("3", "3"), n("1", "1")]
+    );
+    // Lexicon PROPN with particle stripped -> EntityKind::Name on stem span.
+    assert_eq!(
+        ents("서울에서 부산까지 갑니다."),
+        vec![
+            row(EntityKind::Name, "서울", None),
+            row(EntityKind::Name, "부산", None),
+        ]
     );
 }
 
@@ -1266,5 +1428,14 @@ fn ws4_v3_token_boundary_alignment_guard_and_ascending_approx_ranges() {
             qty("七八丈", "7-8", "丈"),
             qty("八九年", "8-9", "年"),
         ]
+    );
+}
+
+#[test]
+fn ko_pronoun_not_extracted_as_name() {
+    let text = "내가 어제 서울에 갔다.";
+    assert_eq!(
+        ents(text),
+        vec![r("어제"), row(EntityKind::Name, "서울", None),]
     );
 }

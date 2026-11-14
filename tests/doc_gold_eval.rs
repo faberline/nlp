@@ -16,7 +16,7 @@ const POS_GOLD_PATH: &str = "tests/data/pos_gold.json";
 
 /// Pinned SHA-256 of `tests/data/gold_layers4_6_v1.jsonl`. Changing the frozen gold set requires
 /// updating both this constant and `docs/annotation-guide.md`.
-const GOLD_SHA256: &str = "cd78c88a1ebfbbcaf7113df0b5ef104402560a177d26d4fea5987850c8e3f149";
+const GOLD_SHA256: &str = "660a42c7ee650e2cb828cfe504fcec1f3c84d9ba1169386966622054125d918f";
 
 /// All 17 UD v2 Universal POS tags.
 const UPOS_TAGS: &[&str] = &[
@@ -968,10 +968,10 @@ fn validator_and_scorer_reject_bad_inputs_and_score_perturbations() {
 
     let mut cross_sent_arg = g026.clone();
     cross_sent_arg["frames"] =
-        serde_json::json!([{"predicate": 3, "args": [{"role": "ARG0", "head": 9}]}]);
+        serde_json::json!([{"predicate": 3, "args": [{"role": "ARG0", "head": 10}]}]);
     assert_eq!(
         check_gold_item(&cross_sent_arg).unwrap_err(),
-        "argument head 9 is not in the sentence of predicate 3"
+        "argument head 10 is not in the sentence of predicate 3"
     );
 
     let mut singleton_cluster = g026.clone();
@@ -982,36 +982,34 @@ fn validator_and_scorer_reject_bad_inputs_and_score_perturbations() {
     );
 
     let mut bad_span = g026.clone();
-    bad_span["coref"] = serde_json::json!([[[1, 2], [9, 99]]]);
+    bad_span["coref"] = serde_json::json!([[[1, 2], [10, 99]]]);
     assert_eq!(
         check_gold_item(&bad_span).unwrap_err(),
-        "mention [9,99] out of range"
+        "mention [10,99] out of range"
     );
 
     let mut non_constituent = g026.clone();
-    // Tokens [2, 3] = ["小姐", "借"] includes token 1 ("周" -> head 2) outside, wait:
-    // 2->3 and 3->0, so only 3 has external head 0; whereas [1, 4] = ["周","小姐","借","了"] without obj 7 is constituent too;
-    // [5, 6] = ["三本"(->7), "歷史"(->7)] has TWO external heads (both -> 7)!
-    non_constituent["coref"] = serde_json::json!([[[5, 6], [9, 9]]]);
+    // [6, 7] = ["本"(->8), "歷史"(->8)] has TWO external heads (both -> 8)!
+    non_constituent["coref"] = serde_json::json!([[[6, 7], [10, 10]]]);
     assert_eq!(
         check_gold_item(&non_constituent).unwrap_err(),
-        "mention [5,6] is not a single-headed syntactic constituent"
+        "mention [6,7] is not a single-headed syntactic constituent"
     );
 
     let mut bad_zero_role = g026.clone();
     bad_zero_role["zero_mentions"] =
-        serde_json::json!([{"zero_at": 13, "role": "iobj", "antecedent": [5, 7]}]);
+        serde_json::json!([{"zero_at": 14, "role": "iobj", "antecedent": [5, 8]}]);
     assert_eq!(
         check_gold_item(&bad_zero_role).unwrap_err(),
         "invalid zero_mentions role \"iobj\""
     );
 
     let mut conflict_zero = g026;
-    // Sentence 1 predicate 3 ("借") already has overt obj at token 7 ("書").
+    // Sentence 1 predicate 3 ("借") already has overt obj at token 8 ("書").
     conflict_zero["zero_mentions"] =
-        serde_json::json!([{"zero_at": 3, "role": "obj", "antecedent": [5, 7]}]);
+        serde_json::json!([{"zero_at": 3, "role": "obj", "antecedent": [5, 8]}]);
     assert_eq!(
         check_gold_item(&conflict_zero).unwrap_err(),
-        "zero_mention (3, obj) conflicts with overt obj at token 7"
+        "zero_mention (3, obj) conflicts with overt obj at token 8"
     );
 }

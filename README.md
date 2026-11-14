@@ -23,26 +23,33 @@ using no network:
   - Tags paragraphs, sentences, and clauses with `lang`: `"zh"`, `"en"`, `"ja"`, `"ko"`,
     `"mixed"`, or `"und"`. Pure-Han spans disambiguate `"ja"` vs `"zh"` using curated
     Japanese-exclusive Shinjitai/Kokuji characters (`駅`, `図`, `読`, `発`, `観`, `気`, `込`, `畑`,
-    `〆`, ...) and paragraph-level Japanese context inheritance (`「約束。」彼は言った。`), while
-    Hangul + Hanja without Kana tags as `"mixed"`.
-  - Language-aware segmentation: Japanese *tōten* `、` splits clauses while Chinese enumeration
-    comma `、` does not; Kana-heavy lines break paragraphs after CJK/Japanese terminators and
-    brackets (`‥`, `⋯`, `】〕〉》］｝`); Korean dotted dates (`2026. 11. 13.`) stay inside one
-    sentence and tight Hangul commas (`먹고,마시고`) split clauses; English quoted `?`/`!` before a
-    lowercase attribution verb (`"Really?" she asked.`) and ellipsis runs before clause separators
-    (`「……，但是」`) do not split sentences; and expanded title/organization/degree/time
-    abbreviations (`Inc.`, `Ltd.`, `Ph.D.`, `a.m.`, `p.m.`, ...) are protected.
+    `〆`, ...) and paragraph-level Japanese context inheritance (`「約束。」彼は言った。`). Korean
+    parenthetical `(Hanja)` glosses (`도덕성(道德性)`) keep `"ko"`, and isolated 1-letter ASCII
+    Latin variables in `ja`/`ko`-dominant prose (`速さが V である`, `점 P 에서`) keep `"ja"`/`"ko"`
+    rather than flipping to `"mixed"`.
+  - Language-aware segmentation: boundary trimming strips invisible format spaces (`U+200B`,
+    `U+2060`, `U+FEFF`) while preserving `U+200D` ZWJ and `U+FE0F` VS16; tight halfwidth ASCII `.`
+    between Han/CJK-closer and Han/CJK-opener (`项目.它主要`) splits sentences; Japanese *tōten*
+    `、` splits clauses while Chinese enumeration comma `、` does not; Kana-heavy lines break
+    paragraphs after CJK/Japanese terminators and brackets (`‥`, `⋯`, `】〕〉》］｝`); Korean
+    dotted dates (`2026. 11. 13.`) stay inside one sentence and tight Hangul commas (`먹고,마시고`)
+    split clauses; English quoted `?`/`!` before a lowercase attribution verb (`"Really?" she
+    asked.`) and ellipsis runs before clause separators (`「……，但是」`) do not split sentences; and
+    expanded title/organization/degree/time abbreviations (`Inc.`, `Ltd.`, `Ph.D.`, `a.m.`,
+    `p.m.`, ...) are protected.
   - Opaque spans (`code`, `formula`, `heading`, `list_item`, `citation`, `url`, `emoji`) never
     split inside sentences, covering Markdown, Chinese, English, Japanese (`第1話`, `第2巻`,
     `12話 雨の駅`, `プロローグ`, excluding particle-attached prose such as `第1話は...`), and
     Korean (`제1장`, `제12화`, `1화`, `프롤로그`, excluding particle-attached prose such as
     `제1장은...`) headings, multilingual author-year citations (`（田中・佐藤、2020）`,
-    `(김철수, 2020a)`), and `※ ` list items.
+    `(김철수, 2020a)`), `※ ` list items, and multi-char PUA noise runs (while single-char PUA gaiji
+    stay plain text).
 - **Layer 2 (`tokens`, `upos` & first-party `lexicon`)**:
-  - Tokenizes Chinese (`jieba` + Taiwan lexicon + optional `t2s` projection, or opt-in
-    `--first-party-dict` / `options.first_party_zh_segmenter` using our compiled `zh-Hant` +
-    `zh-Hans` lexicon), English (UAX #29 + clitics and abbreviations), Japanese (first-party
-    Viterbi segmenter `lexicon::ja::segment_ja` with inflectional stem+tail splitting +
+  - Tokenizes Chinese using our first-party `zh-Hant` + `zh-Hans` lexicon Viterbi segmenter
+    (`lexicon::zh::segment_zh`) by default (with `--legacy-jieba` / `options.legacy_jieba` to select
+    legacy `jieba-rs` + Taiwan lexicon + optional `t2s` projection; `--first-party-dict` remains
+    accepted as a compatible flag), English (UAX #29 + clitics and abbreviations), Japanese
+    (first-party Viterbi segmenter `lexicon::ja::segment_ja` with inflectional stem+tail splitting +
     longest-first `options.names`/`lexicon`), and Korean (longest-first `options.names`/`lexicon`
     + UAX #29 *eojeol* 어절 boundaries).
   - Punctuation, numbers, symbols, and inline opaque spans receive rule-decided `upos` tags across
@@ -53,9 +60,14 @@ using no network:
     (`zh-Hant` ↔ `zh-Hans`, `en-US` ↔ `en-GB`), `upos_candidates`, `sem_class`, and Korean
     `morphemes` on `Token`.
 - **Downstream layers (`entities`, `syntax`, `relations`)**:
-  - Rule-based Layer 3 (`entities`) and Layer 7 (`relations`), plus optional model-backed Layer 4
-    (`analyze_document_with_model` / `nlp_doc --models <DIR>`), operate on `zh`, `en`, and `zh`/`en`
-    `mixed` sentences and cleanly skip sentences containing Japanese or Korean script.
+  - Rule-based Layer 3 (`entities`, including `ja`/`ko` dates, Japanese eras, Korean dotted dates,
+    times, quantities with Korean particle trimming, numbers, URLs, emails, and `options.names` /
+    `PROPN` semantic-class names) and Layer 7 (`relations`, including `ja`/`ko` explicit discourse
+    connectors for `Contrast`, `Cause`, `Condition`, `Sequence`, and `Parallel`) operate across
+    `zh`, `en`, `ja`, `ko`, and `mixed` sentences.
+  - Optional model-backed Layer 4 (`analyze_document_with_model` / `nlp_doc --models <DIR>`)
+    operates on `zh`, `en`, and `zh`/`en` `mixed` sentences and skips sentences containing Japanese
+    or Korean script.
 
 See [docs/doc-v1.md](docs/doc-v1.md) for the full `nlp.doc.v1` specification,
 [docs/narrative-v1.md](docs/narrative-v1.md) for the downstream `nlp.narrative.v1` narrative graph

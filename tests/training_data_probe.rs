@@ -12,7 +12,7 @@ const ANNOTATIONS: &str = "training/probe/annotations.jsonl";
 const DOC: &str = "docs/training-data.md";
 /// Fixed expected hashes. Changing a data file means changing these and the hashes in the doc.
 const TEXTS_SHA: &str = "96e8a4e31daf36cb90024b619cf85fe1686f835f366b92b9a83b7742de5f6d0f";
-const ANNOTATIONS_SHA: &str = "9c9c3bbe3e609e29126c0a0f9f4020051e5db61a278aa90ece677b86ac7e5ef7";
+const ANNOTATIONS_SHA: &str = "7a7ddd82d63965c7a9565612758c9e529dbc3770a1ea3b7a4bfd48e0a3cb4f87";
 const FLAGS: &[&str] = &["layer2_token_error"];
 
 /// The 37 Universal Dependencies relation names (no subtypes).
@@ -252,13 +252,13 @@ fn probe_annotations_are_valid_and_use_repo_tokens() {
         }
     }
     assert!(failures.is_empty(), "invalid annotations: {failures:?}");
-    // Exactly one item is flagged: p17, whose layer 2 token merges a name and a verb.
+    // After switching to the first-party Chinese segmenter, p17 ("阿芳" | "訂") is fixed and no items are flagged.
     let flagged: Vec<&str> = anns
         .iter()
         .filter(|a| a.get("flags").is_some())
         .map(|a| a["id"].as_str().unwrap())
         .collect();
-    assert_eq!(flagged, ["p17"]);
+    assert!(flagged.is_empty(), "unexpected flagged items: {flagged:?}");
 }
 
 #[test]

@@ -60,9 +60,14 @@ struct Args {
     #[arg(long)]
     morphology: bool,
 
-    /// Use the first-party `zh-Hant` + `zh-Hans` lexicon segmenter for Chinese runs (`options.first_party_zh_segmenter`).
+    /// Backwards-compatible flag: the first-party `zh-Hant` + `zh-Hans` lexicon segmenter
+    /// is now enabled by default unless `--legacy-jieba` is passed.
     #[arg(long)]
     first_party_dict: bool,
+
+    /// Fall back to legacy `jieba-rs` for Chinese runs (`options.legacy_jieba`).
+    #[arg(long)]
+    legacy_jieba: bool,
 }
 
 fn main() {
@@ -78,7 +83,8 @@ fn main() {
         normalize_traditional: args.normalize_traditional,
         lexicon: args.lexicon,
         enrich_morphology: args.morphology,
-        first_party_zh_segmenter: args.first_party_dict,
+        first_party_zh_segmenter: args.first_party_dict && !args.legacy_jieba,
+        legacy_jieba: args.legacy_jieba,
     };
     let doc = match &args.models {
         Some(models_dir) => {

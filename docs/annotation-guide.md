@@ -9,7 +9,7 @@ validator in `tests/doc_gold_eval.rs`, and the standalone scorer in `training/ev
 ## Corpus & Provenance
 
 - **File**: `tests/data/gold_layers4_6_v1.jsonl`
-- **SHA-256**: `cd78c88a1ebfbbcaf7113df0b5ef104402560a177d26d4fea5987850c8e3f149`
+- **SHA-256**: `660a42c7ee650e2cb828cfe504fcec1f3c84d9ba1169386966622054125d918f`
 - **Provenance & licence**: All 300 items (**450 sentences**, **4,457 tokens**, **621 frames**,
   **144 coref clusters**, **24 zero mentions**) are self-written,
   CC0-clean, topic-neutral evaluation texts authored specifically for Issue #28. No Universal

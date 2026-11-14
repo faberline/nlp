@@ -4,8 +4,9 @@
 //! char that no rule matches, so no candidate can start or end inside one.
 
 use super::opaque::Found;
-use super::{Entity, EntityKind, OpaqueKind, Reason, Token, Unknown};
+use super::{Entity, EntityKind, Lang, OpaqueKind, Reason, Token, Unknown, Upos};
 use crate::Span;
+use crate::lexicon::SemanticClass;
 use aho_corasick::{AhoCorasick, MatchKind};
 use std::cell::RefCell;
 use std::cmp::Reverse;
@@ -307,7 +308,7 @@ struct Num {
 pub(super) fn extract(
     c: &[char],
     found: &[Found],
-    sentences: &[(usize, Span)],
+    sentences: &[(usize, Span, Lang)],
     tokens: &[Token],
     names: &[String],
     normalize_traditional: bool,
@@ -329,7 +330,7 @@ pub(super) fn extract(
     });
     let mut cands = Vec::new();
     let mut tok_cursor = 0usize;
-    for &(idx, span) in sentences {
+    for &(idx, span, lang) in sentences {
         while tok_cursor < tokens.len() && tokens[tok_cursor].sentence < idx {
             tok_cursor += 1;
         }
@@ -345,6 +346,10 @@ pub(super) fn extract(
             idx,
             bad_dates: RefCell::new(Vec::new()),
         };
+        if matches!(lang, Lang::Ja | Lang::Ko) || super::segment::has_ja_or_ko(c, span) {
+            extract_ja_ko(&x, c, sent_tokens, found, ac.as_ref(), &mut cands);
+            continue;
+        }
         let mut dead = Vec::new();
         for i in x.s..x.e {
             scan_at(&x, i, &mut cands);
@@ -1906,4 +1911,807 @@ fn int_at(t: &[char], i: usize, e: usize) -> Option<(u64, usize)> {
         return Some((zh_value(&t[i..j])?, j));
     }
     None
+}
+
+const JA_RELATIVE: &[&str] = &[
+    "一昨日",
+    "明後日",
+    "今日",
+    "明日",
+    "昨日",
+    "今夜",
+    "今晩",
+    "昨夜",
+    "昨晩",
+    "今年",
+    "来年",
+    "去年",
+    "昨年",
+    "今週",
+    "来週",
+    "先週",
+    "今月",
+    "来月",
+    "先月",
+];
+
+const KO_RELATIVE: &[&str] = &[
+    "오늘밤",
+    "어젯밤",
+    "이번 주",
+    "다음 주",
+    "지난주",
+    "이번 달",
+    "다음 달",
+    "지난달",
+    "그저께",
+    "오늘",
+    "내일",
+    "어제",
+    "그제",
+    "모레",
+    "올해",
+    "금년",
+    "내년",
+    "작년",
+];
+
+const JA_ERAS: &[(&str, u64)] = &[
+    ("明治", 1867),
+    ("大正", 1911),
+    ("昭和", 1925),
+    ("平成", 1988),
+    ("令和", 2018),
+];
+
+const KO_TIME_MARKERS: &[(&str, Marker)] = &[
+    ("오전", Marker::Morning(true)),
+    ("새벽", Marker::Morning(false)),
+    ("아침", Marker::Morning(false)),
+    ("오후", Marker::Afternoon(true)),
+    ("저녁", Marker::Afternoon(false)),
+    ("밤", Marker::Afternoon(false)),
+    ("낮", Marker::Noon),
+];
+
+/// (surface, normalized_unit, attached_only, is_korean_hangul)
+const JA_KO_UNITS: &[(&str, &str, bool, bool)] = &[
+    // Japanese units/counters (attached)
+    ("パーセント", "%", true, false),
+    ("兆円", "兆円", true, false),
+    ("億円", "億円", true, false),
+    ("万円", "万円", true, false),
+    ("ドル", "ドル", true, false),
+    ("円", "円", true, false),
+    ("冊", "冊", true, false),
+    ("人", "人", true, false),
+    ("名", "名", true, false),
+    ("個", "個", true, false),
+    ("枚", "枚", true, false),
+    ("本", "本", true, false),
+    ("台", "台", true, false),
+    ("件", "件", true, false),
+    ("回", "回", true, false),
+    ("歳", "歳", true, false),
+    ("才", "才", true, false),
+    ("階", "階", true, false),
+    ("番", "番", true, false),
+    ("割", "割", true, false),
+    ("倍", "倍", true, false),
+    ("匹", "匹", true, false),
+    ("杯", "杯", true, false),
+    ("軒", "軒", true, false),
+    // Korean units/counters (optional space)
+    ("퍼센트", "%", false, true),
+    ("마리", "마리", false, true),
+    ("조원", "조원", false, true),
+    ("억원", "억원", false, true),
+    ("만원", "만원", false, true),
+    ("달러", "달러", false, true),
+    ("원", "원", false, true),
+    ("권", "권", false, true),
+    ("명", "명", false, true),
+    ("개", "개", false, true),
+    ("장", "장", false, true),
+    ("대", "대", false, true),
+    ("건", "건", false, true),
+    ("번", "번", false, true),
+    ("회", "회", false, true),
+    ("살", "살", false, true),
+    ("세", "세", false, true),
+    ("층", "층", false, true),
+    ("배", "배", false, true),
+    ("잔", "잔", false, true),
+    ("채", "채", false, true),
+    // Shared SI / % units
+    ("kHz", "kHz", false, false),
+    ("MHz", "MHz", false, false),
+    ("GHz", "GHz", false, false),
+    ("Hz", "Hz", false, false),
+    ("KB", "KB", false, false),
+    ("MB", "MB", false, false),
+    ("GB", "GB", false, false),
+    ("TB", "TB", false, false),
+    ("km", "km", false, false),
+    ("cm", "cm", false, false),
+    ("mm", "mm", false, false),
+    ("kg", "kg", false, false),
+    ("mg", "mg", false, false),
+    ("mL", "mL", false, false),
+    ("°C", "°C", false, false),
+    ("℃", "℃", false, false),
+    ("％", "%", false, false),
+    ("%", "%", false, false),
+    ("m", "m", true, false),
+    ("g", "g", true, false),
+    ("L", "L", true, false),
+];
+
+const KO_PARTICLES: &[&str] = &[
+    "입니다",
+    "이에요",
+    "에서",
+    "에게",
+    "으로",
+    "부터",
+    "까지",
+    "이나",
+    "이랑",
+    "밖에",
+    "이고",
+    "이면",
+    "이다",
+    "예요",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "에",
+    "의",
+    "과",
+    "와",
+    "도",
+    "만",
+    "로",
+    "나",
+    "랑",
+    "씩",
+];
+
+fn is_hangul(ch: char) -> bool {
+    matches!(ch, '\u{AC00}'..='\u{D7A3}')
+}
+
+fn ko_end_ok(t: &[char], end: usize, e: usize) -> bool {
+    if end >= e || !is_hangul(t[end]) {
+        return true;
+    }
+    KO_PARTICLES
+        .iter()
+        .any(|&p| matches_at(t, end, e, p).is_some())
+}
+
+fn skip_spaces(t: &[char], mut i: usize, e: usize) -> usize {
+    while i < e && t[i] == ' ' {
+        i += 1;
+    }
+    i
+}
+
+fn extract_ja_ko(
+    x: &Sent,
+    c: &[char],
+    sent_tokens: &[Token],
+    found: &[Found],
+    ac: Option<&AhoCorasick>,
+    out: &mut Vec<Cand>,
+) {
+    let mut local = Vec::new();
+    let mut dead = Vec::new();
+    for i in x.s..x.e {
+        scan_ja_ko_at(x, i, &mut local);
+        if x.t[i].is_ascii_digit()
+            && x.bound(i)
+            && let Some((None, end)) = mixed_at(x.t, i, x.e)
+        {
+            dead.push((i, end));
+        }
+    }
+    let bad = x.bad_dates.take();
+    local.retain(|cand| {
+        let hit = |&(s, e): &(usize, usize)| cand.span.start_char < e && s < cand.span.end_char;
+        let inside =
+            |&(s, e): &(usize, usize)| s <= cand.span.start_char && cand.span.end_char <= e;
+        let dated = match cand.kind {
+            Some(EntityKind::Date | EntityKind::RelativeDate) => bad.iter().any(hit),
+            None => bad.iter().any(inside),
+            Some(_) => false,
+        };
+        !(dead.iter().any(hit) || dated)
+    });
+    emails(x, &mut local);
+    if let Some(ac) = ac {
+        names_in(ac, x, &mut local);
+    }
+    for f in found
+        .iter()
+        .filter(|f| !f.block && f.item.kind == OpaqueKind::Url)
+    {
+        let sp = f.item.span;
+        if sp.start_char >= x.s && sp.end_char <= x.e {
+            local.push(x.cand(
+                sp.start_char,
+                sp.end_char,
+                Some(EntityKind::Url),
+                None,
+                None,
+            ));
+        }
+    }
+    propn_entities_ja_ko(x, c, sent_tokens, &mut local);
+    out.extend(local);
+}
+
+fn scan_ja_ko_at(x: &Sent, i: usize, out: &mut Vec<Cand>) {
+    out.extend(relative_ja_ko_at(x, i));
+    out.extend(date_ja_ko_at(x, i));
+    out.extend(time_ja_ko_at(x, i));
+    out.extend(quantity_ja_ko_at(x, i));
+    out.extend(number_ja_ko_at(x, i));
+}
+
+fn relative_ja_ko_at(x: &Sent, i: usize) -> Option<Cand> {
+    let (t, e) = (x.t, x.e);
+    if !x.bound(i) {
+        return None;
+    }
+    if let Some(end) = JA_RELATIVE
+        .iter()
+        .filter_map(|&w| matches_at(t, i, e, w))
+        .max()
+    {
+        return Some(x.cand(i, end, Some(EntityKind::RelativeDate), None, None));
+    }
+    if (i == x.s || !is_hangul(t[i - 1]))
+        && let Some(end) = KO_RELATIVE
+            .iter()
+            .filter_map(|&w| matches_at(t, i, e, w))
+            .filter(|&end| ko_end_ok(t, end, e))
+            .max()
+    {
+        return Some(x.cand(i, end, Some(EntityKind::RelativeDate), None, None));
+    }
+    None
+}
+
+fn date_ja_ko_at(x: &Sent, i: usize) -> Option<Cand> {
+    if !x.bound(i) {
+        return None;
+    }
+    let ch = x.t[i];
+    if matches!(ch, '明' | '大' | '昭' | '平' | '令') {
+        return ja_era_date(x, i);
+    }
+    if ch.is_ascii_digit() {
+        return ja_ymd_date(x, i)
+            .or_else(|| ko_ymd_date(x, i))
+            .or_else(|| ko_dotted_date(x, i))
+            .or_else(|| numeric_date(x, i));
+    }
+    None
+}
+
+/// `(明治|大正|昭和|平成|令和)(元|\d{1,2})年(\d{1,2}月(\d{1,2}日)?)?`
+fn ja_era_date(x: &Sent, i: usize) -> Option<Cand> {
+    let (t, e) = (x.t, x.e);
+    let (base, after_era) = JA_ERAS
+        .iter()
+        .find_map(|&(era, base)| matches_at(t, i, e, era).map(|k| (base, k)))?;
+    let (era_year, after_num) = if after_era < e && t[after_era] == '元' {
+        (1u64, after_era + 1)
+    } else {
+        digits_at(t, after_era, e, 2)?
+    };
+    if after_num >= e || t[after_num] != '年' {
+        return None;
+    }
+    let year = base + era_year;
+    let mut end = after_num + 1;
+    let (mut month, mut day) = (None, None);
+    if let Some((m, k)) = digits_at(t, end, e, 2)
+        && k < e
+        && t[k] == '月'
+    {
+        month = Some(m);
+        end = k + 1;
+        if let Some((d, k2)) = digits_at(t, end, e, 2)
+            && k2 < e
+            && t[k2] == '日'
+        {
+            day = Some(d);
+            end = k2 + 1;
+        }
+    }
+    let value = match (month, day) {
+        (Some(m), Some(d)) => valid(Some(year), m, d).then(|| format!("{year:04}-{m:02}-{d:02}")),
+        (Some(m), None) => (1..=12).contains(&m).then(|| format!("{year:04}-{m:02}")),
+        (None, None) => Some(format!("{year:04}")),
+        _ => unreachable!(),
+    };
+    let Some(value) = value else {
+        return x.bad_date(i, end);
+    };
+    Some(x.cand(i, end, Some(EntityKind::Date), Some(value), None))
+}
+
+/// `2026年11月14日`, `\d{4}年\d{1,2}月`, `\d{1,2}月\d{1,2}日`.
+fn ja_ymd_date(x: &Sent, i: usize) -> Option<Cand> {
+    let (t, e) = (x.t, x.e);
+    let (first, k) = digits_at(t, i, e, 4)?;
+    if k >= e {
+        return None;
+    }
+    if t[k] == '年' && k - i == 4 {
+        let (m, k2) = digits_at(t, k + 1, e, 2)?;
+        if k2 >= e || t[k2] != '月' {
+            return None;
+        }
+        let mut end = k2 + 1;
+        if let Some((d, k3)) = digits_at(t, end, e, 2)
+            && k3 < e
+            && t[k3] == '日'
+        {
+            end = k3 + 1;
+            return full(x, i, end, first, m, d);
+        }
+        if !(1..=12).contains(&m) {
+            return x.bad_date(i, end);
+        }
+        return Some(x.cand(
+            i,
+            end,
+            Some(EntityKind::Date),
+            Some(format!("{first:04}-{m:02}")),
+            None,
+        ));
+    }
+    if t[k] == '月' && k - i <= 2 {
+        let (d, k2) = digits_at(t, k + 1, e, 2)?;
+        if k2 >= e || t[k2] != '日' {
+            return None;
+        }
+        let end = k2 + 1;
+        if !valid(None, first, d) {
+            return x.bad_date(i, end);
+        }
+        return Some(x.cand(
+            i,
+            end,
+            Some(EntityKind::Date),
+            Some(format!("--{first:02}-{d:02}")),
+            None,
+        ));
+    }
+    None
+}
+
+/// `\d{4}년\s*\d{1,2}월\s*\d{1,2}일`, `\d{4}년\s*\d{1,2}월`, `\d{1,2}월\s*\d{1,2}일`.
+fn ko_ymd_date(x: &Sent, i: usize) -> Option<Cand> {
+    let (t, e) = (x.t, x.e);
+    let (first, k) = digits_at(t, i, e, 4)?;
+    if k >= e {
+        return None;
+    }
+    if t[k] == '년' && k - i == 4 {
+        let m_start = skip_spaces(t, k + 1, e);
+        let (m, k2) = digits_at(t, m_start, e, 2)?;
+        if k2 >= e || t[k2] != '월' {
+            return None;
+        }
+        let d_start = skip_spaces(t, k2 + 1, e);
+        if let Some((d, k3)) = digits_at(t, d_start, e, 2)
+            && k3 < e
+            && t[k3] == '일'
+        {
+            return full(x, i, k3 + 1, first, m, d);
+        }
+        let end = k2 + 1;
+        if !(1..=12).contains(&m) {
+            return x.bad_date(i, end);
+        }
+        return Some(x.cand(
+            i,
+            end,
+            Some(EntityKind::Date),
+            Some(format!("{first:04}-{m:02}")),
+            None,
+        ));
+    }
+    if t[k] == '월' && k - i <= 2 {
+        let d_start = skip_spaces(t, k + 1, e);
+        let (d, k2) = digits_at(t, d_start, e, 2)?;
+        if k2 >= e || t[k2] != '일' {
+            return None;
+        }
+        let end = k2 + 1;
+        if !valid(None, first, d) {
+            return x.bad_date(i, end);
+        }
+        return Some(x.cand(
+            i,
+            end,
+            Some(EntityKind::Date),
+            Some(format!("--{first:02}-{d:02}")),
+            None,
+        ));
+    }
+    None
+}
+
+/// Korean dotted dates: `\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?` (year `1800..=2100`).
+fn ko_dotted_date(x: &Sent, i: usize) -> Option<Cand> {
+    let (t, e) = (x.t, x.e);
+    let (year, k) = year4_at(t, i, e)?;
+    if !(1800..=2100).contains(&year) || k >= e || t[k] != '.' {
+        return None;
+    }
+    let m_start = skip_spaces(t, k + 1, e);
+    let (month, k2) = digits_at(t, m_start, e, 2)?;
+    if k2 >= e || t[k2] != '.' {
+        return None;
+    }
+    let d_start = skip_spaces(t, k2 + 1, e);
+    let (day, mut end) = digits_at(t, d_start, e, 2)?;
+    if end < e && t[end] == '.' {
+        if end + 1 < e && t[end + 1].is_ascii_digit() {
+            return None;
+        }
+        end += 1;
+    } else if end < e && t[end].is_ascii_digit() {
+        return None;
+    }
+    full(x, i, end, year, month, day)
+}
+
+fn time_ja_ko_at(x: &Sent, i: usize) -> Option<Cand> {
+    let (t, e) = (x.t, x.e);
+    if !x.bound(i) {
+        return None;
+    }
+    if let Some(h0) = matches_at(t, i, e, "午前") {
+        return ja_clock(x, i, h0, Some(Marker::Morning(true)));
+    }
+    if let Some(h0) = matches_at(t, i, e, "午後") {
+        return ja_clock(x, i, h0, Some(Marker::Afternoon(true)));
+    }
+    if i == x.s || !is_hangul(t[i - 1]) {
+        for &(marker_str, group) in KO_TIME_MARKERS {
+            if let Some(after) = matches_at(t, i, e, marker_str) {
+                let h0 = skip_spaces(t, after, e);
+                if h0 < e && t[h0].is_ascii_digit() {
+                    return ko_clock(x, i, h0, Some(group));
+                }
+            }
+        }
+    }
+    if t[i].is_ascii_digit() {
+        return ja_clock(x, i, i, None)
+            .or_else(|| ko_clock(x, i, i, None))
+            .or_else(|| clock(x, i, i, None));
+    }
+    None
+}
+
+fn ja_clock(x: &Sent, start: usize, h0: usize, marker: Option<Marker>) -> Option<Cand> {
+    let (t, e) = (x.t, x.e);
+    let (h, k) = digits_at(t, h0, e, 2)?;
+    if k >= e || t[k] != '時' || h > 24 {
+        return None;
+    }
+    let mut end = k + 1;
+    let mut minute = 0u64;
+    let mut has_min = false;
+    if let Some((m, k2)) = digits_at(t, end, e, 2)
+        && k2 < e
+        && t[k2] == '分'
+    {
+        if m > 59 {
+            return None;
+        }
+        minute = m;
+        has_min = true;
+        end = k2 + 1;
+    }
+    if let Some((sec, k3)) = digits_at(t, end, e, 2)
+        && k3 < e
+        && t[k3] == '秒'
+    {
+        if sec > 59 {
+            return None;
+        }
+        end = k3 + 1;
+    }
+    if !has_min && end < e && t[end] == '半' {
+        minute = 30;
+        end += 1;
+    }
+    let (kind, value) = match decide(h, minute, marker) {
+        Some(v) => (Some(EntityKind::Time), Some(v)),
+        None => (None, None),
+    };
+    Some(x.cand(start, end, kind, value, None))
+}
+
+fn ko_clock(x: &Sent, start: usize, h0: usize, marker: Option<Marker>) -> Option<Cand> {
+    let (t, e) = (x.t, x.e);
+    let (h, k) = digits_at(t, h0, e, 2)?;
+    if k >= e || t[k] != '시' || h > 24 {
+        return None;
+    }
+    let mut end = k + 1;
+    let mut minute = 0u64;
+    let mut has_min = false;
+    let m_start = skip_spaces(t, end, e);
+    if let Some((m, k2)) = digits_at(t, m_start, e, 2)
+        && k2 < e
+        && t[k2] == '분'
+    {
+        if m > 59 {
+            return None;
+        }
+        minute = m;
+        has_min = true;
+        end = k2 + 1;
+    }
+    let s_start = skip_spaces(t, end, e);
+    if let Some((sec, k3)) = digits_at(t, s_start, e, 2)
+        && k3 < e
+        && t[k3] == '초'
+    {
+        if sec > 59 {
+            return None;
+        }
+        end = k3 + 1;
+    }
+    let b_start = skip_spaces(t, end, e);
+    if !has_min && b_start < e && t[b_start] == '반' {
+        minute = 30;
+        end = b_start + 1;
+    }
+    let (kind, value) = match decide(h, minute, marker) {
+        Some(v) => (Some(EntityKind::Time), Some(v)),
+        None => (None, None),
+    };
+    Some(x.cand(start, end, kind, value, None))
+}
+
+fn quantity_ja_ko_at(x: &Sent, i: usize) -> Option<Cand> {
+    let (t, e) = (x.t, x.e);
+    for cur in CURRENCY {
+        if let Some(j) = matches_at(t, i, e, cur)
+            && (!cur.is_ascii() || x.bound(i))
+            && let Some(num) = ja_ko_qty_number_at(x, j)
+        {
+            return Some(x.cand(
+                i,
+                num.end,
+                Some(EntityKind::Quantity),
+                Some(num.value),
+                Some(cur.to_ascii_lowercase()),
+            ));
+        }
+    }
+    let num = ja_ko_qty_number_at(x, i)?;
+    let (j, attached) = if num.end < e && t[num.end] == ' ' {
+        (num.end + 1, false)
+    } else {
+        (num.end, true)
+    };
+    let mut best: Option<(&'static str, usize)> = None;
+    for &(surface, norm_unit, only_attached, is_ko) in JA_KO_UNITS {
+        if !attached && only_attached {
+            continue;
+        }
+        let Some(uend) = matches_at(t, j, e, surface) else {
+            continue;
+        };
+        if surface.is_ascii() && uend < e && t[uend].is_ascii_alphanumeric() {
+            continue;
+        }
+        if is_ko && !ko_end_ok(t, uend, e) {
+            continue;
+        }
+        if best.is_none_or(|(_, b_end)| uend > b_end) {
+            best = Some((norm_unit, uend));
+        }
+    }
+    let (unit, uend) = best?;
+    Some(x.cand(
+        i,
+        uend,
+        Some(EntityKind::Quantity),
+        Some(num.value),
+        Some(unit.to_owned()),
+    ))
+}
+
+fn ja_ko_qty_number_at(x: &Sent, i: usize) -> Option<Num> {
+    let (t, e) = (x.t, x.e);
+    if i >= e {
+        return None;
+    }
+    if t[i].is_ascii_digit() {
+        if !x.bound(i) {
+            return None;
+        }
+        if let Some((value, end)) = mixed_at(t, i, e) {
+            return Some(Num {
+                value: value?,
+                end,
+                bare_one: false,
+            });
+        }
+        let (value, end) = ascii_number_at(t, i, e);
+        return Some(Num {
+            value,
+            end,
+            bare_one: false,
+        });
+    }
+    if (zh_digit(t[i]).is_some() || matches!(t[i], '十' | '百' | '千')) && x.zh_start_ok(i) {
+        let end = zh_run_end(t, i, e);
+        if end - i < 2 && !matches!(t[i], '十' | '百' | '千') {
+            return None;
+        }
+        let value = zh_value(&t[i..end])?;
+        return Some(Num {
+            value: value.to_string(),
+            end,
+            bare_one: false,
+        });
+    }
+    None
+}
+
+fn number_ja_ko_at(x: &Sent, i: usize) -> Option<Cand> {
+    let (t, e) = (x.t, x.e);
+    if i >= e {
+        return None;
+    }
+    if t[i].is_ascii_digit() {
+        if !x.bound(i) {
+            return None;
+        }
+        let (value, end) = if let Some((val, end)) = mixed_at(t, i, e) {
+            (val?, end)
+        } else {
+            ascii_number_at(t, i, e)
+        };
+        if end < e && t[end].is_ascii_alphabetic() {
+            return None;
+        }
+        return Some(x.cand(i, end, Some(EntityKind::Number), Some(value), None));
+    }
+    if (zh_digit(t[i]).is_some() || matches!(t[i], '十' | '百' | '千')) && x.zh_start_ok(i) {
+        let end = zh_run_end(t, i, e);
+        if end - i < 2 {
+            return None;
+        }
+        let run = &t[i..end];
+        if !run
+            .iter()
+            .any(|&ch| matches!(ch, '十' | '百' | '千' | '万' | '萬' | '億' | '亿'))
+        {
+            return None;
+        }
+        if matches!(run, ['千', '万'] | ['千', '萬']) {
+            return None;
+        }
+        let value = zh_value(run)?;
+        return Some(x.cand(
+            i,
+            end,
+            Some(EntityKind::Number),
+            Some(value.to_string()),
+            None,
+        ));
+    }
+    None
+}
+
+const KO_PRONOUNS: &[&str] = &[
+    "내가", "나는", "너는", "네가", "우리", "저희", "그녀", "그들", "누구", "어디", "여기", "거기",
+    "저기",
+];
+
+fn propn_entities_ja_ko(x: &Sent, c: &[char], sent_tokens: &[Token], local: &mut Vec<Cand>) {
+    for tok in sent_tokens {
+        if tok.upos != Some(Upos::Propn) {
+            continue;
+        }
+        let ts = tok.span.start_char;
+        let te = tok.span.end_char;
+        if ts < x.s || te > x.e || (ts..te).any(|k| x.t[k] == SENTINEL) {
+            continue;
+        }
+        let stem_span = match tok.lang {
+            Lang::Ja => {
+                if te - ts < 2 {
+                    continue;
+                }
+                let surf: String = c[ts..te].iter().collect();
+                let Some(hit) = crate::lexicon::lookup_ja(&surf) else {
+                    continue;
+                };
+                if hit.decided_upos != Some(Upos::Propn) || hit.upos_mask.count_ones() != 1 {
+                    continue;
+                }
+                if !matches!(
+                    hit.sem_class,
+                    Some(
+                        SemanticClass::Person
+                            | SemanticClass::Location
+                            | SemanticClass::Organization
+                    )
+                ) {
+                    continue;
+                }
+                tok.span
+            }
+            Lang::Ko => {
+                let surf: String = c[ts..te].iter().collect();
+                if KO_PRONOUNS.contains(&surf.as_str()) {
+                    continue;
+                }
+                let analysis = crate::lexicon::ko::analyze_ko_eojeol(&c[ts..te], ts);
+                if analysis.decided_upos != Some(Upos::Propn)
+                    || analysis.upos_mask.count_ones() != 1
+                {
+                    continue;
+                }
+                if !matches!(
+                    analysis.sem_class,
+                    Some(
+                        SemanticClass::Person
+                            | SemanticClass::Location
+                            | SemanticClass::Organization
+                    )
+                ) {
+                    continue;
+                }
+                let span = if let Some(m) = analysis.morphemes.first() {
+                    if m.upos != Some(Upos::Propn) {
+                        continue;
+                    }
+                    m.span
+                } else {
+                    tok.span
+                };
+                if span.end_char - span.start_char < 2 {
+                    continue;
+                }
+                let stem: String = c[span.start_char..span.end_char].iter().collect();
+                if KO_PRONOUNS.contains(&stem.as_str()) {
+                    continue;
+                }
+                span
+            }
+            _ => continue,
+        };
+        let overlaps = local.iter().any(|existing| {
+            existing.span.start_char < stem_span.end_char
+                && stem_span.start_char < existing.span.end_char
+        });
+        if !overlaps {
+            local.push(x.cand(
+                stem_span.start_char,
+                stem_span.end_char,
+                Some(EntityKind::Name),
+                None,
+                None,
+            ));
+        }
+    }
 }

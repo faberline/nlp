@@ -110,11 +110,15 @@ pub fn segment_zh(chars: &[char], base_char: usize, extra_lexicon: &[String]) ->
         // Common-prefix search in the compiled Chinese lexicon.
         let rest = &text[byte_offs[i]..];
         let max_c = MAX_WORD_CHARS.min(n - i);
+        let mut direct_matched = [false; 5];
         db.common_prefix_search(
             LangGroup::Zh,
             rest,
             max_c,
             |_byte_len, char_len, entries| {
+                if char_len <= 4 {
+                    direct_matched[char_len] = true;
+                }
                 let min_cost = entries.iter().map(|e| e.cost as u32).min().unwrap_or(1500);
                 let end = i + char_len;
                 let cand_cost = base_cost + min_cost;
@@ -124,6 +128,37 @@ pub fn segment_zh(chars: &[char], base_char: usize, extra_lexicon: &[String]) ->
                 }
             },
         );
+
+        // Fallback for hybrid Traditional+Simplified words (e.g. "這么晚" -> "这么晚").
+        let max_hybrid = 4.min(n - i);
+        for char_len in 2..=max_hybrid {
+            if direct_matched[char_len] {
+                continue;
+            }
+            let slice_chars = &chars[i..i + char_len];
+            if slice_chars
+                .iter()
+                .any(|c| c.is_whitespace() || is_ascii_word_char(*c))
+            {
+                continue;
+            }
+            let simp: String = slice_chars
+                .iter()
+                .map(|&c| crate::doc::t2s::to_simplified_char(c))
+                .collect();
+            if simp != text[byte_offs[i]..byte_offs[i + char_len]] {
+                let entries = db.lookup_raw(LangGroup::Zh, &simp);
+                if !entries.is_empty() {
+                    let min_cost = entries.iter().map(|e| e.cost as u32).min().unwrap_or(1500);
+                    let end = i + char_len;
+                    let cand_cost = base_cost + min_cost + 40;
+                    if cand_cost < dp_cost[end] {
+                        dp_cost[end] = cand_cost;
+                        back_len[end] = char_len;
+                    }
+                }
+            }
+        }
 
         i += 1;
     }
@@ -148,7 +183,20 @@ pub fn segment_zh(chars: &[char], base_char: usize, extra_lexicon: &[String]) ->
 
 /// Analyze a single Chinese token for UPOS, cross-strait variant counterpart, and semantic class.
 pub fn analyze_zh_token(surface: &str) -> LexTokenAnalysis {
-    let Some(hit) = lookup_zh(surface) else {
+    let hit = lookup_zh(surface).or_else(|| {
+        let char_len = surface.chars().count();
+        if (2..=4).contains(&char_len) {
+            let simp: String = surface
+                .chars()
+                .map(crate::doc::t2s::to_simplified_char)
+                .collect();
+            if simp != surface {
+                return lookup_zh(&simp);
+            }
+        }
+        None
+    });
+    let Some(hit) = hit else {
         return LexTokenAnalysis::default();
     };
     LexTokenAnalysis {

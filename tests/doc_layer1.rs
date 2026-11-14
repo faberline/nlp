@@ -970,3 +970,83 @@ fn real_world_corpora_fixes() {
         ["May 5, 2026", "was sunny."]
     );
 }
+
+#[test]
+fn stage3_long_tail_layer1_fixes_and_guards() {
+    // 1. Invisible format chars (\u{200B}, \u{2060}, \u{FEFF}) trimmed at boundaries;
+    //    emoji ZWJ (\u{200D}) and VS16 (\u{FE0F}) remain 100% intact.
+    let zwsp = "\u{FEFF}第一句。\u{200B}\n\u{200B}\u{2060}\n\u{2060}第二句。\u{FEFF}";
+    let zwsp_doc = analyze(zwsp);
+    assert_eq!(sentence_texts(zwsp, &zwsp_doc), ["第一句。", "第二句。"]);
+    assert!(
+        zwsp_doc
+            .segmentation
+            .sentences
+            .iter()
+            .all(|s| s.lang == Lang::Zh)
+    );
+
+    let emoji_zwj = "Family: \u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466} and \u{2764}\u{FE0F}!";
+    let emoji_doc = analyze(emoji_zwj);
+    assert_eq!(sentence_texts(emoji_zwj, &emoji_doc), [emoji_zwj]);
+    assert!(emoji_doc.segmentation.opaque.iter().any(|o| {
+        emoji_zwj
+            .chars()
+            .skip(o.span.start_char)
+            .take(o.span.end_char - o.span.start_char)
+            .collect::<String>()
+            == "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}"
+    }));
+
+    // 2. Tight halfwidth ASCII `.` between Han characters.
+    let tight = "这是一个研究项目.它主要分析文本.（方法）如下。";
+    assert_eq!(
+        sentence_texts(tight, &analyze(tight)),
+        ["这是一个研究项目.", "它主要分析文本.", "（方法）如下。"]
+    );
+    let tight_closer = "（参考项目.）本文继续。";
+    assert_eq!(
+        sentence_texts(tight_closer, &analyze(tight_closer)),
+        ["（参考项目.）", "本文继续。"]
+    );
+    for unsplit in [
+        "Pi is 3.14 today.",
+        "Release v1.0 is ready.",
+        "Dr. Smith arrived.",
+        "Use e.g. this tool.",
+        "Check foo.bar and .rs files.",
+        "项目..它继续",
+    ] {
+        assert_eq!(
+            sentence_texts(unsplit, &analyze(unsplit)),
+            [unsplit],
+            "must not split {unsplit:?}"
+        );
+    }
+
+    // 3. Korean parenthetical Hanja glosses stay Lang::Ko; pure Hanja stays Lang::Zh.
+    let ko_hanja = "도덕성(道德性)과 정조(貞操)를 지켰다.";
+    assert_eq!(analyze(ko_hanja).segmentation.sentences[0].lang, Lang::Ko);
+    let pure_hanja = "(道德性)";
+    assert_eq!(analyze(pure_hanja).segmentation.sentences[0].lang, Lang::Zh);
+
+    // 4. Isolated 1-letter Latin math/physics variables in Ja / Ko prose.
+    let ja_var = "速さが V である。";
+    assert_eq!(analyze(ja_var).segmentation.sentences[0].lang, Lang::Ja);
+    let ko_var = "점 P 에서 직선까지의 거리.";
+    assert_eq!(analyze(ko_var).segmentation.sentences[0].lang, Lang::Ko);
+
+    // Negative guards: multi-letter English in Ja/Ko and 1-letter English in Zh stay Lang::Mixed.
+    for mixed in [
+        "東京で AI を学ぶ。",
+        "서울에서 AI 를 배운다.",
+        "这个 A 是好的。",
+        "项目 A 的结果。",
+    ] {
+        assert_eq!(
+            analyze(mixed).segmentation.sentences[0].lang,
+            Lang::Mixed,
+            "must stay Mixed: {mixed:?}"
+        );
+    }
+}

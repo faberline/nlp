@@ -584,6 +584,7 @@ fn translate_single_sentence(
             SentenceConditioning::default(),
             options,
             Vec::new(),
+            Vec::new(),
         );
     }
 
@@ -616,6 +617,7 @@ fn translate_single_sentence(
             SentenceConditioning::default(),
             options,
             Vec::new(),
+            Vec::new(),
         );
         outcome.clause_alignments = clause_alignments;
         return outcome;
@@ -637,7 +639,7 @@ fn translate_single_sentence(
         && (sent.lang == Lang::Ja
             || (sent.lang == Lang::Mixed && ja_zh::has_kana_no_hangul(&raw_sent)));
     if is_ja_to_zh {
-        let (masked_zh, clause_alignments) = ja_zh::translate_ja_sentence(
+        let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
             doc,
@@ -646,8 +648,15 @@ fn translate_single_sentence(
             &conditioning,
             options.target,
         );
-        let report = lock_table.restore(&masked_zh);
-        let mut outcome = finalize_sentence_outcome(
+        let mut clause_spans: Vec<Span> = clause_alignments
+            .iter()
+            .map(|clause| clause.target_span)
+            .collect();
+        let report = lock_table.restore_with_spans(&masked_zh, &mut clause_spans);
+        for (clause, span) in clause_alignments.iter_mut().zip(clause_spans) {
+            clause.target_span = span;
+        }
+        return finalize_sentence_outcome(
             sentence_idx,
             chars,
             doc,
@@ -658,9 +667,8 @@ fn translate_single_sentence(
             conditioning,
             options,
             Vec::new(),
+            clause_alignments,
         );
-        outcome.clause_alignments = clause_alignments;
-        return outcome;
     }
 
     if let Some(loaded) = seq2seq {
@@ -752,6 +760,7 @@ fn translate_single_sentence(
             conditioning,
             options,
             extra_unknown,
+            Vec::new(),
         );
     }
 
@@ -788,6 +797,7 @@ fn translate_single_sentence(
             sentence: Some(sentence_idx),
             detail: None,
         }],
+        Vec::new(),
     )
 }
 
@@ -811,6 +821,7 @@ fn finalize_sentence_outcome(
     conditioning: SentenceConditioning,
     options: &TranslateOptions,
     mut unknown: Vec<TranslateUnknown>,
+    mut clause_alignments: Vec<ClauseAlignment>,
 ) -> SentenceOutcome {
     for (kind, sp, detail) in report.issues {
         unknown.push(TranslateUnknown {
@@ -824,6 +835,7 @@ fn finalize_sentence_outcome(
     // Track every restored span (`0..k`) through morphological and spacing shifts!
     let mut tracked_spans: Vec<Span> = report.restored.iter().map(|r| r.target_span).collect();
     let protected_indices: Vec<usize> = (0..report.restored.len()).collect();
+    tracked_spans.extend(clause_alignments.iter().map(|clause| clause.target_span));
 
     let mut text = report.text;
 
@@ -884,6 +896,13 @@ fn finalize_sentence_outcome(
         text = apply_cjk_latin_spacing(&text, &verbatim_prot, &mut tracked_spans);
     }
 
+    for (clause, span) in clause_alignments
+        .iter_mut()
+        .zip(&tracked_spans[report.restored.len()..])
+    {
+        clause.target_span = *span;
+    }
+
     let mut glossary_hits = Vec::new();
     let mut opaque_records = Vec::new();
     for (r, final_target_span) in report.restored.into_iter().zip(tracked_spans) {
@@ -916,7 +935,7 @@ fn finalize_sentence_outcome(
         conditioning,
         glossary_hits,
         opaque_records,
-        clause_alignments: Vec::new(),
+        clause_alignments,
         unknown,
     }
 }

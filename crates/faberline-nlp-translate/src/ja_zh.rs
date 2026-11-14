@@ -13,7 +13,7 @@ use faberline_nlp::doc::{Document, FrameRole, Token, Upos};
 use crate::conditioning::zh_pronoun_for_hint;
 use crate::lock::SpanLockTable;
 use crate::schema::{ClauseAlignment, SentenceConditioning, TargetVariant};
-use crate::variant::convert_zh_text_to_target;
+use crate::variant::{convert_zh_text_to_target, convert_zh_text_to_target_with_spans};
 
 /// Returns `true` if `text` contains Hiragana or Katakana and no Hangul.
 pub(crate) fn has_kana_no_hangul(text: &str) -> bool {
@@ -649,7 +649,12 @@ pub(crate) fn translate_ja_sentence(
     }
 
     let final_zh = if target == TargetVariant::ZhHans {
-        convert_zh_text_to_target(&out, target)
+        let mut target_spans: Vec<Span> = seg_target_spans.iter().map(|(_, span)| *span).collect();
+        let converted = convert_zh_text_to_target_with_spans(&out, target, &mut target_spans);
+        for ((_, span), converted_span) in seg_target_spans.iter_mut().zip(target_spans) {
+            *span = converted_span;
+        }
+        converted
     } else {
         out
     };
@@ -666,7 +671,7 @@ pub(crate) fn translate_ja_sentence(
                 .collect();
             let (t_start, t_end) =
                 if let (Some(first), Some(last)) = (matching.first(), matching.last()) {
-                    (first.1.start_char, last.1.end_char.min(final_chars))
+                    (first.1.start_char, last.1.end_char)
                 } else {
                     (0, final_chars)
                 };

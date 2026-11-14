@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use faberline_nlp::Span;
 use faberline_nlp::doc::model::Backend;
 use faberline_nlp_translate::{
     GlossaryEntry, PronounClass, SpeechRegister, TRANSLATE_SCHEMA, TargetVariant, TranslateOptions,
@@ -30,6 +31,159 @@ fn assert_valid_ja_zh_doc(src: &str, doc: &TranslatedDocument) {
             .take(s.target_span.end_char - s.target_span.start_char)
             .collect();
         assert_eq!(sliced, s.target_text);
+    }
+    for clause in &doc.clause_alignments {
+        let sentence = &doc.sentences[clause.sentence];
+        assert!(clause.source_span.start_char <= clause.source_span.end_char);
+        assert!(clause.source_span.end_char <= doc.source_chars);
+        assert!(clause.target_span.start_char <= clause.target_span.end_char);
+        assert!(clause.target_span.start_char >= sentence.target_span.start_char);
+        assert!(
+            clause.target_span.end_char <= sentence.target_span.end_char,
+            "clause {:?} exceeds sentence {:?}: {}",
+            clause.target_span,
+            sentence.target_span,
+            doc.target_text
+        );
+    }
+}
+
+fn slice_chars(text: &str, span: Span) -> String {
+    text.chars()
+        .skip(span.start_char)
+        .take(span.end_char - span.start_char)
+        .collect()
+}
+
+fn actor_glossary(alice: &str) -> TranslationGlossary {
+    let mut glossary = TranslationGlossary::new();
+    for (surface, target) in [("アリス", alice), ("ボブ", "鮑伯")] {
+        glossary.actors.push(GlossaryEntry {
+            canonical: surface.to_owned(),
+            surfaces: vec![surface.to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, target.to_owned())]),
+            ..GlossaryEntry::default()
+        });
+    }
+    glossary
+}
+
+#[test]
+fn clause_spans_follow_glossary_replacement_and_space_cleanup() {
+    let source = "アリスは本を読む、ボブは手紙を書く。";
+    for (replacement, expected_name) in [
+        ("愛麗絲", "愛麗絲"),
+        ("愛麗絲與她的閱讀小隊", "愛麗絲與她的閱讀小隊"),
+        ("愛 麗 絲", "愛麗絲"),
+    ] {
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &actor_glossary(replacement),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        let clause_texts: Vec<String> = doc
+            .clause_alignments
+            .iter()
+            .map(|c| slice_chars(&doc.target_text, c.target_span))
+            .collect();
+        assert_eq!(
+            clause_texts,
+            [format!("{expected_name}讀書，"), "鮑伯寫信。".to_owned()]
+        );
+        assert_eq!(clause_texts.concat(), doc.target_text);
+        for hit in &doc.glossary_hits {
+            let expected = if slice_chars(source, hit.source_span) == "アリス" {
+                expected_name
+            } else {
+                "鮑伯"
+            };
+            assert_eq!(slice_chars(&doc.target_text, hit.target_span), expected);
+        }
+    }
+}
+
+#[test]
+fn clause_spans_follow_opaque_restoration_and_optional_latin_spacing() {
+    let source = "私は `x` を読む、アリスは本を読む。";
+    for spacing in [false, true] {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.cjk_latin_spacing = spacing;
+        let doc = analyze_and_translate(
+            source,
+            &options,
+            &actor_glossary("Alice"),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        let clause_texts: Vec<String> = doc
+            .clause_alignments
+            .iter()
+            .map(|c| slice_chars(&doc.target_text, c.target_span))
+            .collect();
+        assert_eq!(
+            clause_texts,
+            [
+                "我讀`x`，".to_owned(),
+                if spacing {
+                    "Alice 讀書。"
+                } else {
+                    "Alice讀書。"
+                }
+                .to_owned(),
+            ]
+        );
+        assert_eq!(clause_texts.concat(), doc.target_text);
+        let code = doc
+            .opaque_spans
+            .iter()
+            .find(|op| slice_chars(source, op.source_span) == "`x`")
+            .unwrap();
+        assert_eq!(
+            slice_chars(&doc.target_text, code.target_span.unwrap()),
+            "`x`"
+        );
+        assert_eq!(doc.glossary_hits.len(), 1);
+        let hit_span = doc.glossary_hits[0].target_span;
+        assert!(hit_span.start_char <= hit_span.end_char);
+        assert!(hit_span.end_char <= doc.target_chars);
+        assert_eq!(slice_chars(&doc.target_text, hit_span).trim(), "Alice");
+    }
+}
+
+#[test]
+fn clause_spans_follow_length_changing_simplified_variants() {
+    for (source, first_clause, second_start) in [
+        ("演算法を使うから、本を読む。", "因为使用算法，", 7),
+        ("私は五メートル歩いて、本を読む。", "我五米走，", 5),
+        ("泡麵を食べるから、本を読む。", "因为吃方便面，", 7),
+    ] {
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHans),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert_eq!(doc.clause_alignments.len(), 2);
+        let clause_texts: Vec<String> = doc
+            .clause_alignments
+            .iter()
+            .map(|c| slice_chars(&doc.target_text, c.target_span))
+            .collect();
+        assert_eq!(clause_texts, [first_clause, "读书。"]);
+        assert_eq!(
+            doc.clause_alignments[1].target_span.start_char,
+            second_start
+        );
+        assert_eq!(clause_texts.concat(), doc.target_text);
     }
 }
 

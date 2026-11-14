@@ -141,6 +141,16 @@ impl SpanLockTable {
     /// mandatory (`InlineOpaque` and `Glossary`) spans and recording exact relative target spans
     /// (`0..target_chars` within the returned sentence string).
     pub fn restore(&self, decoded_text: &str) -> RestoreReport {
+        self.restore_with_spans(decoded_text, &mut [])
+    }
+
+    /// Restore placeholders and move ranges from the masked text into the restored text.
+    /// A range boundary inside a placeholder includes the corresponding replacement.
+    pub(crate) fn restore_with_spans(
+        &self,
+        decoded_text: &str,
+        tracked_spans: &mut [Span],
+    ) -> RestoreReport {
         if self.locks.is_empty() {
             return RestoreReport {
                 text: decoded_text.to_owned(),
@@ -154,12 +164,16 @@ impl SpanLockTable {
         let mut issues = Vec::new();
         let mut out = String::with_capacity(decoded_text.len() + 16);
         let mut out_chars = 0usize;
+        let mut input_chars = 0usize;
+        let mut replacements = Vec::new();
 
         let mut rest = decoded_text;
         while let Some(open_pos) = rest.find("[[PH") {
             let prefix = &rest[..open_pos];
             out.push_str(prefix);
-            out_chars += prefix.chars().count();
+            let prefix_chars = prefix.chars().count();
+            out_chars += prefix_chars;
+            input_chars += prefix_chars;
 
             let after_open = &rest[open_pos + 4..];
             if let Some(close_rel) = after_open.find("]]") {
@@ -174,6 +188,17 @@ impl SpanLockTable {
                         start_char: out_chars,
                         end_char: out_chars + rep_chars,
                     };
+                    let marker_end = input_chars + 4 + digits.len() + 2;
+                    if !tracked_spans.is_empty() {
+                        replacements.push((
+                            Span {
+                                start_char: input_chars,
+                                end_char: marker_end,
+                            },
+                            target_span,
+                        ));
+                    }
+                    input_chars = marker_end;
                     out.push_str(&lock.replacement);
                     out_chars += rep_chars;
                     if !seen[idx] {
@@ -193,10 +218,35 @@ impl SpanLockTable {
             // Not a valid `[[PHk]]` marker; emit `[[PH` literally and advance.
             out.push_str("[[PH");
             out_chars += 4;
+            input_chars += 4;
             rest = after_open;
         }
         out.push_str(rest);
         out_chars += rest.chars().count();
+
+        let map_position = |position: usize, is_end: bool| {
+            let mut input_end = 0usize;
+            let mut output_end = 0usize;
+            for &(masked, restored) in &replacements {
+                if position <= masked.start_char {
+                    break;
+                }
+                if position < masked.end_char {
+                    return if is_end {
+                        restored.end_char
+                    } else {
+                        restored.start_char
+                    };
+                }
+                input_end = masked.end_char;
+                output_end = restored.end_char;
+            }
+            output_end + position - input_end
+        };
+        for span in tracked_spans {
+            span.start_char = map_position(span.start_char, false);
+            span.end_char = map_position(span.end_char, true);
+        }
 
         // Conservation check: any mandatory lock missing from neural decode is deterministically
         // appended (before final sentence punctuation if present) so zero code/URL/formula/glossary

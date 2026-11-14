@@ -78,29 +78,93 @@ pub fn detect_zh_orientation(text: &str) -> ZhScriptOrientation {
 /// Convert a Chinese text string to `target` (`zh-Hant` or `zh-Hans`) while preserving `[[PHk]]`
 /// span-lock placeholders verbatim.
 pub(crate) fn convert_zh_text_to_target(text: &str, target: TargetVariant) -> String {
+    convert_zh_text_to_target_with_spans(text, target, &mut [])
+}
+
+/// Convert Chinese variants and track ranges through the actual lexical replacements.
+pub(crate) fn convert_zh_text_to_target_with_spans(
+    text: &str,
+    target: TargetVariant,
+    tracked_spans: &mut [Span],
+) -> String {
     if text.is_empty() || !target.is_zh() {
         return text.to_owned();
     }
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
+    let mut source_offset = 0usize;
+    let mut target_offset = 0usize;
+    let mut replacements = Vec::new();
     while let Some(open) = rest.find("[[PH") {
-        out.push_str(&convert_fragment_variant(&rest[..open], target));
+        let prefix = &rest[..open];
+        let converted = convert_fragment_variant_inner(
+            prefix,
+            target,
+            (source_offset, target_offset),
+            (!tracked_spans.is_empty()).then_some(&mut replacements),
+        );
+        source_offset += prefix.chars().count();
+        target_offset += converted.chars().count();
+        out.push_str(&converted);
         let after = &rest[open + 4..];
         if let Some(close) = after.find("]]") {
-            out.push_str(&rest[open..open + 4 + close + 2]);
+            let placeholder = &rest[open..open + 4 + close + 2];
+            out.push_str(placeholder);
+            let placeholder_chars = placeholder.chars().count();
+            source_offset += placeholder_chars;
+            target_offset += placeholder_chars;
             rest = &after[close + 2..];
         } else {
             out.push_str("[[PH");
+            source_offset += 4;
+            target_offset += 4;
             rest = after;
         }
     }
-    out.push_str(&convert_fragment_variant(rest, target));
+    out.push_str(&convert_fragment_variant_inner(
+        rest,
+        target,
+        (source_offset, target_offset),
+        (!tracked_spans.is_empty()).then_some(&mut replacements),
+    ));
+    let map_position = |position: usize, is_end: bool| {
+        let mut source_end = 0usize;
+        let mut target_end = 0usize;
+        for &(source, target) in &replacements {
+            if position <= source.start_char {
+                break;
+            }
+            if position < source.end_char {
+                return if is_end {
+                    target.end_char
+                } else {
+                    target.start_char
+                };
+            }
+            source_end = source.end_char;
+            target_end = target.end_char;
+        }
+        target_end + position - source_end
+    };
+    for span in tracked_spans {
+        span.start_char = map_position(span.start_char, false);
+        span.end_char = map_position(span.end_char, true);
+    }
     out
 }
 
 /// Convert an arbitrary standalone fragment (e.g. a heading subtitle or glossary surface) to
 /// `target` when `target` is a Chinese or English variant.
 pub fn convert_fragment_variant(fragment: &str, target: TargetVariant) -> String {
+    convert_fragment_variant_inner(fragment, target, (0, 0), None)
+}
+
+fn convert_fragment_variant_inner(
+    fragment: &str,
+    target: TargetVariant,
+    (source_offset, target_offset): (usize, usize),
+    mut replacements: Option<&mut Vec<(Span, Span)>>,
+) -> String {
     if fragment.is_empty() {
         return String::new();
     }
@@ -110,11 +174,13 @@ pub fn convert_fragment_variant(fragment: &str, target: TargetVariant) -> String
         let spans = zh::segment_zh(&chars, 0, &[]);
         let mut out = String::with_capacity(fragment.len());
         let mut cursor = 0usize;
+        let mut target_cursor = 0usize;
         for sp in spans {
             if sp.start_char > cursor {
                 for &c in &chars[cursor..sp.start_char] {
                     out.push(c);
                 }
+                target_cursor += sp.start_char - cursor;
             }
             let surf: String = chars[sp.start_char..sp.end_char].iter().collect();
             let prev_char = sp
@@ -122,14 +188,24 @@ pub fn convert_fragment_variant(fragment: &str, target: TargetVariant) -> String
                 .checked_sub(1)
                 .and_then(|i| chars.get(i).copied());
             let next_char = chars.get(sp.end_char).copied();
-            out.push_str(&convert_zh_word(
-                &surf,
-                None,
-                prev_char,
-                next_char,
-                orientation,
-                target,
-            ));
+            let converted = convert_zh_word(&surf, None, prev_char, next_char, orientation, target);
+            let converted_chars = converted.chars().count();
+            if converted_chars != sp.end_char - sp.start_char
+                && let Some(replacements) = replacements.as_mut()
+            {
+                replacements.push((
+                    Span {
+                        start_char: source_offset + sp.start_char,
+                        end_char: source_offset + sp.end_char,
+                    },
+                    Span {
+                        start_char: target_offset + target_cursor,
+                        end_char: target_offset + target_cursor + converted_chars,
+                    },
+                ));
+            }
+            out.push_str(&converted);
+            target_cursor += converted_chars;
             cursor = sp.end_char;
         }
         if cursor < chars.len() {

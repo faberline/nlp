@@ -1,6 +1,6 @@
 # nlp.narrative.v1
 
-`faberline_nlp_narrative` (`narrative/`) builds a source-linked narrative event, dialogue, actor
+`faberline_nlp_narrative` (`crates/faberline-nlp-narrative/`) builds a source-linked narrative event, dialogue, actor
 mention, and cycle-free partial-order timeline graph over `nlp.doc.v1`
 (`faberline_nlp::doc::Document`) and the exact original UTF-8 text. It runs no neural model of its
 own and makes no network calls.
@@ -14,8 +14,8 @@ own and makes no network calls.
 
 - **Strict one-way crate dependency**: `faberline-nlp` (`nlp.doc.v1`) owns general-purpose text
   segmentation, tokenization, UPOS tagging, rule-based entities, dependency syntax, and surface
-  discourse relations. `faberline-nlp-narrative` (`narrative/`) depends on `faberline-nlp`
-  (`path = ".."`), while `faberline-nlp` does **not** depend on `faberline-nlp-narrative`.
+  discourse relations. `faberline-nlp-narrative` (`crates/faberline-nlp-narrative/`) depends on `faberline-nlp`
+  (workspace dependency), while `faberline-nlp` does **not** depend on `faberline-nlp-narrative`.
 - **Genre-neutral core, zero hardcoded work names**: Neither library code nor CLI binaries contain
   hardcoded work titles, character names, places, organizations, ranks, or genre-specific lexicons.
 - **Optional caller vocabulary (`WorkVocabulary`)**: Callers may supply surface-to-canonical alias

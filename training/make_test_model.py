@@ -23,7 +23,7 @@ from onnx import TensorProto, helper, numpy_helper
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT_DIR = ROOT / "models"
+OUT_DIR = ROOT / "crates" / "faberline-nlp" / "models"
 MODEL_DIR = OUT_DIR / "test-tiny"
 
 MODEL_ID = "test-tiny"

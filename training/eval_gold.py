@@ -26,7 +26,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-DEFAULT_GOLD = Path("tests/data/gold_layers4_6_v1.jsonl")
+_CRATE_GOLD = Path("crates/faberline-nlp/tests/data/gold_layers4_6_v1.jsonl")
+_LEGACY_GOLD = Path("tests/data/gold_layers4_6_v1.jsonl")
+DEFAULT_GOLD = _CRATE_GOLD if _CRATE_GOLD.exists() else _LEGACY_GOLD
 
 UPOS_SET = frozenset({
     "ADJ", "ADP", "ADV", "AUX", "CCONJ", "DET", "INTJ", "NOUN", "NUM",
@@ -736,7 +738,7 @@ def main() -> None:
         "--gold",
         type=Path,
         default=DEFAULT_GOLD,
-        help="Path to gold JSONL file (default: tests/data/gold_layers4_6_v1.jsonl)",
+        help=f"Path to gold JSONL file (default: {DEFAULT_GOLD})",
     )
     parser.add_argument(
         "--pred",

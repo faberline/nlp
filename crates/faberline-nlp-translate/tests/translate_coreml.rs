@@ -64,7 +64,12 @@ fn crate_dir() -> PathBuf {
 }
 
 fn workspace_root() -> PathBuf {
-    crate_dir().parent().unwrap().to_path_buf()
+    crate_dir()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
 }
 
 fn models_dir() -> PathBuf {

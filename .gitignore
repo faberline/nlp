@@ -5,4 +5,4 @@ training/out/
 training/models/
 training/**/__pycache__/
 __pycache__/
-models/doc-syntax-v1/
+crates/faberline-nlp/models/doc-syntax-v1/

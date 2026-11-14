@@ -1509,6 +1509,7 @@ def load_forbidden_texts() -> set[str]:
     for rel in [
         "training/probe/probe_texts.jsonl",
         "training/silver/sample_dryrun.jsonl",
+        "crates/faberline-nlp/tests/data/gold_layers4_6_v1.jsonl",
         "tests/data/gold_layers4_6_v1.jsonl",
     ]:
         p = ROOT / rel
@@ -1519,17 +1520,22 @@ def load_forbidden_texts() -> set[str]:
                     if "text" in obj:
                         forbidden.add(norm_text(obj["text"]))
     # Also exclude swarm/gold-eval if present as a local git branch
-    proc = subprocess.run(
-        ["git", "show", "swarm/gold-eval:tests/data/gold_layers4_6_v1.jsonl"],
-        capture_output=True,
-        check=False,
-    )
-    if proc.returncode == 0:
-        for line in proc.stdout.decode("utf-8").splitlines():
-            if line.strip():
-                obj = json.loads(line)
-                if "text" in obj:
-                    forbidden.add(norm_text(obj["text"]))
+    for git_rel in (
+        "crates/faberline-nlp/tests/data/gold_layers4_6_v1.jsonl",
+        "tests/data/gold_layers4_6_v1.jsonl",
+    ):
+        proc = subprocess.run(
+            ["git", "show", f"swarm/gold-eval:{git_rel}"],
+            capture_output=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            for line in proc.stdout.decode("utf-8").splitlines():
+                if line.strip():
+                    obj = json.loads(line)
+                    if "text" in obj:
+                        forbidden.add(norm_text(obj["text"]))
+            break
     return forbidden
 
 

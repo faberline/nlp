@@ -306,12 +306,29 @@ def load_gold_items(gold_path: Path | None, git_ref: str | None) -> tuple[list[d
         raw = gold_path.read_bytes()
         src = str(gold_path)
     elif git_ref is not None:
-        raw = subprocess.check_output(["git", "show", f"{git_ref}:tests/data/gold_layers4_6_v1.jsonl"])
-        src = f"{git_ref}:tests/data/gold_layers4_6_v1.jsonl"
+        raw = None
+        src = ""
+        for rel in (
+            "crates/faberline-nlp/tests/data/gold_layers4_6_v1.jsonl",
+            "tests/data/gold_layers4_6_v1.jsonl",
+        ):
+            proc = subprocess.run(["git", "show", f"{git_ref}:{rel}"], capture_output=True, check=False)
+            if proc.returncode == 0:
+                raw = proc.stdout
+                src = f"{git_ref}:{rel}"
+                break
+        if raw is None:
+            raise subprocess.CalledProcessError(
+                1, ["git", "show", f"{git_ref}:crates/faberline-nlp/tests/data/gold_layers4_6_v1.jsonl"]
+            )
     else:
-        default_p = ROOT / "tests/data/gold_layers4_6_v1.jsonl"
+        rel = "crates/faberline-nlp/tests/data/gold_layers4_6_v1.jsonl"
+        default_p = ROOT / rel
+        if not default_p.is_file():
+            rel = "tests/data/gold_layers4_6_v1.jsonl"
+            default_p = ROOT / rel
         raw = default_p.read_bytes()
-        src = "tests/data/gold_layers4_6_v1.jsonl"
+        src = rel
     items = [
         json.loads(line)
         for line in raw.decode("utf-8").splitlines()

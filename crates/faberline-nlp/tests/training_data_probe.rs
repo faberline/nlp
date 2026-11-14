@@ -6,6 +6,16 @@ use faberline_nlp::doc::{Options, analyze_document};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::path::{Path, PathBuf};
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
 
 const TEXTS: &str = "training/probe/probe_texts.jsonl";
 const ANNOTATIONS: &str = "training/probe/annotations.jsonl";
@@ -58,7 +68,7 @@ const DEPRELS: &[&str] = &[
 const ROLES: &[&str] = &["ARG0", "ARG1", "ARGM"];
 
 fn lines(path: &str) -> Vec<Value> {
-    fs::read_to_string(path)
+    fs::read_to_string(workspace_root().join(path))
         .unwrap_or_else(|e| panic!("{path}: {e}"))
         .lines()
         .map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{path}: bad JSON: {e}")))
@@ -191,7 +201,7 @@ fn check(a: &Value) -> Result<(), String> {
 
 fn sha(path: &str) -> String {
     let mut h = Sha256::new();
-    h.update(fs::read(path).unwrap());
+    h.update(fs::read(workspace_root().join(path)).unwrap());
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -319,7 +329,7 @@ fn checker_rejects_bad_annotations() {
 
 #[test]
 fn doc_records_decision_hashes_and_counts() {
-    let doc = fs::read_to_string(DOC).unwrap();
+    let doc = fs::read_to_string(workspace_root().join(DOC)).unwrap();
     let mut last = 0;
     for h in [
         "# Training data",
@@ -352,7 +362,7 @@ fn doc_records_decision_hashes_and_counts() {
 
 #[test]
 fn source_table_has_no_forbidden_licences() {
-    let doc = fs::read_to_string(DOC).unwrap();
+    let doc = fs::read_to_string(workspace_root().join(DOC)).unwrap();
     let section = doc
         .split("## Text sources")
         .nth(1)

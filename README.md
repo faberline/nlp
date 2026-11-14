@@ -71,8 +71,8 @@ using no network:
 
 See [docs/doc-v1.md](docs/doc-v1.md) for the full `nlp.doc.v1` specification,
 [docs/narrative-v1.md](docs/narrative-v1.md) for the downstream `nlp.narrative.v1` narrative graph
-layer (`narrative/`), and [docs/translate-v1.md](docs/translate-v1.md) for the offline post-NLP
-translation subsystem (`translate/`, `nlp.translate.v1`).
+layer (`crates/faberline-nlp-narrative/`), and [docs/translate-v1.md](docs/translate-v1.md) for the offline post-NLP
+translation subsystem (`crates/faberline-nlp-translate/`, `nlp.translate.v1`).
 
 ## Experimental source stream
 

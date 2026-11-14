@@ -17,13 +17,17 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+fn workspace_root() -> PathBuf {
+    root().parent().unwrap().parent().unwrap().to_path_buf()
+}
+
 fn json(path: &std::path::Path) -> Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }
 
 /// Every receipt of this layer. The repository keeps exactly one.
 fn receipts() -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = fs::read_dir(root().join("docs/receipts"))
+    let mut found: Vec<PathBuf> = fs::read_dir(workspace_root().join("docs/receipts"))
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| {
@@ -234,7 +238,7 @@ mod mac {
             "arch": command_output("uname", &["-m"]),
             "rust": command_output("rustc", &["--version"]),
         });
-        let path = root().join(format!("docs/receipts/model-runtime-{date}.json"));
+        let path = workspace_root().join(format!("docs/receipts/model-runtime-{date}.json"));
         fs::write(path, serde_json::to_string_pretty(&receipt).unwrap() + "\n").unwrap();
     }
 }

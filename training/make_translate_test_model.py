@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT_DIR = ROOT / "translate" / "models"
+OUT_DIR = ROOT / "crates" / "faberline-nlp-translate" / "models"
 MODEL_ID = "translate-test-tiny"
 MODEL_DIR = OUT_DIR / MODEL_ID
 

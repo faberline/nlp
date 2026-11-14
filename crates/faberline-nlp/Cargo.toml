@@ -1,0 +1,37 @@
+[package]
+name = "faberline-nlp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Source-linked multilingual text analysis"
+publish = false
+
+[features]
+model-tokenizer = ["dep:tiktoken-rs"]
+onnx = ["dep:tract-onnx", "dep:tokenizers"]
+coreml = ["dep:tokenizers", "dep:objc2", "dep:objc2-foundation", "dep:objc2-core-ml", "dep:tempfile"]
+
+[dependencies]
+aho-corasick.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+icu_locale_core.workspace = true
+icu_segmenter.workspace = true
+jieba-rs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tiktoken-rs = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+tokenizers = { workspace = true, optional = true }
+tract-onnx = { workspace = true, optional = true }
+unicode-segmentation.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true, optional = true }
+objc2-core-ml = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true

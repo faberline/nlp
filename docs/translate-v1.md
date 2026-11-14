@@ -1,6 +1,6 @@
 # nlp.translate.v1
 
-`faberline_nlp_translate` (`translate/`) implements deterministic variant conversion and
+`faberline_nlp_translate` (`crates/faberline-nlp-translate/`) implements deterministic variant conversion and
 NLP-conditioned offline Seq2Seq translation over `nlp.doc.v1` (`faberline_nlp::doc::Document`),
 the embedded first-party 4-language / 6-variant lexicon (`FNLPLX01`), and optional
 `nlp.narrative.v1` (`faberline_nlp_narrative::ChapterNarrative`). It runs strictly offline with
@@ -10,8 +10,8 @@ zero network access.
 
 ## 1. Architectural Boundary
 
-- **Strict one-way crate dependency**: `faberline-nlp-translate` (`translate/`) depends on
-  `faberline-nlp` (`path = ".."`) and optionally `faberline-nlp-narrative` (`path = "../narrative"`,
+- **Strict one-way crate dependency**: `faberline-nlp-translate` (`crates/faberline-nlp-translate/`) depends on
+  `faberline-nlp` (workspace dependency) and optionally `faberline-nlp-narrative` (workspace dependency,
   enabled by default via the `narrative` feature). Neither `faberline-nlp` nor
   `faberline-nlp-narrative` depends on `faberline-nlp-translate`.
 - **Supported language variants (`TargetVariant`)**:
@@ -147,7 +147,7 @@ before `tract-onnx` or `objc2-core-ml` parses any bytes.
 - **Decoder step graph** (`decoder_step.onnx` / `decoder_step.mlmodel`):
   - Inputs: `decoder_input_ids` (`[1, tgt_max_len]`), `encoder_hidden` (`[1, src_max_len, d_model]`)
   - Output: `logits` (`[1, tgt_max_len, vocab]`, `FLOAT32`)
-- **Cross-backend receipt**: `translate/tests/translate_coreml.rs` verifies `Onnx` and `Coreml`
+- **Cross-backend receipt**: `crates/faberline-nlp-translate/tests/translate_coreml.rs` verifies `Onnx` and `Coreml`
   (`CPUOnly`) agree within `1e-4` across all 12 fixtures of `translate-test-tiny` and validates
   `docs/receipts/translate-model-runtime-<date>.json` on all platforms.
 
@@ -163,6 +163,6 @@ cargo run -p faberline-nlp-translate --bin nlp_translate -- \
 # Resumable multi-worker corpus/book batch translation
 cargo run -p faberline-nlp-translate --bin nlp_translate_batch -- \
   --input-dir chapters/ --output-dir out/ --target en-US \
-  --glossary glossary.json --models translate/models --model-id translate-test-tiny \
+  --glossary glossary.json --models crates/faberline-nlp-translate/models --model-id translate-test-tiny \
   --workers 4 --bilingual
 ```

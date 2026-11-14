@@ -912,6 +912,10 @@ fn entity_receipt() {
     });
     if std::env::var("NLP_WRITE_RECEIPT").as_deref() == Ok("1") {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
             .join("docs/receipts/entities-2026-11-10.json");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(

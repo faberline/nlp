@@ -638,8 +638,9 @@ def main() -> int:
         "# surface_suffix\tkind\tcond\tcost\teojeol_upos_effect\tdecomp",
     ]
 
-    ko_out = repo_root / "lexicon" / "data" / "ko.tsv"
-    morph_out = repo_root / "lexicon" / "data" / "ko_morph.tsv"
+    nlp_crate_root = repo_root / "crates" / "faberline-nlp"
+    ko_out = nlp_crate_root / "lexicon" / "data" / "ko.tsv"
+    morph_out = nlp_crate_root / "lexicon" / "data" / "ko_morph.tsv"
 
     write_tsv_atomic(ko_out, scratch_dir / "ko.tsv.tmp", ko_header, ko_rows)
     write_tsv_atomic(morph_out, scratch_dir / "ko_morph.tsv.tmp", morph_header, morph_rows)

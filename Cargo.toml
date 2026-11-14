@@ -1,39 +1,32 @@
-[package]
-name = "faberline-nlp"
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "Source-linked English and Chinese text analysis"
+license = "MIT"
 repository = "https://github.com/faberline/nlp"
-publish = false
 
-[workspace]
-members = ["narrative", "translate"]
+[workspace.dependencies]
+faberline-nlp = { path = "crates/faberline-nlp" }
+faberline-nlp-narrative = { path = "crates/faberline-nlp-narrative" }
+faberline-nlp-translate = { path = "crates/faberline-nlp-translate" }
 
-[features]
-model-tokenizer = ["dep:tiktoken-rs"]
-onnx = ["dep:tract-onnx", "dep:tokenizers"]
-coreml = ["dep:tokenizers", "dep:objc2", "dep:objc2-foundation", "dep:objc2-core-ml", "dep:tempfile"]
-
-[dependencies]
 aho-corasick = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 icu_locale_core = "2.3"
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 jieba-rs = "0.11"
+objc2 = "0.6"
+objc2-core-ml = { version = "0.3.2", default-features = false, features = ["std", "MLModel", "MLModel_MLModelCompilation", "MLModelConfiguration", "MLMultiArray", "MLFeatureValue", "MLFeatureProvider", "MLDictionaryFeatureProvider", "MLPredictionOptions", "block2"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSString", "NSURL", "NSValue", "NSObject"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tiktoken-rs = { version = "0.9", optional = true }
-tempfile = { version = "3", optional = true }
-tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"], optional = true }
-tract-onnx = { version = "0.23.10", default-features = false, optional = true }
-unicode-segmentation = "1"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = { version = "0.6", optional = true }
-objc2-core-ml = { version = "0.3.2", default-features = false, features = ["std", "MLModel", "MLModel_MLModelCompilation", "MLModelConfiguration", "MLMultiArray", "MLFeatureValue", "MLFeatureProvider", "MLDictionaryFeatureProvider", "MLPredictionOptions", "block2"], optional = true }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSString", "NSURL", "NSValue", "NSObject"], optional = true }
-
-[dev-dependencies]
 tempfile = "3"
+tiktoken-rs = "0.9"
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }
+tract-onnx = { version = "0.23.10", default-features = false }
+unicode-segmentation = "1"

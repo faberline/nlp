@@ -7,6 +7,16 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
+use std::path::{Path, PathBuf};
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
 
 const DRYRUN: &str = "training/silver/sample_dryrun.jsonl";
 const PROBE_TEXTS: &str = "training/probe/probe_texts.jsonl";
@@ -63,7 +73,7 @@ enum SilverOutcome {
 }
 
 fn read_jsonl(path: &str) -> Vec<Value> {
-    fs::read_to_string(path)
+    fs::read_to_string(workspace_root().join(path))
         .unwrap_or_else(|e| panic!("{path}: {e}"))
         .lines()
         .filter(|l| !l.trim().is_empty())
@@ -513,7 +523,7 @@ fn layer2_token_error_flag_excludes_frames_and_coref_from_merged_layers() {
 
 #[test]
 fn resumable_manifest_checks_source_hash_and_batch_states() {
-    let raw = fs::read(DRYRUN).unwrap();
+    let raw = fs::read(workspace_root().join(DRYRUN)).unwrap();
     let src_sha = sha256_bytes(&raw);
 
     let verify_manifest = |m: &Value, expected_source_sha: &str| -> Result<(), String> {
@@ -561,7 +571,9 @@ fn resumable_manifest_checks_source_hash_and_batch_states() {
 
 #[test]
 fn models_manifest_pins_doc_syntax_v1_metadata() {
-    let raw = fs::read_to_string("models/manifest.json").expect("models/manifest.json");
+    let raw =
+        fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("models/manifest.json"))
+            .expect("models/manifest.json");
     let m: Value = serde_json::from_str(&raw).expect("valid JSON");
     assert_eq!(m["schema"], "nlp.models.v1");
     let models = m["models"].as_array().expect("models list");
@@ -598,8 +610,11 @@ fn staged_doc_syntax_v1_tract_and_coreml_agree_within_1e4() {
         return;
     }
 
-    let repo_m: Value =
-        serde_json::from_str(&fs::read_to_string("models/manifest.json").unwrap()).unwrap();
+    let repo_m: Value = serde_json::from_str(
+        &fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("models/manifest.json"))
+            .unwrap(),
+    )
+    .unwrap();
     let stage_m: Value =
         serde_json::from_str(&fs::read_to_string(stage.join("manifest.json")).unwrap()).unwrap();
     let repo_entry = repo_m["models"]

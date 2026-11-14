@@ -8,6 +8,20 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
+use std::path::{Path, PathBuf};
+
+fn crate_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn workspace_root() -> PathBuf {
+    crate_dir()
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
 
 const GOLD_PATH: &str = "tests/data/gold_layers4_6_v1.jsonl";
 const GUIDE_PATH: &str = "docs/annotation-guide.md";
@@ -83,20 +97,21 @@ const VARIANTS: &[(&str, &str, usize, usize)] = &[
 const TRAD_ONLY_CHARS: &str = "這們個為與會從開關門車馬鳥魚風雲電書長見貝買賣讀寫聽說請讓給對進遠還邊過運選連週醫雙離難響頁題顆飯館體點齊";
 const SIMP_ONLY_CHARS: &str = "这们个为与会从开关门车马鸟鱼风云电书长见贝买卖读写听说请让给对进远还边过运选连医双离难响页题颗饭馆体点齐";
 
-fn read_jsonl(path: &str) -> Vec<Value> {
+fn read_jsonl(path: &Path) -> Vec<Value> {
     fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("{path}: {e}"))
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
         .lines()
         .filter(|l| !l.trim().is_empty())
         .enumerate()
         .map(|(idx, l)| {
-            serde_json::from_str(l).unwrap_or_else(|e| panic!("{path}:{}: bad JSON: {e}", idx + 1))
+            serde_json::from_str(l)
+                .unwrap_or_else(|e| panic!("{}:{}: bad JSON: {e}", path.display(), idx + 1))
         })
         .collect()
 }
 
-fn sha256_hex(path: &str) -> String {
-    let bytes = fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+fn sha256_hex(path: &Path) -> String {
+    let bytes = fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
     hasher
@@ -546,12 +561,12 @@ fn score_predictions(gold: &[Value], pred: &[Value]) -> EvalMetrics {
 #[test]
 fn gold_sha256_and_guide_headings_are_frozen() {
     assert_eq!(
-        sha256_hex(GOLD_PATH),
+        sha256_hex(&crate_dir().join(GOLD_PATH)),
         GOLD_SHA256,
         "tests/data/gold_layers4_6_v1.jsonl changed without updating GOLD_SHA256"
     );
 
-    let guide = fs::read_to_string(GUIDE_PATH).unwrap();
+    let guide = fs::read_to_string(workspace_root().join(GUIDE_PATH)).unwrap();
     assert!(
         guide.contains(GOLD_SHA256),
         "docs/annotation-guide.md does not record current GOLD_SHA256"
@@ -605,7 +620,7 @@ fn gold_sha256_and_guide_headings_are_frozen() {
 
 #[test]
 fn gold_corpus_balance_variants_and_disjointness() {
-    let gold = read_jsonl(GOLD_PATH);
+    let gold = read_jsonl(&crate_dir().join(GOLD_PATH));
     assert_eq!(gold.len(), 300, "expected 300 gold items");
 
     let total_sents: usize = gold
@@ -714,11 +729,12 @@ fn gold_corpus_balance_variants_and_disjointness() {
 
     // Verify strict text disjointness from probe_texts.jsonl and pos_gold.json, and internal uniqueness.
     let mut forbidden = HashSet::new();
-    for p in read_jsonl(PROBE_TEXTS_PATH) {
+    for p in read_jsonl(&workspace_root().join(PROBE_TEXTS_PATH)) {
         forbidden.insert(norm_text(p["text"].as_str().unwrap()));
     }
     let pos_gold: Value =
-        serde_json::from_str(&fs::read_to_string(POS_GOLD_PATH).unwrap()).unwrap();
+        serde_json::from_str(&fs::read_to_string(crate_dir().join(POS_GOLD_PATH)).unwrap())
+            .unwrap();
     if let Some(arr) = pos_gold
         .get("cases")
         .and_then(Value::as_array)
@@ -748,7 +764,7 @@ fn gold_corpus_balance_variants_and_disjointness() {
 
 #[test]
 fn gold_items_match_analyze_document_and_pass_validator() {
-    let gold = read_jsonl(GOLD_PATH);
+    let gold = read_jsonl(&crate_dir().join(GOLD_PATH));
     let opts = Options::default();
     let mut failures = Vec::new();
     let mut total_frames = 0usize;
@@ -857,7 +873,7 @@ fn gold_items_match_analyze_document_and_pass_validator() {
 fn validator_and_scorer_reject_bad_inputs_and_score_perturbations() {
     assert_eq!(lang_str(Lang::Ja), "ja");
     assert_eq!(lang_str(Lang::Ko), "ko");
-    let gold = read_jsonl(GOLD_PATH);
+    let gold = read_jsonl(&crate_dir().join(GOLD_PATH));
 
     // 1. Reference scorer achieves 1.0 on gold-vs-gold and drops predictably under perturbations.
     let perfect = score_predictions(&gold, &gold);

@@ -31,8 +31,9 @@ OPENCC_DIR = SCRATCH_DIR / "lex_build_zh" / "opencc"
 CORPORA_DIR = SCRATCH_DIR / "corpora" / "zh"
 TMP_DIR = SCRATCH_DIR / "lex_build_zh"
 
-OUT_HANT = REPO_ROOT / "lexicon" / "data" / "zh_hant.tsv"
-OUT_HANS = REPO_ROOT / "lexicon" / "data" / "zh_hans.tsv"
+NLP_CRATE_ROOT = REPO_ROOT / "crates" / "faberline-nlp"
+OUT_HANT = NLP_CRATE_ROOT / "lexicon" / "data" / "zh_hant.tsv"
+OUT_HANS = NLP_CRATE_ROOT / "lexicon" / "data" / "zh_hans.tsv"
 
 VALID_UPOS = frozenset(
     {
@@ -358,8 +359,8 @@ class OpenCCConverter:
 
 
 def parse_pos_rs() -> tuple[dict[str, str], set[str]]:
-    """Parse ZH_DECIDED and ZH_AMBIGUOUS from src/doc/pos.rs."""
-    pos_rs = REPO_ROOT / "src" / "doc" / "pos.rs"
+    """Parse ZH_DECIDED and ZH_AMBIGUOUS from crates/faberline-nlp/src/doc/pos.rs."""
+    pos_rs = NLP_CRATE_ROOT / "src" / "doc" / "pos.rs"
     src = pos_rs.read_text(encoding="utf-8")
 
     zh_decided: dict[str, str] = {}
@@ -386,7 +387,7 @@ def load_in_repo_zh_words() -> list[str]:
     """Collect curated Chinese words from src/doc/token.rs, src/text.rs, src/language.rs."""
     words: list[str] = []
     for rel in ("src/doc/token.rs", "src/text.rs", "src/language.rs"):
-        p = REPO_ROOT / rel
+        p = NLP_CRATE_ROOT / rel
         if not p.exists():
             continue
         src = p.read_text(encoding="utf-8")
@@ -400,7 +401,7 @@ def load_gold_pos() -> dict[str, set[str]]:
     """Load all Chinese/mixed token -> set(UPOS) from pos_gold.json and gold_layers4_6_v1.jsonl."""
     gold: dict[str, set[str]] = defaultdict(set)
 
-    pos_gold_path = REPO_ROOT / "tests" / "data" / "pos_gold.json"
+    pos_gold_path = NLP_CRATE_ROOT / "tests" / "data" / "pos_gold.json"
     with open(pos_gold_path, "r", encoding="utf-8") as f:
         for item in json.load(f):
             if item.get("lang") in ("zh", "mixed"):
@@ -408,7 +409,7 @@ def load_gold_pos() -> dict[str, set[str]]:
                     if is_clean_han(tok):
                         gold[tok].add(upos)
 
-    layers_path = REPO_ROOT / "tests" / "data" / "gold_layers4_6_v1.jsonl"
+    layers_path = NLP_CRATE_ROOT / "tests" / "data" / "gold_layers4_6_v1.jsonl"
     with open(layers_path, "r", encoding="utf-8") as f:
         for line in f:
             item = json.loads(line)

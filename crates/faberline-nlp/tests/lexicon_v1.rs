@@ -1,11 +1,20 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, Lang, Options, Reason, SemanticClass, Upos, analyze_document};
 use faberline_nlp::lexicon;
 use serde_json::Value;
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
 
 fn slice(text: &str, s: Span) -> String {
     text.chars()
@@ -23,12 +32,12 @@ fn find_token<'a>(doc: &'a Document, text: &str, surface: &str) -> &'a faberline
 
 #[test]
 fn license_audit_and_receipt_integrity() {
-    let licenses_dir = Path::new("lexicon/LICENSES");
+    let licenses_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("lexicon/LICENSES");
     assert!(licenses_dir.is_dir(), "missing lexicon/LICENSES directory");
 
     let forbidden = ["BY-SA", "BY-NC", "BY-ND", "GPL"];
     let mut license_files = HashSet::new();
-    for entry in fs::read_dir(licenses_dir).expect("read lexicon/LICENSES") {
+    for entry in fs::read_dir(&licenses_dir).expect("read lexicon/LICENSES") {
         let entry = entry.expect("license dir entry");
         let path = entry.path();
         if path.is_file() {
@@ -55,8 +64,8 @@ fn license_audit_and_receipt_integrity() {
         license_files
     );
 
-    let receipt_path = Path::new("docs/receipts/lexicon-2026-11-14.json");
-    let receipt_raw = fs::read_to_string(receipt_path).expect("read lexicon receipt");
+    let receipt_path = workspace_root().join("docs/receipts/lexicon-2026-11-14.json");
+    let receipt_raw = fs::read_to_string(&receipt_path).expect("read lexicon receipt");
     let receipt_upper = receipt_raw.to_uppercase();
     for bad in forbidden {
         assert!(

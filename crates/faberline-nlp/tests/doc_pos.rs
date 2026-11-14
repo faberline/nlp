@@ -476,6 +476,15 @@ fn manifest(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(rel)
 }
 
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
+
 fn gold() -> Vec<Gold> {
     let raw = fs::read_to_string(manifest(GOLD_PATH)).expect("gold file");
     serde_json::from_str(&raw).expect("gold file parses")
@@ -831,7 +840,7 @@ fn pos_receipt() {
             "Precision is the share of decided, matched tokens whose tag equals the gold tag."
         ],
     });
-    let path = manifest(RECEIPT_PATH);
+    let path = workspace_root().join(RECEIPT_PATH);
     fs::create_dir_all(path.parent().expect("receipt dir")).expect("create receipt dir");
     let mut text = serde_json::to_string_pretty(&receipt).expect("receipt json");
     text.push('\n');

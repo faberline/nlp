@@ -749,6 +749,7 @@ pub(super) struct TokenMatcher {
     surface: SurfaceTerms,
     simp_extra: Option<Arc<AhoCorasick>>,
     ja_ko_extra: Option<Arc<AhoCorasick>>,
+    ja_lexicon: Vec<String>,
     normalize_traditional: bool,
     use_doc_jieba: bool,
     first_party_zh_segmenter: bool,
@@ -761,6 +762,7 @@ impl TokenMatcher {
             surface: SurfaceTerms::Default(terms()),
             simp_extra: None,
             ja_ko_extra: None,
+            ja_lexicon: Vec::new(),
             normalize_traditional: false,
             use_doc_jieba: false,
             first_party_zh_segmenter: false,
@@ -798,6 +800,7 @@ impl TokenMatcher {
                 surface: SurfaceTerms::Default(terms()),
                 simp_extra: None,
                 ja_ko_extra: None,
+                ja_lexicon: options.lexicon.clone(),
                 normalize_traditional: options.normalize_traditional,
                 use_doc_jieba: true,
                 first_party_zh_segmenter: !options.legacy_jieba,
@@ -819,6 +822,7 @@ impl TokenMatcher {
                 },
                 simp_extra: cached.simp_ac.as_ref().map(Arc::clone),
                 ja_ko_extra: cached.ja_ko_ac.as_ref().map(Arc::clone),
+                ja_lexicon: options.lexicon.clone(),
                 normalize_traditional: options.normalize_traditional,
                 use_doc_jieba: true,
                 first_party_zh_segmenter: !options.legacy_jieba,
@@ -886,6 +890,7 @@ impl TokenMatcher {
             },
             simp_extra: simp_ac,
             ja_ko_extra: ja_ko_ac,
+            ja_lexicon: options.lexicon.clone(),
             normalize_traditional: options.normalize_traditional,
             use_doc_jieba: true,
             first_party_zh_segmenter: !options.legacy_jieba,
@@ -1055,19 +1060,20 @@ fn ja_tokens(
     if let Some(ac) = &matcher.ja_ko_extra {
         let mut at = 0;
         for m in ac.find_iter(run) {
-            ja_words(&run[at..m.start()], a + at, out);
+            ja_words(&run[at..m.start()], a + at, &matcher.ja_lexicon, out);
             out.push((a + m.start(), a + m.end(), None));
             at = m.end();
         }
-        ja_words(&run[at..], a + at, out);
+        ja_words(&run[at..], a + at, &matcher.ja_lexicon, out);
     } else {
-        ja_words(run, a, out);
+        ja_words(run, a, &matcher.ja_lexicon, out);
     }
 }
 
 fn ja_words(
     stretch: &str,
     base: usize,
+    extra_lexicon: &[String],
     out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
 ) {
     if stretch.is_empty() {
@@ -1080,7 +1086,7 @@ fn ja_words(
     }
     byte_offs.push(stretch.len());
 
-    for seg in crate::lexicon::ja::segment_ja(&chars, 0) {
+    for seg in crate::lexicon::ja::segment_ja_with_lexicon(&chars, 0, extra_lexicon) {
         let start_b = base + byte_offs[seg.span.start_char];
         let end_b = base + byte_offs[seg.span.end_char];
         out.push((start_b, end_b, Some(seg)));

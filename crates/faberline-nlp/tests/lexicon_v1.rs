@@ -312,3 +312,98 @@ fn ko_eojeol_pos_lemma_and_morpheme_spans() {
         doc.unknown
     );
 }
+
+#[test]
+fn ja_colloquial_inflections_and_gloss_lookup() {
+    let opts = Options {
+        enrich_morphology: true,
+        ..Options::default()
+    };
+
+    for (text, expected_head, expected_lemma) in [
+        ("食べちゃった", "食べ", "食べる"),
+        ("濡れてる", "濡れ", "濡れる"),
+        ("喘いでいた", "喘い", "喘ぐ"),
+        ("見ないで", "見", "見る"),
+    ] {
+        let doc = analyze_document(text, &opts);
+        let head = find_token(&doc, text, expected_head);
+        assert_eq!(head.upos, Some(Upos::Verb), "text={text}");
+        assert_eq!(head.lemma.as_deref(), Some(expected_lemma), "text={text}");
+    }
+
+    assert_eq!(
+        lexicon::ja::lookup_ja_gloss("手紙", Some(Upos::Noun)),
+        Some("信")
+    );
+    assert_eq!(lexicon::ja::lookup_ja_gloss("大丈夫", None), Some("沒關係"));
+    assert_eq!(
+        lexicon::ja::lookup_ja_gloss("気持ちいい", Some(Upos::Adj)),
+        Some("舒服")
+    );
+    assert_eq!(
+        lexicon::ja::lookup_ja_gloss("愛撫する", Some(Upos::Verb)),
+        Some("愛撫")
+    );
+}
+
+#[test]
+fn ja_and_zh_adult_colloquial_and_custom_lexicon() {
+    let st = lexicon::stats();
+    assert!(st.ja >= 70_500, "ja={}", st.ja);
+    assert!(st.zh_hant >= 69_400, "zh_hant={}", st.zh_hant);
+    assert!(st.zh_hans >= 73_700, "zh_hans={}", st.zh_hans);
+    assert!(
+        st.ja_inflect_rules >= 1_000,
+        "ja_inflect={}",
+        st.ja_inflect_rules
+    );
+
+    let zh_text = "她輕聲嬌喘並愛撫著他。她轻声娇喘并爱抚着他。";
+    let zh_opts = Options {
+        enrich_morphology: true,
+        first_party_zh_segmenter: true,
+        ..Options::default()
+    };
+    let zh_doc = analyze_document(zh_text, &zh_opts);
+    let zh_surfs: Vec<String> = zh_doc
+        .tokens
+        .iter()
+        .map(|t| slice(zh_text, t.span))
+        .collect();
+    assert!(zh_surfs.contains(&"嬌喘".to_owned()), "{zh_surfs:?}");
+    assert!(zh_surfs.contains(&"愛撫".to_owned()), "{zh_surfs:?}");
+    assert!(zh_surfs.contains(&"娇喘".to_owned()), "{zh_surfs:?}");
+    assert!(zh_surfs.contains(&"爱抚".to_owned()), "{zh_surfs:?}");
+    assert_eq!(
+        find_token(&zh_doc, zh_text, "愛撫")
+            .canonical_variant
+            .as_deref(),
+        Some("爱抚")
+    );
+    assert_eq!(
+        find_token(&zh_doc, zh_text, "爱抚")
+            .canonical_variant
+            .as_deref(),
+        Some("愛撫")
+    );
+
+    let ja_custom = "彼女は魔導書をそっと開いた。";
+    let chars: Vec<char> = ja_custom.chars().collect();
+    let segs = lexicon::ja::segment_ja_with_lexicon(&chars, 0, &["魔導書".to_owned()]);
+    let seg_surfs: Vec<String> = segs.iter().map(|s| slice(ja_custom, s.span)).collect();
+    assert!(seg_surfs.contains(&"魔導書".to_owned()), "{seg_surfs:?}");
+
+    let ja_opts = Options {
+        enrich_morphology: true,
+        lexicon: vec!["魔導書".to_owned()],
+        ..Options::default()
+    };
+    let ja_doc = analyze_document(ja_custom, &ja_opts);
+    let ja_surfs: Vec<String> = ja_doc
+        .tokens
+        .iter()
+        .map(|t| slice(ja_custom, t.span))
+        .collect();
+    assert!(ja_surfs.contains(&"魔導書".to_owned()), "{ja_surfs:?}");
+}

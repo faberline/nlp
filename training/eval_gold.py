@@ -86,13 +86,68 @@ def normalize_prediction(pred: dict[str, Any], expected_n: int) -> dict[str, Any
             deprels[idx] = syn.get("deprel")
             if upos[idx] is None and syn.get("upos") is not None:
                 upos[idx] = syn.get("upos")
+        frames_out: list[dict[str, Any]] = []
+        for f in pred.get("frames", []):
+            if not isinstance(f, dict) or "predicate" not in f:
+                continue
+            args_out = []
+            for a in f.get("args", []):
+                if isinstance(a, dict) and "role" in a and "head" in a:
+                    args_out.append({
+                        **a,
+                        "head": int(a["head"]) + 1,
+                    })
+            frames_out.append({
+                **f,
+                "predicate": int(f["predicate"]) + 1,
+                "args": args_out,
+            })
+
+        coref_out: list[list[list[int]]] = []
+        for cl in pred.get("coref", []):
+            if not isinstance(cl, list):
+                continue
+            cl_out: list[list[int]] = []
+            for m in cl:
+                if isinstance(m, dict) and "start_token" in m and "end_token" in m:
+                    cl_out.append([int(m["start_token"]) + 1, int(m["end_token"]) + 1])
+                elif isinstance(m, (list, tuple)) and len(m) == 2:
+                    cl_out.append([int(m[0]), int(m[1])])
+            if cl_out:
+                coref_out.append(cl_out)
+
+        zeros_out: list[dict[str, Any]] = []
+        for z in pred.get("zero_mentions", []):
+            if not isinstance(z, dict) or "zero_at" not in z or "role" not in z:
+                continue
+            ant = z.get("antecedent")
+            if isinstance(ant, dict) and "start_token" in ant and "end_token" in ant:
+                zeros_out.append({
+                    **z,
+                    "zero_at": int(z["zero_at"]) + 1,
+                    "antecedent": [int(ant["start_token"]) + 1, int(ant["end_token"]) + 1],
+                })
+            elif isinstance(ant, (list, tuple)) and len(ant) == 2:
+                if "span" in z or "sentence" in z:
+                    zeros_out.append({
+                        **z,
+                        "zero_at": int(z["zero_at"]) + 1,
+                        "antecedent": [int(ant[0]) + 1, int(ant[1]) + 1],
+                    })
+                else:
+                    zeros_out.append({
+                        **z,
+                        "zero_at": int(z["zero_at"]),
+                        "antecedent": [int(ant[0]), int(ant[1])],
+                    })
+
         return {
             "upos": upos,
             "heads": heads,
             "deprels": deprels,
-            "frames": pred.get("frames", []),
-            "coref": pred.get("coref", []),
-            "zero_mentions": pred.get("zero_mentions", []),
+            "frames": frames_out,
+            "coref": coref_out,
+            "zero_mentions": zeros_out,
         }
 
     upos_raw = pred.get("upos")
@@ -576,6 +631,72 @@ def run_self_test(gold_path: Path) -> None:
     assert doc_eval["upos_acc"] == 1.0, f"doc round-trip upos_acc={doc_eval['upos_acc']}"
     assert doc_eval["frame_f1"] == 0.0, f"doc round-trip empty frame_f1={doc_eval['frame_f1']}"
     assert doc_eval["coref_conll_f1"] == 0.0, f"doc round-trip empty coref={doc_eval['coref_conll_f1']}"
+    assert doc_eval["zero_mention_f1"] == 0.0, (
+        f"doc round-trip empty zero_mention_f1={doc_eval['zero_mention_f1']}"
+    )
+
+    doc_full_preds = []
+    for g in gold:
+        doc_full_preds.append({
+            "schema": "nlp.doc.v1",
+            "tokens": [{"upos": u} for u in g["upos"]],
+            "syntax": [
+                {
+                    "token": i,
+                    "head": None if h == 0 else h - 1,
+                    "deprel": r,
+                }
+                for i, (h, r) in enumerate(zip(g["heads"], g["deprels"]))
+            ],
+            "frames": [
+                {
+                    "predicate": int(f["predicate"]) - 1,
+                    "sentence": 0,
+                    "span": {"start_char": 0, "end_char": 1},
+                    "args": [
+                        {
+                            "role": a["role"],
+                            "head": int(a["head"]) - 1,
+                            "span": {"start_char": 0, "end_char": 1},
+                        }
+                        for a in f.get("args", [])
+                    ],
+                }
+                for f in g.get("frames", [])
+            ],
+            "coref": [
+                [
+                    {
+                        "start_token": int(m[0]) - 1,
+                        "end_token": int(m[1]) - 1,
+                        "head_token": int(m[1]) - 1,
+                        "sentence": 0,
+                        "span": {"start_char": 0, "end_char": 1},
+                    }
+                    for m in cl
+                ]
+                for cl in g.get("coref", [])
+            ],
+            "zero_mentions": [
+                {
+                    "zero_at": int(z["zero_at"]) - 1,
+                    "sentence": 0,
+                    "span": {"start_char": 0, "end_char": 1},
+                    "role": z["role"],
+                    "antecedent": {
+                        "start_token": int(z["antecedent"][0]) - 1,
+                        "end_token": int(z["antecedent"][1]) - 1,
+                        "head_token": int(z["antecedent"][1]) - 1,
+                        "sentence": 0,
+                        "span": {"start_char": 0, "end_char": 1},
+                    },
+                }
+                for z in g.get("zero_mentions", [])
+            ],
+        })
+    doc_full_eval = evaluate(gold, doc_full_preds)["overall"]
+    for key in ("uas", "las", "upos_acc", "frame_f1", "coref_conll_f1", "zero_mention_f1"):
+        assert doc_full_eval[key] == 1.0, f"doc full round-trip {key}={doc_full_eval[key]} != 1.0"
 
     # 4. Perturb only deprels: UAS stays 1.0, LAS drops
     rel_pert = copy.deepcopy(gold)

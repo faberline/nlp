@@ -2269,6 +2269,10 @@ pub fn analyze_document_with_loaded_model(
 ) -> Result<Document, ModelError> {
     let mut doc = analyze_document(text, options);
     annotate(&mut doc, text, model, tokenizer)?;
+    if !doc.syntax.is_empty() {
+        crate::doc::frame::annotate(&mut doc, text);
+        crate::doc::coref::annotate(&mut doc, text);
+    }
     Ok(doc)
 }
 
@@ -2321,5 +2325,9 @@ fn run_verified_syntax(
     let loaded = crate::doc::model::load_verified(&verified, backend)?;
     let tokenizer = SubwordTokenizer::from_verified(&verified)?;
     annotate(&mut doc, text, &*loaded, &tokenizer)?;
+    if !doc.syntax.is_empty() {
+        crate::doc::frame::annotate(&mut doc, text);
+        crate::doc::coref::annotate(&mut doc, text);
+    }
     Ok(doc)
 }

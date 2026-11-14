@@ -1,18 +1,24 @@
 //! Layer 1 of `nlp.doc.v1`. See `docs/doc-v1.md`.
 
+pub mod coref;
 mod entity;
+pub mod frame;
 pub mod model;
 mod opaque;
 mod pos;
 mod relation;
 mod segment;
 pub mod syntax;
+pub mod syntax_cpu;
+pub(crate) mod syntax_cpu_jako;
 pub(crate) mod t2s;
 mod token;
 
 use crate::Span;
 pub use crate::lexicon::{Morpheme, SemanticClass};
+pub use coref::{CorefMention, ZeroMention, ZeroRole};
 pub(crate) use entity::NameRule;
+pub use frame::{FrameArg, FrameRole, SemanticFrame};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(any(feature = "onnx", feature = "coreml"))]
@@ -55,6 +61,10 @@ pub struct Options {
     /// `zh-Hant` + `zh-Hans` lexicon Viterbi segmenter.
     #[serde(default, skip_serializing_if = "is_false")]
     pub legacy_jieba: bool,
+    /// Run pure-Rust CPU Layer-4 UPOS disambiguation and UD v2 dependency parsing (`syntax_cpu`),
+    /// followed by Layer-5 semantic frames (`frame`) and Layer-6 coreference/zero-mentions (`coref`).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cpu_syntax: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -239,6 +249,12 @@ pub struct Document {
     pub entities: Vec<Entity>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub syntax: Vec<SyntaxToken>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<SemanticFrame>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub coref: Vec<Vec<CorefMention>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zero_mentions: Vec<ZeroMention>,
     pub relations: Vec<Relation>,
     pub unknown: Vec<Unknown>,
 }
@@ -251,6 +267,13 @@ pub(crate) fn sort_unknown(unknown: &mut [Unknown]) {
             b.layer.as_str(),
         ))
     });
+}
+
+/// Analyzes `text` with all layers enabled on CPU (`options.cpu_syntax = true`).
+pub fn analyze_document_all_layers(text: &str, options: &Options) -> Document {
+    let mut opts = options.clone();
+    opts.cpu_syntax = true;
+    analyze_document(text, &opts)
 }
 
 pub fn analyze_document(text: &str, options: &Options) -> Document {
@@ -443,7 +466,7 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
     unknown.extend(relation_unknown);
     sort_unknown(&mut unknown);
 
-    Document {
+    let mut doc = Document {
         schema: SCHEMA.to_owned(),
         text_chars: c.len(),
         text_sha256: Sha256::digest(text.as_bytes())
@@ -455,9 +478,20 @@ pub fn analyze_document(text: &str, options: &Options) -> Document {
         tokens,
         entities,
         syntax: Vec::new(),
+        frames: Vec::new(),
+        coref: Vec::new(),
+        zero_mentions: Vec::new(),
         relations,
         unknown,
+    };
+    if options.cpu_syntax {
+        syntax_cpu::annotate(&mut doc, text);
+        if !doc.syntax.is_empty() {
+            frame::annotate(&mut doc, text);
+            coref::annotate(&mut doc, text);
+        }
     }
+    doc
 }
 
 /// Layers 1 and 3 over one line of text, in byte ranges of that line. The narrative code reads

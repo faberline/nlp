@@ -68,6 +68,10 @@ struct Args {
     /// Fall back to legacy `jieba-rs` for Chinese runs (`options.legacy_jieba`).
     #[arg(long)]
     legacy_jieba: bool,
+
+    /// Run pure-Rust CPU Layer 4–6 annotation (`options.cpu_syntax`).
+    #[arg(long, visible_alias = "cpu-syntax")]
+    all_layers: bool,
 }
 
 fn main() {
@@ -85,6 +89,7 @@ fn main() {
         enrich_morphology: args.morphology,
         first_party_zh_segmenter: args.first_party_dict && !args.legacy_jieba,
         legacy_jieba: args.legacy_jieba,
+        cpu_syntax: args.all_layers,
     };
     let doc = match &args.models {
         Some(models_dir) => {

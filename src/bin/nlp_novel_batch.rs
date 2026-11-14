@@ -195,6 +195,10 @@ struct Args {
     /// Fall back to legacy `jieba-rs` for Chinese runs (`options.legacy_jieba`).
     #[arg(long)]
     legacy_jieba: bool,
+
+    /// Run pure-Rust CPU Layer 4–6 annotation (`options.cpu_syntax`).
+    #[arg(long, visible_alias = "cpu-syntax")]
+    all_layers: bool,
 }
 
 /// Exact Unicode scalar (`start_char..end_char`) and UTF-8 byte (`start_byte..end_byte`) span within `source_file`.
@@ -2911,22 +2915,20 @@ fn compute_chapter_outputs_sha256(entries: &[CompletedIndexEntry]) -> String {
 }
 
 fn build_doc_options(
-    names: Vec<String>,
+    args: &Args,
     mask_editorial: bool,
     normalize_traditional: bool,
     lexicon: Vec<String>,
-    enrich_morphology: bool,
-    first_party_zh_segmenter: bool,
-    legacy_jieba: bool,
 ) -> Options {
     Options {
-        names,
+        names: args.names.clone(),
         mask_editorial,
         normalize_traditional,
         lexicon,
-        enrich_morphology,
-        first_party_zh_segmenter,
-        legacy_jieba,
+        enrich_morphology: args.morphology,
+        first_party_zh_segmenter: args.first_party_dict && !args.legacy_jieba,
+        legacy_jieba: args.legacy_jieba,
+        cpu_syntax: args.all_layers,
     }
 }
 
@@ -3067,15 +3069,8 @@ fn run() -> Result<()> {
             .as_ref()
             .map_or(&[][..], |a| a.terms.as_slice()),
     );
-    let doc_options = build_doc_options(
-        args.names.clone(),
-        mask_editorial,
-        normalize_traditional,
-        merged_lexicon,
-        args.morphology,
-        args.first_party_dict && !args.legacy_jieba,
-        args.legacy_jieba,
-    );
+    let doc_options =
+        build_doc_options(&args, mask_editorial, normalize_traditional, merged_lexicon);
     let expected_options_sha256 = sha256_hex(&serde_json::to_vec(&doc_options)?);
 
     let total_chapters = chapters.len();

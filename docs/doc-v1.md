@@ -6,14 +6,17 @@ emoji) that sentences never split, and the entities found by rules. It uses no m
 network.
 
 CLI: `nlp_doc` reads UTF-8 text from stdin and prints one JSON document plus a newline. With no
-flags it runs `analyze_document` (rules only, no model). Optional flags `--name <SURFACE>` and
-`--lexicon <SURFACE>` (repeatable), `--mask-editorial`, `--normalize-traditional`,
-`--morphology`, `--legacy-jieba`, and `--first-party-dict` (compatible flag; first-party Chinese
-lexicon segmentation is now the default) populate `Options`. With `--models <DIR>` and optional
-`--backend <coreml|coreml-fast|onnx>` (defaulting to
-`coreml` on macOS when compiled in, otherwise `onnx`), it runs `analyze_document_with_model` to
-populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prints
-`nlp_doc: <error>` to stderr and exits with 1.
+flags it runs `analyze_document` (Layers 1–3 and 7, rules only, no model). With `--all-layers`
+(alias `--cpu-syntax`), it sets `options.cpu_syntax = true` and runs the pure-Rust CPU pipeline for
+Layers 1–7 (`syntax`, `frames`, `coref`, `zero_mentions`) without external model files. Optional
+flags `--name <SURFACE>` and `--lexicon <SURFACE>` (repeatable), `--mask-editorial`,
+`--normalize-traditional`, `--morphology`, `--legacy-jieba`, and `--first-party-dict` (compatible
+flag; first-party Chinese lexicon segmentation is now the default) populate `Options`. With
+`--models <DIR>` and optional `--backend <coreml|coreml-fast|onnx>` (defaulting to `coreml` on macOS
+when compiled in, otherwise `onnx`), it runs `analyze_document_with_model` to populate Layer 4
+(`syntax`) and automatically runs Layers 5–6 (`frames`, `coref`, `zero_mentions`) whenever
+`syntax` is non-empty. On a read or model integrity/runtime error, it prints `nlp_doc: <error>` to
+stderr and exits with 1.
 
 ## Schema
 
@@ -32,6 +35,9 @@ populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prin
   "tokens": [{"span": {...}, "lang": "en", "sentence": 0, "upos": "PRON"}],
   "entities": [{"kind": "date", "span": {...}, "sentence": 0, "value": "2026-11-10"}],
   "syntax": [{"token": 0, "sentence": 0, "span": {...}, "head": null, "deprel": "root", "score": 0.94}],
+  "frames": [{"predicate": 0, "sentence": 0, "span": {...}, "args": [{"role": "ARG0", "head": 1, "span": {...}}]}],
+  "coref": [[{"start_token": 1, "end_token": 1, "head_token": 1, "sentence": 0, "span": {...}}]],
+  "zero_mentions": [{"zero_at": 4, "sentence": 1, "span": {...}, "role": "nsubj", "antecedent": {...}}],
   "relations": [{"kind": "sequence", "level": "clause", "connector": {...}, "arg1": {...}, "arg2": {...}}],
   "unknown": [{"layer": "segmentation", "span": {...}, "reason": "unsupported_language"}]
 }
@@ -39,10 +45,10 @@ populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prin
 
 - `options.names` and `options.lexicon` are optional (`Vec<String>`, omitted when empty);
   `options.mask_editorial`, `options.normalize_traditional`, `options.enrich_morphology`,
-  `options.first_party_zh_segmenter`, and `options.legacy_jieba` are optional booleans (`false` by
-  default, omitted when `false`), so `Options::default()` serializes to `{}`. First-party `zh-Hant`
-  + `zh-Hans` lexicon Viterbi segmentation is enabled by default unless `legacy_jieba` is `true`
-  (`first_party_zh_segmenter` is retained as a backwards-compatible flag).
+  `options.first_party_zh_segmenter`, `options.legacy_jieba`, and `options.cpu_syntax` are optional
+  booleans (`false` by default, omitted when `false`), so `Options::default()` serializes to `{}`.
+  First-party `zh-Hant` + `zh-Hans` lexicon Viterbi segmentation is enabled by default unless
+  `legacy_jieba` is `true` (`first_party_zh_segmenter` is retained as a backwards-compatible flag).
 - `lang` is one of `zh`, `en`, `ja`, `ko`, `mixed`, `und`.
 - `reason` is one of `no_model`, `ambiguous`, `low_confidence`, `unsupported_language`,
   `not_applicable`. Layer 1 produces `unsupported_language` (`layer: "segmentation"`) when
@@ -56,9 +62,10 @@ populate Layer 4 (`syntax`). On a read or model integrity/runtime error, it prin
   `entity.sentence` and `syntax.sentence` index `sentences`. `syntax.token` and `syntax.head`
   index `tokens` (`head` is `null` for `"root"`).
 - All lists are sorted by start. `unknown` is sorted by span start, then end, then layer.
-- `entities` and `relations` are always present, `[]` when nothing is found. `syntax` is omitted
-  when empty (`analyze_document` never emits it). When present, the order of the lists is
-  `segmentation`, `tokens`, `entities`, `syntax`, `relations`, `unknown`.
+- `entities` and `relations` are always present, `[]` when nothing is found. `syntax`, `frames`,
+  `coref`, and `zero_mentions` are omitted when empty (`analyze_document` with
+  `Options::default()` never emits them). When present, the order of the lists is `segmentation`,
+  `tokens`, `entities`, `syntax`, `frames`, `coref`, `zero_mentions`, `relations`, `unknown`.
 
 ## Offsets
 
@@ -923,12 +930,27 @@ manifest by a script (a later issue).
 
 ## Syntax (layer 4)
 
-`analyze_document_with_model(text, options, models_dir, backend)` runs Layers 1–3 and 7 first, then
-loads `SYNTAX_MODEL_ID` (`"doc-syntax-v1"`) on `backend` to decode Universal Dependencies v2 trees
-into `Document.syntax` and upgrade undecided Layer-2 `upos` tags. Callers that run many documents
-can verify and load the model once and call `analyze_document_with_loaded_model(text, options,
-model, tokenizer)` (or `doc::syntax::annotate`). Calling `analyze_document(text, options)` never
-runs a model and leaves `syntax` empty (omitted from JSON).
+There are two ways to populate Layer 4 (`Document.syntax` and upgraded `Token.upos`), both of
+which also automatically populate Layer 5 (`frames`) and Layer 6 (`coref`, `zero_mentions`)
+whenever `Document.syntax` is non-empty:
+
+1. **Pure-Rust CPU (`options.cpu_syntax = true` / `analyze_document_all_layers`)**:
+   `analyze_document_all_layers(text, options)` (or `analyze_document` with `cpu_syntax: true`, or
+   `nlp_doc --all-layers` / `nlp_novel_batch --all-layers`) runs `doc::syntax_cpu::annotate` on CPU
+   with zero external models. It disambiguates undecided `Token.upos` tags (clearing resolved
+   `"pos"` entries from `doc.unknown`) and emits single-root acyclic UD v2 trees via
+   `chu_liu_edmonds` across `zh` (`zh-Hant` + `zh-Hans`), `en`, `ja`, `ko`, and `mixed` (`zh/en`,
+   `ja/en`, `ko/en`), routing `ja`, `ko`, and Kana/Hangul-containing `mixed` sentences to
+   `doc::syntax_cpu_jako::annotate_sentence`.
+2. **Neural model (`analyze_document_with_model`)**:
+   `analyze_document_with_model(text, options, models_dir, backend)` runs Layers 1–3 and 7 first,
+   then loads `SYNTAX_MODEL_ID` (`"doc-syntax-v1"`) on `backend` to decode Universal Dependencies v2
+   trees into `Document.syntax` and upgrade undecided Layer-2 `upos` tags. Callers that run many
+   documents can verify and load the model once and call `analyze_document_with_loaded_model(text,
+   options, model, tokenizer)` (or `doc::syntax::annotate`).
+
+Calling `analyze_document(text, &Options::default())` leaves `syntax`, `frames`, `coref`, and
+`zero_mentions` empty (omitted from JSON).
 
 ### Language coverage (`en`, `zh-TW`, `zh-CN`, and `mixed`)
 
@@ -1032,8 +1054,9 @@ tensor with `C = 17 + max_len + 148` (`421` when `max_len = 256`):
 `nlp_novel_batch` runs resumable multi-worker `nlp.doc.v1` analysis over chapter bundles or a
 chapter manifest:
 
-- **Defaults**: enables `Options { mask_editorial: true, normalize_traditional: true, lexicon, .. }`
-  and pure-statistical two-pass corpus compound discovery (`--auto-lexicon`, opt-out
+- **Defaults**: enables `Options { mask_editorial: true, normalize_traditional: true, lexicon, .. }`,
+  optional `--all-layers` (alias `--cpu-syntax`, setting `options.cpu_syntax = true` for CPU Layers
+  4–6), and pure-statistical two-pass corpus compound discovery (`--auto-lexicon`, opt-out
   `--no-auto-lexicon`), scanning frequent high-PMI / high-accessor-variety 2–5 character Han
   compounds across chapters (`MIN_FREQ = 10` for 3–4 char proper names and `15` otherwise,
   `MIN_CHAP_DF = 3`, `MIN_AV = 3` at `min_pmi >= 5.5` else `4`) while pruning scraper anti-censorship
@@ -1050,6 +1073,34 @@ chapter manifest:
 - **Receipt structural counters**: `book_manifest_receipt.json` records `auto_lexicon_enabled`,
   `discovered_lexicon_count`, `zero_root_sentences`, and `orphan_syntax_arcs` alongside token,
   UPOS, syntax, entity, relation, and SHA-256 provenance metrics.
+
+## Semantic Frames (layer 5)
+
+`doc::frame::annotate(doc, text)` extracts deterministic predicate-argument `SemanticFrame`s into
+`Document.frames` across `zh`, `en`, `ja`, `ko`, and `mixed` whenever `Document.syntax` is
+non-empty:
+
+- **Predicates**: `VERB` and predicative `ADJ` tokens (excluding copular nominal heads, `amod`,
+  `aux`, `cop`, and `compound` verb/adjective pieces).
+- **Roles (`FrameRole`)**: `ARG0` (agent/subject, or agentive `obl` in passives), `ARG1`
+  (patient/object, `把`/`將` disposal `obl`, passive `nsubj`, unaccusative/predicative `nsubj`), and
+  `ARGM` (adjuncts such as `advmod`, `obl`, `advcl`, `xcomp`, `ccomp`, and extent/duration `obj`).
+- **Invariants**: each `FrameArg.head` is in the same sentence as `predicate`, `head != predicate`,
+  no `ADP`/`PART`/`case`/`mark` heads are emitted, and frames/args are deduplicated and sorted.
+
+## Coreference and Zero Mentions (layer 6)
+
+`doc::coref::annotate(doc, text)` runs a deterministic multi-sieve entity coreference resolver
+(`Document.coref`) and pro-drop zero-mention resolver (`Document.zero_mentions`) across `zh`, `en`,
+`ja`, `ko`, and `mixed` whenever `Document.syntax` is non-empty:
+
+- **Coreference (`Document.coref`)**: extracts maximal constituent NP mentions (`CorefMention` with
+  `start_token`, `end_token`, `head_token`, `sentence`, `span`) and clusters them via exact/canonical
+  head match, proper-name/alias match, and anaphoric pronoun/demonstrative resolution with Binding
+  Condition B and animacy/number/person agreement.
+- **Pro-drop zero mentions (`Document.zero_mentions`)**: resolves omitted `ZeroRole::Nsubj` and
+  `ZeroRole::Obj` arguments on `zh`, `ja`, `ko`, and `mixed` predicates (`zero_at`) to a prior
+  `CorefMention` `antecedent`.
 
 ## Readers of `nlp.doc.v1`
 

@@ -85,23 +85,11 @@ The stream is experimental. Input directories must be trusted and must not
 change during a run. See the [source stream contract](docs/source-stream.md)
 for the format, validation steps, and known scope and resource limits.
 
-## English CNL
+## English CNL (Retired)
 
-Use `cnl::parse` to read English SOM CNL v1. The grammar covers prompt versions 1 through 7. Pass the whole request as a string.
-
-```rust
-let source = std::fs::read_to_string("request.cnl")?;
-let document = faberline_nlp::cnl::parse(&source)?;
-assert_eq!(document.text, source.as_str());
-```
-
-The result is a tree of grammar rules. Each node gives its text and a byte range in the original input. A syntax error gives a line and column.
-
-Use `faberline-nlp-cnl` from the `cnl/` directory if you only need the English parser. Call `check_syntax` to check the grammar without building a tree.
-
-`faberline-nlp-cnl` owns the SOM CNL grammar (`cnl/src/som_cnl.pest`), the syntax tree and the syntax error locations. It is the only place where CNL syntax changes. nlp holds no business rules, DSL or code generation. Those belong to [som](https://github.com/faberline/som). If som needs a syntax change, open an nlp issue first. After it merges, som moves its pinned revision.
-
-Use the [SOM examples](https://github.com/faberline/som/tree/05c63d08275d59ea7110cd8f2b30786070b91968/som-rs/contracts/compiler-v1/examples) for sample requests.
+`faberline-nlp-cnl` has been retired from `faberline/nlp` and handed over to
+[faberline/som](https://github.com/faberline/som/issues/217), which owns both SOM CNL syntax and
+semantics.
 
 ## Model token limits
 

@@ -7,7 +7,7 @@ repository = "https://github.com/faberline/nlp"
 publish = false
 
 [workspace]
-members = ["cnl", "narrative", "translate"]
+members = ["narrative", "translate"]
 
 [features]
 model-tokenizer = ["dep:tiktoken-rs"]
@@ -18,7 +18,6 @@ coreml = ["dep:tokenizers", "dep:objc2", "dep:objc2-foundation", "dep:objc2-core
 aho-corasick = "1"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-faberline-nlp-cnl = { path = "cnl" }
 icu_locale_core = "2.3"
 icu_segmenter = { version = "2.3", default-features = false, features = ["compiled_data"] }
 jieba-rs = "0.11"
@@ -37,5 +36,4 @@ objc2-core-ml = { version = "0.3.2", default-features = false, features = ["std"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSDictionary", "NSError", "NSString", "NSURL", "NSValue", "NSObject"], optional = true }
 
 [dev-dependencies]
-pest = "2.9"
 tempfile = "3"

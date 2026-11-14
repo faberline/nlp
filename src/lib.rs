@@ -29,7 +29,6 @@ pub use analyze::{
     WrittenTransferCue, WrittenTransferDirection, WrittenTransferRoleAlternatives,
     WrittenTransferRoleCandidate, WrittenTransferUnknown, analyze,
 };
-pub use faberline_nlp_cnl as cnl;
 use serde::{Deserialize, Serialize};
 
 /// Names, aliases, vocabulary and source-format markers for a single work.

@@ -49077,7 +49077,7 @@
 打ち落す	ja	1162	VERB	VERB	-	-	infl=godan_sa
 打ち落とす	ja	1162	VERB	VERB	-	-	infl=godan_sa
 打ち落とせる	ja	1162	VERB	VERB	-	-	infl=ichidan
-打ち見る	ja	1162	VERB	VERB	-	凝視	infl=ichidan;src=first_party_mit
+打ち見る	ja	1162	VERB	VERB	-	瞥一眼	infl=ichidan;src=first_party_mit
 打ち解ける	ja	1161	VERB	VERB	-	-	infl=ichidan
 打ち込む	ja	1104	VERB	VERB	-	專注於	infl=godan_ma;src=first_party_mit
 打ち込める	ja	1161	VERB	VERB	-	能投入	infl=ichidan;src=first_party_mit
@@ -49160,7 +49160,7 @@
 打萎れる	ja	1162	VERB	VERB	-	-	infl=ichidan
 打落す	ja	1162	VERB	VERB	-	-	infl=godan_sa
 打落とせる	ja	1162	VERB	VERB	-	-	infl=ichidan
-打見る	ja	1162	VERB	VERB	-	凝視	infl=ichidan;src=first_party_mit
+打見る	ja	1162	VERB	VERB	-	瞥一眼	infl=ichidan;src=first_party_mit
 打解ける	ja	1162	VERB	VERB	-	-	infl=ichidan
 打診	ja	763	-	NOUN|VERB	-	-	-
 打込む	ja	1148	VERB	VERB	-	投入	infl=godan_ma;src=first_party_mit
@@ -52181,7 +52181,7 @@
 明し暮らす	ja	1162	VERB	VERB	-	-	infl=godan_sa
 明び	ja	812	ADJ	ADJ	-	-	-
 明や	ja	1028	NOUN	NOUN	-	-	-
-明らむ	ja	1162	VERB	VERB	-	泛紅	infl=godan_ma;src=first_party_mit
+明らむ	ja	1162	VERB	VERB	-	變亮	infl=godan_ma;src=first_party_mit
 明らめる	ja	1162	VERB	VERB	-	-	infl=ichidan
 明るい	ja	756	ADJ	ADJ	-	明亮	infl=adj_i
 明るむ	ja	1177	VERB	VERB	-	-	infl=godan_ma
@@ -54972,7 +54972,7 @@
 注げる	ja	1162	VERB	VERB	-	能注入	infl=ichidan;src=first_party_mit
 注し	ja	756	-	NOUN|VERB	-	-	-
 注す	ja	1161	VERB	VERB	-	注入	infl=godan_sa;src=first_party_mit
-注する	ja	1162	VERB	VERB	-	注入	infl=sahen;src=first_party_mit
+注する	ja	1162	VERB	VERB	-	加註	infl=sahen;src=first_party_mit
 注入	ja	762	-	NOUN|VERB	-	注入	-
 注力	ja	762	-	NOUN|VERB	-	-	-
 注射	ja	757	-	NOUN|VERB	-	注射	-

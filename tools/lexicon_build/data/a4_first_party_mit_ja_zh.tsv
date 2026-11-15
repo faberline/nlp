@@ -371,7 +371,7 @@ VERB	369	検する	ja	VERB	VERB	檢查
 VERB	370	馬鹿げる	ja	VERB	VERB	荒唐
 VERB	371	持する	ja	VERB	VERB	堅持
 VERB	372	労する	ja	VERB	VERB	勞煩
-VERB	373	注する	ja	VERB	VERB	注入
+VERB	373	注する	ja	VERB	VERB	加註
 VERB	374	貶する	ja	VERB	VERB	貶低
 VERB	375	役する	ja	VERB	VERB	使役
 VERB	376	賞する	ja	VERB	VERB	賞賜
@@ -922,8 +922,8 @@ VERB	920	汗染みる	ja	VERB	VERB	汗透
 VERB	921	盗みみる	ja	VERB	VERB	偷看
 VERB	922	詰め込む	ja	VERB	VERB	塞進
 VERB	923	惟る	ja	VERB	VERB	深思
-VERB	924	打ち見る	ja	VERB	VERB	凝視
-VERB	925	打見る	ja	VERB	VERB	凝視
+VERB	924	打ち見る	ja	VERB	VERB	瞥一眼
+VERB	925	打見る	ja	VERB	VERB	瞥一眼
 VERB	926	打ちみる	ja	VERB	VERB	瞥一眼
 VERB	927	滲む	ja	VERB	VERB	滲出
 VERB	928	泥濘む	ja	VERB	VERB	泥濘
@@ -1124,7 +1124,7 @@ VERB	1122	攻め倦む	ja	VERB	VERB	久攻不下
 VERB	1123	攻め込む	ja	VERB	VERB	攻入
 VERB	1124	攻込む	ja	VERB	VERB	攻入
 VERB	1125	斬り苛む	ja	VERB	VERB	折磨
-VERB	1126	明らむ	ja	VERB	VERB	泛紅
+VERB	1126	明らむ	ja	VERB	VERB	變亮
 VERB	1127	果無む	ja	VERB	VERB	哀嘆
 VERB	1128	植え込む	ja	VERB	VERB	植入
 VERB	1129	汲みこむ	ja	VERB	VERB	汲入

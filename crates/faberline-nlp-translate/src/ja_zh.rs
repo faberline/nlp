@@ -3768,11 +3768,18 @@ enum GivingReceivingKind {
 }
 
 #[derive(Clone, Copy)]
+enum BenefactiveCore {
+    Generic,
+    Show,
+    Lend,
+}
+
+#[derive(Clone, Copy)]
 struct GivingReceivingPredicate {
     kind: GivingReceivingKind,
     atom_index: usize,
     auxiliary: bool,
-    shows_to_beneficiary: bool,
+    benefactive_core: BenefactiveCore,
 }
 
 fn giving_receiving_kind(atom: &Atom) -> Option<GivingReceivingKind> {
@@ -3873,8 +3880,9 @@ fn giving_receiving_predicate(
     {
         return None;
     }
-    // Only replace a single show core; extra content must stay on the generic path.
-    let shows_to_beneficiary = auxiliary
+    // Show and lend take the beneficiary as their own recipient. Do not turn
+    // `lend to me` into `help me lend`. Extra cores stay on the generic path.
+    let simple_core = auxiliary
         && atoms.iter().all(|a| {
             !a.is_locked
                 && matches!(
@@ -3886,15 +3894,25 @@ fn giving_receiving_predicate(
             .iter()
             .filter(|a| a.upos == Some(Upos::Verb))
             .count()
-            == 1
-        && atoms[..atom_index - 1]
+            == 1;
+    let benefactive_core = if simple_core {
+        match atoms[..atom_index - 1]
             .iter()
-            .any(|a| !a.is_locked && a.lemma.as_deref().unwrap_or(&a.surface) == "見せる");
+            .find(|a| a.upos == Some(Upos::Verb))
+            .map(|a| a.lemma.as_deref().unwrap_or(&a.surface))
+        {
+            Some("見せる") => BenefactiveCore::Show,
+            Some("貸す") => BenefactiveCore::Lend,
+            _ => BenefactiveCore::Generic,
+        }
+    } else {
+        BenefactiveCore::Generic
+    };
     Some(GivingReceivingPredicate {
         kind,
         atom_index,
         auxiliary,
-        shows_to_beneficiary,
+        benefactive_core,
     })
 }
 
@@ -4817,16 +4835,27 @@ fn translate_clause_bunsetsus(
             } else {
                 transfer_counterpart
             };
-            if transfer.shows_to_beneficiary {
-                if let Some(viewer) = beneficiary {
-                    verb_core = "看".to_owned();
-                    transfer_prefix = Some(format!("給{viewer}"));
-                } else {
-                    verb_core = "展示".to_owned();
+            match transfer.benefactive_core {
+                BenefactiveCore::Show => {
+                    if let Some(viewer) = beneficiary {
+                        verb_core = "看".to_owned();
+                        transfer_prefix = Some(format!("給{viewer}"));
+                    } else {
+                        verb_core = "展示".to_owned();
+                    }
                 }
-            } else {
-                transfer_prefix =
-                    Some(beneficiary.map_or_else(|| "幫忙".to_owned(), |np| format!("幫{np}")));
+                BenefactiveCore::Lend => {
+                    if let Some(borrower) = beneficiary {
+                        verb_core = "借給".to_owned();
+                        transfer_recipient = Some(borrower);
+                    } else {
+                        verb_core = "出借".to_owned();
+                    }
+                }
+                BenefactiveCore::Generic => {
+                    transfer_prefix =
+                        Some(beneficiary.map_or_else(|| "幫忙".to_owned(), |np| format!("幫{np}")));
+                }
             }
         } else if transfer.kind == GivingReceivingKind::Receive {
             transfer_prefix = transfer_counterpart.map(|np| format!("從{np}"));

@@ -445,6 +445,55 @@ fn keigo_descriptive_forms_keep_the_action_tense_and_polarity() {
 }
 
 #[test]
+fn keigo_lending_keeps_the_beneficiary_as_the_borrower() {
+    for (source, hant, hans) in [
+        (
+            "先生は本を貸してくださる。",
+            "老師借給我書。",
+            "老师借给我书。",
+        ),
+        (
+            "先生は本を貸してくださった。",
+            "老師借給了我書。",
+            "老师借给了我书。",
+        ),
+        (
+            "私は先生に本を貸していただきました。",
+            "老師借給了我書。",
+            "老师借给了我书。",
+        ),
+        (
+            "先生は彼女に本を貸してくださる。",
+            "老師借給她書。",
+            "老师借给她书。",
+        ),
+        (
+            "先生は本を貸してくれた。",
+            "老師借給了我書。",
+            "老师借给了我书。",
+        ),
+        (
+            "私は先生に本を貸してもらう。",
+            "老師借給我書。",
+            "老师借给我书。",
+        ),
+    ] {
+        for (target, expected) in [(TargetVariant::ZhHant, hant), (TargetVariant::ZhHans, hans)] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert_eq!(doc.target_text, expected, "{source}");
+        }
+    }
+}
+
+#[test]
 fn keigo_wrappers_preserve_other_verbs_and_explicit_beneficiaries() {
     for (source, plain) in [
         ("先生は手紙をお書きになる。", "先生は手紙を書く。"),

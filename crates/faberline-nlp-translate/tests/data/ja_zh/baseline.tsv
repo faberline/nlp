@@ -1,9 +1,9 @@
 # ja -> zh-Hant evaluation baseline. Written by tests/ja_zh_eval.rs.
-# engine_rev	732efacfbc46d21659e19f09822e97fa7de5c4af
+# engine_rev	862320049170863aba0a77a02ff48e58ccf839fc
 # challenge_sha256	a3a1bc58d297bfe181b6a7856354fe2d9d46e09312c5d4d75491c9115d4b5def
 key	n	chrf	exact_pct	kana_left	passthrough	errors
-overall	160	27.16	5.62	35	0	0
-set/dev	130	26.90	4.62	25	0	0
+overall	160	28.98	6.88	34	0	0
+set/dev	130	29.14	6.15	24	0	0
 set/test	30	28.30	10.00	10	0	0
 dev/case_particles	4	41.46	0.00	0	0	0
 dev/causative	4	29.77	0.00	0	0	0
@@ -17,7 +17,7 @@ dev/idioms	4	13.39	0.00	0	0	0
 dev/katakana_names	4	7.84	0.00	4	0	0
 dev/keigo_register	4	24.78	0.00	4	0	0
 dev/modality	4	39.96	0.00	0	0	0
-dev/negation	13	32.63	7.69	3	0	0
+dev/negation	13	55.06	23.08	2	0	0
 dev/onomatopoeia	4	16.44	0.00	0	0	0
 dev/passive	4	44.28	25.00	0	0	0
 dev/polite_forms	8	44.71	25.00	0	0	0
@@ -26,6 +26,6 @@ dev/relative_clauses	4	38.56	25.00	0	0	0
 dev/tense_aspect	4	27.81	0.00	0	0	0
 dev/topic_subject	4	29.47	0.00	0	0	0
 dev/zero_pronoun	15	23.39	0.00	3	0	0
-# report	dev_without_katakana_names	n=126	chrf=27.50
-# report	kana_left_dev	25/130
-# report	kana_left_overall	35/160
+# report	dev_without_katakana_names	n=126	chrf=29.81
+# report	kana_left_dev	24/130
+# report	kana_left_overall	34/160

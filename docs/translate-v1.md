@@ -25,7 +25,12 @@ zero network access.
     `segment_zh`, `lookup_en`), UPOS and syntactic context disambiguation (`practice` NOUN vs
     `practise` VERB, `licence` NOUN vs `license` VERB, polysemous `發/髮`, `后/後`, `乾/幹`,
     `裡/里`, `麵/面`, `係/繫/系`), and bilateral cross-strait lexical adaptation.
-  - **Track B (`neural_seq2seq`) — NLP-Conditioned Offline Seq2Seq Translation**: Cross-language
+  - **Track B (`neural_seq2seq`) — NLP-Conditioned Offline Seq2Seq Translation**:
+    **Track B is paused by owner decision of 2026-11-15.**
+    The current rules are [ja-zh-development-rules.md](ja-zh-development-rules.md).
+    The text below is kept for a possible restart by the owner.
+
+    Cross-language
     translation backed by verified local encoder-decoder models (`nlp.models.seq2seq.v1`) on
     `tract-onnx` (`Backend::Onnx`) and macOS `objc2-core-ml` (`Backend::Coreml` CPU deterministic
     reference and `Backend::CoremlFast` Apple Silicon CPU+GPU+ANE).

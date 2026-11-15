@@ -90,7 +90,8 @@ with tempfile.TemporaryDirectory(prefix='nlp-release-smoke-') as tmp:
             old_name = 'nlp_' + command.replace('-', '_')
             old_exe = legacy(command)
             old = subprocess.run([str(old_exe), '--help'], text=True, encoding='utf-8', capture_output=True, check=True)
-            assert old.stdout.replace(old_name, 'nlp ' + command) == help_text
+            normalized = old.stdout.replace(old_exe.name, 'nlp ' + command).replace(old_name, 'nlp ' + command)
+            assert normalized == help_text
     assert legacy_dir, 'comparison requires the native legacy binaries'
     assert json.loads(equivalent('doc', [], '這是測試。'))
     assert json.loads(equivalent('narrative-doc', [], '這是測試。'))

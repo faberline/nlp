@@ -188,6 +188,292 @@ fn clause_spans_follow_length_changing_simplified_variants() {
 }
 
 #[test]
+fn source_kara_before_a_copula_keeps_the_start_point() {
+    for source in [
+        "授業は午前九時からです。",
+        "仕事は明日からです。",
+        "発表は六月一日の午後三時からです。",
+    ] {
+        for (target, start) in [(TargetVariant::ZhHant, '從'), (TargetVariant::ZhHans, '从')] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(
+                doc.target_text.contains(start),
+                "{source}: {}",
+                doc.target_text
+            );
+        }
+    }
+}
+
+#[test]
+fn giving_and_receiving_keep_explicit_transfer_roles() {
+    let cases = [
+        ("私は彼に本をあげた。", "我給了他書。", "我给了他书。"),
+        ("彼が私に本をくれた。", "他給了我書。", "他给了我书。"),
+        (
+            "私は彼に本をもらった。",
+            "我從他收到了書。",
+            "我从他收到了书。",
+        ),
+        (
+            "私は彼から本をもらった。",
+            "我從他收到了書。",
+            "我从他收到了书。",
+        ),
+        (
+            "私は彼に本をもらいました。",
+            "我從他收到了書。",
+            "我从他收到了书。",
+        ),
+        ("本をもらった。", "收到了書。", "收到了书。"),
+        ("彼が本をくれた。", "他給了書。", "他给了书。"),
+        (
+            "私は彼に本をもらわなかった。",
+            "我沒有從他收到書。",
+            "我没有从他收到书。",
+        ),
+    ];
+    for (source, expected_hant, expected_hans) in cases {
+        for (target, expected) in [
+            (TargetVariant::ZhHant, expected_hant),
+            (TargetVariant::ZhHans, expected_hans),
+        ] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert_eq!(doc.target_text, expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn benefactive_actions_keep_actor_and_beneficiary_distinct() {
+    let cases = [
+        (
+            "彼が私に本を読んでくれた。",
+            "他幫我讀了書。",
+            "他帮我读了书。",
+        ),
+        (
+            "彼が妹に本を読んでくれた。",
+            "他幫妹妹讀了書。",
+            "他帮妹妹读了书。",
+        ),
+        (
+            "私は妹に本を読んであげた。",
+            "我幫妹妹讀了書。",
+            "我帮妹妹读了书。",
+        ),
+        (
+            "私は彼に本を読んでもらった。",
+            "他幫我讀了書。",
+            "他帮我读了书。",
+        ),
+        (
+            "彼女は弟に手紙を書いてもらった。",
+            "弟弟幫她寫了信。",
+            "弟弟帮她写了信。",
+        ),
+        (
+            "私は彼に本を読んでもらいました。",
+            "他幫我讀了書。",
+            "他帮我读了书。",
+        ),
+        (
+            "彼に本を読んでもらった。",
+            "他幫忙讀了書。",
+            "他帮忙读了书。",
+        ),
+        (
+            "私は本を読んでもらった。",
+            "有人幫我讀了書。",
+            "有人帮我读了书。",
+        ),
+        ("彼が本を読んでくれた。", "他幫忙讀了書。", "他帮忙读了书。"),
+    ];
+    for (source, expected_hant, expected_hans) in cases {
+        for (target, expected) in [
+            (TargetVariant::ZhHant, expected_hant),
+            (TargetVariant::ZhHans, expected_hans),
+        ] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert_eq!(doc.target_text, expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn transfer_roles_preserve_glossary_names_and_opaque_objects() {
+    let source = "アリスはボブに `x` をもらった。";
+    let mut glossary = TranslationGlossary::new();
+    for (surface, hant, hans) in [("アリス", "愛麗絲", "爱丽丝"), ("ボブ", "鮑伯", "鲍伯")]
+    {
+        glossary.actors.push(GlossaryEntry {
+            canonical: surface.to_owned(),
+            surfaces: vec![surface.to_owned()],
+            targets: BTreeMap::from([
+                (TargetVariant::ZhHant, hant.to_owned()),
+                (TargetVariant::ZhHans, hans.to_owned()),
+            ]),
+            ..GlossaryEntry::default()
+        });
+    }
+    for (target, expected) in [
+        (TargetVariant::ZhHant, "愛麗絲從鮑伯收到了`x`。"),
+        (TargetVariant::ZhHans, "爱丽丝从鲍伯收到了`x`。"),
+    ] {
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(target),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert_eq!(doc.target_text, expected);
+        assert_eq!(doc.glossary_hits.len(), 2);
+        for hit in &doc.glossary_hits {
+            let entry = glossary
+                .actors
+                .iter()
+                .find(|e| e.canonical == hit.canonical)
+                .unwrap();
+            assert_eq!(
+                slice_chars(&doc.target_text, hit.target_span),
+                entry.targets[&target]
+            );
+        }
+        let code = doc
+            .opaque_spans
+            .iter()
+            .find(|record| slice_chars(source, record.source_span) == "`x`")
+            .unwrap();
+        assert_eq!(
+            slice_chars(&doc.target_text, code.target_span.unwrap()),
+            "`x`"
+        );
+    }
+}
+
+#[test]
+fn benefactive_actions_keep_the_named_actor_before_verb_role_rewrites() {
+    for source in [
+        "私は彼に来てもらった。",
+        "私は彼に学校へ行ってもらった。",
+        "私は彼に泣いてもらった。",
+        "私は彼に気づいてもらった。",
+    ] {
+        for (target, benefit) in [
+            (TargetVariant::ZhHant, "幫我"),
+            (TargetVariant::ZhHans, "帮我"),
+        ] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(
+                doc.target_text.starts_with('他'),
+                "{source}: {}",
+                doc.target_text
+            );
+            assert!(
+                doc.target_text.contains(benefit),
+                "{source}: {}",
+                doc.target_text
+            );
+            assert_eq!(
+                doc.target_text.matches('他').count(),
+                1,
+                "{source}: {}",
+                doc.target_text
+            );
+        }
+    }
+}
+
+#[test]
+fn ambiguous_ageru_does_not_assert_giving_without_a_recipient() {
+    for source in [
+        "私は声をあげた。",
+        "私は声をあげる。",
+        "私は手をあげた。",
+        "私は窓をあげた。",
+    ] {
+        for target in [TargetVariant::ZhHant, TargetVariant::ZhHans] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(
+                !doc.target_text.contains(['給', '给']),
+                "{source}: {}",
+                doc.target_text
+            );
+        }
+    }
+}
+
+#[test]
+fn complex_benefactive_controls_keep_the_original_subject() {
+    for (source, subject) in [
+        ("私は彼に手紙を書いてもらいたい。", "我"),
+        ("彼女は弟に手紙を書いてもらいたかった。", "她"),
+        ("私は先生に発表させてもらった。", "我"),
+        ("私は彼から母に本を読んでもらった。", "我"),
+    ] {
+        for target in [TargetVariant::ZhHant, TargetVariant::ZhHans] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(
+                doc.target_text.starts_with(subject),
+                "{source}: {}",
+                doc.target_text
+            );
+        }
+    }
+}
+
+#[test]
 fn everyday_sov_to_svo_and_honorifics_both_scripts() {
     let src = "私は図書館で本を読みます。美咲さんは佐藤先生に手紙を書いた。";
 

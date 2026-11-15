@@ -2,7 +2,7 @@
   "schema": "nlp.lexicon.receipt.v1",
   "date": "2026-11-15",
   "binary_format": "FNLPLX01",
-  "binary_bytes": 15131026,
+  "binary_bytes": 15134887,
   "total_entries": 350403,
   "total_rules": 1389,
   "variants": {
@@ -40,8 +40,8 @@
     {
       "path": "lexicon/data/ja.tsv",
       "entries": 70827,
-      "bytes": 2970486,
-      "sha256": "0af9157bc606164835e1632005bc0785c09d013c045024e2af63127982f98228"
+      "bytes": 3032194,
+      "sha256": "051685e984860af420dc355a8e46aedc169399d0f90f256346343b60809e7964"
     },
     {
       "path": "lexicon/data/ja_inflect.tsv",
@@ -133,8 +133,19 @@
       ],
       "license": "Unicode-3.0",
       "license_file": "LICENSE-UNICODE-3.0.txt"
+    },
+    {
+      "name": "SudachiDict 20261015 (offline ranking only; no CSV or glosses in repo)",
+      "variants": [
+        "ja"
+      ],
+      "license": "Apache-2.0",
+      "license_file": "LICENSE-SUDACHIDICT-APACHE-2.0.txt",
+      "notice_file": "NOTICE-SUDACHIDICT.txt",
+      "small_lex_zip_sha256": "981b78cdc532ce058b34c76cd9acd3c9a6c771cc0ce528d7de92424b21172125",
+      "core_lex_zip_sha256": "e9ac06222f0ce401a0fef9b129e61e93d59e3ff395a1b037f498962ee5b8ad8b"
     }
   ],
-  "lexicon_bin_bytes": 15131026,
-  "lexicon_bin_sha256": "f4edd6a90e5d4a350d8a41ff97c4cd966489ae04a03a9bd0c65bd879d6a9830b"
+  "lexicon_bin_bytes": 15134887,
+  "lexicon_bin_sha256": "4a51625084555f1ff43bb2f3b8fd2f9a1c85fd1f6787d227044ee278decff255"
 }

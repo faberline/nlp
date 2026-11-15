@@ -39,6 +39,8 @@
 仮装	false_friend
 仮設	false_friend
 仲間	false_friend
+何処	false_friend	literary kango vs everyday Taiwan zh-Hant 哪裡
+何故	false_friend	literary kango vs everyday Taiwan zh-Hant 為什麼
 便所	false_friend
 借り物	false_friend
 借物	false_friend
@@ -80,6 +82,7 @@
 各駅	false_friend
 各驛	false_friend
 合意	false_friend
+吾輩	false_friend	JP 1sg pronoun vs ZH plural 吾輩 (use 我)
 味方	false_friend
 品物	false_friend
 喧嘩	false_friend

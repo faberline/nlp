@@ -191,6 +191,7 @@ fn clause_spans_follow_length_changing_simplified_variants() {
 fn existence_and_copula_negatives_keep_their_distinct_meanings() {
     let mut failures = Vec::new();
     for (source, hant, hans) in [
+        ("約束はあります。", "有約定。", "有约定。"),
         ("約束はありません。", "沒有約定。", "没有约定。"),
         ("約束はありませんでした。", "沒有約定。", "没有约定。"),
         ("約束はない。", "沒有約定。", "没有约定。"),

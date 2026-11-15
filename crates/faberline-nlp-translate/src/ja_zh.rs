@@ -4061,10 +4061,9 @@ fn translate_clause_bunsetsus(
     });
     let negative_existence = verb_core == "沒有" && (pred_is_aru || pred_is_bare_nai);
     if (pred_is_aru && verb_core == "有") || negative_existence {
-        // Move a single nominal item after the negative existence verb.
+        // Put a single nominal item after 有 / 沒有 in both polarities.
         // Keep people and any separate possessor topic as subjects.
-        let move_negative_topic =
-            negative_existence && subj_entries.len() == 1 && !subj_entries[0].is_person_like;
+        let move_item_topic = subj_entries.len() == 1 && !subj_entries[0].is_person_like;
         let has_ni = iobjs
             .iter()
             .chain(obliques.iter())
@@ -4102,7 +4101,7 @@ fn translate_clause_bunsetsus(
             obliques = kept_obls;
             let mut rem_subjs = Vec::new();
             for s in subj_entries.drain(..) {
-                if s.had_ga || move_negative_topic {
+                if s.had_ga || move_item_topic {
                     objs.push(s.text);
                 } else {
                     rem_subjs.push(s);
@@ -4112,11 +4111,11 @@ fn translate_clause_bunsetsus(
         } else if objs.is_empty()
             && !subj_entries.is_empty()
             && (subj_entries.iter().all(|s| s.had_ga)
-                || move_negative_topic
+                || move_item_topic
                 || (negative_existence && subj_entries.iter().any(|s| s.had_ga)))
         {
             subj_entries.retain(|s| {
-                if s.had_ga || move_negative_topic {
+                if s.had_ga || move_item_topic {
                     objs.push(s.text.clone());
                     false
                 } else {

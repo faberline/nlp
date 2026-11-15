@@ -971,6 +971,20 @@ fn is_te_subsidiary_atom(a: &Atom) -> bool {
             ))
 }
 
+fn has_temporal_te_kara_tail(atoms: &[Atom]) -> bool {
+    let Some(i) = atoms.iter().rposition(|a| !is_punct_atom(a)) else {
+        return false;
+    };
+    i >= 2
+        && !atoms[i].is_locked
+        && atoms[i].surface == "から"
+        && !atoms[i - 1].is_locked
+        && matches!(atoms[i - 1].surface.as_str(), "て" | "で")
+        && atoms[i - 1].upos == Some(Upos::Sconj)
+        && !atoms[i - 2].is_locked
+        && atoms[i - 2].upos == Some(Upos::Verb)
+}
+
 fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<Atom> = Vec::new();
@@ -1115,6 +1129,7 @@ fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span)
             && a.upos == Some(Upos::Adp)
             && i > 0
             && !next_is_copula
+            && !has_temporal_te_kara_tail(&current)
             && !matches!(atoms[i - 1].upos, Some(Upos::Verb | Upos::Adj | Upos::Aux));
         if !a.is_locked
             && !is_obligation_nara
@@ -3558,6 +3573,7 @@ fn try_translate_indirect_directive(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum GivingReceivingKind {
     Give,
+    GiveTowardSpeaker,
     Receive,
 }
 
@@ -3566,6 +3582,7 @@ struct GivingReceivingPredicate {
     kind: GivingReceivingKind,
     atom_index: usize,
     auxiliary: bool,
+    shows_to_beneficiary: bool,
 }
 
 fn giving_receiving_kind(atom: &Atom) -> Option<GivingReceivingKind> {
@@ -3573,7 +3590,8 @@ fn giving_receiving_kind(atom: &Atom) -> Option<GivingReceivingKind> {
         return None;
     }
     match atom.lemma.as_deref().unwrap_or(&atom.surface) {
-        "あげる" | "くれる" => Some(GivingReceivingKind::Give),
+        "あげる" => Some(GivingReceivingKind::Give),
+        "くれる" => Some(GivingReceivingKind::GiveTowardSpeaker),
         "もらう" => Some(GivingReceivingKind::Receive),
         _ => None,
     }
@@ -3643,10 +3661,28 @@ fn giving_receiving_predicate(
     {
         return None;
     }
+    // Only replace a single show core; extra content must stay on the generic path.
+    let shows_to_beneficiary = auxiliary
+        && atoms.iter().all(|a| {
+            !a.is_locked
+                && matches!(
+                    a.upos,
+                    Some(Upos::Verb | Upos::Aux | Upos::Sconj | Upos::Part | Upos::Adp)
+                )
+        })
+        && atoms[..atom_index - 1]
+            .iter()
+            .filter(|a| a.upos == Some(Upos::Verb))
+            .count()
+            == 1
+        && atoms[..atom_index - 1]
+            .iter()
+            .any(|a| !a.is_locked && a.lemma.as_deref().unwrap_or(&a.surface) == "見せる");
     Some(GivingReceivingPredicate {
         kind,
         atom_index,
         auxiliary,
+        shows_to_beneficiary,
     })
 }
 
@@ -3690,10 +3726,15 @@ fn translate_clause_bunsetsus(
     let mut sfp_suffix: Option<&'static str> = None;
     let mut saw_to_sconj = false;
     let mut is_toshitemo_clause = false;
+    let mut has_competing_transfer_recipient = false;
 
     for b in bunsetsus.drain(..) {
+        if b.case_particle.as_deref() == Some("へ") && !is_time_or_place_bunsetsu(&b.atoms) {
+            has_competing_transfer_recipient = true;
+        }
         if let Some(sc) = b.sconj_tail.as_deref() {
             match sc {
+                "てから" => sconj_suffix = Some("後"),
                 "から" | "ので" => sconj_prefix = Some("因為"),
                 "からといって" => sconj_prefix = Some("即便因為"),
                 "けれど" | "けれども" | "けど" | "のに" => sconj_suffix = Some("，但是"),
@@ -3910,8 +3951,11 @@ fn translate_clause_bunsetsus(
         .iter()
         .filter(|p| p.case_particle.as_deref() == Some("から"))
         .count();
-    let transfer = giving_receiving_predicate(&predicates, dative_count == 1)
-        .filter(|_| dative_count + from_count <= 1 && subj_entries.len() + subjects.len() <= 1);
+    let transfer = giving_receiving_predicate(&predicates, dative_count == 1).filter(|_| {
+        dative_count + from_count <= 1
+            && subj_entries.len() + subjects.len() <= 1
+            && !has_competing_transfer_recipient
+    });
     let transfer_counterpart = transfer.and_then(|transfer| {
         if let Some(i) = iobjs.iter().position(|p| p.transfer_dative) {
             let arg = iobjs.remove(i);
@@ -3932,6 +3976,9 @@ fn translate_clause_bunsetsus(
         {
             let arg = obliques.remove(i);
             Some(arg.text.strip_prefix('從').unwrap_or(&arg.text).to_owned())
+        } else if transfer.kind == GivingReceivingKind::GiveTowardSpeaker && from_count == 0 {
+            // `くれる` points toward the speaker, including in attributed direct speech.
+            Some("我".to_owned())
         } else {
             None
         }
@@ -4530,8 +4577,17 @@ fn translate_clause_bunsetsus(
             } else {
                 transfer_counterpart
             };
-            transfer_prefix =
-                Some(beneficiary.map_or_else(|| "幫忙".to_owned(), |np| format!("幫{np}")));
+            if transfer.shows_to_beneficiary {
+                if let Some(viewer) = beneficiary {
+                    verb_core = "看".to_owned();
+                    transfer_prefix = Some(format!("給{viewer}"));
+                } else {
+                    verb_core = "展示".to_owned();
+                }
+            } else {
+                transfer_prefix =
+                    Some(beneficiary.map_or_else(|| "幫忙".to_owned(), |np| format!("幫{np}")));
+            }
         } else if transfer.kind == GivingReceivingKind::Receive {
             transfer_prefix = transfer_counterpart.map(|np| format!("從{np}"));
         } else {
@@ -6487,7 +6543,10 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
                 ))
     });
     let ends_with_no = last_non_punct.is_some_and(|a| !a.is_locked && a.surface == "の");
-    if (has_verb_or_adj || has_copula)
+    if has_temporal_te_kara_tail(&atoms) {
+        sconj_tail = Some("てから".to_owned());
+        case_particle = None;
+    } else if (has_verb_or_adj || has_copula)
         && !ends_with_no
         && let Some(tail) = last_non_punct
         && !tail.is_locked
@@ -7175,7 +7234,9 @@ fn synthesize_predicate_complex(
         {
             if !transfer.auxiliary {
                 cores.push(match transfer.kind {
-                    GivingReceivingKind::Give => "給".to_owned(),
+                    GivingReceivingKind::Give | GivingReceivingKind::GiveTowardSpeaker => {
+                        "給".to_owned()
+                    }
                     GivingReceivingKind::Receive => "收到".to_owned(),
                 });
             }

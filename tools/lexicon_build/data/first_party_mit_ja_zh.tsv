@@ -565,7 +565,7 @@
 なぜか	ADV	不知為何	550	-
 何故か	ADV	不知為何	550	-
 なにしろ	ADV	畢竟	550	-
-何しろ	ADV	畢竟	550	-
+何しろ	ADV	總之	550	-
 なんとなく	ADV	總覺得	550	-
 何となく	ADV	總覺得	550	-
 なんだか	ADV	總覺得	550	-
@@ -1103,7 +1103,7 @@
 話し込む	VERB	暢談	750	godan_ma
 考え込む	VERB	沉思	750	godan_ma
 考え直す	VERB	重新考慮	750	godan_sa
-思い浮かべる	VERB	浮現	750	ichidan
+思い浮かべる	VERB	回想起	750	ichidan
 思い浮かぶ	VERB	浮現	750	godan_ba
 思い切る	VERB	下決心	750	godan_ra
 思い知る	VERB	深切體會	750	godan_ra
@@ -1200,7 +1200,7 @@
 打ち勝つ	VERB	戰勝	750	godan_ta
 ぶつける	VERB	撞擊	750	ichidan
 ぶっ壊す	VERB	砸爛	750	godan_sa
-突き当たる	VERB	碰壁	750	godan_ra
+突き当たる	VERB	撞上	750	godan_ra
 突き放す	VERB	推開	750	godan_sa
 突き飛ばす	VERB	推飛	750	godan_sa
 突き刺す	VERB	刺穿	750	godan_sa
@@ -1286,7 +1286,7 @@
 傷める	VERB	弄傷	750	ichidan
 痛める	VERB	弄痛	750	ichidan
 祝う	VERB	慶祝	750	godan_wa
-植わる	VERB	種著	750	godan_ra
+植わる	VERB	被種植	750	godan_ra
 浮かぶ	VERB	浮起	750	godan_ba
 疑う	VERB	懷疑	750	godan_wa
 映す	VERB	映照	750	godan_sa
@@ -1735,7 +1735,7 @@
 向ける	VERB	面向	750	ichidan
 迎える	VERB	歡迎	750	ichidan
 剥く	VERB	剝皮	750	godan_ka
-剥ける	VERB	脫皮	750	ichidan
+剥ける	VERB	剝落	750	ichidan
 報いる	VERB	報答	750	ichidan
 報われる	VERB	獲得回報	750	ichidan
 結ぶ	VERB	締結	750	godan_ba
@@ -1901,7 +1901,7 @@
 教える	VERB	指導	750	ichidan
 落ちる	VERB	落下	750	ichidan
 落とす	VERB	弄掉	750	godan_sa
-訪れる	VERB	來臨	750	ichidan
+訪れる	VERB	造訪	750	ichidan
 踊る	VERB	舞動	750	godan_ra
 驚く	VERB	驚奇	750	godan_ka
 溺れる	VERB	沉溺	750	ichidan
@@ -1931,7 +1931,7 @@
 囲む	VERB	包圍	750	godan_ma
 重ねる	VERB	累積	750	ichidan
 重なる	VERB	重合	750	godan_ra
-飾る	VERB	點綴	750	godan_ra
+飾る	VERB	裝飾	750	godan_ra
 貸す	VERB	出借	750	godan_sa
 稼ぐ	VERB	賺	750	godan_ga
 数える	VERB	計算	750	ichidan
@@ -2435,7 +2435,7 @@
 退く	VERB	後退	750	godan_ka
 退ける	VERB	推開	750	ichidan
 静まる	VERB	靜下來	750	godan_ra
-鎮める	VERB	鎮壓	750	ichidan
+鎮める	VERB	平息	750	ichidan
 鎮まる	VERB	平息	750	godan_ra
 沈める	VERB	弄沉	750	ichidan
 忍ぶ	VERB	忍耐	750	godan_ba
@@ -2468,7 +2468,7 @@
 
 甘やかす	VERB	寵壞	750	godan_sa
 浴びせる	VERB	澆淋	750	ichidan
-言い寄る	VERB	搭訕	750	godan_ra
+言い寄る	VERB	示好	750	godan_ra
 打ち返す	VERB	回擊	750	godan_sa
 うなずく	VERB	點頭	750	godan_ka
 羨ましがる	VERB	羨慕	750	godan_ra

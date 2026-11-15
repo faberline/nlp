@@ -12,7 +12,8 @@ Permissively licensed, compile-time compiled multilingual lexicon covering 4 lan
   - `ja_inflect.tsv` (6-column): Japanese conjugation rules (`godan_*`, `ichidan`, `sahen`, `kahen`, `adj_i`) with UD-aligned morpheme splits.
   - `ko.tsv` (8-column): Korean (`ko`) stems, function words, and pre-analyzed irregular inflections.
   - `ko_morph.tsv` (6-column): Korean Josa, Copula, XSV/XSA, and Eomi suffix rules with batchim conditions and exact character-span decompositions.
-- `LICENSES/` — Upstream permissive license texts (`MIT`, `Apache-2.0`, `BSD-3-Clause`, `WordNet`, `SCOWL`). No `CC BY-SA`, `CC BY-NC`, `CC BY-ND`, or `GPL` sources are used.
+- `LICENSES/` — Upstream permissive license texts (`MIT`, `Apache-2.0`, `BSD-3-Clause`, `Unicode-3.0`, `WordNet`, `SCOWL`). No `CC BY-SA`, `CC BY-NC`, `CC BY-ND`, or `GPL` sources are used.
+  - `LICENSE-UNICODE-3.0.txt`: Unicode License V3 (`Unicode-3.0`) covering Unicode Unihan `kTraditionalVariant` / Japanese shinjitai-to-Traditional glyph mappings (`src/lexicon/ja.rs` and `tools/lexicon_build/derive_unihan_kango.py`).
 
 ## Build-Time Compilation
 

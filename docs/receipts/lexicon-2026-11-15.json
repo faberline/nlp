@@ -2,7 +2,7 @@
   "schema": "nlp.lexicon.receipt.v1",
   "date": "2026-11-15",
   "binary_format": "FNLPLX01",
-  "binary_bytes": 15130996,
+  "binary_bytes": 15131026,
   "total_entries": 350403,
   "total_rules": 1389,
   "variants": {
@@ -40,8 +40,8 @@
     {
       "path": "lexicon/data/ja.tsv",
       "entries": 70827,
-      "bytes": 2964928,
-      "sha256": "f9779ee714aace461277c8e4d3904bedc6af27bb5e94495cbed916ac5ee8f1be"
+      "bytes": 2970486,
+      "sha256": "0af9157bc606164835e1632005bc0785c09d013c045024e2af63127982f98228"
     },
     {
       "path": "lexicon/data/ja_inflect.tsv",
@@ -125,8 +125,16 @@
       ],
       "license": "MIT",
       "license_file": "LICENSE-FABERLINE-FIRST-PARTY-MIT.txt"
+    },
+    {
+      "name": "Unicode Unihan",
+      "variants": [
+        "ja"
+      ],
+      "license": "Unicode-3.0",
+      "license_file": "LICENSE-UNICODE-3.0.txt"
     }
   ],
-  "lexicon_bin_bytes": 15130996,
-  "lexicon_bin_sha256": "f6b8588ae71a4529137b770ef86d4abbf97922a47eb7d0719d097f78e54351a7"
+  "lexicon_bin_bytes": 15131026,
+  "lexicon_bin_sha256": "f4edd6a90e5d4a350d8a41ff97c4cd966489ae04a03a9bd0c65bd879d6a9830b"
 }

@@ -328,7 +328,7 @@ VERB	326	鈍する	ja	VERB	VERB	變鈍
 VERB	327	閲する	ja	VERB	VERB	歷經
 VERB	328	饗する	ja	VERB	VERB	款待
 VERB	329	駁する	ja	VERB	VERB	反駁
-VERB	330	鬱する	ja	VERB	VERB	鬱積
+VERB	330	鬱する	ja	VERB	VERB	鬱悶
 VERB	331	鼓する	ja	VERB	VERB	鼓舞
 VERB	332	侍する	ja	VERB	VERB	侍奉
 VERB	333	緘する	ja	VERB	VERB	緘默
@@ -371,7 +371,7 @@ VERB	369	検する	ja	VERB	VERB	檢查
 VERB	370	馬鹿げる	ja	VERB	VERB	荒唐
 VERB	371	持する	ja	VERB	VERB	堅持
 VERB	372	労する	ja	VERB	VERB	勞煩
-VERB	373	注する	ja	VERB	VERB	注入
+VERB	373	注する	ja	VERB	VERB	加註
 VERB	374	貶する	ja	VERB	VERB	貶低
 VERB	375	役する	ja	VERB	VERB	使役
 VERB	376	賞する	ja	VERB	VERB	賞賜
@@ -653,7 +653,7 @@ VERB	651	包み込める	ja	VERB	VERB	能包住
 VERB	652	飛びたつ	ja	VERB	VERB	飛起
 VERB	653	透す	ja	VERB	VERB	透過
 VERB	654	演る	ja	VERB	VERB	表演
-VERB	655	犯る	ja	VERB	VERB	犯下
+VERB	655	犯る	ja	VERB	VERB	侵犯
 VERB	656	売り出す	ja	VERB	VERB	發售
 VERB	657	読込む	ja	VERB	VERB	讀取
 VERB	658	附す	ja	VERB	VERB	附加
@@ -757,7 +757,7 @@ VERB	755	加え持つ	ja	VERB	VERB	兼備
 VERB	756	勇み立つ	ja	VERB	VERB	奮起
 VERB	757	哮り立つ	ja	VERB	VERB	怒吼
 VERB	758	弥立つ	ja	VERB	VERB	高聳
-VERB	759	投げ勝つ	ja	VERB	VERB	投勝
+VERB	759	投げ勝つ	ja	VERB	VERB	投贏
 VERB	760	抜き放つ	ja	VERB	VERB	拔出
 VERB	761	振り放つ	ja	VERB	VERB	甩開
 VERB	762	毛羽立つ	ja	VERB	VERB	起毛球
@@ -922,9 +922,9 @@ VERB	920	汗染みる	ja	VERB	VERB	汗透
 VERB	921	盗みみる	ja	VERB	VERB	偷看
 VERB	922	詰め込む	ja	VERB	VERB	塞進
 VERB	923	惟る	ja	VERB	VERB	深思
-VERB	924	打ち見る	ja	VERB	VERB	凝視
-VERB	925	打見る	ja	VERB	VERB	凝視
-VERB	926	打ちみる	ja	VERB	VERB	凝視
+VERB	924	打ち見る	ja	VERB	VERB	瞥一眼
+VERB	925	打見る	ja	VERB	VERB	瞥一眼
+VERB	926	打ちみる	ja	VERB	VERB	瞥一眼
 VERB	927	滲む	ja	VERB	VERB	滲出
 VERB	928	泥濘む	ja	VERB	VERB	泥濘
 VERB	929	舞い込む	ja	VERB	VERB	飄進
@@ -1105,7 +1105,7 @@ VERB	1103	怪しむ	ja	VERB	VERB	懷疑
 VERB	1104	悄気込む	ja	VERB	VERB	垂頭喪氣
 VERB	1105	悴む	ja	VERB	VERB	凍僵
 VERB	1106	手挟む	ja	VERB	VERB	夾帶
-VERB	1107	打ちあぐむ	ja	VERB	VERB	苦惱
+VERB	1107	打ちあぐむ	ja	VERB	VERB	苦於打不中
 VERB	1108	打ち沈む	ja	VERB	VERB	消沉
 VERB	1109	打沈む	ja	VERB	VERB	消沉
 VERB	1110	折れこむ	ja	VERB	VERB	折入
@@ -1124,7 +1124,7 @@ VERB	1122	攻め倦む	ja	VERB	VERB	久攻不下
 VERB	1123	攻め込む	ja	VERB	VERB	攻入
 VERB	1124	攻込む	ja	VERB	VERB	攻入
 VERB	1125	斬り苛む	ja	VERB	VERB	折磨
-VERB	1126	明らむ	ja	VERB	VERB	泛紅
+VERB	1126	明らむ	ja	VERB	VERB	變亮
 VERB	1127	果無む	ja	VERB	VERB	哀嘆
 VERB	1128	植え込む	ja	VERB	VERB	植入
 VERB	1129	汲みこむ	ja	VERB	VERB	汲入
@@ -1860,7 +1860,7 @@ MULTI	358	セイヨウ	ja	-	NOUN|VERB	西洋
 MULTI	359	ピン	ja	-	ADV|NOUN	敏銳
 MULTI	360	サイク	ja	-	NOUN|VERB	動手腳
 MULTI	361	トス	ja	-	NOUN|VERB	拋
-MULTI	362	フェーン	ja	-	INTJ|NOUN	嗚咽
+MULTI	362	フェーン	ja	-	INTJ|NOUN	焚風
 MULTI	363	ジブン	ja	-	ADV|NOUN	自己
 MULTI	364	バーン	ja	-	ADV|NOUN	砰然
 MULTI	365	ホールアウト	ja	-	NOUN|VERB	完賽
@@ -2340,7 +2340,7 @@ MULTI	838	精勤	ja	-	NOUN|VERB	勤奮
 MULTI	839	謙そん	ja	-	NOUN|VERB	謙遜
 MULTI	840	謙抑	ja	-	ADJ|NOUN|VERB	謙抑
 MULTI	841	難儀	ja	-	NOUN|VERB	困苦
-MULTI	842	難渋	ja	-	NOUN|VERB	艱澀
+MULTI	842	難渋	ja	-	NOUN|VERB	陷入困境
 MULTI	843	卓抜	ja	-	ADJ|NOUN|VERB	卓越
 MULTI	844	続発	ja	-	NOUN|VERB	接連發生
 MULTI	845	極	ja	-	ADV|NOUN	極為

@@ -188,6 +188,134 @@ fn clause_spans_follow_length_changing_simplified_variants() {
 }
 
 #[test]
+fn existence_and_copula_negatives_keep_their_distinct_meanings() {
+    let mut failures = Vec::new();
+    for (source, hant, hans) in [
+        ("約束はありません。", "沒有約定。", "没有约定。"),
+        ("約束はありませんでした。", "沒有約定。", "没有约定。"),
+        ("約束はない。", "沒有約定。", "没有约定。"),
+        ("約束はなかった。", "沒有約定。", "没有约定。"),
+        (
+            "ここに椅子はありません。",
+            "這裡沒有椅子。",
+            "这里没有椅子。",
+        ),
+        (
+            "ここに椅子がありませんでした。",
+            "這裡沒有椅子。",
+            "这里没有椅子。",
+        ),
+        ("私は学生ではありません。", "我不是學生。", "我不是学生。"),
+        ("私は学生じゃありません。", "我不是學生。", "我不是学生。"),
+        ("私は学生ではない。", "我不是學生。", "我不是学生。"),
+        ("私は学生じゃない。", "我不是學生。", "我不是学生。"),
+        (
+            "私は学生ではありませんでした。",
+            "我不是學生。",
+            "我不是学生。",
+        ),
+        ("私は本がありません。", "我沒有書。", "我没有书。"),
+        ("私はありません。", "我沒有。", "我没有。"),
+        ("私はありませんでした。", "我沒有。", "我没有。"),
+        ("ここに椅子があります。", "這裡有椅子。", "这里有椅子。"),
+        ("私は学生です。", "我是學生。", "我是学生。"),
+    ] {
+        for (target, expected) in [(TargetVariant::ZhHant, hant), (TargetVariant::ZhHans, hans)] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            if doc.target_text != expected {
+                failures.push(format!("{source}: {} != {expected}", doc.target_text));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn existence_and_copula_negatives_preserve_locations_quotes_and_locks() {
+    for target in [TargetVariant::ZhHant, TargetVariant::ZhHans] {
+        for (source, hant, hans) in [
+            (
+                "私は学校では本を読みます。",
+                "我在學校讀書。",
+                "我在学校读书。",
+            ),
+            (
+                "学校では約束はありません。",
+                "在學校沒有約定。",
+                "在学校没有约定。",
+            ),
+            (
+                "私は「学生ではありません」と言う。",
+                "我說「不是學生」。",
+                "我说“不是学生”。",
+            ),
+            (
+                "私は `ではありません` を読む。",
+                "我讀`ではありません`。",
+                "我读`ではありません`。",
+            ),
+        ] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert_eq!(
+                doc.target_text,
+                if target == TargetVariant::ZhHant {
+                    hant
+                } else {
+                    hans
+                },
+                "{source}"
+            );
+            for opaque in &doc.opaque_spans {
+                assert_eq!(
+                    slice_chars(source, opaque.source_span),
+                    slice_chars(&doc.target_text, opaque.target_span.unwrap())
+                );
+            }
+        }
+        let source = "私は学生ではありません。";
+        let glossary = TranslationGlossary {
+            domain_terms: vec![GlossaryEntry {
+                canonical: "学生".to_owned(),
+                surfaces: vec!["学生".to_owned()],
+                targets: BTreeMap::from([(target, "STUDENT".to_owned())]),
+                ..GlossaryEntry::default()
+            }],
+            ..TranslationGlossary::new()
+        };
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(target),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert_eq!(doc.target_text, "我不是STUDENT。");
+        assert_eq!(doc.glossary_hits.len(), 1);
+        let hit = &doc.glossary_hits[0];
+        assert_eq!(slice_chars(source, hit.source_span), "学生");
+        assert_eq!(slice_chars(&doc.target_text, hit.target_span), "STUDENT");
+    }
+}
+
+#[test]
 fn polite_negative_endings_keep_polarity_and_past_tense() {
     let mut failures = Vec::new();
     for (source, hant, hans) in [

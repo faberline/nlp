@@ -3708,6 +3708,7 @@ fn translate_clause_bunsetsus(
         has_mo: bool,
         had_ga: bool,
         is_hou: bool,
+        is_pronoun_or_name: bool,
     }
 
     let mut connectors: Vec<String> = Vec::new();
@@ -3791,6 +3792,10 @@ fn translate_clause_bunsetsus(
                 let has_mo = b.case_particle.as_deref() == Some("も");
                 let had_ga = b.case_particle.as_deref() == Some("が");
                 let is_hou = had_ga && b.atoms.iter().any(|a| !a.is_locked && a.surface == "ほう");
+                let is_pronoun_or_name = b
+                    .atoms
+                    .iter()
+                    .any(|a| matches!(a.upos, Some(Upos::Pron | Upos::Propn)));
                 let s = render_bunsetsu_np(&b, target);
                 if !s.is_empty() {
                     if is_wh_mo {
@@ -3801,6 +3806,7 @@ fn translate_clause_bunsetsus(
                             has_mo: false,
                             had_ga: false,
                             is_hou: false,
+                            is_pronoun_or_name,
                         });
                     } else {
                         subj_entries.push(PlacedSubj {
@@ -3808,6 +3814,7 @@ fn translate_clause_bunsetsus(
                             has_mo,
                             had_ga,
                             is_hou,
+                            is_pronoun_or_name,
                         });
                     }
                 }
@@ -4040,7 +4047,27 @@ fn translate_clause_bunsetsus(
                 )
         })
     });
-    if pred_is_aru && verb_core == "有" {
+    let pred_is_bare_nai = predicates.iter().flat_map(|b| &b.atoms).any(|a| {
+        !a.is_locked
+            && matches!(
+                a.lemma.as_deref().unwrap_or(&a.surface),
+                "ない" | "なかっ" | "なかった"
+            )
+    }) && predicates.iter().flat_map(|b| &b.atoms).all(|a| {
+        !a.is_locked
+            && (matches!(a.upos, Some(Upos::Aux | Upos::Part | Upos::Sconj))
+                || (a.upos == Some(Upos::Adj)
+                    && matches!(
+                        a.lemma.as_deref().unwrap_or(&a.surface),
+                        "ない" | "なかっ" | "なかった"
+                    )))
+    });
+    let negative_existence = verb_core == "沒有" && (pred_is_aru || pred_is_bare_nai);
+    if (pred_is_aru && verb_core == "有") || negative_existence {
+        // Move a single nominal item after the negative existence verb.
+        // Keep pronouns, names and any separate possessor topic as subjects.
+        let move_negative_topic =
+            negative_existence && subj_entries.len() == 1 && !subj_entries[0].is_pronoun_or_name;
         let has_ni = iobjs
             .iter()
             .chain(obliques.iter())
@@ -4078,7 +4105,7 @@ fn translate_clause_bunsetsus(
             obliques = kept_obls;
             let mut rem_subjs = Vec::new();
             for s in subj_entries.drain(..) {
-                if s.had_ga {
+                if s.had_ga || move_negative_topic {
                     objs.push(s.text);
                 } else {
                     rem_subjs.push(s);
@@ -4087,11 +4114,18 @@ fn translate_clause_bunsetsus(
             subj_entries = rem_subjs;
         } else if objs.is_empty()
             && !subj_entries.is_empty()
-            && subj_entries.iter().all(|s| s.had_ga)
+            && (subj_entries.iter().all(|s| s.had_ga)
+                || move_negative_topic
+                || (negative_existence && subj_entries.iter().any(|s| s.had_ga)))
         {
-            for s in subj_entries.drain(..) {
-                objs.push(s.text);
-            }
+            subj_entries.retain(|s| {
+                if s.had_ga || move_negative_topic {
+                    objs.push(s.text.clone());
+                    false
+                } else {
+                    true
+                }
+            });
         }
     }
 
@@ -5104,6 +5138,80 @@ fn normalize_ja_atoms(atoms: &[Atom]) -> Vec<Atom> {
                     is_locked: false,
                 });
                 i += count;
+                continue;
+            }
+        }
+
+        // A complete negative copula is an auxiliary, not locative `で + は`.
+        // Leave case particles intact unless the negative tail is adjacent.
+        let copula_prefix = if !a.is_locked
+            && a.surface == "で"
+            && a.upos == Some(Upos::Adp)
+            && atoms
+                .get(i + 1)
+                .is_some_and(|ha| !ha.is_locked && ha.surface == "は" && ha.upos == Some(Upos::Adp))
+        {
+            2
+        } else if !a.is_locked && a.surface == "じゃ" && a.upos == Some(Upos::Sconj) {
+            1
+        } else {
+            0
+        };
+        if copula_prefix > 0 {
+            let start = i + copula_prefix;
+            let negative_len = if atoms.get(start).is_some_and(|neg| {
+                !neg.is_locked
+                    && neg.surface == "ない"
+                    && matches!(neg.upos, Some(Upos::Adj | Upos::Aux))
+            }) {
+                1
+            } else if atoms.get(start..start + 3).is_some_and(|tail| {
+                tail.iter().all(|a| !a.is_locked)
+                    && tail[0].upos == Some(Upos::Verb)
+                    && tail[0].lemma.as_deref().unwrap_or(&tail[0].surface) == "ある"
+                    && tail[1].upos == Some(Upos::Aux)
+                    && tail[1].surface == "ませ"
+                    && tail[2].upos == Some(Upos::Aux)
+                    && tail[2].surface == "ん"
+            }) {
+                3
+            } else {
+                0
+            };
+            let mut consumed = copula_prefix + negative_len;
+            let past_start = i + consumed;
+            if negative_len == 3
+                && atoms.get(past_start..past_start + 2).is_some_and(|past| {
+                    !past[0].is_locked
+                        && past[0].surface == "でし"
+                        && past[0].upos == Some(Upos::Aux)
+                        && !past[1].is_locked
+                        && past[1].surface == "た"
+                        && past[1].upos == Some(Upos::Aux)
+                })
+            {
+                consumed += 2;
+            }
+            if negative_len > 0
+                && atoms[i..i + consumed]
+                    .windows(2)
+                    .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+            {
+                let last = &atoms[i + consumed - 1];
+                out.push(Atom {
+                    span: Span {
+                        start_char: a.span.start_char,
+                        end_char: last.span.end_char,
+                    },
+                    surface: "ではない".to_owned(),
+                    lemma: Some("ではない".to_owned()),
+                    upos: Some(Upos::Aux),
+                    doc_tok_idx: last.doc_tok_idx,
+                    head: last.head,
+                    deprel: last.deprel.clone(),
+                    is_locked: false,
+                });
+                i += consumed;
                 continue;
             }
         }
@@ -7294,6 +7402,22 @@ fn synthesize_predicate_complex(
         }
     }
 
+    let has_single_aru_core = cores.len() == 1
+        && cores[0] == "有"
+        && all_atoms.iter().all(|a| !a.is_locked)
+        && all_atoms
+            .iter()
+            .filter(|a| a.upos == Some(Upos::Verb))
+            .count()
+            == 1
+        && all_atoms.iter().any(|a| {
+            a.upos == Some(Upos::Verb) && a.lemma.as_deref().unwrap_or(&a.surface) == "ある"
+        });
+    if has_single_aru_core && (has_neg || has_neg_past) && !is_copula_neg {
+        pre.retain(|m| m != "不" && m != "沒有");
+        cores[0] = "沒有".to_owned();
+    }
+
     let is_sole_existential_neg = cores.is_empty()
         && !is_copula_pos
         && !is_copula_neg
@@ -7303,7 +7427,7 @@ fn synthesize_predicate_complex(
             !a.is_locked
                 && matches!(
                     a.surface.as_str(),
-                    "ない" | "なかった" | "ありません" | "ませんでした"
+                    "ない" | "なかっ" | "なかった" | "ありません" | "ませんでした"
                 )
         });
     if is_sole_existential_neg {

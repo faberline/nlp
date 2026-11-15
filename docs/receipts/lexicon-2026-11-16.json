@@ -22,20 +22,20 @@
     {
       "path": "lexicon/data/zh_hant.tsv",
       "entries": 69909,
-      "bytes": 3034506,
-      "sha256": "631e4bab2de39ca33294a7a32fb1d6fd7ee88fc221f066f642b54a88b1007393"
+      "bytes": 3006136,
+      "sha256": "229052235205d5eadd696e02c39848086dd29a1bd54eb0d3f63e45c9e361e57a"
     },
     {
       "path": "lexicon/data/zh_hans.tsv",
       "entries": 74187,
-      "bytes": 3236576,
-      "sha256": "cfa9a89c43c734e93143d452adc4aa05b2f71012958275db0d2d8393f432e222"
+      "bytes": 3206711,
+      "sha256": "8f3a1336c3e6b22400f827b920401e6e8f539d0fe1dcda5828ba2185bf44cf4b"
     },
     {
       "path": "lexicon/data/en.tsv",
       "entries": 66000,
-      "bytes": 2807797,
-      "sha256": "c5b8a12a2bfae957398de7c1a27181cfe81df9f847f76c9c6735cbd76f781ad2"
+      "bytes": 2921339,
+      "sha256": "43c460aeac0707526c1fc40ea4ea39fb5193e63a2438adb2dcf3c77dcb364ae0"
     },
     {
       "path": "lexicon/data/ja.tsv",
@@ -279,8 +279,8 @@
     },
     "zh_modern_mit_v1": {
       "path": "tools/lexicon_build/data/zh_modern_mit_v1.tsv",
-      "bytes": 601,
-      "sha256": "422d053c04b3d099213ffdd6d22a647e3d94b46684517ee521ea21ef76b58492"
+      "bytes": 478,
+      "sha256": "388e3366d11fa8d1b9ae71edf39de755321c3d584a34f4337049a26b0ff85e92"
     },
     "opencc_tables": [
       {
@@ -329,10 +329,10 @@
     "base_ref": "d99dd7b68001687b3cd76023ac32785abdc32f06",
     "reproduce_cmd": "python3 -B tools/lexicon_build/generate_c1_manifest.py --out-dir <out_dir>",
     "files": {
-      "manifest_en.tsv": "efc4df9d4ae16a350e0b4e5b691d05a4347c788509d120f163a390354fda441c",
-      "manifest_zh_hant.tsv": "3b7d610571f741680b2a985fdffee3cca73e47a09de3255806170c44887c9d53",
-      "manifest_zh_hans.tsv": "85f8c3be05d2848773581849b5324fdc61cac079ef29c0a5ea3d573cf6ffd5b1",
-      "manifest_summary.json": "03f635554105c44ef00696ce0fa93caf2cebfc38c8c618f82789a1c49ab410d7"
+      "manifest_en.tsv": "b4de863963adb12fe3d6ebff3e3d245a1380535fdf16c133071fa7626526dd74",
+      "manifest_zh_hant.tsv": "86ece6e26681d4d1924e44d3bc19158e01b8ef9a4e62d0a927d29b40be616079",
+      "manifest_zh_hans.tsv": "088eba03a5a9d8594626e05193ff6edff6e455318ef8492d21132e9b64a3dd6c",
+      "manifest_summary.json": "812a04306035d95973a0e6c70d5f8a7a4b0df4305f84d94c75ea33e2b596e608"
     }
   }
 }

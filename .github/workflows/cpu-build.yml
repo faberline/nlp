@@ -1,0 +1,87 @@
+name: CPU package build
+on:
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            rustflags: ''
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            rustflags: ''
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            rustflags: '-C target-feature=+crt-static'
+    runs-on: ${{ matrix.runner }}
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+      - name: Check native architecture
+        shell: bash
+        run: |
+          case '${{ matrix.target }}' in
+            aarch64-apple-darwin) test "$(uname -m)" = arm64 ;;
+            x86_64-apple-darwin) test "$(uname -m)" = x86_64 ;;
+            x86_64-pc-windows-msvc) test "$PROCESSOR_ARCHITECTURE" = AMD64 ;;
+          esac
+      - name: Build CPU CLI
+        run: cargo build --release --locked --workspace --bins --target ${{ matrix.target }}
+      - name: Capture locked target dependency metadata
+        shell: bash
+        run: cargo metadata --locked --format-version 1 --filter-platform '${{ matrix.target }}' > cpu-metadata.json
+      - name: Inspect runtime imports
+        shell: bash
+        run: |
+          exe=nlp
+          py=python3
+          if [[ '${{ matrix.target }}' == *windows* ]]; then exe=nlp.exe; py=python; fi
+          "$py" scripts/release/inspect_runtime.py "target/${{ matrix.target }}/release/$exe" '${{ matrix.target }}' runtime-dependencies.txt
+      - name: Package
+        shell: bash
+        run: |
+          exe=nlp
+          py=python3
+          if [[ '${{ matrix.target }}' == *windows* ]]; then exe=nlp.exe; py=python; fi
+          "$py" scripts/release/package.py "target/${{ matrix.target }}/release/$exe" '${{ matrix.target }}' dist cpu-metadata.json runtime-dependencies.txt '${{ matrix.rustflags }}'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: cpu-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+      - name: Create separate download directory
+        shell: bash
+        run: mkdir verify-download
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: cpu-${{ matrix.target }}
+          path: verify-download
+      - name: Verify downloaded archive and execute all commands
+        shell: bash
+        run: |
+          py=python3
+          if [[ '${{ matrix.target }}' == *windows* ]]; then py=python; fi
+          for checksum in verify-download/*.sha256; do
+            archive="${checksum%.sha256}"
+            "$py" scripts/release/verify.py "$archive" "$checksum" '${{ matrix.target }}' "$(git rev-parse HEAD)" 'target/${{ matrix.target }}/release'
+          done
+  cpu-package-gate:
+    name: cpu-package-gate
+    if: always()
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every native package job
+        env:
+          RESULT: ${{ needs.package.result }}
+        run: test "$RESULT" = success

@@ -7,7 +7,7 @@
 //! - `JA_ZH_EVAL_WRITE_BASELINE=1`: write `baseline.tsv` from this run instead of checking it.
 //! - `JA_ZH_EVAL_VERBOSE=1`: print per-row details for `dev` rows (never for `test` rows).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -41,31 +41,51 @@ struct Row {
     refs: Vec<String>,
 }
 
-fn parse_challenge(text: &str) -> Vec<Row> {
+fn is_blank(s: &str) -> bool {
+    s.chars().all(char::is_whitespace)
+}
+
+fn parse_challenge(text: &str) -> Result<Vec<Row>, String> {
     let mut lines = text.lines();
-    assert_eq!(lines.next(), Some(HEADER), "challenge.tsv header mismatch");
+    if lines.next() != Some(HEADER) {
+        return Err("challenge.tsv header mismatch".to_owned());
+    }
     let mut rows = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::new();
     for (idx, line) in lines.enumerate() {
+        let lineno = idx + 2;
         if line.trim().is_empty() {
             continue;
         }
         let cols: Vec<&str> = line.split('\t').collect();
-        assert!(
-            cols.len() == 6 || cols.len() == 7,
-            "challenge.tsv line {}: expected 7 columns, got {}",
-            idx + 2,
-            cols.len()
-        );
+        if cols.len() != 6 && cols.len() != 7 {
+            return Err(format!(
+                "challenge.tsv line {lineno}: expected 7 columns, got {}",
+                cols.len()
+            ));
+        }
         let set = match cols[1] {
             "dev" => Split::Dev,
             "test" => Split::Test,
-            other => panic!("challenge.tsv line {}: bad set {other:?}", idx + 2),
+            other => return Err(format!("challenge.tsv line {lineno}: bad set {other:?}")),
         };
-        assert!(seen.insert(cols[0].to_owned()), "duplicate id {}", cols[0]);
-        assert!(!cols[5].is_empty(), "empty reference for {}", cols[0]);
+        if !seen.insert(cols[0].to_owned()) {
+            return Err(format!(
+                "challenge.tsv line {lineno}: duplicate id {}",
+                cols[0]
+            ));
+        }
+        if is_blank(cols[4]) {
+            return Err(format!("challenge.tsv line {lineno}: empty source"));
+        }
+        // An empty primary reference would make chrF score an empty output as 100.
+        if is_blank(cols[5]) {
+            return Err(format!(
+                "challenge.tsv line {lineno}: empty primary reference"
+            ));
+        }
         let mut refs = vec![cols[5].to_owned()];
-        if let Some(alt) = cols.get(6).filter(|s| !s.is_empty()) {
+        if let Some(alt) = cols.get(6).filter(|s| !is_blank(s)) {
             refs.push((*alt).to_owned());
         }
         rows.push(Row {
@@ -76,7 +96,7 @@ fn parse_challenge(text: &str) -> Vec<Row> {
             refs,
         });
     }
-    rows
+    Ok(rows)
 }
 
 fn ngram_counts(chars: &[char], n: usize) -> HashMap<&[char], usize> {
@@ -128,8 +148,13 @@ fn chrf(hyp: &str, reference: &str) -> f64 {
 }
 
 fn has_kana(text: &str) -> bool {
-    text.chars()
-        .any(|c| matches!(c, '\u{3041}'..='\u{3096}' | '\u{30A1}'..='\u{30FA}'))
+    text.chars().any(|c| {
+        matches!(c,
+            '\u{3041}'..='\u{3096}' // hiragana
+            | '\u{30A1}'..='\u{30FA}' // katakana (without `・` and `ー`)
+            | '\u{FF66}'..='\u{FF9F}' // halfwidth katakana
+        )
+    })
 }
 
 #[derive(Default, Clone)]
@@ -225,16 +250,71 @@ fn aggregate(rows: &[Row], scored: &[Scored]) -> Vec<(String, Agg)> {
     out
 }
 
-fn engine_revision() -> String {
-    std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
+/// Repo-relative path prefixes whose content decides the engine output. A baseline is
+/// written only when none of them has uncommitted changes, so `engine_rev` names the exact
+/// engine that produced it. Evaluation files (`tests/`) are not engine inputs.
+const ENGINE_INPUTS: &[&str] = &[
+    "crates/faberline-nlp-translate/src/",
+    "crates/faberline-nlp/src/",
+    "crates/faberline-nlp/lexicon/",
+    "crates/faberline-nlp-narrative/src/",
+];
+
+/// Engine-input paths listed in `git status --porcelain=v1` output.
+fn dirty_engine_inputs(porcelain: &str) -> Vec<String> {
+    porcelain
+        .lines()
+        .filter(|l| l.len() > 3)
+        .flat_map(|l| {
+            let paths = &l[3..];
+            // A rename lists `old -> new`; both sides matter.
+            paths
+                .split(" -> ")
+                .map(|p| p.trim_matches('"').to_owned())
+                .collect::<Vec<_>>()
+        })
+        .filter(|p| ENGINE_INPUTS.iter().any(|prefix| p.starts_with(prefix)))
+        .collect()
+}
+
+fn git(args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .args(args)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_owned())
+        .map_err(|e| format!("git {args:?}: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// The commit of a clean engine, or an error when the engine revision cannot be named.
+fn clean_engine_revision() -> Result<String, String> {
+    let root = git(&["rev-parse", "--show-toplevel"])?;
+    let porcelain = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "--untracked-files=all"])
+        .current_dir(root.trim())
+        .output()
+        .map_err(|e| format!("git status: {e}"))?;
+    if !porcelain.status.success() {
+        return Err("git status failed".to_owned());
+    }
+    let dirty = dirty_engine_inputs(&String::from_utf8_lossy(&porcelain.stdout));
+    if !dirty.is_empty() {
+        return Err(format!(
+            "engine inputs have uncommitted changes; commit them before writing a baseline:\n{}",
+            dirty.join("\n")
+        ));
+    }
+    let rev = git(&["rev-parse", "HEAD"])?.trim().to_owned();
+    if rev.is_empty() {
+        return Err("git rev-parse HEAD returned nothing".to_owned());
+    }
+    Ok(rev)
 }
 
 fn render_baseline(rev: &str, challenge_sha: &str, aggs: &[(String, Agg)]) -> String {
@@ -268,7 +348,24 @@ struct Baseline {
     chrf: BTreeMap<String, f64>,
 }
 
-fn parse_baseline(text: &str) -> Baseline {
+/// Every aggregate key a run over `rows` produces: overall, both sets, each dev phenomenon.
+fn expected_keys(rows: &[Row]) -> Vec<String> {
+    let mut keys = vec![
+        "overall".to_owned(),
+        "set/dev".to_owned(),
+        "set/test".to_owned(),
+    ];
+    let phenomena: std::collections::BTreeSet<&str> = rows
+        .iter()
+        .filter(|r| r.set == Split::Dev)
+        .map(|r| r.phenomenon.as_str())
+        .collect();
+    keys.extend(phenomena.into_iter().map(|p| format!("dev/{p}")));
+    keys
+}
+
+/// Parses `baseline.tsv` and requires exactly the `expected` keys, each once, each finite.
+fn parse_baseline(text: &str, expected: &[String]) -> Result<Baseline, String> {
     let mut challenge_sha = String::new();
     let mut chrf = BTreeMap::new();
     for line in text.lines() {
@@ -283,13 +380,37 @@ fn parse_baseline(text: &str) -> Baseline {
         let value: f64 = cols
             .get(2)
             .and_then(|v| v.parse().ok())
-            .unwrap_or_else(|| panic!("bad baseline line: {line:?}"));
-        chrf.insert(cols[0].to_owned(), value);
+            .ok_or_else(|| format!("bad baseline line: {line:?}"))?;
+        if !value.is_finite() {
+            return Err(format!("non-finite chrF in baseline line: {line:?}"));
+        }
+        if chrf.insert(cols[0].to_owned(), value).is_some() {
+            return Err(format!("duplicate baseline key {:?}", cols[0]));
+        }
     }
-    Baseline {
+    if challenge_sha.is_empty() {
+        return Err("baseline has no challenge_sha256 line".to_owned());
+    }
+    let missing: Vec<&str> = expected
+        .iter()
+        .filter(|k| !chrf.contains_key(k.as_str()))
+        .map(String::as_str)
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!("baseline is missing keys: {}", missing.join(", ")));
+    }
+    let unknown: Vec<&str> = chrf
+        .keys()
+        .filter(|k| !expected.contains(k))
+        .map(String::as_str)
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!("baseline has unknown keys: {}", unknown.join(", ")));
+    }
+    Ok(Baseline {
         challenge_sha,
         chrf,
-    }
+    })
 }
 
 fn env_flag(name: &str) -> bool {
@@ -305,8 +426,106 @@ fn chrf_metric_sanity() {
     assert!(partial > 0.0 && partial < 100.0);
     // Recall is weighted more than precision (beta = 2).
     assert!(chrf("我去", "我去。") < chrf("我去。。", "我去。"));
+}
+
+#[test]
+fn kana_detection_covers_halfwidth_katakana() {
     assert!(has_kana("東京へ"));
+    assert!(has_kana("コーヒー"));
+    assert!(has_kana("ｺｰﾋｰ"));
+    assert!(has_kana("咖啡ｺ"));
     assert!(!has_kana("東京ー"));
+    assert!(!has_kana("咖啡・紅茶"));
+}
+
+const TEST_HEADER_ROW: &str = "jz1\tdev\tdaily\tnegation\t行かない。\t不去。\t";
+
+fn challenge_with(row: &str) -> String {
+    format!("{HEADER}\n{row}\n")
+}
+
+#[test]
+fn challenge_rejects_blank_primary_reference() {
+    assert!(parse_challenge(&challenge_with(TEST_HEADER_ROW)).is_ok());
+    for primary in ["", "   ", "\u{3000}"] {
+        let row = format!("jz1\tdev\tdaily\tnegation\t行かない。\t{primary}\t不去。");
+        let err = parse_challenge(&challenge_with(&row)).err();
+        assert!(
+            err.as_deref()
+                .is_some_and(|e| e.contains("empty primary reference")),
+            "primary {primary:?}: {err:?}"
+        );
+    }
+    // An empty or blank alt reference is allowed and ignored.
+    for alt in ["", " "] {
+        let row = format!("jz1\tdev\tdaily\tnegation\t行かない。\t不去。\t{alt}");
+        let rows = parse_challenge(&challenge_with(&row)).unwrap();
+        assert_eq!(rows[0].refs, vec!["不去。".to_owned()]);
+    }
+}
+
+fn sample_rows() -> Vec<Row> {
+    let text =
+        format!("{HEADER}\n{TEST_HEADER_ROW}\njz2\ttest\tdaily\tpassive\t盗まれた。\t被偷了。\t\n");
+    parse_challenge(&text).unwrap()
+}
+
+#[test]
+fn baseline_requires_every_key_once_and_finite() {
+    let rows = sample_rows();
+    let expected = expected_keys(&rows);
+    assert_eq!(expected, ["overall", "set/dev", "set/test", "dev/negation"]);
+    let head = "# challenge_sha256\tabc\nkey\tn\tchrf\texact_pct\tkana_left\tpassthrough\terrors\n";
+    let good = format!(
+        "{head}overall\t2\t10.00\t0\t0\t0\t0\nset/dev\t1\t10.00\t0\t0\t0\t0\n\
+         set/test\t1\t10.00\t0\t0\t0\t0\ndev/negation\t1\t10.00\t0\t0\t0\t0\n"
+    );
+    assert!(parse_baseline(&good, &expected).is_ok());
+
+    // Right hash, no rows.
+    assert!(parse_baseline(head, &expected).is_err());
+    // A missing key.
+    let missing = good.replace("dev/negation\t1\t10.00\t0\t0\t0\t0\n", "");
+    assert!(parse_baseline(&missing, &expected).is_err());
+    // A duplicate key.
+    let dup = format!("{good}overall\t2\t10.00\t0\t0\t0\t0\n");
+    assert!(parse_baseline(&dup, &expected).is_err());
+    // An unknown key.
+    let unknown = format!("{good}dev/idioms\t1\t10.00\t0\t0\t0\t0\n");
+    assert!(parse_baseline(&unknown, &expected).is_err());
+    // Non-finite scores.
+    for bad in ["NaN", "inf", "-inf"] {
+        let text = good.replacen("overall\t2\t10.00", &format!("overall\t2\t{bad}"), 1);
+        assert!(parse_baseline(&text, &expected).is_err(), "{bad}");
+    }
+    // No hash line.
+    let no_hash = good.replace("# challenge_sha256\tabc\n", "");
+    assert!(parse_baseline(&no_hash, &expected).is_err());
+}
+
+#[test]
+fn dirty_engine_inputs_block_baseline_but_eval_files_do_not() {
+    let porcelain = concat!(
+        " M crates/faberline-nlp-translate/tests/ja_zh_eval.rs\n",
+        "?? crates/faberline-nlp-translate/tests/data/ja_zh/baseline.tsv\n",
+        " M README.md\n",
+    );
+    assert!(dirty_engine_inputs(porcelain).is_empty());
+    let porcelain = concat!(
+        " M crates/faberline-nlp-translate/src/lib.rs\n",
+        "?? crates/faberline-nlp/lexicon/data/new.tsv\n",
+        "R  crates/faberline-nlp/src/a.rs -> crates/faberline-nlp/src/b.rs\n",
+        " M crates/faberline-nlp-translate/tests/ja_zh_eval.rs\n",
+    );
+    assert_eq!(
+        dirty_engine_inputs(porcelain),
+        [
+            "crates/faberline-nlp-translate/src/lib.rs",
+            "crates/faberline-nlp/lexicon/data/new.tsv",
+            "crates/faberline-nlp/src/a.rs",
+            "crates/faberline-nlp/src/b.rs",
+        ]
+    );
 }
 
 #[test]
@@ -314,7 +533,7 @@ fn ja_zh_hant_challenge_ratchet() {
     let dir = data_dir();
     let challenge = std::fs::read_to_string(dir.join("challenge.tsv")).expect("read challenge.tsv");
     let challenge_sha = sha256_hex(&challenge);
-    let rows = parse_challenge(&challenge);
+    let rows = parse_challenge(&challenge).unwrap_or_else(|e| panic!("{e}"));
     let glossary = TranslationGlossary::new();
     let verbose = env_flag("JA_ZH_EVAL_VERBOSE");
 
@@ -354,16 +573,20 @@ fn ja_zh_hant_challenge_ratchet() {
 
     let baseline_path = dir.join("baseline.tsv");
     if env_flag("JA_ZH_EVAL_WRITE_BASELINE") {
-        let text = render_baseline(&engine_revision(), &challenge_sha, &aggs);
+        let rev = clean_engine_revision().unwrap_or_else(|e| panic!("{e}"));
+        let text = render_baseline(&rev, &challenge_sha, &aggs);
         std::fs::write(&baseline_path, text).expect("write baseline.tsv");
         println!("wrote {}", baseline_path.display());
         return;
     }
 
+    let expected = expected_keys(&rows);
     let baseline = parse_baseline(
         &std::fs::read_to_string(&baseline_path)
             .expect("read baseline.tsv (run with JA_ZH_EVAL_WRITE_BASELINE=1 to create it)"),
-    );
+        &expected,
+    )
+    .unwrap_or_else(|e| panic!("baseline.tsv: {e}"));
     assert_eq!(
         baseline.challenge_sha, challenge_sha,
         "challenge.tsv changed since baseline.tsv was written; \
@@ -371,10 +594,11 @@ fn ja_zh_hant_challenge_ratchet() {
     );
     let current: BTreeMap<&str, f64> = aggs.iter().map(|(k, a)| (k.as_str(), a.chrf())).collect();
     let mut failures = Vec::new();
-    for (key, &base) in &baseline.chrf {
+    for key in &expected {
+        let base = baseline.chrf[key];
         match current.get(key.as_str()) {
             None => failures.push(format!("{key}: missing from this run")),
-            Some(&now) if now + CHRF_TOLERANCE < base => {
+            Some(&now) if !now.is_finite() || now + CHRF_TOLERANCE < base => {
                 failures.push(format!("{key}: chrF {now:.2} < baseline {base:.2}"));
             }
             Some(_) => {}

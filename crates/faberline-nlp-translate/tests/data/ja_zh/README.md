@@ -29,6 +29,9 @@ id	set	genre	phenomenon	ja	zh_hant	zh_hant_alt
 - `zh_hant`: the main reference, natural Traditional Chinese as written in Taiwan.
 - `zh_hant_alt`: a second acceptable reference. It may be empty.
 
+The runner rejects a row whose source or primary reference is empty after whitespace removal
+(an empty reference would give an empty output a chrF of 100). A blank alt reference is ignored.
+
 No tab or newline inside a field.
 
 ## Metric
@@ -37,7 +40,8 @@ No tab or newline inside a field.
   Precision and recall are averaged over the n-gram orders the reference has.
   The score of a row is the best score over its references.
 - Exact match: the trimmed output equals one reference.
-- `kana_left`: the output still contains hiragana or katakana (`ー` and `・` do not count).
+- `kana_left`: the output still contains hiragana, katakana or halfwidth katakana
+  (fullwidth `ー` and `・` do not count).
 - `passthrough`: the output equals the source, or the engine reports `TranslationTrack::Passthrough`.
 - Averages are reported overall, per set, and per phenomenon for `dev` rows only.
 
@@ -66,7 +70,9 @@ JA_ZH_EVAL_VERBOSE=1 cargo test -p faberline-nlp-translate --test ja_zh_eval -- 
 
 The test fails when a chrF number in `baseline.tsv` (overall, a set, or a `dev` phenomenon)
 is lower in this run by more than 0.5. It also fails when `challenge.tsv` changed after the
-baseline was written (the baseline stores its SHA-256).
+baseline was written (the baseline stores its SHA-256), and when `baseline.tsv` is not exactly
+one finite chrF row for each aggregate key (`overall`, `set/dev`, `set/test`, one `dev/<phenomenon>`
+per phenomenon), without duplicates or unknown keys.
 
 ## How to update the baseline
 
@@ -77,7 +83,11 @@ JA_ZH_EVAL_WRITE_BASELINE=1 cargo test -p faberline-nlp-translate --test ja_zh_e
 ```
 
 Commit `baseline.tsv` with the change. It records the engine revision (`git rev-parse HEAD`
-at the time of writing) and the hash of `challenge.tsv`. A baseline that lowers a number needs
+at the time of writing) and the hash of `challenge.tsv`. Writing fails when an engine input
+(`crates/faberline-nlp-translate/src/`, `crates/faberline-nlp/src/`, `crates/faberline-nlp/lexicon/`,
+`crates/faberline-nlp-narrative/src/`) has uncommitted or untracked changes, so the recorded
+revision always names the engine that produced the numbers. Commit the engine change first.
+Uncommitted evaluation files do not block writing. A baseline that lowers a number needs
 a reason in the PR description.
 
 ## Licence rule for sentences

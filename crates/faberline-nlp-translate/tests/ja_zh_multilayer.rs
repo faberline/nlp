@@ -69,6 +69,96 @@ fn actor_glossary(alice: &str) -> TranslationGlossary {
 }
 
 #[test]
+fn shinjitai_fallback_keeps_word_glosses_and_mixed_script_terms() {
+    for (source, target, expected) in [
+        ("私は製糸を見る。", TargetVariant::ZhHant, "我看製絲。"),
+        ("私は塩を見る。", TargetVariant::ZhHant, "我看鹽。"),
+        ("私は塩を見る。", TargetVariant::ZhHans, "我看盐。"),
+        ("私は鉄を見る。", TargetVariant::ZhHant, "我看鐵。"),
+        ("私は鉄を見る。", TargetVariant::ZhHans, "我看铁。"),
+        ("私はガス灯を見る。", TargetVariant::ZhHant, "我看ガス灯。"),
+        ("私はガス灯を見る。", TargetVariant::ZhHans, "我看ガス灯。"),
+        (
+            "私は駅で新聞を読む。",
+            TargetVariant::ZhHant,
+            "我在車站讀報紙。",
+        ),
+        (
+            "私は駅で新聞を読む。",
+            TargetVariant::ZhHans,
+            "我在车站读报纸。",
+        ),
+        ("「私は塩を見る。」", TargetVariant::ZhHant, "「我看鹽。」"),
+        ("「私は塩を見る。」", TargetVariant::ZhHans, "“我看盐。”"),
+    ] {
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(target),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert_eq!(doc.target_text, expected, "{source}");
+    }
+}
+
+#[test]
+fn shinjitai_fallback_preserves_locked_names_and_scalar_spans() {
+    let source = "私は `𠮷塩` を見る、斎藤は塩を見る。";
+    for (target, expected) in [
+        (TargetVariant::ZhHant, "我看`𠮷塩`，斎藤看鹽。"),
+        (TargetVariant::ZhHans, "我看`𠮷塩`，斎藤看盐。"),
+    ] {
+        let glossary = TranslationGlossary {
+            actors: vec![GlossaryEntry {
+                canonical: "斎藤".to_owned(),
+                surfaces: vec!["斎藤".to_owned()],
+                targets: BTreeMap::from([(target, "斎藤".to_owned())]),
+                ..GlossaryEntry::default()
+            }],
+            ..TranslationGlossary::new()
+        };
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(target),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert_eq!(doc.target_text, expected);
+        assert_eq!(doc.glossary_hits.len(), 1);
+        let hit = &doc.glossary_hits[0];
+        assert_eq!(slice_chars(source, hit.source_span), "斎藤");
+        assert_eq!(slice_chars(&doc.target_text, hit.target_span), "斎藤");
+        let opaque = doc
+            .opaque_spans
+            .iter()
+            .find(|op| slice_chars(source, op.source_span) == "`𠮷塩`")
+            .unwrap();
+        assert_eq!(
+            slice_chars(&doc.target_text, opaque.target_span.unwrap()),
+            "`𠮷塩`"
+        );
+        assert_eq!(
+            doc.clause_alignments
+                .iter()
+                .map(|clause| slice_chars(&doc.target_text, clause.target_span))
+                .collect::<String>(),
+            doc.target_text
+        );
+        assert!(
+            doc.clause_alignments
+                .iter()
+                .any(|clause| slice_chars(source, clause.source_span).contains("斎藤は塩を見る"))
+        );
+    }
+}
+
+#[test]
 fn clause_spans_follow_glossary_replacement_and_space_cleanup() {
     let source = "アリスは本を読む、ボブは手紙を書く。";
     for (replacement, expected_name) in [

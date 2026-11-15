@@ -7982,63 +7982,13 @@ fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upo
 
     // 3. Pure Han kanji compound fallback: map Japanese Shinjitai -> Traditional Han, then
     //    convert to zh-Hant.
-    if surface.chars().all(is_han) {
-        let mapped: String = surface.chars().map(map_ja_shinjitai_char).collect();
+    if !surface.is_empty() && surface.chars().all(is_han) {
+        let mapped = faberline_nlp::lexicon::ja::map_ja_shinjitai(surface);
         return convert_zh_text_to_target(&mapped, TargetVariant::ZhHant);
     }
 
     // 4. Fallback: preserve surface.
     surface.to_owned()
-}
-
-fn map_ja_shinjitai_char(c: char) -> char {
-    match c {
-        '図' => '圖',
-        '読' => '讀',
-        '国' => '國',
-        '学' => '學',
-        '駅' => '站',
-        '気' => '氣',
-        '声' => '聲',
-        '体' => '體',
-        '髪' => '髮',
-        '黒' => '黑',
-        '広' => '廣',
-        '楽' => '樂',
-        '変' => '變',
-        '恋' => '戀',
-        '悪' => '惡',
-        '帰' => '歸',
-        '絵' => '繪',
-        '売' => '賣',
-        '昼' => '晝',
-        '豊' => '豐',
-        '静' => '靜',
-        '触' => '觸',
-        '届' => '屆',
-        '絶' => '絕',
-        '続' => '續',
-        '残' => '殘',
-        '遅' => '遲',
-        '辺' => '邊',
-        '抜' => '拔',
-        '揺' => '搖',
-        '乱' => '亂',
-        '余' => '餘',
-        '亀' => '龜',
-        '茎' => '莖',
-        '顔' => '顏',
-        '薬' => '藥',
-        '痴' => '癡',
-        '沢' => '澤',
-        '実' => '實',
-        '宝' => '寶',
-        '剣' => '劍',
-        '戦' => '戰',
-        '竜' => '龍',
-        '桜' => '櫻',
-        _ => c,
-    }
 }
 
 fn lookup_curated_ja_word(s: &str) -> Option<&'static str> {
@@ -8349,4 +8299,36 @@ fn lookup_curated_ja_word(s: &str) -> Option<&'static str> {
         "場" => "場所",
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod shinjitai_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn unglossed_han_terms_use_shared_glyph_forms() {
+        assert_eq!(
+            translate_single_ja_term("製糸", None, Some(Upos::Noun)),
+            "製絲"
+        );
+        assert_eq!(
+            translate_single_ja_term("𠀀糸", None, Some(Upos::Noun)),
+            "𠀀絲"
+        );
+    }
+
+    #[test]
+    fn glyph_fallback_keeps_word_glosses_and_non_han_surfaces() {
+        assert_eq!(
+            translate_single_ja_term("駅", None, Some(Upos::Noun)),
+            "車站"
+        );
+        assert_eq!(
+            translate_single_ja_term("未登録かな", Some("読む"), Some(Upos::Verb)),
+            "讀"
+        );
+        for surface in ["糸かな", "糸A", "糸한", "𠀀", ""] {
+            assert_eq!(translate_single_ja_term(surface, None, None), surface);
+        }
+    }
 }

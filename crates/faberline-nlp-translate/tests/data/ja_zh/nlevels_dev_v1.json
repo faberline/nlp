@@ -1,0 +1,415 @@
+{
+  "title": "Supplemental independent ja-to-zh-Hant N1-N5 QA draft",
+  "provenance": {
+    "author_role": "Luna (gpt-6-luna), independent QA author",
+    "japanese_sentence_provenance": "Original Japanese sentences composed for this development bank by the AI-assisted independent QA author; no JLPT exam, textbook, game, or other external sentence text was copied.",
+    "reference_provenance": "Traditional Chinese (Taiwan) references and allowed variants are provisional, AI-assisted QA-author drafts. They are candidate references for independent human review, not model suggestions treated as gold and not yet formally adopted.",
+    "data_license": "first_party_mit",
+    "source_material": "No external sentence or gloss source was used. Official JLPT level summaries informed only approximate difficulty labels.",
+    "level_sources": [
+      "https://www.jlpt.jp/e/about/levelsummary.html",
+      "https://www.jlpt.jp/about/levelsummary.html"
+    ]
+  },
+  "progress_criteria": {
+    "per_batch": [
+      "Freeze an independently authored supplemental batch before engine or lexicon changes that it evaluates.",
+      "Review every item for natural Japanese, intended reading, level approximation, and Taiwan Traditional Chinese acceptability. Record reviewer roles and whether each review is AI-assisted or human. Formal adoption requires independent Codex and Antigravity agent review; those reviews are not complete until recorded. Human calibration remains open.",
+      "Report counts by level and phenomenon, all changed items, and aggregate metrics only where the existing policy requires that limit; never inspect or report test rows.",
+      "Require no semantic inversion, participant/direction error, omitted negation, or modality/scope error in reviewed items. Record lesser lexical/style issues separately.",
+      "Keep the historical baseline and ratchet intact. Supplemental results are additive and cannot lower or replace the old baseline."
+    ],
+    "final_joint_signoff": "Formal adoption requires independent Codex and Antigravity agent review of engine and lexicon coverage, respectively; those reviews are not complete until recorded. The QA author checks semantic intent and provenance; root decides whether to adopt the exact bank and evidence. Agent reviews are not human reviews. Human calibration remains open. A 20-item smoke set is a regression signal only, not proof of N1-N5 quality. Broader evidence should add stratified review and multiple natural contexts per phenomenon, while preserving the old baseline and ratchet, plus separate CLI/package checks for macOS and Windows by the responsible owners."
+  },
+  "items": [
+    {
+      "id": "L5-01",
+      "level": "N5 approx",
+      "jp": "私は毎朝、水を飲みます。",
+      "zh_hant": "我每天早上喝水。",
+      "allowed_variants": [
+        "我每天早晨喝水。"
+      ],
+      "semantic_checks": [
+        "speaker is the subject",
+        "habitual action occurs every morning",
+        "water is the object"
+      ],
+      "pair": "L5-02",
+      "pair_reason": "Same simple daily context; negative control checks negation without changing participants.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L5-02",
+      "level": "N5 approx",
+      "jp": "私は毎朝、水を飲みません。",
+      "zh_hant": "我每天早上不喝水。",
+      "allowed_variants": [
+        "我每天早晨不喝水。"
+      ],
+      "semantic_checks": [
+        "speaker is the subject",
+        "habitual action is negated",
+        "do not change to past tense"
+      ],
+      "pair": "L5-01",
+      "pair_reason": "Minimal polarity pair with L5-01.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L5-03",
+      "level": "N5 approx",
+      "jp": "田中さんは昨日、学校へ行きました。",
+      "zh_hant": "田中昨天去了學校。",
+      "allowed_variants": [
+        "田中昨天到學校去了。"
+      ],
+      "semantic_checks": [
+        "Tanaka is the traveler",
+        "past event",
+        "destination is school"
+      ],
+      "pair": "L5-04",
+      "pair_reason": "Same subject and destination; direction/polarity control.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L5-04",
+      "level": "N5 approx",
+      "jp": "田中さんは昨日、学校へ行きませんでした。",
+      "zh_hant": "田中昨天沒有去學校。",
+      "allowed_variants": [
+        "田中昨天沒去學校。"
+      ],
+      "semantic_checks": [
+        "Tanaka is the traveler",
+        "past event is negated",
+        "destination remains school"
+      ],
+      "pair": "L5-03",
+      "pair_reason": "Minimal past-negation pair with L5-03.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L4-01",
+      "level": "N4 approx",
+      "jp": "雨が降っているので、今日は家で勉強します。",
+      "zh_hant": "因為正在下雨，今天會在家讀書。",
+      "allowed_variants": [
+        "因為下著雨，今天會在家學習。"
+      ],
+      "semantic_checks": [
+        "雨正在下，這是原因",
+        "今天在家讀書",
+        "原句未明示主語，中文不補出特定人物"
+      ],
+      "pair": "L4-02",
+      "pair_reason": "Same causal frame; distinguishes ongoing event and future intention.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L4-02",
+      "level": "N4 approx",
+      "jp": "雨が降っているので、今日は家で勉強するつもりです。",
+      "zh_hant": "因為正在下雨，打算今天在家讀書。",
+      "allowed_variants": [
+        "因為下著雨，打算今天在家學習。"
+      ],
+      "semantic_checks": [
+        "雨正在下，這是原因",
+        "有人打算今天在家讀書",
+        "原句未明示意圖者，中文不指定人物"
+      ],
+      "pair": "L4-01",
+      "pair_reason": "Adds explicit intention to L4-01; checks modality/aspect distinction.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L4-03",
+      "level": "N4 approx",
+      "jp": "駅まで歩いて、友達に会いました。",
+      "zh_hant": "走到車站後，遇見了朋友。",
+      "allowed_variants": [
+        "步行到車站後，見到了朋友。"
+      ],
+      "semantic_checks": [
+        "移動的目的地是車站",
+        "之後發生與朋友見面的事件",
+        "原句未明示主語；て連接未必表示「步行途中」或明確相遇地點"
+      ],
+      "pair": "L4-04",
+      "pair_reason": "Same event frame with destination/starting-point contrast.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L4-04",
+      "level": "N4 approx",
+      "jp": "駅から歩いて、友達に会いました。",
+      "zh_hant": "從車站出發，步行一段路後見到了朋友。",
+      "allowed_variants": [
+        "從車站步行一段路後，遇見了朋友。"
+      ],
+      "semantic_checks": [
+        "移動從車站開始",
+        "步行之後發生與朋友見面的事件",
+        "原句未明示主語或相遇地點；不指定相遇者身份或見面地點"
+      ],
+      "pair": "L4-03",
+      "pair_reason": "Particle contrast tests direction/source interpretation.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L3-01",
+      "level": "N3 approx",
+      "jp": "電車が遅れたため、会議の開始時刻までに間に合いませんでした。",
+      "zh_hant": "因為電車誤點，沒能在會議開始前趕到。",
+      "allowed_variants": [
+        "由於電車延誤，沒能及時趕上會議。"
+      ],
+      "semantic_checks": [
+        "電車誤點是未能趕上的原因",
+        "未能在會議開始前及時趕到",
+        "原句未明示未能趕到者，中文不補出特定人物"
+      ],
+      "pair": "L3-02",
+      "pair_reason": "Contrasts cause plus failure with concession plus success in L3-02; checks causal/concessive relation and polarity, not a change in the cause.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L3-02",
+      "level": "N3 approx",
+      "jp": "電車が遅れたものの、会議の開始時刻までに間に合いました。",
+      "zh_hant": "雖然電車誤點，仍及時趕上了會議。",
+      "allowed_variants": [
+        "電車雖然延誤，還是及時趕上了會議。"
+      ],
+      "semantic_checks": [
+        "即使電車誤點，仍及時趕上會議；保留「在會議開始時刻前趕上」的時間界線",
+        "ものの表達讓步；趕上是成功結果，不是未能趕上",
+        "原句省略趕上者，中文不補出特定人物"
+      ],
+      "pair": "L3-01",
+      "pair_reason": "Contrasts L3-01 cause plus failure with concession plus success; checks causal/concessive relation and polarity, not は-scope.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L3-03",
+      "level": "N3 approx",
+      "jp": "この薬を飲んでから、せきが少しずつ治ってきました。",
+      "zh_hant": "服用這種藥之後，咳嗽逐漸好轉。",
+      "allowed_variants": [
+        "吃了這種藥後，咳嗽慢慢好起來。"
+      ],
+      "semantic_checks": [
+        "先服用這種藥，之後咳嗽逐漸好轉",
+        "不表示完全痊癒",
+        "原句未明示服藥者，中文不補出特定人物"
+      ],
+      "pair": "L3-04",
+      "pair_reason": "Aspect contrast: gradual improvement versus completed improvement.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L3-04",
+      "level": "N3 approx",
+      "jp": "この薬を飲んでから、せきが治りました。",
+      "zh_hant": "服用這種藥之後，咳嗽好了。",
+      "allowed_variants": [
+        "吃了這種藥後，咳嗽痊癒了。"
+      ],
+      "semantic_checks": [
+        "先服用這種藥，之後咳嗽好轉至痊癒",
+        "描述結果，不只是逐漸好轉",
+        "原句未明示服藥者，中文不補出特定人物"
+      ],
+      "pair": "L3-03",
+      "pair_reason": "Completed-result contrast with L3-03.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L2-01",
+      "level": "N2 approx",
+      "jp": "資料を先に共有しておけば、会議では細部の確認に時間をかけずに済む。",
+      "zh_hant": "如果事先分享資料，開會時就不必花時間確認細節。",
+      "allowed_variants": [
+        "若先分享資料，會議中便能省下確認細節的時間。"
+      ],
+      "semantic_checks": [
+        "sharing materials beforehand is a condition",
+        "result is avoiding time spent on detail checks",
+        "do not imply no meeting"
+      ],
+      "pair": "L2-02",
+      "pair_reason": "Counterfactual planning control; tests conditional result and negated necessity.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L2-02",
+      "level": "N2 approx",
+      "jp": "資料を先に共有しておいても、会議では細部の確認に時間をかける必要がある。",
+      "zh_hant": "即使事先分享資料，開會時仍有必要花時間確認細節。",
+      "allowed_variants": [
+        "就算先分享資料，會議中還是得花時間確認細節。"
+      ],
+      "semantic_checks": [
+        "advance sharing does not remove the need",
+        "meeting detail checks still require time",
+        "preserve concession"
+      ],
+      "pair": "L2-01",
+      "pair_reason": "Concession and necessity contrast with L2-01.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L2-03",
+      "level": "N2 approx",
+      "jp": "担当者が確認し次第、結果を関係者に知らせることになっています。",
+      "zh_hant": "負責人一確認完，就會依安排通知相關人員結果。",
+      "allowed_variants": [
+        "負責人確認後，按規定會將結果通知相關人員。"
+      ],
+      "semantic_checks": [
+        "確認之後通知結果",
+        "句子表示既定安排",
+        "日文主句省略通知者；中文不把通知者指定為負責人"
+      ],
+      "pair": "L2-04",
+      "pair_reason": "Same process; changes whether it is a standing arrangement or an unresolved intention.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L2-04",
+      "level": "N2 approx",
+      "jp": "担当者が確認し次第、結果を関係者に知らせるつもりです。",
+      "zh_hant": "負責人一確認完，我打算通知相關人員結果。",
+      "allowed_variants": [
+        "等負責人確認後，我預計通知相關人員結果。"
+      ],
+      "semantic_checks": [
+        "確認之後通知結果",
+        "句子表示說話者的打算，但未說明說話者身份",
+        "不把個人打算改成既定程序"
+      ],
+      "pair": "L2-03",
+      "pair_reason": "Intention/procedure modality contrast with L2-03.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L1-01",
+      "level": "N1 approx",
+      "jp": "制度の見直しが先送りされたからといって、現場の負担が軽くなったわけではない。",
+      "zh_hant": "不能因為制度檢討延期，就說工作現場的負擔減輕了。",
+      "allowed_variants": [
+        "制度檢討雖然延後，並不代表工作現場的負擔因此減輕。"
+      ],
+      "semantic_checks": [
+        "制度檢討延期不代表實際工作現場的負擔減輕",
+        "否定「延期所以負擔減輕」的推論",
+        "保留からといって所表達的推論否定；不指定現場職種"
+      ],
+      "pair": "L1-02",
+      "pair_reason": "Same discourse claim with distinct causal premise; tests scope and idiomatic inference.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L1-02",
+      "level": "N1 approx",
+      "jp": "制度の見直しが延期された以上、現場の負担が軽くなるとは限らない。",
+      "zh_hant": "既然制度檢討延期，工作現場的負擔也未必會減輕。",
+      "allowed_variants": [
+        "制度檢討既已延後，工作現場的負擔不見得會因此減輕。"
+      ],
+      "semantic_checks": [
+        "以制度檢討延期為前提，工作現場負擔減輕並無保證",
+        "とは限らない是「未必」，不是「不可能」",
+        "不推成負擔一定增加；不指定現場職種"
+      ],
+      "pair": "L1-01",
+      "pair_reason": "Not-necessarily modality contrasts with rejected inference in L1-01.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L1-03",
+      "level": "N1 approx",
+      "jp": "責任者の説明は、事実関係を認めたようでいて、肝心な判断の経緯には触れていなかった。",
+      "zh_hant": "負責人的說明看似承認了事實，卻沒有提到關鍵決策的經過。",
+      "allowed_variants": [
+        "負責人的說法表面上像是承認事實，實際上並未交代關鍵判斷的過程。"
+      ],
+      "semantic_checks": [
+        "surface appearance of acknowledging facts",
+        "contrast: key decision process omitted",
+        "register is measured and critical, not slangy"
+      ],
+      "pair": "L1-04",
+      "pair_reason": "Contrastive appearance versus actual disclosure, paired with register/scope control.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    },
+    {
+      "id": "L1-04",
+      "level": "N1 approx",
+      "jp": "責任者の説明は、事実関係を認めたうえで、肝心な判断の経緯にも触れていた。",
+      "zh_hant": "負責人在說明中承認事實，也提到了關鍵決策的經過。",
+      "allowed_variants": [
+        "負責人的說明承認了事實，並且也交代了關鍵判斷的過程。"
+      ],
+      "semantic_checks": [
+        "facts are acknowledged",
+        "key decision process is also addressed",
+        "うえで is additive/sequential here, not concession"
+      ],
+      "pair": "L1-03",
+      "pair_reason": "Explicit additive disclosure contrasts with apparent acknowledgment and omission in L1-03.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original Japanese QA sentence; provisional AI-assisted Taiwan Traditional Chinese reference/variants; first_party_mit."
+    }
+  ],
+  "schema": "faberline.nlp.ja_zh.nlevels_dev.v1",
+  "version": "1.0.0-dev.1",
+  "bank_status": "development-visible",
+  "dataset_policy": {
+    "visibility": "Development data. Every row is visible to developers and evaluators.",
+    "heldout": false,
+    "relation_to_existing_data": "Supplemental to the existing challenge data and baseline. This file does not modify or replace either one and does not lower the old baseline.",
+    "use_limit": "Do not present this 20-item smoke bank as proof that any complete JLPT level is passed or that the N1-N5 goal is closed."
+  }
+}

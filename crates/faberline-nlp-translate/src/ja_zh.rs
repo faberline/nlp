@@ -4110,9 +4110,7 @@ fn translate_clause_bunsetsus(
             subj_entries = rem_subjs;
         } else if objs.is_empty()
             && !subj_entries.is_empty()
-            && (subj_entries.iter().all(|s| s.had_ga)
-                || move_item_topic
-                || (negative_existence && subj_entries.iter().any(|s| s.had_ga)))
+            && (move_item_topic || subj_entries.iter().any(|s| s.had_ga))
         {
             subj_entries.retain(|s| {
                 if s.had_ga || move_item_topic {

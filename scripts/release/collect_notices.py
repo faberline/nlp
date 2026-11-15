@@ -64,7 +64,11 @@ for ident in sorted(seen):
         if not entry['files'] and key in recovered:
             revision, path, digest = recovered[key]
             assert entry.get('vcs', {}).get('git', {}).get('sha1') == revision
-            assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+            actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            assert actual_digest == digest, (
+                f'recovered notice mismatch: {package["name"]} {package["version"]} '
+                f'{path.name}: expected {digest}, actual {actual_digest}'
+            )
             dest = out / 'dependencies' / (package['name'] + '-' + package['version']) / path.name
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, dest)

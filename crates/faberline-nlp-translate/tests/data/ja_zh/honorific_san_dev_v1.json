@@ -1,0 +1,249 @@
+{
+  "title": "Supplemental ja-to-zh-Hant gender-neutral さん QA bank",
+  "schema": "faberline.nlp.ja_zh.honorific_san_dev.v1",
+  "version": "1.0.0",
+  "status": "development-visible supplemental QA data",
+  "adoption_status_source": "The separate data-only PR is the record of review and adoption; this file does not assert approval status.",
+  "author_role": "Luna (gpt-6-luna), independent QA author",
+  "provenance": {
+    "sentence_provenance": "Original Japanese sentences composed by the AI-assisted independent QA author for this draft; no exam, textbook, game, or other external sentence text was copied.",
+    "reference_provenance": "Provisional Taiwan Traditional Chinese renderings and variants, drafted by the independent QA author; not model gold. The separate data-only PR records independent review and adoption.",
+    "data_license": "first_party_mit",
+    "external_gloss_source": "None used.",
+    "level_note": "Approximate sentence difficulty only; not JLPT questions and not JLPT certification.",
+    "visibility": "Development-visible; not held out."
+  },
+  "purpose": "Probe when Japanese さん attached to a personal name should not cause Chinese translation to assert gender, while nearby forms that explicitly state gender, a title, kinship, occupation, or an ordinary lexical word retain that information.",
+  "items": [
+    {
+      "id": "HS-01",
+      "level_approx": "N5",
+      "jp": "佐藤さんが受付にいます。",
+      "zh_hant": "佐藤在櫃檯。",
+      "allowed_variants": [
+        "佐藤在接待處。"
+      ],
+      "semantic_checks": [
+        "佐藤這個人位於櫃檯或接待處",
+        "日文未提供此人的性別",
+        "不增譯先生、小姐、女士或其他性別稱謂"
+      ],
+      "pair": "HS-02",
+      "pair_reason": "同一姓名和地點，配對否定句，檢查 さん 的性別中立處理不改變否定。",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-02",
+      "level_approx": "N5",
+      "jp": "佐藤さんは受付にいません。",
+      "zh_hant": "佐藤不在櫃檯。",
+      "allowed_variants": [
+        "佐藤不在接待處。"
+      ],
+      "semantic_checks": [
+        "佐藤不在櫃檯或接待處",
+        "否定現在存在",
+        "不從 さん 推斷性別"
+      ],
+      "pair": "HS-01",
+      "pair_reason": "與 HS-01 只改變肯定／否定；一般化規則應保留否定。",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-03",
+      "level_approx": "N4",
+      "jp": "さくらさんは先週、店長に電話しました。",
+      "zh_hant": "さくら上週打電話給店長。",
+      "allowed_variants": [
+        "Sakura 上週打電話給店長。"
+      ],
+      "semantic_checks": [
+        "姓名以平假名書寫，原文未提供對應漢字或性別",
+        "上週打電話給店長",
+        "不自行補出誰接聽或其他通話內容"
+      ],
+      "pair": "HS-04",
+      "pair_reason": "同一人物與通話對象，過去和未來時間對照；姓名以平假名呈現。",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-04",
+      "level_approx": "N4",
+      "jp": "さくらさんは来週、店長に電話します。",
+      "zh_hant": "さくら下週會打電話給店長。",
+      "allowed_variants": [
+        "Sakura 下週會打電話給店長。"
+      ],
+      "semantic_checks": [
+        "下週打電話給店長",
+        "日文非過去式配合未來時間，表示下週事件",
+        "原文未提供姓名漢字或性別"
+      ],
+      "pair": "HS-03",
+      "pair_reason": "與 HS-03 對照過去／未來時間，不應因 さん 的處理改變時間或姓名性別。",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-05",
+      "level_approx": "N4",
+      "jp": "アレックスさんが資料を読みました。",
+      "zh_hant": "亞歷克斯看了資料。",
+      "allowed_variants": [
+        "アレックス看了資料。",
+        "Alex 看了資料。"
+      ],
+      "semantic_checks": [
+        "アレックス是片假名姓名寫法；亞歷克斯是暫定中文音譯",
+        "Alex／アレックス是閱讀資料的人",
+        "過去肯定；さん未說明性別"
+      ],
+      "pair": "HS-06",
+      "pair_reason": "同名和同一份資料，搭配否定進行／結果表述作近控制，檢查肯定與否定。",
+      "rendering_notes": [
+        "Alex 是暫定羅馬字形式；日文片假名未指定唯一羅馬字拼法。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-06",
+      "level_approx": "N4",
+      "jp": "アレックスさんはその資料をまだ読んでいません。",
+      "zh_hant": "亞歷克斯還沒看那份資料。",
+      "allowed_variants": [
+        "アレックス還沒看那份資料。",
+        "Alex 還沒看那份資料。"
+      ],
+      "semantic_checks": [
+        "截至目前仍未讀那份資料",
+        "保留まだ與否定所表達的尚未狀態",
+        "不由名字或 さん 推斷性別"
+      ],
+      "pair": "HS-05",
+      "pair_reason": "與 HS-05 對照已閱讀和截至目前尚未閱讀；姓名改用片假名原形保存。",
+      "rendering_notes": [
+        "Alex 是暫定羅馬字形式；日文片假名未指定唯一羅馬字拼法。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-07",
+      "level_approx": "N4",
+      "jp": "男性の李さんが新しい担当者になりました。",
+      "zh_hant": "李姓男性成了新的負責人。",
+      "allowed_variants": [
+        "男性李姓人士成為了新任負責人。"
+      ],
+      "semantic_checks": [
+        "原文明示李姓此人是男性，不能把明示性別一律刪除",
+        "李成為新的負責人",
+        "不添加未提及的職稱或關係"
+      ],
+      "pair": "HS-08",
+      "pair_reason": "性別明示控制：與未提供性別的姓名 さん 例句不同，此句明確寫出男性。",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-08",
+      "level_approx": "N4",
+      "jp": "教師をしている李先生が、新しい担当者になりました。",
+      "zh_hant": "身為教師的李老師成了新的負責人。",
+      "allowed_variants": [
+        "李老師成為新的負責人。"
+      ],
+      "semantic_checks": [
+        "教師をしている明確表示李先生的職業是教師",
+        "李老師成為新的負責人",
+        "先生在此是教師職稱，不是 さん 的性別標記"
+      ],
+      "pair": "HS-07",
+      "pair_reason": "性別／稱謂控制：HS-07 明示男性但沒有職稱；本句以授課脈絡明確指教師，且不從先生推斷性別。",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-09",
+      "level_approx": "N5",
+      "jp": "お母さんは夕方に家に帰ります。",
+      "zh_hant": "媽媽傍晚會回家。",
+      "allowed_variants": [
+        "母親傍晚會回家。"
+      ],
+      "semantic_checks": [
+        "お母さん表示母親／媽媽的親屬關係",
+        "傍晚回家；目的地由家に明示",
+        "不可因字串含 さん 而將親屬關係刪去"
+      ],
+      "pair": "HS-10",
+      "pair_reason": "詞彙近控制：お母さん 是親屬稱呼，不是某個個人姓名後接 さん。",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-10",
+      "level_approx": "N5",
+      "jp": "店員さんが注文を確認しました。",
+      "zh_hant": "店員確認了訂單。",
+      "allowed_variants": [
+        "店員核對了訂單。"
+      ],
+      "semantic_checks": [
+        "執行確認動作的是店員",
+        "店員是職業角色；不可在去除敬稱時丟掉職業資訊",
+        "店員確認的對象是訂單；不添加未提及的移動方向或目的地"
+      ],
+      "pair": "HS-09",
+      "pair_reason": "詞彙近控制：さん 接在職業名詞後，是對店員的禮貌稱呼；句子本身表達核對訂單，不含性別資訊。",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-11",
+      "level_approx": "N5",
+      "jp": "夕食にさんまを焼きました。",
+      "zh_hant": "晚餐烤了秋刀魚。",
+      "allowed_variants": [
+        "晚餐烤秋刀魚吃。"
+      ],
+      "semantic_checks": [
+        "さんま是秋刀魚這種魚名，不是敬稱",
+        "烤的是秋刀魚",
+        "不可對字面字串 さん 做姓名後綴處理"
+      ],
+      "pair": "HS-12",
+      "pair_reason": "字串近控制：さんま 含有假名連續 さん，但該詞與敬稱無關。",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "HS-12",
+      "level_approx": "N5",
+      "jp": "授業を担当する先生は、授業後に佐藤さんへ資料を渡しました。",
+      "zh_hant": "負責授課的老師下課後把資料交給佐藤。",
+      "allowed_variants": [
+        "授課老師下課後將資料交給佐藤。"
+      ],
+      "semantic_checks": [
+        "授業を担当する先生明確是負責授課的教師",
+        "授課老師在下課後把資料交給佐藤",
+        "原文未標示授課者性別；佐藤さん的性別也未明"
+      ],
+      "pair": "HS-11",
+      "pair_reason": "Contrasts さんま, where さん is only part of a fish name, with 佐藤さん, where さん is a personal-name honorific; 授業を担当する先生 is a teacher role without gender information.",
+      "visibility": "development-visible",
+      "heldout": false
+    }
+  ],
+  "review_and_adoption": {
+    "process": "Independent review and exact adoption must be recorded in a separate data-only PR before any rule uses these rows for acceptance.",
+    "author_does_not_accept_own_work": true,
+    "human_review_claim": false,
+    "scope_limit": "This 12-row draft is a focused smoke set. It does not prove broad Japanese-to-Taiwan-Traditional-Chinese quality or complete handling of さん."
+  }
+}

@@ -1,31 +1,31 @@
 # ja -> zh-Hant evaluation baseline. Written by tests/ja_zh_eval.rs.
-# engine_rev	862320049170863aba0a77a02ff48e58ccf839fc
+# engine_rev	862dd7b8da9e6216546a19552f9613d8916efcdd
 # challenge_sha256	a3a1bc58d297bfe181b6a7856354fe2d9d46e09312c5d4d75491c9115d4b5def
 key	n	chrf	exact_pct	kana_left	passthrough	errors
-overall	160	28.98	6.88	34	0	0
-set/dev	130	29.14	6.15	24	0	0
-set/test	30	28.30	10.00	10	0	0
-dev/case_particles	4	41.46	0.00	0	0	0
+overall	160	29.48	6.88	33	0	0
+set/dev	130	29.54	6.15	23	0	0
+set/test	30	29.21	10.00	10	0	0
+dev/case_particles	4	45.84	0.00	0	0	0
 dev/causative	4	29.77	0.00	0	0	0
 dev/conditionals	4	35.01	0.00	0	0	0
 dev/counters_numbers	4	23.98	0.00	0	0	0
 dev/dates	4	21.37	0.00	0	0	0
 dev/dialogue	15	14.11	0.00	10	0	0
 dev/final_particles	4	19.36	0.00	0	0	0
-dev/giving_receiving	15	28.35	6.67	1	0	0
+dev/giving_receiving	15	29.31	6.67	1	0	0
 dev/idioms	4	13.39	0.00	0	0	0
 dev/katakana_names	4	7.84	0.00	4	0	0
-dev/keigo_register	4	24.78	0.00	4	0	0
+dev/keigo_register	4	24.85	0.00	3	0	0
 dev/modality	4	39.96	0.00	0	0	0
 dev/negation	13	55.06	23.08	2	0	0
 dev/onomatopoeia	4	16.44	0.00	0	0	0
-dev/passive	4	44.28	25.00	0	0	0
-dev/polite_forms	8	44.71	25.00	0	0	0
-dev/polysemous_verbs	4	18.27	0.00	0	0	0
-dev/relative_clauses	4	38.56	25.00	0	0	0
+dev/passive	4	44.22	25.00	0	0	0
+dev/polite_forms	8	45.87	25.00	0	0	0
+dev/polysemous_verbs	4	19.49	0.00	0	0	0
+dev/relative_clauses	4	40.13	25.00	0	0	0
 dev/tense_aspect	4	27.81	0.00	0	0	0
 dev/topic_subject	4	29.47	0.00	0	0	0
 dev/zero_pronoun	15	23.39	0.00	3	0	0
-# report	dev_without_katakana_names	n=126	chrf=29.81
-# report	kana_left_dev	24/130
-# report	kana_left_overall	34/160
+# report	dev_without_katakana_names	n=126	chrf=30.23
+# report	kana_left_dev	23/130
+# report	kana_left_overall	33/160

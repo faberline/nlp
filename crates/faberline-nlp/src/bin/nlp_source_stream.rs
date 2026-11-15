@@ -1396,11 +1396,16 @@ fn run(args: Args, out: &mut impl Write) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()> {
+pub fn dispatch(argv: Vec<std::ffi::OsString>) -> Result<()> {
     let mut out = BufWriter::new(io::stdout().lock());
-    run(Args::parse(), &mut out)?;
+    run(Args::parse_from(argv), &mut out)?;
     out.flush()?;
     Ok(())
+}
+
+#[allow(dead_code)]
+fn main() -> Result<()> {
+    dispatch(std::env::args_os().collect())
 }
 
 #[cfg(test)]

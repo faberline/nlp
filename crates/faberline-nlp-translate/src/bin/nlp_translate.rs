@@ -87,8 +87,8 @@ fn parse_backend(s: Option<&str>) -> Result<Backend, String> {
     }
 }
 
-fn run() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+fn run(argv: Vec<std::ffi::OsString>) -> anyhow::Result<()> {
+    let cli = Cli::parse_from(argv);
     let backend = parse_backend(cli.backend.as_deref()).map_err(anyhow::Error::msg)?;
 
     let mut input = String::new();
@@ -124,9 +124,14 @@ fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn main() {
-    if let Err(err) = run() {
+pub fn dispatch(argv: Vec<std::ffi::OsString>) {
+    if let Err(err) = run(argv) {
         eprintln!("nlp_translate: {err}");
         process::exit(1);
     }
+}
+
+#[allow(dead_code)]
+fn main() {
+    dispatch(std::env::args_os().collect());
 }

@@ -1,0 +1,33 @@
+[package]
+name = "faberline-nlp-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "nlp"
+path = "src/main.rs"
+test = false
+
+[features]
+default = []
+onnx = ["faberline-nlp/onnx", "faberline-nlp-narrative/onnx", "faberline-nlp-translate/onnx"]
+coreml = ["faberline-nlp/coreml", "faberline-nlp-narrative/coreml", "faberline-nlp-translate/coreml", "dep:objc2", "dep:objc2-foundation", "dep:objc2-core-ml"]
+model-tokenizer = ["faberline-nlp/model-tokenizer"]
+
+[dependencies]
+faberline-nlp.workspace = true
+faberline-nlp-narrative.workspace = true
+faberline-nlp-translate = { path = "../faberline-nlp-translate" }
+aho-corasick.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true }
+objc2-core-ml = { workspace = true, optional = true }

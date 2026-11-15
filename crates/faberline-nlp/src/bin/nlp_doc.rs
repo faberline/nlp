@@ -74,8 +74,8 @@ struct Args {
     all_layers: bool,
 }
 
-fn main() {
-    let args = Args::parse();
+pub fn dispatch(argv: Vec<std::ffi::OsString>) {
+    let args = Args::parse_from(argv);
     let mut text = String::new();
     if let Err(err) = io::stdin().read_to_string(&mut text) {
         eprintln!("nlp_doc: {err}");
@@ -108,4 +108,9 @@ fn main() {
         "{}",
         serde_json::to_string(&doc).expect("document serializes to JSON")
     );
+}
+
+#[allow(dead_code)]
+fn main() {
+    dispatch(std::env::args_os().collect());
 }

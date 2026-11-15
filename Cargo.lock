@@ -610,6 +610,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "faberline-nlp-cli"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "anyhow",
+ "clap",
+ "faberline-nlp",
+ "faberline-nlp-narrative",
+ "faberline-nlp-translate",
+ "objc2",
+ "objc2-core-ml",
+ "objc2-foundation",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "faberline-nlp-narrative"
 version = "0.1.0"
 dependencies = [

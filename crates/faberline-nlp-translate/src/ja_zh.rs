@@ -4988,7 +4988,10 @@ fn translate_clause_bunsetsus(
     parts.extend(transfer_prefix);
     // 到 already expresses the destination relation of bare 去. Other motion
     // verbs retain their manner: 走到, 跑到.
-    if !verb_core.is_empty() && !(has_spatial_made && verb_core == "去") {
+    if has_spatial_made && verb_core == "去" {
+        verb_core.clear();
+    }
+    if !verb_core.is_empty() {
         parts.push(verb_core);
     }
     parts.extend(made_endpoints);

@@ -18,7 +18,7 @@ id	set	genre	phenomenon	ja	zh_hant	zh_hant_alt
 ```
 
 - `id`: unique row id (`jz001`, …).
-- `set`: `dev` or `test` (about 70/30, split inside each phenomenon).
+- `set`: `dev` or `test`, split inside each phenomenon. The `test` rows are fixed; new rows go to `dev`.
 - `genre`: free label (`daily`, `dialogue`, `fiction`, `news`, `business`, `expository`).
 - `phenomenon`: one of `case_particles`, `topic_subject`, `passive`, `causative`,
   `giving_receiving`, `negation`, `tense_aspect`, `modality`, `conditionals`,
@@ -33,6 +33,19 @@ The runner rejects a row whose source or primary reference is empty after whites
 (an empty reference would give an empty output a chrF of 100). A blank alt reference is ignored.
 
 No tab or newline inside a field.
+
+### Current size
+
+128 rows: 98 `dev`, 30 `test`.
+
+| phenomenon | dev | test |
+|---|---|---|
+| `giving_receiving`, `zero_pronoun` | 15 each | 2 / 1 |
+| the other 17 phenomena | 4 each | 1 or 2 each |
+
+The two larger `dev` groups give a steadier signal for the engine work on giving and
+receiving verbs and on omitted subjects. Each `zero_pronoun` row has at least one reference
+without a subject, because Chinese can drop the subject too.
 
 ## Metric
 

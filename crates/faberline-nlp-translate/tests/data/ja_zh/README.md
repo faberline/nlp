@@ -24,7 +24,7 @@ id	set	genre	phenomenon	ja	zh_hant	zh_hant_alt
   `giving_receiving`, `negation`, `tense_aspect`, `modality`, `conditionals`,
   `relative_clauses`, `zero_pronoun`, `keigo_register`, `final_particles`,
   `counters_numbers`, `dates`, `katakana_names`, `onomatopoeia`, `idioms`,
-  `polysemous_verbs`, `dialogue`.
+  `polysemous_verbs`, `dialogue`, `polite_forms`.
 - `ja`: one Japanese sentence.
 - `zh_hant`: the main reference, natural Traditional Chinese as written in Taiwan.
 - `zh_hant_alt`: a second acceptable reference. It may be empty.
@@ -36,13 +36,15 @@ No tab or newline inside a field.
 
 ### Current size
 
-143 rows: 113 `dev`, 30 `test`.
+160 rows: 130 `dev`, 30 `test`.
 
 | phenomenon | dev | test |
 |---|---|---|
 | `giving_receiving`, `zero_pronoun` | 15 each | 2 / 1 |
 | `dialogue` | 15 | none yet |
-| the other 17 phenomena | 4 each | 1 or 2 each |
+| `negation` | 13 | 1 |
+| `polite_forms` | 8 | none yet |
+| the other 16 phenomena | 4 each | 1 or 2 each |
 
 The two larger `dev` groups give a steadier signal for the engine work on giving and
 receiving verbs and on omitted subjects. Each `zero_pronoun` row has at least one reference
@@ -51,6 +53,12 @@ without a subject, because Chinese can drop the subject too.
 `dialogue` covers casual speech: colloquial endings and sentence-final particles, contractions
 (`ちゃう`, `てる`, `じゃん`, `なきゃ`), vocatives, ellipsis and onomatopoeia in speech. It has no
 `test` rows yet; when they are added, they are written new and never taken from `dev`.
+
+`polite_forms` covers the polite verb endings `ません`, `ませんでした`, `ましょう` and `ませんか`
+(negative, past negative, proposal, invitation or request). `negation` also has rows for the
+existence negative (`ない`, `なかった`, `ありません`, `ありませんでした`) and the copular negative
+(`ではない`, `じゃない`, `ではありません`, `じゃありません`, `ではありませんでした`), plain and polite.
+`polite_forms` has no `test` rows yet; the same rule as for `dialogue` applies.
 
 ## Metric
 

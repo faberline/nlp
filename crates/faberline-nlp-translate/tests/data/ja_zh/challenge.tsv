@@ -142,3 +142,20 @@ jz140	dev	dialogue	dialogue	ドアがバタンって閉まったの。	門砰的
 jz141	dev	dialogue	dialogue	あのさ、明日ひま？	那個，你明天有空嗎？	欸，明天有空嗎？
 jz142	dev	dialogue	dialogue	先輩、これ食べてもいいっすか。	學長，這個可以吃嗎？	前輩，我可以吃這個嗎？
 jz143	dev	dialogue	dialogue	お腹がグーグー鳴ってる。	肚子咕嚕咕嚕叫。	肚子在咕嚕咕嚕地叫。
+jz144	dev	daily	polite_forms	今日は雨が降りません。	今天不會下雨。	今天不下雨。
+jz145	dev	daily	polite_forms	私はコーヒーを飲みません。	我不喝咖啡。	
+jz146	dev	daily	polite_forms	昨日は会社に行きませんでした。	昨天沒有去公司。	我昨天沒去公司。
+jz147	dev	business	polite_forms	会議の資料はまだ届いていませんでした。	會議資料當時還沒送到。	會議資料還沒送到。
+jz148	dev	daily	polite_forms	駅まで一緒に歩きましょう。	一起走到車站吧。	我們一起走去車站吧。
+jz149	dev	dialogue	polite_forms	そろそろ始めましょうか。	差不多該開始了吧？	我們差不多開始吧？
+jz150	dev	dialogue	polite_forms	週末に映画を見に行きませんか。	週末要不要去看電影？	週末一起去看電影好嗎？
+jz151	dev	business	polite_forms	明日の午後、少しお時間をいただけませんか。	明天下午能不能占用您一點時間？	明天下午可以給我一點時間嗎？
+jz152	dev	daily	negation	冷蔵庫に牛乳がありません。	冰箱裡沒有牛奶。	冰箱沒有牛奶了。
+jz153	dev	daily	negation	昨日は時間がありませんでした。	昨天沒有時間。	我昨天沒時間。
+jz154	dev	daily	negation	この町には映画館がない。	這個小鎮沒有電影院。	這座城鎮沒有電影院。
+jz155	dev	daily	negation	財布の中にお金がなかった。	錢包裡沒有錢。	當時錢包裡沒錢。
+jz156	dev	business	negation	彼は社長ではありません。	他不是社長。	他不是老闆。
+jz157	dev	dialogue	negation	それは私の傘じゃありません。	那不是我的傘。	
+jz158	dev	daily	negation	今日は休みではない。	今天不是休假日。	今天不放假。
+jz159	dev	dialogue	negation	あの人は先生じゃない。	那個人不是老師。	那人不是老師。
+jz160	dev	business	negation	先週の会議は中止ではありませんでした。	上週的會議沒有取消。	上週的會議並沒有取消。

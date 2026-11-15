@@ -24,7 +24,7 @@ id	set	genre	phenomenon	ja	zh_hant	zh_hant_alt
   `giving_receiving`, `negation`, `tense_aspect`, `modality`, `conditionals`,
   `relative_clauses`, `zero_pronoun`, `keigo_register`, `final_particles`,
   `counters_numbers`, `dates`, `katakana_names`, `onomatopoeia`, `idioms`,
-  `polysemous_verbs`.
+  `polysemous_verbs`, `dialogue`.
 - `ja`: one Japanese sentence.
 - `zh_hant`: the main reference, natural Traditional Chinese as written in Taiwan.
 - `zh_hant_alt`: a second acceptable reference. It may be empty.
@@ -36,16 +36,21 @@ No tab or newline inside a field.
 
 ### Current size
 
-128 rows: 98 `dev`, 30 `test`.
+143 rows: 113 `dev`, 30 `test`.
 
 | phenomenon | dev | test |
 |---|---|---|
 | `giving_receiving`, `zero_pronoun` | 15 each | 2 / 1 |
+| `dialogue` | 15 | none yet |
 | the other 17 phenomena | 4 each | 1 or 2 each |
 
 The two larger `dev` groups give a steadier signal for the engine work on giving and
 receiving verbs and on omitted subjects. Each `zero_pronoun` row has at least one reference
 without a subject, because Chinese can drop the subject too.
+
+`dialogue` covers casual speech: colloquial endings and sentence-final particles, contractions
+(`ちゃう`, `てる`, `じゃん`, `なきゃ`), vocatives, ellipsis and onomatopoeia in speech. It has no
+`test` rows yet; when they are added, they are written new and never taken from `dev`.
 
 ## Metric
 
@@ -57,6 +62,11 @@ without a subject, because Chinese can drop the subject too.
   (fullwidth `ー` and `・` do not count).
 - `passthrough`: the output equals the source, or the engine reports `TranslationTrack::Passthrough`.
 - Averages are reported overall, per set, and per phenomenon for `dev` rows only.
+- Report-only lines (`report\t…`), also stored as `#` comments in `baseline.tsv`, are not
+  part of the ratchet:
+  - `dev_without_katakana_names`: dev chrF without `katakana_names`. With an empty glossary
+    the engine cannot transliterate names, so that group measures the glossary more than the rules.
+  - `kana_left_dev` and `kana_left_overall`: rows with kana left in the output.
 
 The engine runs with an empty glossary, `TargetVariant::ZhHant` and no model directory,
 through `analyze_and_translate`, one sentence at a time.

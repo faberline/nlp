@@ -317,6 +317,39 @@ fn clean_engine_revision() -> Result<String, String> {
     Ok(rev)
 }
 
+/// Phenomenon left out of the report-only dev number: with an empty glossary the engine
+/// cannot transliterate names, so this group mostly measures the glossary, not the rules.
+const REPORT_EXCLUDED_PHENOMENON: &str = "katakana_names";
+
+/// Report-only lines (tab separated, starting with `report`). They are printed and written
+/// into `baseline.tsv` as comments; the ratchet does not read them.
+fn report_lines(rows: &[Row], scored: &[Scored]) -> Vec<String> {
+    let mut dev_without = Agg::default();
+    let mut dev = Agg::default();
+    let mut overall = Agg::default();
+    for (row, s) in rows.iter().zip(scored) {
+        overall.add(s);
+        if row.set == Split::Dev {
+            dev.add(s);
+            if row.phenomenon != REPORT_EXCLUDED_PHENOMENON {
+                dev_without.add(s);
+            }
+        }
+    }
+    vec![
+        format!(
+            "report\tdev_without_{REPORT_EXCLUDED_PHENOMENON}\tn={}\tchrf={:.2}",
+            dev_without.n,
+            dev_without.chrf()
+        ),
+        format!("report\tkana_left_dev\t{}/{}", dev.kana_left, dev.n),
+        format!(
+            "report\tkana_left_overall\t{}/{}",
+            overall.kana_left, overall.n
+        ),
+    ]
+}
+
 fn render_baseline(rev: &str, challenge_sha: &str, aggs: &[(String, Agg)]) -> String {
     let mut s = String::new();
     writeln!(
@@ -503,6 +536,46 @@ fn baseline_requires_every_key_once_and_finite() {
     assert!(parse_baseline(&no_hash, &expected).is_err());
 }
 
+fn scored(chrf: f64, kana_left: bool) -> Scored {
+    Scored {
+        chrf,
+        exact: false,
+        kana_left,
+        passthrough: false,
+        error: false,
+        output: String::new(),
+    }
+}
+
+#[test]
+fn report_lines_exclude_katakana_names_and_count_kana() {
+    let text = format!(
+        "{HEADER}\n{TEST_HEADER_ROW}\n\
+         jz2\tdev\tdaily\tkatakana_names\tマリア。\t瑪麗亞。\t\n\
+         jz3\ttest\tdaily\tpassive\t盗まれた。\t被偷了。\t\n"
+    );
+    let rows = parse_challenge(&text).unwrap();
+    let s = [scored(40.0, false), scored(0.0, true), scored(10.0, true)];
+    assert_eq!(
+        report_lines(&rows, &s),
+        [
+            "report\tdev_without_katakana_names\tn=1\tchrf=40.00",
+            "report\tkana_left_dev\t1/2",
+            "report\tkana_left_overall\t2/3",
+        ]
+    );
+    // Report lines are stored as comments, so the baseline parser ignores them.
+    let expected = expected_keys(&rows);
+    let mut baseline = render_baseline("rev", "abc", &aggregate(&rows, &s));
+    for line in report_lines(&rows, &s) {
+        writeln!(baseline, "# {line}").unwrap();
+    }
+    assert_eq!(
+        parse_baseline(&baseline, &expected).unwrap().chrf.len(),
+        expected.len()
+    );
+}
+
 #[test]
 fn dirty_engine_inputs_block_baseline_but_eval_files_do_not() {
     let porcelain = concat!(
@@ -571,10 +644,19 @@ fn ja_zh_hant_challenge_ratchet() {
         );
     }
 
+    // Report-only numbers: printed and stored as comments, never part of the ratchet.
+    let report = report_lines(&rows, &scored);
+    for line in &report {
+        println!("{line}");
+    }
+
     let baseline_path = dir.join("baseline.tsv");
     if env_flag("JA_ZH_EVAL_WRITE_BASELINE") {
         let rev = clean_engine_revision().unwrap_or_else(|e| panic!("{e}"));
-        let text = render_baseline(&rev, &challenge_sha, &aggs);
+        let mut text = render_baseline(&rev, &challenge_sha, &aggs);
+        for line in &report {
+            writeln!(text, "# {line}").unwrap();
+        }
         std::fs::write(&baseline_path, text).expect("write baseline.tsv");
         println!("wrote {}", baseline_path.display());
         return;

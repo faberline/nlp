@@ -27602,7 +27602,7 @@
 フェール	ja	533	NOUN	NOUN	-	-	-
 フェールセーフ	ja	533	NOUN	NOUN	-	-	-
 フェールソフト	ja	533	NOUN	NOUN	-	-	-
-フェーン	ja	428	-	INTJ|NOUN	-	嗚咽	src=first_party_mit
+フェーン	ja	428	-	INTJ|NOUN	-	焚風	src=first_party_mit
 フォア	ja	553	NOUN	NOUN	-	-	-
 フォアグラ	ja	533	NOUN	NOUN	-	-	-
 フォアグラウンド	ja	533	NOUN	NOUN	-	-	-
@@ -49005,7 +49005,7 @@
 打さん	ja	763	-	NOUN|VERB	-	-	-
 打しおれる	ja	1162	VERB	VERB	-	-	infl=ichidan
 打ちあう	ja	1162	VERB	VERB	-	-	infl=godan_wa
-打ちあぐむ	ja	1162	VERB	VERB	-	苦惱	infl=godan_ma;src=first_party_mit
+打ちあぐむ	ja	1162	VERB	VERB	-	苦於打不中	infl=godan_ma;src=first_party_mit
 打ちあける	ja	1162	VERB	VERB	-	-	infl=ichidan
 打ちあげる	ja	1162	VERB	VERB	-	-	infl=ichidan
 打ちあわす	ja	1162	VERB	VERB	-	-	infl=godan_sa
@@ -49024,7 +49024,7 @@
 打ちはらう	ja	1162	VERB	VERB	-	-	infl=godan_wa
 打ちまくる	ja	1162	VERB	VERB	-	-	infl=godan_ra
 打ちまける	ja	1162	VERB	VERB	-	-	infl=ichidan
-打ちみる	ja	1162	VERB	VERB	-	凝視	infl=ichidan;src=first_party_mit
+打ちみる	ja	1162	VERB	VERB	-	瞥一眼	infl=ichidan;src=first_party_mit
 打ちよせる	ja	1162	VERB	VERB	-	-	infl=ichidan
 打ち上げる	ja	950	VERB	VERB	-	發射	infl=ichidan;src=first_party_mit
 打ち付ける	ja	1162	VERB	VERB	-	-	infl=ichidan
@@ -49302,7 +49302,7 @@
 投げ入れる	ja	1161	VERB	VERB	-	-	infl=ichidan
 投げ出す	ja	1161	VERB	VERB	-	-	infl=godan_sa
 投げ出せる	ja	1162	VERB	VERB	-	-	infl=ichidan
-投げ勝つ	ja	1162	VERB	VERB	-	投勝	infl=godan_ta;src=first_party_mit
+投げ勝つ	ja	1162	VERB	VERB	-	投贏	infl=godan_ta;src=first_party_mit
 投げ勝てる	ja	1162	VERB	VERB	-	-	infl=ichidan
 投げ捨てる	ja	1161	VERB	VERB	-	-	infl=ichidan
 投げ捨る	ja	1163	VERB	VERB	-	-	infl=ichidan
@@ -57025,7 +57025,7 @@
 犬死に	ja	763	-	NOUN|VERB	-	-	-
 犯す	ja	1160	VERB	VERB	-	犯下	infl=godan_sa;src=first_party_mit
 犯せる	ja	1162	VERB	VERB	-	-	infl=ichidan
-犯る	ja	1181	VERB	VERB	-	犯下	infl=ichidan;src=first_party_mit
+犯る	ja	1181	VERB	VERB	-	侵犯	infl=ichidan;src=first_party_mit
 犯人	ja	1029	NOUN	NOUN	-	犯人	-
 犯則	ja	762	-	NOUN|VERB	-	-	-
 犯意	ja	1033	NOUN	NOUN	-	-	-
@@ -69092,7 +69092,7 @@
 難所	ja	1037	NOUN	NOUN	-	-	-
 難曲	ja	1036	NOUN	NOUN	-	-	-
 難民	ja	1018	NOUN	NOUN	-	難民	-
-難渋	ja	763	-	NOUN|VERB	-	艱澀	src=first_party_mit
+難渋	ja	763	-	NOUN|VERB	-	陷入困境	src=first_party_mit
 難点	ja	1033	NOUN	NOUN	-	難點	-
 難無く	ja	857	ADV	ADV	-	-	-
 難産	ja	754	-	NOUN|VERB	-	難產	-
@@ -70503,7 +70503,7 @@
 鬱々	ja	812	ADJ	ADJ	-	-	-
 鬱ぎ込む	ja	1162	VERB	VERB	-	消沉	infl=godan_ma;src=first_party_mit
 鬱ぐ	ja	1162	VERB	VERB	-	鬱悶	infl=godan_ga;src=first_party_mit
-鬱する	ja	1162	VERB	VERB	-	鬱積	infl=sahen;src=first_party_mit
+鬱する	ja	1162	VERB	VERB	-	鬱悶	infl=sahen;src=first_party_mit
 鬱屈	ja	763	-	NOUN|VERB	-	-	-
 鬱気	ja	763	-	NOUN|VERB	-	-	-
 鬱積	ja	763	-	NOUN|VERB	-	鬱積	-

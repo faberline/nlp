@@ -188,6 +188,265 @@ fn clause_spans_follow_length_changing_simplified_variants() {
 }
 
 #[test]
+fn te_kara_keeps_temporal_order_separate_from_cause_and_source() {
+    for target in [TargetVariant::ZhHant, TargetVariant::ZhHans] {
+        let after = if target == TargetVariant::ZhHant {
+            '後'
+        } else {
+            '后'
+        };
+        for source in [
+            "私は本を読んでから寝ます。",
+            "私は本を読んでから、寝ます。",
+            "私は仕事をしてから帰った。",
+            "先生に本を読んでもらってから返します。",
+        ] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(
+                doc.target_text.contains(after),
+                "{source}: {}",
+                doc.target_text
+            );
+            assert!(
+                !doc.target_text.contains("因"),
+                "{source}: {}",
+                doc.target_text
+            );
+            if source.contains("寝ます") {
+                let read = if target == TargetVariant::ZhHant {
+                    '讀'
+                } else {
+                    '读'
+                };
+                let read_at = doc.target_text.find(read).expect("reading action");
+                let after_at = doc.target_text.find(after).expect("temporal relation");
+                let sleep_at = doc.target_text.find('睡').expect("following action");
+                assert!(
+                    read_at < after_at && after_at < sleep_at,
+                    "{}",
+                    doc.target_text
+                );
+            }
+        }
+        for source in [
+            "私は本を読んでいるから家にいます。",
+            "私は本を読んでいないから家にいます。",
+        ] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(doc.target_text.contains("因"), "{}", doc.target_text);
+            assert!(!doc.target_text.contains(after), "{}", doc.target_text);
+        }
+        let source = "私は本を読んでから寝ない。";
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(target),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        let (before, following) = doc
+            .target_text
+            .split_once(after)
+            .expect("temporal boundary");
+        assert!(!before.contains('不'), "{}", doc.target_text);
+        assert!(following.contains('不'), "{}", doc.target_text);
+    }
+}
+
+#[test]
+fn showing_for_someone_uses_one_recipient_marker() {
+    for (source, hant, hans) in [
+        (
+            "私は彼に写真を見せてあげた。",
+            "我給他看了照片。",
+            "我给他看了照片。",
+        ),
+        (
+            "彼が私に写真を見せてくれた。",
+            "他給我看了照片。",
+            "他给我看了照片。",
+        ),
+        (
+            "私は彼に写真を見せてもらった。",
+            "他給我看了照片。",
+            "他给我看了照片。",
+        ),
+        (
+            "私は彼に写真を見せてあげます。",
+            "我給他看照片。",
+            "我给他看照片。",
+        ),
+        ("写真を見せてあげた。", "展示了照片。", "展示了照片。"),
+        ("写真を見せてくれた。", "給我看了照片。", "给我看了照片。"),
+        (
+            "私は彼に写真を見せてあげなかった。",
+            "我沒有給他看照片。",
+            "我没有给他看照片。",
+        ),
+        (
+            "私は彼に本を読ませてあげた。",
+            "我讓他讀了書。",
+            "我让他读了书。",
+        ),
+    ] {
+        for (target, expected) in [(TargetVariant::ZhHant, hant), (TargetVariant::ZhHans, hans)] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert_eq!(doc.target_text, expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn showing_keeps_additional_predicate_content_on_the_conservative_path() {
+    let source = "私は彼に写真を綺麗に見せてあげた。";
+    for (target, modifier) in [
+        (TargetVariant::ZhHant, "美麗"),
+        (TargetVariant::ZhHans, "美丽"),
+    ] {
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(target),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert!(doc.target_text.contains(modifier), "{}", doc.target_text);
+    }
+}
+
+#[test]
+fn kureru_defaults_toward_the_speaker_but_keeps_explicit_recipients() {
+    for (source, hant, hans) in [
+        ("本をくれた。", "給了我書。", "给了我书。"),
+        ("彼が本をくれた。", "他給了我書。", "他给了我书。"),
+        ("彼が本を読んでくれた。", "他幫我讀了書。", "他帮我读了书。"),
+        (
+            "彼が本を読んでくれました。",
+            "他幫我讀了書。",
+            "他帮我读了书。",
+        ),
+        (
+            "彼が妹に本を読んでくれた。",
+            "他幫妹妹讀了書。",
+            "他帮妹妹读了书。",
+        ),
+        ("彼が本を読んであげた。", "他幫忙讀了書。", "他帮忙读了书。"),
+    ] {
+        for (target, expected) in [(TargetVariant::ZhHant, hant), (TargetVariant::ZhHans, hans)] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert_eq!(doc.target_text, expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn kureru_keeps_competing_recipients_on_the_conservative_path() {
+    for source in [
+        "彼が妹へ本を読んでくれた。",
+        "彼が妹に母に本を読んでくれた。",
+    ] {
+        for target in [TargetVariant::ZhHant, TargetVariant::ZhHans] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(
+                !doc.target_text.contains('我'),
+                "{source}: {}",
+                doc.target_text
+            );
+        }
+    }
+}
+
+#[cfg(feature = "narrative")]
+#[test]
+fn kureru_in_direct_speech_uses_first_person_instead_of_the_speaker_name() {
+    let source = "「彼が本を読んでくれた。」";
+    let glossary = TranslationGlossary::new();
+    for (target, expected) in [
+        (TargetVariant::ZhHant, "他幫我讀了書"),
+        (TargetVariant::ZhHans, "他帮我读了书"),
+    ] {
+        let options = TranslateOptions::new(target);
+        let doc = faberline_nlp::doc::analyze_document(
+            source,
+            &faberline_nlp_translate::doc_options_for_translate(&options, &glossary),
+        );
+        let mut narrative = faberline_nlp_narrative::analyze_chapter_narrative(
+            1,
+            None,
+            source,
+            &doc,
+            &glossary.to_work_vocabulary(),
+        )
+        .unwrap();
+        narrative.dialogues[0].speaker_canonical = Some("named_speaker".to_owned());
+        let translated = faberline_nlp_translate::translate_document(
+            source,
+            &doc,
+            Some(&narrative),
+            &options,
+            &glossary,
+            None,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &translated);
+        assert_eq!(
+            translated.sentences[0].conditioning.speaker.as_deref(),
+            Some("named_speaker")
+        );
+        assert!(
+            translated.target_text.contains(expected),
+            "{}",
+            translated.target_text
+        );
+        assert!(!translated.target_text.contains("named_speaker"));
+    }
+}
+
+#[test]
 fn source_kara_before_a_copula_keeps_the_start_point() {
     for source in [
         "授業は午前九時からです。",
@@ -234,7 +493,7 @@ fn giving_and_receiving_keep_explicit_transfer_roles() {
             "我从他收到了书。",
         ),
         ("本をもらった。", "收到了書。", "收到了书。"),
-        ("彼が本をくれた。", "他給了書。", "他给了书。"),
+        ("彼が本をくれた。", "他給了我書。", "他给了我书。"),
         (
             "私は彼に本をもらわなかった。",
             "我沒有從他收到書。",
@@ -303,7 +562,7 @@ fn benefactive_actions_keep_actor_and_beneficiary_distinct() {
             "有人幫我讀了書。",
             "有人帮我读了书。",
         ),
-        ("彼が本を読んでくれた。", "他幫忙讀了書。", "他帮忙读了书。"),
+        ("彼が本を読んでくれた。", "他幫我讀了書。", "他帮我读了书。"),
     ];
     for (source, expected_hant, expected_hans) in cases {
         for (target, expected) in [

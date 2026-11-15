@@ -7048,36 +7048,48 @@ fn synthesize_predicate_complex(
     let has_rashii = surfaces.contains(&"らしい");
     let has_neg_past =
         !has_obligation && (joined.contains("なかった") || joined.contains("ませんでした"));
+    let has_split_polite_neg = predicates.iter().any(|b| {
+        b.atoms.windows(2).any(|pair| {
+            !pair[0].is_locked
+                && !pair[1].is_locked
+                && pair[0].upos == Some(Upos::Aux)
+                && pair[1].upos == Some(Upos::Aux)
+                && pair[0].surface == "ませ"
+                && pair[1].surface == "ん"
+                && pair[0].span.end_char == pair[1].span.start_char
+        })
+    });
     let has_neg = !has_neg_past
         && !has_naide
         && !has_naide_kudasai
         && !has_obligation
-        && all_atoms.iter().enumerate().any(|(idx, a)| {
-            if a.is_locked {
-                return false;
-            }
-            match a.surface.as_str() {
-                "ない" | "ません" | "ず" | "ぬ" => true,
-                "なく" => !all_atoms.get(idx + 1).is_some_and(|nx| {
-                    !nx.is_locked
-                        && matches!(nx.surface.as_str(), "なる" | "なり" | "なっ" | "なった")
-                }),
-                "ん" => {
-                    idx > 0
-                        && !all_atoms[idx - 1].is_locked
-                        && all_atoms[idx - 1].upos == Some(Upos::Verb)
-                        && !matches!(all_atoms[idx - 1].surface.as_str(), "た" | "だ")
-                        && !all_atoms.get(idx + 1).is_some_and(|nx| {
-                            !nx.is_locked
-                                && matches!(
-                                    nx.surface.as_str(),
-                                    "だ" | "です" | "だけど" | "だから" | "なのに" | "なら"
-                                )
-                        })
+        && (has_split_polite_neg
+            || all_atoms.iter().enumerate().any(|(idx, a)| {
+                if a.is_locked {
+                    return false;
                 }
-                _ => false,
-            }
-        });
+                match a.surface.as_str() {
+                    "ない" | "ません" | "ず" | "ぬ" => true,
+                    "なく" => !all_atoms.get(idx + 1).is_some_and(|nx| {
+                        !nx.is_locked
+                            && matches!(nx.surface.as_str(), "なる" | "なり" | "なっ" | "なった")
+                    }),
+                    "ん" => {
+                        idx > 0
+                            && !all_atoms[idx - 1].is_locked
+                            && all_atoms[idx - 1].upos == Some(Upos::Verb)
+                            && !matches!(all_atoms[idx - 1].surface.as_str(), "た" | "だ")
+                            && !all_atoms.get(idx + 1).is_some_and(|nx| {
+                                !nx.is_locked
+                                    && matches!(
+                                        nx.surface.as_str(),
+                                        "だ" | "です" | "だけど" | "だから" | "なのに" | "なら"
+                                    )
+                            })
+                    }
+                    _ => false,
+                }
+            }));
     let has_past = all_atoms.iter().enumerate().any(|(idx, a)| {
         if a.is_locked {
             return false;

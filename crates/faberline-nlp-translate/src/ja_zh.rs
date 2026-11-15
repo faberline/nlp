@@ -3930,6 +3930,7 @@ fn translate_clause_bunsetsus(
         text: String,
         case_particle: Option<String>,
         is_instrument_de: bool,
+        is_spatial_made: bool,
         transfer_dative: bool,
     }
 
@@ -4056,6 +4057,7 @@ fn translate_clause_bunsetsus(
                         text: s,
                         case_particle: b.case_particle.clone(),
                         is_instrument_de: is_inst,
+                        is_spatial_made: is_spatial_made_bunsetsu(&b),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                     });
@@ -4067,6 +4069,9 @@ fn translate_clause_bunsetsus(
                     if matches!(
                         s.as_str(),
                         "每天"
+                            | "每天早上"
+                            | "每天晚上"
+                            | "每晚"
                             | "今天"
                             | "明天"
                             | "昨天"
@@ -4092,6 +4097,7 @@ fn translate_clause_bunsetsus(
                         text: s,
                         case_particle: b.case_particle.clone(),
                         is_instrument_de: false,
+                        is_spatial_made: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                     });
@@ -4443,6 +4449,7 @@ fn translate_clause_bunsetsus(
                     text: format!("跟{np}"),
                     case_particle: Some("と".to_owned()),
                     is_instrument_de: false,
+                    is_spatial_made: false,
                     transfer_dative: false,
                 });
             }
@@ -4948,9 +4955,19 @@ fn translate_clause_bunsetsus(
     if has_front_modal {
         parts.extend(temporal_others);
     }
+    // A place marked by まで is the endpoint of a motion event. Keep this
+    // local to まで: the global goal flag also changes recipients and vehicles.
+    let has_spatial_made = !has_causative
+        && !passive_agent_needed
+        && objs.is_empty()
+        && predicates_is_made_motion_verb(&predicates)
+        && obliques.iter().any(|o| o.is_spatial_made);
+    let mut made_endpoints = Vec::new();
     for o in obliques {
         let _ = o.is_instrument_de;
-        if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
+        if has_spatial_made && o.is_spatial_made {
+            made_endpoints.push(o.text);
+        } else if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
             let raw_np = o.text.strip_prefix('到').unwrap_or(&o.text);
             parts.push(format!("連{raw_np}都"));
         } else {
@@ -4969,9 +4986,12 @@ fn translate_clause_bunsetsus(
     parts.extend(others);
     parts.extend(inner_pre_mods);
     parts.extend(transfer_prefix);
-    if !verb_core.is_empty() {
+    // 到 already expresses the destination relation of bare 去. Other motion
+    // verbs retain their manner: 走到, 跑到.
+    if !verb_core.is_empty() && !(has_spatial_made && verb_core == "去") {
         parts.push(verb_core);
     }
+    parts.extend(made_endpoints);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
     let trailing_change_le =
@@ -7109,6 +7129,141 @@ fn predicates_has_passive(predicates: &[Bunsetsu]) -> bool {
                     || a.surface.ends_with("された"))
         })
     })
+}
+
+#[cfg(test)]
+mod motion_endpoint_tests {
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    fn translate(source: &str) -> String {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        analyze_and_translate(
+            source,
+            &options,
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .expect("CPU rules translate the control sentence")
+        .target_text
+    }
+
+    #[test]
+    fn walking_and_running_keep_the_place_as_endpoint() {
+        for (source, phrase) in [
+            ("公園まで歩いた。", "走到公園"),
+            ("学校まで走った。", "跑到學校"),
+        ] {
+            let output = translate(source);
+            assert!(output.contains(phrase), "{source}: {output}");
+            assert!(!output.contains('連'), "{source}: {output}");
+        }
+    }
+
+    #[test]
+    fn transport_and_time_precede_the_motion_endpoint() {
+        assert_eq!(
+            translate("私は毎朝駅までバスで行きます。"),
+            "我每天早上坐公車到車站。"
+        );
+        let reversed_source_order = translate("バスで駅まで行った。");
+        assert!(reversed_source_order.contains("坐公車到車站"));
+    }
+
+    #[test]
+    fn people_and_non_motion_keep_additive_focus() {
+        let person = translate("先生まで歩いた。");
+        assert!(person.contains("連老師都"), "{person}");
+        assert!(!person.contains("到老師"), "{person}");
+        let non_motion = translate("公園まで描いた。");
+        assert!(non_motion.contains("連公園都"), "{non_motion}");
+    }
+
+    #[test]
+    fn origin_and_recipient_cases_keep_their_relations() {
+        let origin = translate("駅から歩いた。");
+        assert!(origin.contains("從車站"), "{origin}");
+        assert!(!origin.contains("到車站"), "{origin}");
+        let recipient = translate("友達に手紙を書いた。");
+        assert!(recipient.contains("給朋友"), "{recipient}");
+        assert!(!recipient.contains("到朋友"), "{recipient}");
+    }
+
+    #[test]
+    fn a_place_modifier_does_not_make_a_teacher_a_destination() {
+        let output = translate("学校の先生まで歩いた。");
+        assert!(output.contains('連'), "{output}");
+        assert!(output.contains("老師都"), "{output}");
+        assert!(!output.contains("到學校"), "{output}");
+    }
+
+    #[test]
+    fn negative_motion_and_a_following_clause_keep_their_scope() {
+        let negative = translate("駅まで歩かなかった。");
+        assert!(negative.contains("沒有走到車站"), "{negative}");
+        let sequence = translate("公園まで歩いて、友達に会った。");
+        assert!(sequence.contains("走到公園"), "{sequence}");
+        assert!(sequence.contains("朋友"), "{sequence}");
+        assert!(sequence.contains("見面"), "{sequence}");
+        assert!(!sequence.contains("連公園"), "{sequence}");
+    }
+}
+
+fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {
+    if b.case_particle.as_deref() != Some("まで") {
+        return false;
+    }
+    // Use the noun phrase head, not a place inside a modifier such as
+    // 学校の先生. Relational nouns such as 前/後 can also be temporal.
+    b.atoms
+        .iter()
+        .rev()
+        .find(|a| {
+            !matches!(a.upos, Some(Upos::Adp | Upos::Part | Upos::Punct))
+                && !is_case_or_sfp_to_strip(&a.surface)
+        })
+        .is_some_and(|a| {
+            !a.is_locked
+                && matches!(
+                    a.surface.as_str(),
+                    "部屋"
+                        | "学校"
+                        | "図書館"
+                        | "公園"
+                        | "駅"
+                        | "東京駅"
+                        | "東京"
+                        | "家"
+                        | "会社"
+                        | "病院"
+                        | "ここ"
+                        | "そこ"
+                        | "あそこ"
+                        | "ベッド"
+                        | "椅子"
+                        | "机"
+                        | "風呂"
+                )
+        })
+}
+
+fn predicates_is_made_motion_verb(predicates: &[Bunsetsu]) -> bool {
+    let mut verbs = predicates
+        .iter()
+        .flat_map(|b| &b.atoms)
+        .filter(|a| !a.is_locked && a.upos == Some(Upos::Verb));
+    let Some(verb) = verbs.next() else {
+        return false;
+    };
+    // Do not move an endpoint across another lexical predicate. Clauses with
+    // multiple verbs need an explicit attachment relation before reordering.
+    verbs.next().is_none()
+        && matches!(
+            verb.lemma.as_deref().unwrap_or(verb.surface.as_str()),
+            "行く" | "歩く" | "走る"
+        )
 }
 
 fn predicates_is_goal_verb(predicates: &[Bunsetsu]) -> bool {

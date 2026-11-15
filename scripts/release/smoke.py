@@ -11,9 +11,19 @@ import tempfile
 binary = pathlib.Path(sys.argv[1]).resolve()
 legacy_dir = pathlib.Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None
 
+def restricted_environment(source, windows):
+    env = dict(source)
+    if windows:
+        system_root = next((value for key, value in env.items() if key.upper() == 'SYSTEMROOT'), None)
+        if not system_root:
+            raise RuntimeError('SystemRoot is required for the Windows system-only PATH')
+        env['PATH'] = str(pathlib.PureWindowsPath(system_root) / 'System32')
+    else:
+        env['PATH'] = '/usr/bin:/bin'
+    return env
+
 def invoke(executable, args, text=None):
-    env = os.environ.copy()
-    env['PATH'] = str(pathlib.Path(env['SystemRoot']) / 'System32') if os.name == 'nt' else '/usr/bin:/bin'
+    env = restricted_environment(os.environ, os.name == 'nt')
     return subprocess.run([str(executable), *map(str, args)], input=text, text=True, capture_output=True, encoding='utf-8', cwd=root, env=env)
 
 def run(args, text=None):

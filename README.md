@@ -91,6 +91,10 @@ for the format, validation steps, and known scope and resource limits.
 [faberline/som](https://github.com/faberline/som/issues/217), which owns both SOM CNL syntax and
 semantics.
 
+## Development rules
+
+ja → zh-Hant work follows [docs/ja-zh-development-rules.md](docs/ja-zh-development-rules.md); agents also read [AGENTS.md](AGENTS.md).
+
 ## Model token limits
 
 Enable the `model-tokenizer` Cargo feature to count model tokens or limit the length of model input. A model token is a unit of text in the model's encoding. Reuse the tokenizer across calls.

@@ -8,7 +8,7 @@ import subprocess
 from collections import Counter
 from pathlib import Path
 
-BASE_REF_DEFAULT = "e1f817c33b9d1676474a2d2a24f8d8c0a9f9c9cb"
+BASE_REF_DEFAULT = "d99dd7b68001687b3cd76023ac32785abdc32f06"
 LEXICON_FILES = {
     "en": "crates/faberline-nlp/lexicon/data/en.tsv",
     "zh_hant": "crates/faberline-nlp/lexicon/data/zh_hant.tsv",

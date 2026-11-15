@@ -1,0 +1,12 @@
+# First-party MIT UPOS/semantic overrides for Chinese lexicon hygiene (C1)
+# Format: surface	variant	cost	decided_upos	upos_mask	lemma	counterpart	meta
+花蓮	zh-Hant	1200	PROPN	PROPN	-	花莲	sem=location
+波士頓	zh-Hant	1200	PROPN	PROPN	-	波士顿	sem=location
+阿芳	zh-Hant	1200	PROPN	PROPN	-	-	sem=person
+清單	zh-Hant	1200	NOUN	NOUN	-	清单	-
+粟米	zh-Hant	1200	NOUN	NOUN	-	-	-
+蜀錦	zh-Hant	1200	NOUN	NOUN	-	蜀锦	-
+優越感	zh-Hant	1200	NOUN	NOUN	-	优越感	-
+數據	zh-Hant	1200	NOUN	NOUN	-	数据	-
+資料	zh-Hant	1200	NOUN	NOUN	-	资料	-
+網絡	zh-Hant	1200	NOUN	NOUN	-	网络	-

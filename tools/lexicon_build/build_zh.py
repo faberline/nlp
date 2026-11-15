@@ -494,6 +494,68 @@ def mine_corpora_npmi(
     return unigrams, mined, docs
 
 
+_NR_NON_PERSON_SUFFIXES = frozenset(
+    "權权法學学术論论制度性化感率量力器機机品物料劑剂藥药病症炎癌築筑館馆院系部局會会"
+    "社黨党軍军隊队團团國国省市縣县區区鎮镇鄉乡村路街橋桥站港場场廠厂店行業務务費费"
+    "稅税款價价單单表書书報报刊圖图片集錄录史記记傳传經经說話话語语詞词字號号式型類类"
+    "種种級级等面線线點点網网體体质質素能原物米麥麦豆瓜果菜茶酒肉魚鱼鳥鸟蟲虫草花樹树"
+    "木石沙土金銀银銅铜鐵铁錦锦絲丝布紙纸墨筆笔刀劍剑車车船房屋門门窗桌椅床燈灯鐘钟"
+    "痛風风雨雪霜霧雾雲云雷電电光色聲声味香臭氣气水火油鹽盐糖醋醬酱湯汤飯饭麵面餅饼糕粥"
+)
+_NS_NT_NZ_NOUN_SUFFIXES = frozenset(
+    "錦锦緞缎繡绣綢绸布瓷陶玉茶酒菜餅饼麵面米果梨桃棗枣橘柑語语話话文字學学术法論论"
+    "品物器料劑剂藥药病症感權权力率度單单表書书報报纸紙筆笔墨硯砚刀劍剑槍枪砲炮"
+    "車车船機机網网線线片素質质酸鹼碱鹽盐醇酮醛醚酯烴烃苯酚胺"
+)
+_MODIFIER_NOUN_SUFFIXES = frozenset(
+    "感權权力率度性單单表書书品物器者員员師师家室館馆處处部科組组會会業业界學学"
+    "論论法制式型類类種种點点線线面體体網网觀观心意情症病費费金款稅税價价值額额量數数"
+    "期代紀纪史錄录案件事"
+)
+
+
+def clean_map_ictclas(word: str, tag: str) -> tuple[str, str, str]:
+    """Map ICTCLAS tag to (decided_upos, upos_mask, meta) with structural noise repair."""
+    # 1. Single-char entity/unknown tags are unreliable in isolation
+    if len(word) == 1 and tag in ("nr", "nrt", "nrfg", "ns", "nt", "nz", "zg", "g", "x"):
+        return "-", "-", "-"
+
+    # 2. Structural repair for person tags (nr / nrt / nrfg)
+    if tag in ("nr", "nrt", "nrfg"):
+        if word in CURATED_PERSON_NAMES:
+            return "PROPN", "PROPN", "sem=person"
+        # 4+ char nr/nrt in jieba are predominantly idioms/compounds
+        if len(word) >= 4:
+            return "-", "-", "-"
+        # nrt transliterations or -人 compounds
+        if tag == "nrt" and (word.endswith("人") or len(word) >= 3):
+            return ("NOUN", "NOUN", "-") if word.endswith("人") else ("-", "-", "-")
+        # 2-char and 3-char compositional/nominal nr forms (e.g. 古建筑, 司法权, 粟米)
+        if word[-1] in _NR_NON_PERSON_SUFFIXES:
+            return "NOUN", "NOUN", "-"
+        if len(word) == 3 and word[0] in ("古", "新", "老", "大", "小", "副", "主", "非", "偽", "伪"):
+            return "-", "-", "-"
+        return "PROPN", "PROPN", "sem=person"
+
+    # 3. Noun-headed ns / nt / nz (e.g. 蜀锦)
+    if tag in ("ns", "nt", "nz"):
+        if len(word) >= 2 and word[-1] in _NS_NT_NZ_NOUN_SUFFIXES:
+            return "NOUN", "NOUN", "-"
+
+    # 4. Noun-headed a / b / l (e.g. 清单, 优越感)
+    if tag in ("a", "b", "l") and len(word) >= 2 and word[-1] in _MODIFIER_NOUN_SUFFIXES:
+        return "NOUN", "NOUN", "-"
+
+    # 5. Descriptive 'z' forms ending in 地 / 的
+    if tag == "z" and len(word) >= 2:
+        if word.endswith("地"):
+            return "ADV", "ADV", "-"
+        if word.endswith("的"):
+            return "ADJ", "ADJ", "-"
+
+    return map_ictclas(word, tag)
+
+
 def map_ictclas(word: str, tag: str) -> tuple[str, str, str]:
     """Map ICTCLAS tag to (decided_upos, upos_mask, meta)."""
     meta = "-"
@@ -555,7 +617,7 @@ def resolve_pos(
     conv: OpenCCConverter,
 ) -> tuple[str, str, str]:
     """Determine (decided_upos, upos_mask, meta) with 0 conflicts against pos.rs and gold."""
-    decided, mask, meta = map_ictclas(word, ictclas_tag)
+    decided, mask, meta = clean_map_ictclas(word, ictclas_tag)
 
     # Check gold in both exact form and cross-script form
     gold_tags: set[str] = set()
@@ -583,9 +645,10 @@ def resolve_pos(
 
     # 3. Gold compatibility check
     if gold_tags:
+        base_tags = set(mask.split("|")) if mask != "-" else set()
         if len(gold_tags) > 1:
             # Multi-POS in gold -> MUST be "-"
-            tags = set(mask.split("|")) | gold_tags
+            tags = base_tags | gold_tags
             return "-", "|".join(sorted(tags)), meta
         only_gold = next(iter(gold_tags))
         if decided != "-" and decided != only_gold:
@@ -595,7 +658,10 @@ def resolve_pos(
                 meta = "-"
             return only_gold, only_gold, meta
         if decided == "-":
-            tags = set(mask.split("|")) | gold_tags
+            tags = base_tags | gold_tags
+            if len(tags) == 1:
+                only = next(iter(tags))
+                return only, only, meta
             return "-", "|".join(sorted(tags)), meta
 
     return decided, mask, meta
@@ -672,7 +738,9 @@ def verify_tsv(
             assert 200 <= cost <= 1800, f"{path}:{line_no}: cost out of range {cost}"
             assert dec == "-" or dec in VALID_UPOS, f"{path}:{line_no}: bad dec {dec!r}"
             mask_parts = mask.split("|")
-            assert all(m in VALID_UPOS for m in mask_parts), f"{path}:{line_no}: bad mask {mask!r}"
+            assert (dec == "-" and mask == "-") or all(
+                m in VALID_UPOS for m in mask_parts
+            ), f"{path}:{line_no}: bad mask {mask!r}"
             assert mask_parts == sorted(set(mask_parts)), f"{path}:{line_no}: unsorted mask {mask!r}"
             if dec != "-":
                 assert mask == dec, f"{path}:{line_no}: dec={dec} != mask={mask}"
@@ -842,12 +910,22 @@ def main() -> None:
         if is_clean_han(k) and 2 <= len(k) <= 6:
             mandatory_hans.add(conv.hant_to_hans(k))
 
-    # Load first-party MIT additions (PR #46 + optional modern terms)
+    # Load first-party MIT additions (PR #46 + optional modern UPOS/semantic overrides)
     mit_translate = load_mit_overrides(ZH_TRANSLATE_MIT_TSV)
+    mandatory_hant.update(mit_translate["zh-Hant"].keys())
+    mandatory_hans.update(mit_translate["zh-Hans"].keys())
+
     mit_modern = load_mit_overrides(ZH_MODERN_MIT_TSV)
-    for var_map in (mit_translate, mit_modern):
-        mandatory_hant.update(var_map["zh-Hant"].keys())
-        mandatory_hans.update(var_map["zh-Hans"].keys())
+    # Symmetrically propagate mit_modern across Hant & Hans without altering mandatory_* selection sets
+    for src_var, dst_var, fn in (
+        ("zh-Hant", "zh-Hans", conv.hant_to_hans),
+        ("zh-Hans", "zh-Hant", conv.hans_to_hant),
+    ):
+        for w, row in list(mit_modern[src_var].items()):
+            w_dst = fn(w)
+            if is_clean_han(w_dst) and w_dst not in mit_modern[dst_var]:
+                cost, dec, mask, lemma, _cp, meta = row
+                mit_modern[dst_var][w_dst] = (cost, dec, mask, lemma, w if w != w_dst else "-", meta)
 
     # Build scored candidate pools for zh-Hans and zh-Hant (1-Char Hanzi Policy: freq >= 80 or Gutenberg PD or mandatory)
     hans_pool: dict[str, tuple[float, str]] = {}
@@ -957,7 +1035,16 @@ def main() -> None:
             cp = conv.hant_to_hans(w) if is_hant else conv.hans_to_hant(w)
             if not is_clean_han(cp) or cp == w:
                 cp = "-"
-            if w in mit_overrides and w not in zh_decided and w not in zh_ambiguous and w not in gold_pos:
+            w_hant = conv.hans_to_hant(w)
+            w_hans = conv.hant_to_hans(w)
+            if (
+                w in mit_overrides
+                and w not in zh_decided
+                and w not in zh_ambiguous
+                and w not in gold_pos
+                and w_hant not in gold_pos
+                and w_hans not in gold_pos
+            ):
                 _, m_dec, m_mask, _, m_cp, m_meta = mit_overrides[w]
                 m_mask = "|".join(sorted(set(m_mask.split("|"))))
                 if m_dec != "-" and m_mask != m_dec:

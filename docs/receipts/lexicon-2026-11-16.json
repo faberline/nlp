@@ -2,7 +2,7 @@
   "schema": "nlp.lexicon.receipt.v1",
   "date": "2026-11-16",
   "binary_format": "FNLPLX01",
-  "binary_bytes": 15122271,
+  "binary_bytes": 15122208,
   "total_entries": 350906,
   "total_rules": 1389,
   "variants": {
@@ -22,20 +22,20 @@
     {
       "path": "lexicon/data/zh_hant.tsv",
       "entries": 69909,
-      "bytes": 3082743,
-      "sha256": "371644a07583ccc2ed1f93eb91775f73b46a28903cc94538cc4e1e422224b33b"
+      "bytes": 3034506,
+      "sha256": "631e4bab2de39ca33294a7a32fb1d6fd7ee88fc221f066f642b54a88b1007393"
     },
     {
       "path": "lexicon/data/zh_hans.tsv",
       "entries": 74187,
-      "bytes": 3287974,
-      "sha256": "6f5c62fa1c57e1f1ada7aa5ffa8da0ff8398c080e14e8fbc377492183c64ced3"
+      "bytes": 3236576,
+      "sha256": "cfa9a89c43c734e93143d452adc4aa05b2f71012958275db0d2d8393f432e222"
     },
     {
       "path": "lexicon/data/en.tsv",
       "entries": 66000,
-      "bytes": 2890558,
-      "sha256": "0d61b6d8daa018df433e7d39e7d2d8a056d35376c482c89d7d6c64433e8add48"
+      "bytes": 2807797,
+      "sha256": "c5b8a12a2bfae957398de7c1a27181cfe81df9f847f76c9c6735cbd76f781ad2"
     },
     {
       "path": "lexicon/data/ja.tsv",
@@ -146,8 +146,8 @@
       "core_lex_zip_sha256": "e9ac06222f0ce401a0fef9b129e61e93d59e3ff395a1b037f498962ee5b8ad8b"
     }
   ],
-  "lexicon_bin_bytes": 15122271,
-  "lexicon_bin_sha256": "4d1bade7387a7c2a131e42e18c4f669bf02d09e0998c8ba0aec648a719efb287",
+  "lexicon_bin_bytes": 15122208,
+  "lexicon_bin_sha256": "8b55e6426343d9502dae0b94d2499828a9288cb8e2a75a99e20a366e488a2c8c",
   "upstream_inputs": {
     "wordnet_3_1": {
       "archive": "wn3.1.dict.tar.gz",
@@ -196,7 +196,7 @@
       {
         "id": "pg205",
         "bytes": 667957,
-        "sha256": "2d9a76a2e3e8195c69430516ebd33c4d0757a53ad432ff6186b7b94e6fe99f9"
+        "sha256": "2d9a76a2e3e8195c69430516ebd33c4d0757a53ad432ff6186b7b794e6fe99f9"
       },
       {
         "id": "pg5116",
@@ -211,7 +211,7 @@
       {
         "id": "pg575",
         "bytes": 324388,
-        "sha256": "4434aa015d325e65816eb0e694e7c573fa4b71523530e45adfeb23e7fcf63bf"
+        "sha256": "4434aa015d325e65816eb0e694e7c573fa4b71523530e45adfeb23e7fcf63bf1"
       },
       {
         "id": "pg5827",
@@ -230,15 +230,18 @@
       }
     ],
     "project_gutenberg_zh_pd_books": {
-      "input_file": "zh_hant_novel.jsonl",
-      "input_bytes": 581356,
-      "input_sha256": "9ba954cc67a1ca53d3d7afb16003e55f8a7457bd110804b9aebd48af3e70cd66",
+      "input_file": "zh_hant_pg_pd_150.jsonl",
+      "input_bytes": 425536,
+      "input_sha256": "11b5ce43cef8882d2f386d3a656fd9608fc48db37097ef36edadac56f472b3f7",
       "zh_hans_projection": "OpenCC hant_to_hans",
       "native_external_zh_hans_docs": 0,
       "projected_from_zh_hant_pd_docs": 150,
       "books": [
         {
           "id": "gutenberg:23950",
+          "raw_file": "pg23950.txt",
+          "raw_bytes": 1863656,
+          "raw_sha256": "ed422e10c16c19af7ca7b09ca0320012e60776b3d7cb054769b8f7d9a19aea7d",
           "docs": 80,
           "chars": 74465,
           "canonical_bytes": 219144,
@@ -246,12 +249,38 @@
         },
         {
           "id": "gutenberg:23962",
+          "raw_file": "pg23962.txt",
+          "raw_bytes": 2263209,
+          "raw_sha256": "bd18088ccb70d3164e3a4bc9805a6ea72095d6cc3891e4f172ed0a3d281292bb",
           "docs": 70,
           "chars": 65348,
           "canonical_bytes": 191995,
           "canonical_sha256": "a6814df8c4860ca832d142d2af10b1ba4a2a4da825a7c49af67da59c427d58c0"
         }
       ]
+    },
+    "prepared_corpora": {
+      "reproduce_cmd": "python3 -B tools/lexicon_build/prepare_pd_corpora.py --en-raw-dir <en_raw_dir> --zh-raw-dir <zh_raw_dir> --opencc-dir <opencc_dir> --out-dir <out_dir>",
+      "en_pg_pd_660.jsonl": {
+        "docs": 660,
+        "bytes": 844202,
+        "sha256": "12e8da345d24a9e4225c552a87bd198736673cd1bc15297ca482a6e0fd1d87be"
+      },
+      "zh_hant_pg_pd_150.jsonl": {
+        "docs": 150,
+        "bytes": 425536,
+        "sha256": "11b5ce43cef8882d2f386d3a656fd9608fc48db37097ef36edadac56f472b3f7"
+      },
+      "zh_hans_pg_projected_150.jsonl": {
+        "docs": 150,
+        "bytes": 425542,
+        "sha256": "b7430a38bc681899e3bba025b60779d3cf3673217191101bc43aef831d1cca75"
+      }
+    },
+    "zh_modern_mit_v1": {
+      "path": "tools/lexicon_build/data/zh_modern_mit_v1.tsv",
+      "bytes": 601,
+      "sha256": "422d053c04b3d099213ffdd6d22a647e3d94b46684517ee521ea21ef76b58492"
     },
     "opencc_tables": [
       {
@@ -297,13 +326,13 @@
     ]
   },
   "impact_manifests": {
-    "base_ref": "e1f817c33b9d1676474a2d2a24f8d8c0a9f9c9cb",
+    "base_ref": "d99dd7b68001687b3cd76023ac32785abdc32f06",
     "reproduce_cmd": "python3 -B tools/lexicon_build/generate_c1_manifest.py --out-dir <out_dir>",
     "files": {
-      "manifest_en.tsv": "1f43e9b77c984a5737847d08529518e06a91559bf74b2103bb2611d2ed1af8da",
-      "manifest_zh_hant.tsv": "802c28a824ce337fd3207b1d9d5d960dc6703683e9512aacb05b1eb09c902daa",
-      "manifest_zh_hans.tsv": "46f04ea982f5332b5b7cb9073f64df48ff03e605381ddd2fb10fce8618b6df93",
-      "manifest_summary.json": "a15067b55f70e8f72779191de3d662f69f0a43140f5d1ef4ea8afb880d630b19"
+      "manifest_en.tsv": "efc4df9d4ae16a350e0b4e5b691d05a4347c788509d120f163a390354fda441c",
+      "manifest_zh_hant.tsv": "3b7d610571f741680b2a985fdffee3cca73e47a09de3255806170c44887c9d53",
+      "manifest_zh_hans.tsv": "85f8c3be05d2848773581849b5324fdc61cac079ef29c0a5ea3d573cf6ffd5b1",
+      "manifest_summary.json": "03f635554105c44ef00696ce0fa93caf2cebfc38c8c618f82789a1c49ab410d7"
     }
   }
 }

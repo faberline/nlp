@@ -94,7 +94,11 @@ unclear licence. Universal Dependencies treebank text is out; only its label sch
 > input is a deterministic `OpenCC hant_to_hans` projection of those same `150` `zh-Hant` Gutenberg
 > PD texts (`native_external_zh_hans_docs: 0`, `projected_from_zh_hant_pd_docs: 150`), not
 > independently sourced native `zh-Hans` text. Five compositional-bigram boundary restorations are
-> retained in `EXCLUDED_WORDS` (`三本`, `就会`, `要去`, `發到`, `发到`).
+> retained in `EXCLUDED_WORDS` (`三本`, `就会`, `要去`, `發到`, `发到`). Out-of-dictionary or
+> structurally unreliable POS entries emit `decided_upos="-"` and `upos_mask="-"` rather than
+> defaulting to `NOUN`. End-to-end clean builds run `tools/lexicon_build/prepare_pd_corpora.py`,
+> `tools/lexicon_build/build_en.py`, `tools/lexicon_build/build_zh.py`, and
+> `tools/lexicon_build/generate_c1_manifest.py` with explicit CLI flags (see `docs/receipts/lexicon-2026-11-16.json`).
 Sizes come from each source's own metadata as read by the previous session on 2026-11-10; this
 session re-checked only the two CC0 casual sources (the `moztw/cc0-sentences` README says "zh-tw
 sentences release under CC0"; the Common Voice `server/data/en/` folder has a `LICENSE` file and

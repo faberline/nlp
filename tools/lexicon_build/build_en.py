@@ -1,38 +1,37 @@
 #!/usr/bin/env python3
 """Build lexicon/data/en.tsv from Princeton WordNet 3.1, SCOWL/VarCon,
-src/doc/pos.rs, and public CC0/PD English corpora.
+src/doc/pos.rs, and allowlisted Public Domain Project Gutenberg English texts.
 
 Strictly permissive commercial-safe sources only:
 - Princeton WordNet 3.1 (WordNet BSD-style license)
 - SCOWL / VarCon (MIT/BSD-like permissive license)
-- In-repo src/doc/pos.rs & public CC0/PD en_corpus.jsonl
+- In-repo src/doc/pos.rs & gold sets (first-party MIT/CC0)
+- Public Domain Project Gutenberg (12 books, 660 docs)
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import os
 import re
 import sys
+import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRATCH_DIR = Path(
-    "/Users/chrischeng/.gemini/antigravity/brain/"
-    "fcdf5ec7-a63d-4308-93f6-0436229a04ea/scratch"
-)
-BUILD_TMP_DIR = SCRATCH_DIR / "lex_build_en"
-WN_DICT_DIR = BUILD_TMP_DIR / "dict"
-VARCON_PATH = BUILD_TMP_DIR / "varcon.txt"
-CORPUS_PATH = SCRATCH_DIR / "corpora" / "en" / "en_corpus.jsonl"
 
 NLP_CRATE_ROOT = REPO_ROOT / "crates" / "faberline-nlp"
 POS_RS_PATH = NLP_CRATE_ROOT / "src" / "doc" / "pos.rs"
 POS_GOLD_PATH = NLP_CRATE_ROOT / "tests" / "data" / "pos_gold.json"
 GOLD_LAYERS_PATH = NLP_CRATE_ROOT / "tests" / "data" / "gold_layers4_6_v1.jsonl"
 OUT_TSV_PATH = NLP_CRATE_ROOT / "lexicon" / "data" / "en.tsv"
+
+ALLOWED_PG_IDS = frozenset(
+    {"76", "2701", "64317", "541", "16643", "205", "5116", "408", "575", "5827", "130", "470"}
+)
 
 WORD_RE = re.compile(r"^[a-z]+(?:[-'][a-z]+)*$")
 CLITICS = {"n't", "'ll", "'ve", "'re", "'m", "'s", "'d"}
@@ -73,7 +72,7 @@ CLOSED_LEMMAS = {
 
 TARGET_MIN = 50_000
 TARGET_MAX = 70_000
-TARGET_GOAL = 62_000
+TARGET_GOAL = 66_000
 
 
 def is_valid_token(w: str) -> bool:
@@ -141,29 +140,49 @@ def load_gold_upos() -> dict[str, set[str]]:
     return gold
 
 
-def load_corpus_freqs() -> Counter[str]:
-    """Count token frequencies from public CC0/PD en_corpus.jsonl."""
+def load_corpus_freqs(
+    corpus_path: Path | None, gutenberg_dir: Path | None
+) -> tuple[Counter[str], int]:
+    """Count token frequencies strictly from the 12 allowlisted Project Gutenberg PD books."""
     counts: Counter[str] = Counter()
-    if not CORPUS_PATH.exists():
-        return counts
+    docs = 0
     tok_re = re.compile(r"[a-z]+(?:[-'][a-z]+)*|n't|'[a-z]+")
-    with CORPUS_PATH.open(encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            d = json.loads(line)
-            text = d.get("text", "").lower().replace("\u2019", "'")
+    if corpus_path is not None:
+        with corpus_path.open(encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                d = json.loads(line)
+                src = d.get("source", "")
+                if not src.startswith("gutenberg:"):
+                    continue
+                parts = src.split(":", 2)
+                if len(parts) < 2 or parts[1] not in ALLOWED_PG_IDS:
+                    continue
+                docs += 1
+                text = d.get("text", "").lower().replace("\u2019", "'")
+                for m in tok_re.finditer(text):
+                    w = m.group(0)
+                    if is_valid_token(w):
+                        counts[w] += 1
+    elif gutenberg_dir is not None:
+        for pg_id in sorted(ALLOWED_PG_IDS):
+            pg_file = gutenberg_dir / f"pg{pg_id}.txt"
+            if not pg_file.exists():
+                raise FileNotFoundError(f"Missing allowlisted Gutenberg file: {pg_file}")
+            docs += 1
+            text = pg_file.read_text(encoding="utf-8", errors="replace").lower().replace("\u2019", "'")
             for m in tok_re.finditer(text):
                 w = m.group(0)
                 if is_valid_token(w):
                     counts[w] += 1
-    return counts
+    return counts, docs
 
 
-def load_cntlist() -> Counter[str]:
+def load_cntlist(wn_dict_dir: Path) -> Counter[str]:
     """Load WordNet cntlist frequencies per lemma."""
     counts: Counter[str] = Counter()
-    cnt_path = WN_DICT_DIR / "cntlist"
+    cnt_path = wn_dict_dir / "cntlist"
     if not cnt_path.exists():
         return counts
     with cnt_path.open(encoding="utf-8", errors="replace") as f:
@@ -181,11 +200,11 @@ def load_cntlist() -> Counter[str]:
     return counts
 
 
-def load_noun_lex_filenums() -> tuple[dict[str, int], set[str]]:
+def load_noun_lex_filenums(wn_dict_dir: Path) -> tuple[dict[str, int], set[str]]:
     """Read data.noun to map synset_offset -> lex_filenum and detect instance-only nouns."""
     offset_to_lex: dict[str, int] = {}
     instance_offsets: set[str] = set()
-    data_noun = WN_DICT_DIR / "data.noun"
+    data_noun = wn_dict_dir / "data.noun"
     with data_noun.open(encoding="utf-8", errors="replace") as f:
         for line in f:
             if line.startswith("  "):
@@ -203,7 +222,7 @@ def load_noun_lex_filenums() -> tuple[dict[str, int], set[str]]:
 
 
 def load_wordnet(
-    offset_to_lex: dict[str, int], instance_offsets: set[str]
+    wn_dict_dir: Path, offset_to_lex: dict[str, int], instance_offsets: set[str]
 ) -> tuple[
     dict[str, set[str]],
     dict[str, int],
@@ -219,7 +238,7 @@ def load_wordnet(
     instance_only_nouns: set[str] = set()
 
     for pos_name, ud_tag in WN_POS_TO_UD.items():
-        idx_path = WN_DICT_DIR / f"index.{pos_name}"
+        idx_path = wn_dict_dir / f"index.{pos_name}"
         with idx_path.open(encoding="utf-8", errors="replace") as f:
             for line in f:
                 if line.startswith("  "):
@@ -260,7 +279,7 @@ def load_wordnet(
     irr_bases: set[str] = set()
     for pos_name in ["noun", "verb", "adj", "adv"]:
         ud_tag = WN_POS_TO_UD[pos_name]
-        exc_path = WN_DICT_DIR / f"{pos_name}.exc"
+        exc_path = wn_dict_dir / f"{pos_name}.exc"
         with exc_path.open(encoding="utf-8", errors="replace") as f:
             for line in f:
                 parts = line.strip().split()
@@ -277,7 +296,7 @@ def load_wordnet(
     return wn_pos, wn_senses, wn_sem, instance_only_nouns, exc_map, irr_bases
 
 
-def load_varcon() -> tuple[dict[str, tuple[str, str]], set[str]]:
+def load_varcon(varcon_path: Path) -> tuple[dict[str, tuple[str, str]], set[str]]:
     """Parse varcon.txt for clean US<->GB pairs.
 
     Returns:
@@ -287,7 +306,7 @@ def load_varcon() -> tuple[dict[str, tuple[str, str]], set[str]]:
     raw_pairs: list[tuple[str, str]] = []
     shared_words: set[str] = set()
 
-    with VARCON_PATH.open(encoding="utf-8", errors="replace") as f:
+    with varcon_path.open(encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.split("#", 1)[0].strip()
             if not line:
@@ -370,23 +389,69 @@ def infer_regular_lemma(
     return candidates[0]
 
 
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Build crates/faberline-nlp/lexicon/data/en.tsv")
+    p.add_argument(
+        "--wn-dict-dir",
+        type=Path,
+        default=Path(os.environ["LEX_WN_DICT_DIR"]) if "LEX_WN_DICT_DIR" in os.environ else None,
+        help="Path to Princeton WordNet 3.1 dict/ directory (or env LEX_WN_DICT_DIR)",
+    )
+    p.add_argument(
+        "--varcon",
+        type=Path,
+        default=Path(os.environ["LEX_VARCON_PATH"]) if "LEX_VARCON_PATH" in os.environ else None,
+        help="Path to SCOWL/VarCon varcon.txt (or env LEX_VARCON_PATH)",
+    )
+    p.add_argument(
+        "--clean-corpus-jsonl",
+        type=Path,
+        default=Path(os.environ["LEX_EN_CORPUS_JSONL"]) if "LEX_EN_CORPUS_JSONL" in os.environ else None,
+        help="Path to JSONL corpus filtered strictly to allowlisted Gutenberg PD books (or env LEX_EN_CORPUS_JSONL)",
+    )
+    p.add_argument(
+        "--gutenberg-dir",
+        type=Path,
+        default=Path(os.environ["LEX_EN_GUTENBERG_DIR"]) if "LEX_EN_GUTENBERG_DIR" in os.environ else None,
+        help="Directory containing pg<id>.txt for the 12 allowlisted Gutenberg PD books (or env LEX_EN_GUTENBERG_DIR)",
+    )
+    p.add_argument(
+        "--tmp-dir",
+        type=Path,
+        default=Path(os.environ.get("LEX_TMP_DIR", tempfile.gettempdir())),
+        help="Temporary directory for atomic write (or env LEX_TMP_DIR)",
+    )
+    return p.parse_args()
+
+
 def main() -> int:
-    for required in [WN_DICT_DIR / "index.noun", VARCON_PATH, POS_RS_PATH]:
+    args = parse_args()
+    if args.wn_dict_dir is None or args.varcon is None:
+        print(
+            "ERROR: --wn-dict-dir (or LEX_WN_DICT_DIR) and --varcon (or LEX_VARCON_PATH) are required",
+            file=sys.stderr,
+        )
+        return 1
+    wn_dict_dir: Path = args.wn_dict_dir
+    varcon_path: Path = args.varcon
+    tmp_dir: Path = args.tmp_dir
+
+    for required in [wn_dict_dir / "index.noun", varcon_path, POS_RS_PATH]:
         if not required.exists():
             print(f"ERROR: missing required file {required}", file=sys.stderr)
             return 1
 
     en_decided, en_ambiguous = parse_pos_rs()
     gold_upos = load_gold_upos()
-    corpus_freqs = load_corpus_freqs()
-    cntlist_freqs = load_cntlist()
-    offset_to_lex, instance_offsets = load_noun_lex_filenums()
+    corpus_freqs, docs = load_corpus_freqs(args.clean_corpus_jsonl, args.gutenberg_dir)
+    cntlist_freqs = load_cntlist(wn_dict_dir)
+    offset_to_lex, instance_offsets = load_noun_lex_filenums(wn_dict_dir)
     wn_pos, wn_senses, wn_sem, instance_only_nouns, exc_map, irr_bases = load_wordnet(
-        offset_to_lex, instance_offsets
+        wn_dict_dir, offset_to_lex, instance_offsets
     )
-    variant_map, _ = load_varcon()
+    variant_map, shared_words = load_varcon(varcon_path)
 
-    # Build candidate vocabulary
+    # Build candidate vocabulary (Product Vocabulary Policy)
     must_keep: set[str] = set()
     must_keep.update(en_decided.keys())
     must_keep.update(en_ambiguous)
@@ -394,21 +459,23 @@ def main() -> int:
     must_keep.update(exc_map.keys())
     must_keep.update(irr_bases)
     must_keep.update(variant_map.keys())
+    must_keep.update(shared_words)
     must_keep.update(w for w, c in corpus_freqs.items() if c >= 1)
     must_keep.update(w for w, c in cntlist_freqs.items() if c >= 1)
 
-    # Filter remaining WordNet words to hit TARGET_GOAL (~62k)
-    extra_candidates: list[tuple[tuple[int, int, int], str]] = []
+    # Filter remaining WordNet words to hit TARGET_GOAL (66k)
+    extra_candidates: list[tuple[tuple[int, int, int, int], str]] = []
     for w in wn_pos:
         if w in must_keep:
             continue
         is_non_instance = 0 if w in instance_only_nouns else 1
+        is_sem_headword = 1 if (w in wn_sem and w not in instance_only_nouns) else 0
         has_non_noun = 1 if (wn_pos[w] - {"NOUN"}) else 0
         senses = wn_senses.get(w, 1)
-        score = (is_non_instance, has_non_noun, senses)
+        score = (is_non_instance, is_sem_headword, has_non_noun, senses)
         extra_candidates.append((score, w))
 
-    extra_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    extra_candidates.sort(key=lambda x: (-x[0][0], -x[0][1], -x[0][2], -x[0][3], x[1]))
     need_extra = max(0, TARGET_GOAL - len(must_keep))
     vocab = set(must_keep)
     for _, w in extra_candidates[:need_extra]:
@@ -566,10 +633,11 @@ def main() -> int:
 
     # Write atomically via scratch temp file -> os.replace()
     OUT_TSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp_out = BUILD_TMP_DIR / "en.tsv.tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_out = tmp_dir / "en.tsv.tmp"
     with tmp_out.open("w", encoding="utf-8", newline="\n") as f:
         f.write("# faberline-nlp English (en-US / en-GB / en) morphological & semantic lexicon\n")
-        f.write("# Sources: Princeton WordNet 3.1, SCOWL/VarCon, src/doc/pos.rs, CC0/PD en_corpus\n")
+        f.write("# Sources: Princeton WordNet 3.1, SCOWL/VarCon, src/doc/pos.rs, PD Project Gutenberg (12 books)\n")
         f.write("# Format: surface\\tvariant\\tcost\\tdecided_upos\\tupos_mask\\tlemma\\tcounterpart\\tmeta\n")
         for r in deduped:
             f.write(
@@ -583,7 +651,7 @@ def main() -> int:
     sem_count = sum(1 for r in deduped if "sem=" in r[7])
     irr_count = sum(1 for r in deduped if "infl=irr" in r[7])
     lemma_count = sum(1 for r in deduped if r[5] != "-")
-    print(f"Wrote {len(deduped)} entries to {OUT_TSV_PATH}")
+    print(f"Wrote {len(deduped)} entries to {OUT_TSV_PATH} (corpus docs={docs})")
     print(f"  Variants: {dict(var_counts)}")
     print(f"  Decided UPOS: {dec_count}, Ambiguous('-'): {len(deduped) - dec_count}")
     print(f"  With lemma != '-': {lemma_count}, sem=*: {sem_count}, infl=irr: {irr_count}")

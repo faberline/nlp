@@ -36414,13 +36414,13 @@
 何れ	ja	754	-	ADV|PRON	-	-	-
 何一つ	ja	832	ADV	ADV	-	-	-
 何事	ja	1036	NOUN	NOUN	-	何事	-
-何処	ja	705	PRON	PRON	-	何處	src=unihan_zh_hant
+何処	ja	705	PRON	PRON	-	哪裡	src=first_party_mit
 何分	ja	895	-	ADV|NOUN	-	-	-
 何卒	ja	857	ADV	ADV	-	-	-
 何彼と	ja	841	ADV	ADV	-	-	-
 何心無い	ja	755	ADJ	ADJ	-	-	infl=adj_i
 何所と無く	ja	857	ADV	ADV	-	-	-
-何故	ja	602	ADV	ADV	-	何故	src=unihan_zh_hant
+何故	ja	602	ADV	ADV	-	為什麼	src=first_party_mit
 何故か	ja	832	ADV	ADV	-	不知為何	src=first_party_mit
 何方道	ja	857	ADV	ADV	-	-	-
 何時	ja	918	PRON	PRON	-	-	-
@@ -41611,7 +41611,7 @@
 吾	ja	1116	NOUN	NOUN	-	-	-
 吾が	ja	622	DET	DET	-	-	-
 吾妻	ja	1032	NOUN	NOUN	-	-	-
-吾輩	ja	420	PRON	PRON	-	吾輩	src=unihan_zh_hant
+吾輩	ja	420	PRON	PRON	-	我	src=first_party_mit
 呂	ja	1056	NOUN	NOUN	-	-	-
 呆ける	ja	1162	VERB	VERB	-	-	infl=ichidan
 呆る	ja	1162	VERB	VERB	-	-	infl=ichidan

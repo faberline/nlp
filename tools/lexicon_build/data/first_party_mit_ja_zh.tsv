@@ -2735,3 +2735,7 @@
 仰る	VERB	說	750	godan_ra
 申し上げる	VERB	稟告	750	ichidan
 頂ける	VERB	能承蒙	750	ichidan
+# --- Post-merge A3 audit fixes ---
+何処	PRON	哪裡	705	-
+何故	ADV	為什麼	602	-
+吾輩	PRON	我	420	-

@@ -40,8 +40,8 @@
     {
       "path": "lexicon/data/ja.tsv",
       "entries": 70827,
-      "bytes": 2970486,
-      "sha256": "0af9157bc606164835e1632005bc0785c09d013c045024e2af63127982f98228"
+      "bytes": 2970489,
+      "sha256": "79893e79cdb4d64139b522eda92ad5b103d9ab4731d8fbf03ef1d98db91433f5"
     },
     {
       "path": "lexicon/data/ja_inflect.tsv",
@@ -136,5 +136,5 @@
     }
   ],
   "lexicon_bin_bytes": 15131026,
-  "lexicon_bin_sha256": "f4edd6a90e5d4a350d8a41ff97c4cd966489ae04a03a9bd0c65bd879d6a9830b"
+  "lexicon_bin_sha256": "3c1e4db0a0d9cc5c7204907545119d90b4efbcfed2f1b166c35107c760a1baee"
 }

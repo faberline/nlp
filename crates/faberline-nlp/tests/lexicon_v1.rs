@@ -503,6 +503,8 @@ fn ja_shinjitai_to_traditional_mapping() {
         ('脱', '脫'),
         ('査', '查'),
         ('税', '稅'),
+        ('艶', '豔'),
+        ('槙', '槇'),
     ];
     for (src, dst) in pairs {
         assert_eq!(map_ja_shinjitai_char(src), dst, "pair {src} -> {dst}");
@@ -514,4 +516,6 @@ fn ja_shinjitai_to_traditional_mapping() {
     assert_eq!(map_ja_shinjitai("東京駅"), "東京驛");
     assert_eq!(map_ja_shinjitai("台風到着"), "台風到着");
     assert_eq!(map_ja_shinjitai("偽物と戻る"), "偽物と戻る");
+    assert_eq!(map_ja_shinjitai("艶"), "豔");
+    assert_eq!(map_ja_shinjitai("槙"), "槇");
 }

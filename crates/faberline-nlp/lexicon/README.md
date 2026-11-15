@@ -13,7 +13,7 @@ Permissively licensed, compile-time compiled multilingual lexicon covering 4 lan
   - `ko.tsv` (8-column): Korean (`ko`) stems, function words, and pre-analyzed irregular inflections.
   - `ko_morph.tsv` (6-column): Korean Josa, Copula, XSV/XSA, and Eomi suffix rules with batchim conditions and exact character-span decompositions.
 - `LICENSES/` — Upstream permissive license texts (`MIT`, `Apache-2.0`, `BSD-3-Clause`, `Unicode-3.0`, `WordNet`, `SCOWL`). No `CC BY-SA`, `CC BY-NC`, `CC BY-ND`, or `GPL` sources are used.
-  - `LICENSE-UNICODE-3.0.txt`: Unicode License V3 (`Unicode-3.0`) covering Unicode Unihan `kTraditionalVariant` / Japanese shinjitai-to-Traditional glyph mappings (`src/lexicon/ja.rs` and `tools/lexicon_build/derive_unihan_kango.py`).
+  - `LICENSE-UNICODE-3.0.txt`: Unicode License V3 (`Unicode-3.0`) covering Unicode Unihan `kTraditionalVariant` / Japanese shinjitai-to-Traditional glyph mappings (`src/lexicon/ja.rs` and `tools/lexicon_build/derive_unihan_kango.py`; `249` `unihan_zh_hant` rows in `ja.tsv`, `342` false-friend blocks in `tools/lexicon_build/data/ja_zh_false_friends.tsv`).
 
 ## Build-Time Compilation
 

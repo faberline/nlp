@@ -3708,7 +3708,7 @@ fn translate_clause_bunsetsus(
         has_mo: bool,
         had_ga: bool,
         is_hou: bool,
-        is_pronoun_or_name: bool,
+        is_person_like: bool,
     }
 
     let mut connectors: Vec<String> = Vec::new();
@@ -3792,10 +3792,7 @@ fn translate_clause_bunsetsus(
                 let has_mo = b.case_particle.as_deref() == Some("も");
                 let had_ga = b.case_particle.as_deref() == Some("が");
                 let is_hou = had_ga && b.atoms.iter().any(|a| !a.is_locked && a.surface == "ほう");
-                let is_pronoun_or_name = b
-                    .atoms
-                    .iter()
-                    .any(|a| matches!(a.upos, Some(Upos::Pron | Upos::Propn)));
+                let is_person_like = is_person_like_bunsetsu(&b);
                 let s = render_bunsetsu_np(&b, target);
                 if !s.is_empty() {
                     if is_wh_mo {
@@ -3806,7 +3803,7 @@ fn translate_clause_bunsetsus(
                             has_mo: false,
                             had_ga: false,
                             is_hou: false,
-                            is_pronoun_or_name,
+                            is_person_like,
                         });
                     } else {
                         subj_entries.push(PlacedSubj {
@@ -3814,7 +3811,7 @@ fn translate_clause_bunsetsus(
                             has_mo,
                             had_ga,
                             is_hou,
-                            is_pronoun_or_name,
+                            is_person_like,
                         });
                     }
                 }
@@ -4065,9 +4062,9 @@ fn translate_clause_bunsetsus(
     let negative_existence = verb_core == "沒有" && (pred_is_aru || pred_is_bare_nai);
     if (pred_is_aru && verb_core == "有") || negative_existence {
         // Move a single nominal item after the negative existence verb.
-        // Keep pronouns, names and any separate possessor topic as subjects.
+        // Keep people and any separate possessor topic as subjects.
         let move_negative_topic =
-            negative_existence && subj_entries.len() == 1 && !subj_entries[0].is_pronoun_or_name;
+            negative_existence && subj_entries.len() == 1 && !subj_entries[0].is_person_like;
         let has_ni = iobjs
             .iter()
             .chain(obliques.iter())

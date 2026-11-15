@@ -91,8 +91,8 @@ fn load_precomputed_doc(path: &PathBuf) -> Result<Document> {
     }
 }
 
-fn run() -> Result<()> {
-    let args = Args::parse();
+fn run(argv: Vec<std::ffi::OsString>) -> Result<()> {
+    let args = Args::parse_from(argv);
 
     let mut text = String::new();
     io::stdin()
@@ -136,9 +136,14 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn main() {
-    if let Err(err) = run() {
+pub fn dispatch(argv: Vec<std::ffi::OsString>) {
+    if let Err(err) = run(argv) {
         eprintln!("nlp_narrative_doc: {err:#}");
         std::process::exit(1);
     }
+}
+
+#[allow(dead_code)]
+fn main() {
+    dispatch(std::env::args_os().collect());
 }

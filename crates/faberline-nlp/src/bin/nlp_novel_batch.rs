@@ -2942,9 +2942,9 @@ fn with_platform_pool<T, F: FnOnce() -> T>(f: F) -> T {
     f()
 }
 
-fn run() -> Result<()> {
+fn run(argv: Vec<std::ffi::OsString>) -> Result<()> {
     let start_instant = Instant::now();
-    let args = Args::parse();
+    let args = Args::parse_from(argv);
 
     let (input_mode, chapters, extra_corpus_meta) = match (&args.bundles_dir, &args.manifest) {
         (Some(dir), None) => {
@@ -3696,11 +3696,16 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn main() {
-    if let Err(err) = run() {
+pub fn dispatch(argv: Vec<std::ffi::OsString>) {
+    if let Err(err) = run(argv) {
         eprintln!("nlp_novel_batch: {err:#}");
         std::process::exit(1);
     }
+}
+
+#[allow(dead_code)]
+fn main() {
+    dispatch(std::env::args_os().collect());
 }
 
 #[cfg(test)]

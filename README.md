@@ -1,5 +1,30 @@
 # Faberline NLP
 
+## Unified command line
+
+Build the CPU command with `cargo build --release --locked -p faberline-nlp-cli`.
+The result is `target/release/nlp` (`nlp.exe` on Windows).
+Its dictionary is built into the executable. The default build needs no model files.
+
+Run `nlp --help` to list the commands. Run `nlp <command> --help` for its options.
+The commands use the same options and output as the existing executables.
+
+| Command | Existing executable |
+|---|---|
+| `nlp doc` | `nlp_doc` |
+| `nlp novel-batch` | `nlp_novel_batch` |
+| `nlp source-stream` | `nlp_source_stream` |
+| `nlp narrative-doc` | `nlp_narrative_doc` |
+| `nlp narrative-batch` | `nlp_narrative_batch` |
+| `nlp translate` | `nlp_translate` |
+| `nlp translate-batch` | `nlp_translate_batch` |
+
+The `onnx`, `coreml`, and `model-tokenizer` Cargo features remain optional.
+Model paths still refer to files supplied by the caller.
+No production model weights are included in the default CPU build.
+
+## Library
+
 A Rust library for finding candidate events and ordering them in Chinese narrative text. Results point back to spans in the original text. An end offset is exclusive. Offsets count Unicode scalar values from the start of each input.
 
 Call `analyze` with the source text, its title, and a `Lexicon`. The caller supplies character names, alternate names, places, objects, rank terms, and publisher footer markers. The result includes events, text sections, and items that need review.

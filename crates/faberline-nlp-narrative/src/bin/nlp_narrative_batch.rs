@@ -637,9 +637,9 @@ fn compute_chapter_outputs_sha256(entries: &[CompletedNarrativeIndexEntry]) -> S
     out
 }
 
-fn run() -> Result<()> {
+fn run(argv: Vec<std::ffi::OsString>) -> Result<()> {
     let started = Instant::now();
-    let args = Args::parse();
+    let args = Args::parse_from(argv);
     let workers = args.workers.unwrap_or_else(default_workers).max(1);
 
     let (vocab, discovered_lexicon_terms, vocab_file_provided) =
@@ -831,9 +831,14 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn main() {
-    if let Err(err) = run() {
+pub fn dispatch(argv: Vec<std::ffi::OsString>) {
+    if let Err(err) = run(argv) {
         eprintln!("nlp_narrative_batch: {err:#}");
         std::process::exit(1);
     }
+}
+
+#[allow(dead_code)]
+fn main() {
+    dispatch(std::env::args_os().collect());
 }

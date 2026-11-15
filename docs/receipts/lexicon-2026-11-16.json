@@ -2,7 +2,7 @@
   "schema": "nlp.lexicon.receipt.v1",
   "date": "2026-11-16",
   "binary_format": "FNLPLX01",
-  "binary_bytes": 15122208,
+  "binary_bytes": 15124438,
   "total_entries": 350906,
   "total_rules": 1389,
   "variants": {
@@ -146,8 +146,8 @@
       "core_lex_zip_sha256": "e9ac06222f0ce401a0fef9b129e61e93d59e3ff395a1b037f498962ee5b8ad8b"
     }
   ],
-  "lexicon_bin_bytes": 15122208,
-  "lexicon_bin_sha256": "8b55e6426343d9502dae0b94d2499828a9288cb8e2a75a99e20a366e488a2c8c",
+  "lexicon_bin_bytes": 15124438,
+  "lexicon_bin_sha256": "ed91380631d031c7f742013d0485bef1a56c6f425c438a6a4f20657dcfd1c462",
   "upstream_inputs": {
     "wordnet_3_1": {
       "archive": "wn3.1.dict.tar.gz",

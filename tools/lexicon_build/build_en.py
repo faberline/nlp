@@ -360,9 +360,11 @@ def infer_regular_lemma(
     if word.endswith("ies") and len(word) > 4:
         check(word[:-3] + "y", {"NOUN", "VERB"})
     if word.endswith("es") and len(word) > 3:
-        check(word[:-2], {"NOUN", "VERB"})
+        allowed_es = {"VERB"} if word.endswith(("sises", "sizes")) else {"NOUN", "VERB"}
+        check(word[:-2], allowed_es)
     if word.endswith("s") and len(word) > 2 and not word.endswith("ss"):
-        check(word[:-1], {"NOUN", "VERB"})
+        allowed_s = {"VERB"} if word.endswith(("sises", "sizes")) else {"NOUN", "VERB"}
+        check(word[:-1], allowed_s)
     if word.endswith("ied") and len(word) > 4:
         check(word[:-3] + "y", {"VERB", "ADJ"})
     if word.endswith("ed") and len(word) > 3:
@@ -407,14 +409,21 @@ _PREFIXES = (
 )
 
 
-def _varcon_ise_ize_variants(w: str) -> list[str]:
-    """Generate productive -ise/-ize and -yse/-yze orthographic equivalents."""
+def _varcon_orth_variants(w: str) -> list[str]:
+    """Generate productive -ise/-ize, -yse/-yze, and ae/e orthographic equivalents."""
     swaps = [
-        ("isation", "ization"), ("izations", "isations"), ("isation", "ization"),
-        ("isability", "izability"),
-        ("isable", "izable"), ("isers", "izers"), ("iser", "izer"),
-        ("ising", "izing"), ("ised", "ized"), ("ises", "izes"), ("ise", "ize"),
-        ("ysing", "yzing"), ("ysed", "yzed"), ("yses", "yzes"), ("yser", "yzer"), ("yse", "yze"),
+        ("isations", "izations"), ("isation", "ization"),
+        ("isabilities", "izabilities"), ("isability", "izability"),
+        ("isables", "izables"), ("isable", "izable"),
+        ("isabler", "izabler"), ("isablest", "izablest"),
+        ("isers", "izers"), ("iser", "izer"),
+        ("isings", "izings"), ("ising", "izing"),
+        ("ised", "ized"), ("ises", "izes"), ("ise", "ize"),
+        ("ysings", "yzings"), ("ysing", "yzing"),
+        ("ysed", "yzed"), ("yses", "yzes"),
+        ("ysers", "yzers"), ("yser", "yzer"), ("yse", "yze"),
+        ("aemias", "emias"), ("aemia", "emia"), ("aemic", "emic"),
+        ("aevally", "evally"), ("aeval", "eval"),
     ]
     out: list[str] = []
     for a, b in swaps:
@@ -425,69 +434,147 @@ def _varcon_ise_ize_variants(w: str) -> list[str]:
     return out
 
 
-def infer_derivational_pos(
-    word: str, known_bases: dict[str, set[str]]
-) -> set[str]:
-    """Multi-pass morphological/orthographic POS inference for out-of-WordNet tokens."""
+def _map_lemma_to_word_orthography(word: str, alt: str, alt_lem: str) -> str:
+    """Map an inferred lemma from `alt` back to `word`'s orthographic style if distinct."""
+    if not alt_lem or alt_lem == "-" or alt_lem == alt:
+        return "-"
+    for cand in _varcon_orth_variants(alt_lem):
+        if cand != alt_lem:
+            return cand
+    return alt_lem
+
+
+def infer_derivational_pos_and_lemma(
+    word: str, known_bases: dict[str, set[str]], depth: int = 0
+) -> tuple[set[str], str]:
+    """Multi-pass morphological/orthographic POS & lemma inference for out-of-WordNet tokens."""
     # 1. De-hyphenation & hyphenated compound rules
     if "-" in word:
         dehyphen = word.replace("-", "")
         if dehyphen in known_bases:
-            return set(known_bases[dehyphen])
+            return set(known_bases[dehyphen]), "-"
         if word.endswith(_HYPHEN_ADV_SUFFIXES):
-            return {"ADV"}
+            return {"ADV"}, "-"
         if word.endswith(_HYPHEN_ADJ_SUFFIXES):
-            return {"ADJ"}
+            return {"ADJ"}, "-"
         tail = word.rsplit("-", 1)[-1]
         if len(tail) >= 3 and tail in known_bases:
-            return set(known_bases[tail])
+            return set(known_bases[tail]), "-"
         if tail.endswith(("ed", "en")) and len(tail) >= 4:
-            return {"ADJ"}
+            return {"ADJ"}, "-"
 
-    # 2. Productive VarCon -ize/-ise, -yze/-yse orthographic transfer
-    for alt in _varcon_ise_ize_variants(word):
+    # 2. Productive VarCon -ize/-ise, -yze/-yse, ae/e orthographic transfer
+    for alt in _varcon_orth_variants(word):
         if alt in known_bases:
-            return set(known_bases[alt])
+            return set(known_bases[alt]), "-"
+        alt_base, alt_pos = infer_regular_lemma(alt, known_bases)
+        if alt_base and alt_pos:
+            mapped = _map_lemma_to_word_orthography(word, alt, alt_base)
+            return alt_pos, (mapped if mapped != word else "-")
 
-    # 3. Productive derivational suffixes
-    if word.endswith(("able", "ible", "ative", "ful", "less", "ous", "ish")) and len(word) > 6:
-        return {"ADJ"}
+    # 3. Inflected derivational suffixes
+    if word.endswith(("izes", "ises", "ifies")) and len(word) > 6:
+        lem = word[:-3] + "y" if word.endswith("ifies") else word[:-1]
+        return {"VERB"}, lem
+    if word.endswith(("ized", "ised", "ified")) and len(word) > 6:
+        if word.startswith("un") and len(word) > 7:
+            return {"ADJ"}, "-"
+        lem = word[:-3] + "y" if word.endswith("ified") else word[:-1]
+        return {"ADJ", "VERB"}, lem
+    if word.endswith(("izing", "ising", "ifying")) and len(word) > 7:
+        if word.startswith("un") and len(word) > 8:
+            return {"ADJ"}, "-"
+        lem = word[:-3] + "y" if word.endswith("ifying") else word[:-3] + "e"
+        return {"ADJ", "VERB"}, lem
+    if (
+        word.endswith(
+            (
+                "izations", "isations", "ments", "nesses", "isms", "ists",
+                "ities", "abilities", "ibilities", "emias", "aemias",
+            )
+        )
+        and len(word) > 7
+    ):
+        if word.endswith(("ities", "abilities", "ibilities")):
+            return {"NOUN"}, word[:-3] + "y"
+        if word.endswith("nesses"):
+            return {"NOUN"}, word[:-2]
+        return {"NOUN"}, word[:-1]
+    if word.endswith(("izers", "isers", "ifiers", "fiers")) and len(word) > 6:
+        return {"NOUN"}, word[:-1]
+    if word.endswith(("abler", "ibler")) and len(word) > 7:
+        return {"ADJ"}, word[:-1]
+    if word.endswith(("ablest", "iblest")) and len(word) > 8:
+        return {"ADJ"}, word[:-2]
+
+    # 4. Base derivational suffixes
+    if word.endswith(("able", "ible", "ative", "ful", "less", "ous", "ish", "emic", "aemic")) and len(word) > 6:
+        return {"ADJ"}, "-"
     if word.endswith("ic") and len(word) > 5:
-        return {"ADJ"}
-    if word.endswith("ally") and len(word) > 6:
-        return {"ADV"}
+        return {"ADJ"}, "-"
+    if word.endswith(("ally", "ably", "ibly", "fully", "lessly", "ously", "ively")) and len(word) > 6:
+        return {"ADV"}, "-"
     if word.endswith("ly") and len(word) > 5:
         stem = word[:-2]
-        if stem in known_bases or (word.endswith("ily") and (word[:-3] + "y") in known_bases):
-            return {"ADV"}
-        if len(stem) >= 4:
-            return {"ADV"}
-    if word.endswith(("ness", "ity", "tion", "sion", "ment", "ship", "hood", "ism", "ist")) and len(word) > 6:
-        return {"NOUN"}
+        if stem in known_bases:
+            if "ADJ" in known_bases[stem]:
+                return {"ADV"}, "-"
+            if known_bases[stem] == {"NOUN"}:
+                return {"ADJ"}, "-"
+            return {"ADV"}, "-"
+        if word.endswith("ily") and (word[:-3] + "y") in known_bases:
+            return {"ADV"}, "-"
+        if len(stem) >= 5:
+            return {"ADV"}, "-"
+    if (
+        word.endswith(
+            (
+                "ness", "ity", "tion", "sion", "ment", "ship", "hood", "ism", "ist",
+                "emia", "aemia", "graphy", "logy", "metry", "scopy",
+                "izer", "iser", "ifier", "fier",
+            )
+        )
+        and len(word) > 6
+    ):
+        return {"NOUN"}, "-"
+    if word.endswith("ers") and len(word) > 6:
+        sg = word[:-1]
+        st = sg[:-2]
+        st_e = sg[:-1]
+        for cand in (st, st_e, *_varcon_orth_variants(st), *_varcon_orth_variants(st_e)):
+            if cand in known_bases and "VERB" in known_bases[cand]:
+                return {"NOUN"}, sg
     if word.endswith(("er", "or")) and len(word) > 5:
         stem = word[:-2]
         stem_e = word[:-1]
-        for st in (stem, stem_e, *_varcon_ise_ize_variants(stem), *_varcon_ise_ize_variants(stem_e)):
+        for st in (stem, stem_e, *_varcon_orth_variants(stem), *_varcon_orth_variants(stem_e)):
             if st in known_bases and "VERB" in known_bases[st]:
-                return {"NOUN"}
+                return {"NOUN"}, "-"
     if word.endswith(("ize", "ise", "ify")) and len(word) > 5:
-        return {"VERB"}
+        return {"VERB"}, "-"
     if word.endswith("ate") and len(word) > 6:
-        return {"VERB"}
+        return {"VERB"}, "-"
 
-    # 4. Productive prefix stripping
-    for pfx in _PREFIXES:
-        for sep in ("-", ""):
-            full_pfx = pfx + sep
-            if word.startswith(full_pfx) and len(word) - len(full_pfx) >= 3:
-                stem = word[len(full_pfx) :]
-                if stem in known_bases:
-                    return set(known_bases[stem])
-                sub = infer_derivational_pos(stem, known_bases)
-                if sub:
-                    return sub
+    # 5. Productive prefix stripping
+    if depth < 2:
+        for pfx in _PREFIXES:
+            for sep in ("-", ""):
+                full_pfx = pfx + sep
+                if word.startswith(full_pfx) and len(word) - len(full_pfx) >= 4:
+                    stem = word[len(full_pfx) :]
+                    if pfx == "un" and word.endswith(("ed", "ing")):
+                        return {"ADJ"}, "-"
+                    if stem in known_bases:
+                        return set(known_bases[stem]), "-"
+                    r_base, r_pos = infer_regular_lemma(stem, known_bases)
+                    if r_base and r_pos:
+                        return r_pos, (full_pfx + r_base if full_pfx + r_base != word else "-")
+                    sub_pos, sub_lem = infer_derivational_pos_and_lemma(stem, known_bases, depth + 1)
+                    if sub_pos:
+                        lem = full_pfx + sub_lem if sub_lem != "-" else "-"
+                        return sub_pos, (lem if lem != word else "-")
 
-    return set()
+    return set(), "-"
 
 
 def parse_args() -> argparse.Namespace:
@@ -650,23 +737,40 @@ def main() -> int:
             if counterpart in wn_pos:
                 pos_set.update(wn_pos[counterpart])
 
-        # Infer regular lemma for inflected forms only when not already an uninflected base in wn_pos
-        if lemma == "-" and w not in wn_pos:
+        # Infer regular lemma for inflected forms (including VarCon participles/inflections)
+        if lemma == "-" and (
+            w not in wn_pos
+            or (w in variant_map and not ({"NOUN", "VERB"} & wn_pos[w] and w.endswith(("er", "or"))))
+        ):
             inf_base, inf_pos = infer_regular_lemma(w, wn_pos)
             if inf_base and inf_base != w:
                 pos_set.update(inf_pos)
                 lemma = inf_base
-            elif counterpart != "-" and counterpart not in wn_pos:
+            elif counterpart != "-" and (
+                counterpart not in wn_pos
+                or (
+                    counterpart in variant_map
+                    and not ({"NOUN", "VERB"} & wn_pos[counterpart] and counterpart.endswith(("er", "or")))
+                )
+            ):
                 c_base, c_pos = infer_regular_lemma(counterpart, wn_pos)
                 if c_base and c_base != counterpart:
                     pos_set.update(c_pos)
                     lemma = c_base
 
-        # Multi-pass morphological/orthographic POS inference before unknown fallback
+        # Multi-pass morphological/orthographic POS & lemma inference before unknown fallback
         if not pos_set:
-            pos_set.update(infer_derivational_pos(w, wn_pos))
+            d_pos, d_lem = infer_derivational_pos_and_lemma(w, wn_pos)
+            pos_set.update(d_pos)
+            if lemma == "-" and d_lem != "-":
+                lemma = d_lem
         if not pos_set and counterpart != "-":
-            pos_set.update(infer_derivational_pos(counterpart, wn_pos))
+            d_pos, d_lem = infer_derivational_pos_and_lemma(counterpart, wn_pos)
+            pos_set.update(d_pos)
+            if lemma == "-" and d_lem != "-":
+                lemma = _map_lemma_to_word_orthography(w, counterpart, d_lem)
+                if lemma == "-":
+                    lemma = d_lem
 
         # Align lemma spelling with en-GB variant if lemma is an en-US headword
         if variant == "en-GB" and lemma != "-" and lemma in variant_map:

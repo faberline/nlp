@@ -93,6 +93,19 @@ CURATED_PERSON_NAMES = {
     "阿芳", "阿杰", "小芸", "小林", "老王",
 }
 
+# Known historical/literary/common 2-char person names for clean_map_ictclas POS/sem tagging
+# (kept separate from CURATED_PERSON_NAMES so pool membership/costs stay invariant).
+_KNOWN_PERSON_NAMES = CURATED_PERSON_NAMES | {
+    "老張", "老张", "老李", "小王", "小張", "小张", "小李", "小強", "小强",
+    "李白", "杜甫", "呂布", "吕布", "宋江", "曹操", "劉備", "刘备", "孫權", "孙权", "關羽", "关羽",
+    "張飛", "张飞", "周瑜", "魯肅", "鲁肃", "黃忠", "黄忠", "馬超", "马超", "趙雲", "赵云",
+    "袁紹", "袁绍", "董卓", "項羽", "项羽", "劉邦", "刘邦", "韓信", "韩信", "張良", "张良", "蕭何", "萧何",
+    "屈原", "孔子", "孟子", "老子", "莊子", "庄子", "荀子", "墨子", "韓非", "韩非",
+    "蘇軾", "苏轼", "蘇轍", "苏辙", "蘇洵", "苏洵", "韓愈", "韩愈", "王維", "王维", "杜牧",
+    "陸游", "陆游", "岳飛", "岳飞", "朱熹", "魯迅", "鲁迅", "巴金", "老舍", "茅盾", "冰心",
+    "胡適", "胡适", "朱德", "林彪", "陳雲", "陈云", "李四", "張三", "张三",
+}
+
 # Curated domain/classical/Taiwan terms that must have low enough cost to stay whole
 # (e.g. 在下 cost < cost(在)+cost(下), while 還在下雨 still keeps 在 + 下雨).
 CURATED_BOOST_WORDS = {
@@ -494,63 +507,203 @@ def mine_corpora_npmi(
     return unigrams, mined, docs
 
 
-_NR_NON_PERSON_SUFFIXES = frozenset(
-    "權权法學学术論论制度性化感率量力器機机品物料劑剂藥药病症炎癌築筑館馆院系部局會会"
-    "社黨党軍军隊队團团國国省市縣县區区鎮镇鄉乡村路街橋桥站港場场廠厂店行業務务費费"
-    "稅税款價价單单表書书報报刊圖图片集錄录史記记傳传經经說話话語语詞词字號号式型類类"
-    "種种級级等面線线點点網网體体质質素能原物米麥麦豆瓜果菜茶酒肉魚鱼鳥鸟蟲虫草花樹树"
-    "木石沙土金銀银銅铜鐵铁錦锦絲丝布紙纸墨筆笔刀劍剑車车船房屋門门窗桌椅床燈灯鐘钟"
-    "痛風风雨雪霜霧雾雲云雷電电光色聲声味香臭氣气水火油鹽盐糖醋醬酱湯汤飯饭麵面餅饼糕粥"
+_COMMON_SURNAMES_1 = frozenset(
+    "王李张刘陈杨黄赵周吴徐孙马朱胡郭何林罗高郑梁谢宋唐许韩冯邓曹彭曾萧田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤"
 )
-_NS_NT_NZ_NOUN_SUFFIXES = frozenset(
-    "錦锦緞缎繡绣綢绸布瓷陶玉茶酒菜餅饼麵面米果梨桃棗枣橘柑語语話话文字學学术法論论"
-    "品物器料劑剂藥药病症感權权力率度單单表書书報报纸紙筆笔墨硯砚刀劍剑槍枪砲炮"
-    "車车船機机網网線线片素質质酸鹼碱鹽盐醇酮醛醚酯烴烃苯酚胺"
+_COMPOUND_SURNAMES_2 = (
+    "欧阳", "太史", "端木", "上官", "司马", "东方", "独孤", "南宫", "万俟", "闻人",
+    "夏侯", "诸葛", "尉迟", "公羊", "赫连", "澹台", "皇甫", "宗政", "濮阳", "公冶",
+    "太叔", "申屠", "公孙", "慕容", "仲孙", "钟离", "长孙", "宇文", "司徒", "鲜于",
+    "司空", "闾丘", "子车", "亓官", "司寇", "巫马", "公西", "颛孙", "壤驷", "公良",
+    "漆雕", "乐正", "宰父", "谷梁", "拓跋", "夹谷", "轩辕", "令狐", "段干", "百里",
+    "呼延", "东郭", "南门", "羊舌", "微生", "公户", "公玉", "公仪", "梁丘", "公仲",
+    "公上", "公门", "公山", "公坚", "左丘", "公伯", "西门", "公祖", "第五", "公乘",
+    "贯丘", "公皙", "南荣", "东里", "东宫", "仲长", "子书", "子桑", "即墨", "达奚", "褚师",
+)
+_HEADS_LOC = frozenset("宫庙寺观庵殿斋洞峡滩渡堡寨省市县区镇乡村湾岛溪墩棚山河湖海港路街桥")
+_HEADS_ORG = frozenset("院馆所校厂店行司局会部社党军团")
+_HEADS_NOUN = frozenset("器机具品物药剂车船书报单表法制权学感率度网线面体肉米麦豆瓜果菜茶酒糖盐油汤饭面饼")
+_NR_NONSURNAME_1CHAR_NOUN_SUFFIXES = frozenset(
+    "权法学感率力量器机品物剂药病症炎癌筑馆院部会党军国省市区镇乡村路街桥站港场厂店行务费税款价单表书报刊图集录经话语词字号式型类种级等面线点网体质素能米麦豆瓜果菜茶酒肉鱼鸟虫草花树"
+    "木石沙土金银铜铁锦丝布纸墨笔刀剑车船房屋门窗桌椅床灯钟风雪霜雾雷电光声味香气水火油盐糖醋酱汤饭饼糕粥"
+)
+_NRT_KNOWN_NON_PROPN = {
+    "二人": ("-", "-", "-"),
+    "令人": ("VERB", "VERB", "-"),
+    "登基": ("VERB", "VERB", "-"),
+    "崇拜": ("VERB", "VERB", "-"),
+    "多谢": ("VERB", "VERB", "-"),
+    "崇高": ("ADJ", "ADJ", "-"),
+    "保姆": ("NOUN", "NOUN", "-"),
+    "默契": ("-", "-", "-"),
+    "威武": ("ADJ", "ADJ", "-"),
+    "永世": ("ADV", "ADV", "-"),
+    "旭日": ("NOUN", "NOUN", "-"),
+    "新颜": ("NOUN", "NOUN", "-"),
+    "略逊": ("VERB", "VERB", "-"),
+    "顺祝": ("VERB", "VERB", "-"),
+    "大王": ("NOUN", "NOUN", "-"),
+    "法王": ("NOUN", "NOUN", "-"),
+    "二世": ("NOUN", "NOUN", "-"),
+    "五世": ("NOUN", "NOUN", "-"),
+}
+_NRT_KNOWN_LOCATIONS = {
+    "伊拉克", "伊朗", "拉萨", "迦太基", "南斯拉夫", "塞尔维亚", "巴巴多斯", "威尼斯",
+    "瑙鲁", "克里特", "克什米尔", "坎特伯雷", "新罕布什尔", "新罕布夏", "科尔多凡",
+    "若羌", "沔阳", "费拉拉", "朗斯", "亚马逊", "波士顿", "花莲", "特拉华", "柴达木", "萨摩亚",
+}
+_NR_KNOWN_LOCATIONS = {
+    "花莲", "波士顿", "仰光", "万宁", "钟祥", "乐安", "鲁尔", "萨摩亚", "特拉华",
+    "柴达木", "贺兰山", "张家界", "王屋山", "五台山", "峨眉山",
+}
+_NR_ORG_ENDINGS = (
+    "大学", "学院", "农专", "师专", "中学", "银行", "政府", "公司", "集团",
+    "委员会", "联会", "监会", "协会", "学会", "商会", "工会", "研究院", "研究所",
+    "设计院", "博物院", "博物馆", "图书馆", "体育馆", "展览馆", "纪念馆",
+)
+_NR_MULTI_NOUN_SUFFIXES = (
+    "建筑", "礼教", "法权", "政权", "主权", "人权", "霸权", "产权", "股权", "特权",
+    "版权", "债权", "物权", "主义", "制度", "汽车", "列车", "科学", "技术", "词典",
+    "字典", "公报", "报告", "声明", "氏菌", "三角", "昆虫", "维生素", "粟米", "玉米",
+    "大米", "小米", "糯米", "上唇", "下唇", "师傅", "长老", "公公", "大人", "师爷",
+    "帮主", "教主", "掌门", "皇帝", "皇后", "太后", "宰相", "将军", "夫人", "小姐",
+    "先生", "太太", "女儿", "兄弟", "姐妹", "诸侯", "阎王", "龙王", "大王", "魔王",
+    "法王", "顾问团", "宣传画", "郁金香", "天文台", "植物", "动物", "菊花", "银花",
+    "香花", "梅花", "桂花", "荷花", "桃花", "棉花", "雪花",
+)
+_NS_CULTURAL_ENDINGS = frozenset("锦缎绣绸布瓷陶玉茶酒菜饼面粉米梨桃枣橘柑橙柚瓜果鸡鸭鱼肉肠腿戏曲剧腔调语话歌谣舞拳剑刀扇伞纸笔墨砚席帽鞋毯")
+_NS_GEO_SUFFIXES = frozenset("省市县区镇乡村岛湾海湖山河江溪港城国洲州郡")
+_NT_FALSE_ORG_SUFFIXES = (
+    "汽车", "越野车", "中档车", "草药", "公报", "科学", "文学", "法学",
+    "理学", "哲学", "美学", "事物", "楼梯",
+)
+_NZ_STRICT_NOUN_SUFFIXES = (
+    "英文", "中文", "日文", "法文", "德文", "俄文", "韩文", "百科全书", "机器",
+    "病毒", "细菌", "软件", "硬件", "系统", "协议", "算法", "模型", "引擎",
+    "语言", "文字", "字体", "编码", "格式", "标准", "主义", "理论", "定理",
+    "公式", "定律", "方程", "函数", "矩阵", "化学", "物理", "生物", "医学",
+    "疾病", "综合征", "药品", "制剂", "材料", "器件", "设备", "仪器",
 )
 _MODIFIER_NOUN_SUFFIXES = frozenset(
-    "感權权力率度性單单表書书品物器者員员師师家室館馆處处部科組组會会業业界學学"
-    "論论法制式型類类種种點点線线面體体網网觀观心意情症病費费金款稅税價价值額额量數数"
-    "期代紀纪史錄录案件事"
+    "感权率度性单表书品物器者员师家室馆处部科组会业学"
+    "论法制式型类种点线面体网观心意情症病费金款税价额量数"
+    "期代纪史录案件事"
 )
+_MODIFIER_ADJ_WHITELIST = {
+    "高兴", "开心", "满意", "故意", "客观", "主观", "好看", "难看", "好听", "难听",
+    "好吃", "难吃", "好玩", "有趣", "无趣", "有意", "无意", "诚心", "真心", "假意",
+    "热心", "细心", "小心", "粗心", "耐心", "放心", "安心", "担心", "伤心", "痛心",
+    "灰心", "死心", "专心", "用心", "尽心", "偏心", "多心", "好心", "坏心", "良心",
+    "恶心", "贴心", "顺心", "称心", "舒心", "省心", "操心", "费心", "分心", "走心",
+    "可观", "美观", "壮观", "悲观", "乐观", "直观", "宏观", "微观", "达观", "旁观",
+    "自觉", "直觉", "错觉", "幻觉", "知觉", "感觉", "视觉", "听觉", "嗅觉", "味觉", "触觉",
+}
+_Z_LAND_NOUNS = {
+    "湿地", "草地", "土地", "山地", "盆地", "平地", "空地", "工地", "基地", "阵地",
+    "领地", "殖民地", "目的地", "发源地", "栖息地", "根据地", "所在地",
+}
 
 
-def clean_map_ictclas(word: str, tag: str) -> tuple[str, str, str]:
+def clean_map_ictclas(
+    word: str,
+    tag: str,
+    conv: OpenCCConverter,
+    non_person_2: set[str],
+    high_nr2: set[str],
+) -> tuple[str, str, str]:
     """Map ICTCLAS tag to (decided_upos, upos_mask, meta) with structural noise repair."""
     # 1. Single-char entity/unknown tags are unreliable in isolation
     if len(word) == 1 and tag in ("nr", "nrt", "nrfg", "ns", "nt", "nz", "zg", "g", "x"):
         return "-", "-", "-"
 
+    s = conv.hant_to_hans(word)
+
     # 2. Structural repair for person tags (nr / nrt / nrfg)
-    if tag in ("nr", "nrt", "nrfg"):
-        if word in CURATED_PERSON_NAMES:
+    if tag == "nrt":
+        if word in _KNOWN_PERSON_NAMES or s in _KNOWN_PERSON_NAMES:
             return "PROPN", "PROPN", "sem=person"
-        # 4+ char nr/nrt in jieba are predominantly idioms/compounds
-        if len(word) >= 4:
-            return "-", "-", "-"
-        # nrt transliterations or -人 compounds
-        if tag == "nrt" and (word.endswith("人") or len(word) >= 3):
-            return ("NOUN", "NOUN", "-") if word.endswith("人") else ("-", "-", "-")
-        # 2-char and 3-char compositional/nominal nr forms (e.g. 古建筑, 司法权, 粟米)
-        if word[-1] in _NR_NON_PERSON_SUFFIXES:
+        if s in _NRT_KNOWN_NON_PROPN:
+            return _NRT_KNOWN_NON_PROPN[s]
+        if s.endswith("人"):
             return "NOUN", "NOUN", "-"
-        if len(word) == 3 and word[0] in ("古", "新", "老", "大", "小", "副", "主", "非", "偽", "伪"):
+        if s in _NRT_KNOWN_LOCATIONS or s[-1] in "堡河山岛湾海湖州郡省市县镇城国洲峡港":
+            return "PROPN", "PROPN", "sem=location"
+        return "PROPN", "PROPN", "-"
+
+    if tag in ("nr", "nrfg"):
+        if word in _KNOWN_PERSON_NAMES or s in _KNOWN_PERSON_NAMES:
+            return "PROPN", "PROPN", "sem=person"
+        if s in _NR_KNOWN_LOCATIONS:
+            return "PROPN", "PROPN", "sem=location"
+        if s.endswith(_NR_ORG_ENDINGS):
+            return "PROPN", "PROPN", "sem=organization"
+        if (
+            s.endswith(_NR_MULTI_NOUN_SUFFIXES)
+            or (len(s) >= 3 and s.endswith("树"))
+            or s[-1] in "器素胺酸碱盐酯醇酮醚醛烃酚苯肽酶苷菌虫癌癣症癖剂泵阀"
+        ):
+            return "NOUN", "NOUN", "-"
+        if len(s) == 2:
+            if s[-1] in "米卡铜玉仓府坡庐虎蜂鹃薇芩麻弦冠实":
+                return "NOUN", "NOUN", "-"
             return "-", "-", "-"
+        if len(s) >= 4:
+            if len(s) == 4 and s.startswith(_COMPOUND_SURNAMES_2):
+                return "PROPN", "PROPN", "sem=person"
+            return "-", "-", "-"
+        # len(s) == 3
+        if s[0] in "那这每各某能会要可敢肯该别莫勿未不没很太更最再又也还就才都只共总全":
+            return "-", "-", "-"
+        if s[1] == "家" and s[2] in "庄村屯集店湾坡沟岭山桥河嘴坪坝台墩棚铺营堡寨界巷":
+            return "PROPN", "PROPN", "sem=location"
+        if s[:2] in high_nr2:
+            return "-", "-", "-"
+        if s[:2] in non_person_2:
+            if s[2] in _HEADS_LOC:
+                return "PROPN", "PROPN", "sem=location"
+            if s[2] in _HEADS_ORG:
+                return "PROPN", "PROPN", "sem=organization"
+            if s[2] in _HEADS_NOUN:
+                return "NOUN", "NOUN", "-"
+        if s[-1] in "宫庙寺观庵殿斋洞峡滩渡堡寨省市县区镇乡村湾岛溪墩棚":
+            return "PROPN", "PROPN", "sem=location"
+        if (
+            s[0] not in _COMMON_SURNAMES_1
+            and not s.startswith(_COMPOUND_SURNAMES_2)
+            and s[0] not in ("小", "老", "阿")
+            and s[-1] in _NR_NONSURNAME_1CHAR_NOUN_SUFFIXES
+        ):
+            return "NOUN", "NOUN", "-"
         return "PROPN", "PROPN", "sem=person"
 
-    # 3. Noun-headed ns / nt / nz (e.g. 蜀锦)
-    if tag in ("ns", "nt", "nz"):
-        if len(word) >= 2 and word[-1] in _NS_NT_NZ_NOUN_SUFFIXES:
+    # 3. Cultural/product ns
+    if tag == "ns":
+        if len(s) >= 2 and s[-1] in _NS_CULTURAL_ENDINGS and s[-1] not in _NS_GEO_SUFFIXES:
             return "NOUN", "NOUN", "-"
 
-    # 4. Noun-headed a / b / l (e.g. 清单, 优越感)
-    if tag in ("a", "b", "l") and len(word) >= 2 and word[-1] in _MODIFIER_NOUN_SUFFIXES:
+    # 4. False-org nt
+    if tag == "nt":
+        if s == "人品出众":
+            return "-", "-", "-"
+        if s.endswith(_NT_FALSE_ORG_SUFFIXES):
+            return "NOUN", "NOUN", "-"
+
+    # 5. Strict noun nz (excluding personal names ending in 文 like 凯文/欧文/达尔文)
+    if tag == "nz":
+        if s not in ("凯文", "欧文", "达尔文") and s.endswith(_NZ_STRICT_NOUN_SUFFIXES):
+            return "NOUN", "NOUN", "-"
+
+    # 6. Noun-headed a / b / l (guarding genuine adjectives)
+    if tag in ("a", "b", "l") and len(s) >= 2 and s[-1] in _MODIFIER_NOUN_SUFFIXES and s not in _MODIFIER_ADJ_WHITELIST:
         return "NOUN", "NOUN", "-"
 
-    # 5. Descriptive 'z' forms ending in 地 / 的
-    if tag == "z" and len(word) >= 2:
-        if word.endswith("地"):
+    # 7. Descriptive 'z' forms
+    if tag == "z" and len(s) >= 2:
+        if s in _Z_LAND_NOUNS:
+            return "NOUN", "NOUN", "-"
+        if s.endswith("地"):
             return "ADV", "ADV", "-"
-        if word.endswith("的"):
+        if s.endswith("的") and s not in ("目的", "标的", "有的"):
             return "ADJ", "ADJ", "-"
 
     return map_ictclas(word, tag)
@@ -615,9 +768,11 @@ def resolve_pos(
     zh_ambiguous: set[str],
     gold_pos: dict[str, set[str]],
     conv: OpenCCConverter,
+    non_person_2: set[str],
+    high_nr2: set[str],
 ) -> tuple[str, str, str]:
     """Determine (decided_upos, upos_mask, meta) with 0 conflicts against pos.rs and gold."""
-    decided, mask, meta = clean_map_ictclas(word, ictclas_tag)
+    decided, mask, meta = clean_map_ictclas(word, ictclas_tag, conv, non_person_2, high_nr2)
 
     # Check gold in both exact form and cross-script form
     gold_tags: set[str] = set()
@@ -885,6 +1040,19 @@ def main() -> None:
                 jieba_entries[w] = (freq, tag)
     print(f"  Clean Han entries from jieba: {len(jieba_entries)}")
 
+    non_person_2 = {
+        w
+        for w, (fr, tg) in jieba_entries.items()
+        if len(w) == 2
+        and tg in ("n", "vn", "nz", "v", "a", "d", "b", "z", "t", "s", "f", "m", "q", "r", "c", "p")
+        and fr >= 5
+    }
+    high_nr2 = {
+        w
+        for w, (fr, tg) in jieba_entries.items()
+        if len(w) == 2 and tg == "nr" and fr >= 50 and w not in _COMPOUND_SURNAMES_2
+    }
+
     # Mandatory words that MUST be included in both scripts
     mandatory_hans: set[str] = set()
     mandatory_hant: set[str] = set()
@@ -1031,7 +1199,7 @@ def main() -> None:
         rows: dict[str, tuple[int, str, str, str, str, str]] = {}
         for w, (sc, tag) in selected.items():
             cost = compute_cost(sc, total_freq)
-            dec, mask, meta = resolve_pos(w, tag, zh_decided, zh_ambiguous, gold_pos, conv)
+            dec, mask, meta = resolve_pos(w, tag, zh_decided, zh_ambiguous, gold_pos, conv, non_person_2, high_nr2)
             cp = conv.hant_to_hans(w) if is_hant else conv.hans_to_hant(w)
             if not is_clean_han(cp) or cp == w:
                 cp = "-"

@@ -617,8 +617,33 @@ fn c1_hygiene_en_and_zh_pos_lemma_and_entity_regressions() {
             .contains(&Upos::Adj)
     );
 
+    // Additional EN VarCon & derivational POS/lemma regressions.
+    for (word, expected_pos, expected_lemma) in [
+        ("anonymized", Upos::Verb, Some("anonymize")),
+        ("anonymises", Upos::Verb, Some("anonymise")),
+        ("sterilisable", Upos::Adj, None),
+        ("mediaevally", Upos::Adv, None),
+        ("anarchize", Upos::Verb, None),
+        ("photosynthesizes", Upos::Verb, Some("photosynthesize")),
+        ("baptised", Upos::Verb, Some("baptise")),
+    ] {
+        let hit = lexicon::en::analyze_en_token(word);
+        assert!(
+            hit.upos_candidates.contains(&expected_pos),
+            "{word} expected {expected_pos:?}, got {hit:?}"
+        );
+        if let Some(lem) = expected_lemma {
+            assert_eq!(hit.lemma.as_deref(), Some(lem), "{word}: {hit:?}");
+        }
+    }
+    assert!(
+        lexicon::en::analyze_en_token("baptised")
+            .upos_candidates
+            .contains(&Upos::Adj)
+    );
+
     // ZH: non-person nouns/idioms must not be mislabeled SemanticClass::Person.
-    let zh_hant_text = "古建築與司法權、粟米、蜀錦、清單、優越感、封建禮教，以及李白、杜甫、諸葛亮、阿芳、老王、北京、花蓮、波士頓、中國人民銀行、美國政府。";
+    let zh_hant_text = "古建築與司法權、粟米、蜀錦、清單、優越感、封建禮教、相生相剋，以及李白、杜甫、諸葛亮、呂布、史可法、小桂子、阿芳、老王、北京、花蓮、波士頓、沃爾夫斯堡、柴科夫斯基、耶魯大學、中國人民銀行、美國政府。";
     let zh_hant_doc = analyze_document(zh_hant_text, &opts);
     for non_person in [
         "古建築",
@@ -628,6 +653,7 @@ fn c1_hygiene_en_and_zh_pos_lemma_and_entity_regressions() {
         "清單",
         "優越感",
         "封建禮教",
+        "相生相剋",
     ] {
         let tok = find_token(&zh_hant_doc, zh_hant_text, non_person);
         assert_ne!(
@@ -636,7 +662,16 @@ fn c1_hygiene_en_and_zh_pos_lemma_and_entity_regressions() {
             "{non_person} must not be Person: {tok:?}"
         );
     }
-    for person in ["李白", "杜甫", "諸葛亮", "阿芳", "老王"] {
+    for person in [
+        "李白",
+        "杜甫",
+        "諸葛亮",
+        "呂布",
+        "史可法",
+        "小桂子",
+        "阿芳",
+        "老王",
+    ] {
         let tok = find_token(&zh_hant_doc, zh_hant_text, person);
         assert_eq!(
             tok.sem_class,
@@ -644,7 +679,7 @@ fn c1_hygiene_en_and_zh_pos_lemma_and_entity_regressions() {
             "{person} must remain Person: {tok:?}"
         );
     }
-    for loc in ["北京", "花蓮", "波士頓"] {
+    for loc in ["北京", "花蓮", "波士頓", "沃爾夫斯堡"] {
         let tok = find_token(&zh_hant_doc, zh_hant_text, loc);
         assert_eq!(
             tok.sem_class,
@@ -652,7 +687,7 @@ fn c1_hygiene_en_and_zh_pos_lemma_and_entity_regressions() {
             "{loc} must remain Location: {tok:?}"
         );
     }
-    for org in ["中國人民銀行", "美國政府"] {
+    for org in ["耶魯大學", "中國人民銀行", "美國政府"] {
         let tok = find_token(&zh_hant_doc, zh_hant_text, org);
         assert_eq!(
             tok.sem_class,
@@ -660,6 +695,18 @@ fn c1_hygiene_en_and_zh_pos_lemma_and_entity_regressions() {
             "{org} must remain Organization: {tok:?}"
         );
     }
+    let tchaikovsky = lexicon::lookup_zh("柴科夫斯基").expect("柴科夫斯基 in lexicon");
+    assert_eq!(
+        tchaikovsky.decided_upos,
+        Some(Upos::Propn),
+        "柴科夫斯基 expected Propn, got {tchaikovsky:?}"
+    );
+    let wetland = lexicon::lookup_zh("湿地").expect("湿地 in lexicon");
+    assert_eq!(
+        wetland.decided_upos,
+        Some(Upos::Noun),
+        "湿地 expected Noun, got {wetland:?}"
+    );
 
     let zh_hans_text = "古建筑与司法权、粟米、蜀锦、清单、优越感、封建礼教、相生相克、雷霆万钧。";
     let zh_hans_doc = analyze_document(zh_hans_text, &opts);

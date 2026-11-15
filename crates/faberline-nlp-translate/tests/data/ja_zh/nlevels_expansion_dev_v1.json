@@ -1,0 +1,1152 @@
+{
+  "schema": "faberline.nlp.ja_zh.nlevels_expansion_dev.v1",
+  "title": "Independent N1-N5 development expansion: 50 original sentences",
+  "status": "Data-only review candidate; formal independent adoption is pending.",
+  "provenance": {
+    "author_role": "Luna (gpt-6-luna), independent QA authoring roles",
+    "japanese_sentence_provenance": "Original Japanese sentences composed with AI assistance for this development bank. No exam, textbook, game, dictionary or corpus sentence text was copied.",
+    "reference_provenance": "Provisional AI-assisted Taiwan Traditional Chinese references and variants. Independent agent cross-review corrections were applied before this freeze. They are candidate references, not model gold or human-reviewed translations.",
+    "data_license": "first_party_mit",
+    "level_note": "N1 through N5 are approximate planning labels for individual sentences. They are not official JLPT items or certified difficulty labels."
+  },
+  "review_and_adoption": {
+    "author_does_not_accept_own_work": true,
+    "human_review_claim": false,
+    "process": "Use a separate data-only PR. Independent Codex and Antigravity review and adoption must finish before a corresponding rule PR is measured with this bank. Independent agent reviews are not human reviews.",
+    "measurement": "These 50 rows are supplemental and development-visible. The current challenge runner does not load this JSON. No score or pass rate is claimed here. Keep the historical challenge, baseline, ratchet and held-out isolation unchanged.",
+    "scope_limit": "Ten sentences per approximate level and 25 paired controls are limited probes. They do not prove full N1-N5 translation quality. Human calibration and broader stratified review remain open."
+  },
+  "items": [
+    {
+      "id": "N5X-01",
+      "level_approx": "N5",
+      "jp": "教室に本があります。",
+      "zh_hant": "教室裡有書。",
+      "allowed_variants": [
+        "教室裡有書本。"
+      ],
+      "semantic_checks": [
+        "存在的物品是書",
+        "地點是教室",
+        "使用無生命事物的存在表達"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說書的數量或所有者"
+      ],
+      "pair": "N5X-02",
+      "pair_reason": "與 N5X-02 同在教室比較 あります／います；翻譯須保留物品與人物的存在差別。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N5X-02",
+      "level_approx": "N5",
+      "jp": "教室に先生がいます。",
+      "zh_hant": "教室裡有老師。",
+      "allowed_variants": [
+        "教室裡有老師在。"
+      ],
+      "semantic_checks": [
+        "存在的人物是老師",
+        "地點是教室",
+        "使用有生命人物的存在表達"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說是哪位老師或是否只有一位"
+      ],
+      "pair": "N5X-01",
+      "pair_reason": "與 N5X-01 同在教室比較有生命與無生命存在；避免把人物改成書或反過來。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N5X-03",
+      "level_approx": "N5",
+      "jp": "会議は午前九時に始まります。",
+      "zh_hant": "會議上午九點開始。",
+      "allowed_variants": [
+        "會議在上午九點開始。"
+      ],
+      "semantic_checks": [
+        "會議的開始時間是上午九點整"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說日期或會議參與者"
+      ],
+      "pair": "N5X-04",
+      "pair_reason": "與 N5X-04 比較九點整和九點半；保持上午與開始事件不變。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N5X-04",
+      "level_approx": "N5",
+      "jp": "会議は午前九時半に始まります。",
+      "zh_hant": "會議上午九點半開始。",
+      "allowed_variants": [
+        "會議在上午九時三十分開始。"
+      ],
+      "semantic_checks": [
+        "會議的開始時間是上午九點三十分，不是九點整"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說日期或會議參與者"
+      ],
+      "pair": "N5X-03",
+      "pair_reason": "與 N5X-03 只改變時間中的半小時；不可省略半或改成九點整。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N5X-05",
+      "level_approx": "N5",
+      "jp": "みかんを三つ買いました。",
+      "zh_hant": "買了三顆橘子。",
+      "allowed_variants": [
+        "買了三個橘子。"
+      ],
+      "semantic_checks": [
+        "買的是橘子",
+        "數量是三個",
+        "過去已完成購買"
+      ],
+      "semantic_unknowns": [
+        "原文未說明購買者或購買地點"
+      ],
+      "pair": "N5X-06",
+      "pair_reason": "與 N5X-06 比較數量詞和物品分類詞；保留三個橘子，不補出購買者。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N5X-06",
+      "level_approx": "N5",
+      "jp": "水を三本買いました。",
+      "zh_hant": "買了三瓶水。",
+      "allowed_variants": [
+        "水買了三瓶。"
+      ],
+      "semantic_checks": [
+        "買的是水",
+        "本計數詞在此表示三個長形容器單位，中文自然表達為三瓶",
+        "過去已完成購買"
+      ],
+      "semantic_unknowns": [
+        "原文未說明購買者或購買地點"
+      ],
+      "pair": "N5X-05",
+      "pair_reason": "與 N5X-05 對照不同物品所用的計數方式；不可把三本水誤作三本書或三杯水。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N5X-07",
+      "level_approx": "N5",
+      "jp": "この箱は重いです。",
+      "zh_hant": "這個箱子很重。",
+      "allowed_variants": [
+        "這個箱子很沉。"
+      ],
+      "semantic_checks": [
+        "描述的是這個箱子的重量",
+        "肯定形容詞，表示重"
+      ],
+      "semantic_unknowns": [
+        "原文沒有比較另一個箱子"
+      ],
+      "pair": "N5X-08",
+      "pair_reason": "與 N5X-08 比較形容詞肯定與否定；保留同一個箱子和重量特徵。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N5X-08",
+      "level_approx": "N5",
+      "jp": "この箱は重くないです。",
+      "zh_hant": "這個箱子不重。",
+      "allowed_variants": [
+        "這個箱子並不重。"
+      ],
+      "semantic_checks": [
+        "否定箱子重這個性質",
+        "不能翻成很重"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說箱子很輕或與其他物品比較"
+      ],
+      "pair": "N5X-07",
+      "pair_reason": "與 N5X-07 對照重／不重；否定不等於斷言非常輕。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N5X-09",
+      "level_approx": "N5",
+      "jp": "私の部屋は二階です。",
+      "zh_hant": "我的房間在二樓。",
+      "allowed_variants": [
+        "我的房間在二樓。"
+      ],
+      "semantic_checks": [
+        "房間屬於說話者",
+        "樓層是二樓"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指出建築物或房間用途"
+      ],
+      "pair": "N5X-10",
+      "pair_reason": "與 N5X-10 比較樓層數字；保留「我的房間」和判斷句。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N5X-10",
+      "level_approx": "N5",
+      "jp": "私の部屋は三階です。",
+      "zh_hant": "我的房間在三樓。",
+      "allowed_variants": [
+        "我的房間在三樓。"
+      ],
+      "semantic_checks": [
+        "房間屬於說話者",
+        "樓層是三樓，不是二樓"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指出建築物或房間用途"
+      ],
+      "pair": "N5X-09",
+      "pair_reason": "與 N5X-09 只改變樓層；不可沿用二樓或改變房間所有者。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N4X-01",
+      "level_approx": "N4",
+      "jp": "私は家から駅まで歩きます。",
+      "zh_hant": "我從家裡走到車站。",
+      "allowed_variants": [
+        "我從家步行到車站。"
+      ],
+      "semantic_checks": [
+        "說話者從家步行到車站",
+        "家是起點，車站是終點"
+      ],
+      "semantic_unknowns": [
+        "原文未說明沿途路線或同行者"
+      ],
+      "pair": "N4X-02",
+      "pair_reason": "與 N4X-02 使用相同的家與車站，但起點、終點和方向互換。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N4X-02",
+      "level_approx": "N4",
+      "jp": "私は駅から家まで歩きます。",
+      "zh_hant": "我從車站走到家。",
+      "allowed_variants": [
+        "我從車站步行到家。"
+      ],
+      "semantic_checks": [
+        "說話者從車站步行到家",
+        "車站是起點，家是終點；原文只說路線，不明示「回去」"
+      ],
+      "semantic_unknowns": [
+        "原文未說明沿途路線或同行者"
+      ],
+      "pair": "N4X-01",
+      "pair_reason": "與 N4X-01 對照相反方向；不要把起點和終點顛倒。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N4X-03",
+      "level_approx": "N4",
+      "jp": "窓を開けてください。",
+      "zh_hant": "請把窗戶打開。",
+      "allowed_variants": [
+        "請開窗。"
+      ],
+      "semantic_checks": [
+        "提出禮貌請求，請求內容是打開窗戶"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說誰收到請求或窗戶在哪裡"
+      ],
+      "pair": "N4X-04",
+      "pair_reason": "與 N4X-04 對照同一物件的相反請求；保留動詞方向。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N4X-04",
+      "level_approx": "N4",
+      "jp": "窓を閉めてください。",
+      "zh_hant": "請把窗戶關上。",
+      "allowed_variants": [
+        "請關窗。"
+      ],
+      "semantic_checks": [
+        "提出禮貌請求，請求內容是關上窗戶"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說誰收到請求或窗戶在哪裡"
+      ],
+      "pair": "N4X-03",
+      "pair_reason": "與 N4X-03 對照開／關；不可把關窗請求翻成開窗。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N4X-05",
+      "level_approx": "N4",
+      "jp": "ここに座ってもいいですか。",
+      "zh_hant": "可以坐在這裡嗎？",
+      "allowed_variants": [
+        "在這裡坐下可以嗎？"
+      ],
+      "semantic_checks": [
+        "詢問在此坐下是否被允許",
+        "保持疑問和許可模態"
+      ],
+      "semantic_unknowns": [
+        "日文省略詢問者及授權對象；中文不需補出特定人物"
+      ],
+      "pair": "N4X-06",
+      "pair_reason": "與 N4X-06 比較同一地點和動作的許可與禁止；不可將詢問許可改成陳述禁止。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N4X-06",
+      "level_approx": "N4",
+      "jp": "ここに座ってはいけません。",
+      "zh_hant": "不可以坐在這裡。",
+      "allowed_variants": [
+        "這裡禁止坐下。"
+      ],
+      "semantic_checks": [
+        "禁止在此坐下",
+        "不是詢問能否坐下"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指出禁止者或規則來源"
+      ],
+      "pair": "N4X-05",
+      "pair_reason": "與 N4X-05 對照許可疑問與禁止陳述；不可補出具體規則制定者。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N4X-07",
+      "level_approx": "N4",
+      "jp": "弟は今、宿題をしています。",
+      "zh_hant": "弟弟現在在做作業。",
+      "allowed_variants": [
+        "弟弟現在正在做功課。"
+      ],
+      "semantic_checks": [
+        "執行作業的人是弟弟",
+        "動作目前正在進行"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說作業科目或完成進度"
+      ],
+      "pair": "N4X-08",
+      "pair_reason": "與 N4X-08 比較現在進行與昨日已做；保留人物並區分時間和體貌。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N4X-08",
+      "level_approx": "N4",
+      "jp": "弟は昨日、宿題をしました。",
+      "zh_hant": "弟弟昨天做了作業。",
+      "allowed_variants": [
+        "弟弟昨天做了功課。"
+      ],
+      "semantic_checks": [
+        "執行作業的人是弟弟",
+        "事件在昨天發生並以過去式陳述"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說作業科目或完成所有作業的程度"
+      ],
+      "pair": "N4X-07",
+      "pair_reason": "與 N4X-07 對照昨日過去事件與現在進行；不可把昨天改成現在。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N4X-09",
+      "level_approx": "N4",
+      "jp": "私は来月、新しい靴を買うつもりです。",
+      "zh_hant": "我打算下個月買新鞋。",
+      "allowed_variants": [
+        "我計畫下個月買新鞋。"
+      ],
+      "semantic_checks": [
+        "說話者有下個月買新鞋的打算",
+        "つもり表示意圖或計畫，不只是願望"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說鞋款、數量或最後是否買成"
+      ],
+      "pair": "N4X-10",
+      "pair_reason": "與 N4X-10 比較計畫和願望；保留同一說話者、下個月和買新鞋的內容。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N4X-10",
+      "level_approx": "N4",
+      "jp": "私は来月、新しい靴を買いたいです。",
+      "zh_hant": "我想下個月買新鞋。",
+      "allowed_variants": [
+        "我希望下個月買新鞋。"
+      ],
+      "semantic_checks": [
+        "說話者希望下個月買新鞋",
+        "たい表示願望，不保證已有確定計畫或最後會買成"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說鞋款、數量或最後是否買成"
+      ],
+      "pair": "N4X-09",
+      "pair_reason": "與 N4X-09 對照願望和意圖；不可把想要買說成已確定安排或已完成購買。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N3X-01",
+      "level_approx": "N3",
+      "jp": "私が昨日図書館で借りた本を、妹が読みました。",
+      "zh_hant": "妹妹讀了我昨天在圖書館借的書。",
+      "allowed_variants": [
+        "我昨天在圖書館借的書，妹妹讀了。"
+      ],
+      "semantic_checks": [
+        "妹妹是讀書的人",
+        "書是說話者昨天在圖書館借的",
+        "保留關係子句中的借書者與主句讀書者"
+      ],
+      "semantic_unknowns": [
+        "閱讀發生的時間未說明",
+        "原文沒有說妹妹讀完了多少或書的內容"
+      ],
+      "pair": "N3X-02",
+      "pair_reason": "與 N3X-02 互換借書者和讀書者；測試關係子句與主句的參與者角色。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N3X-02",
+      "level_approx": "N3",
+      "jp": "妹が昨日図書館で借りた本を、私が読みました。",
+      "zh_hant": "我讀了妹妹昨天在圖書館借的書。",
+      "allowed_variants": [
+        "妹妹昨天在圖書館借的書，我讀了。"
+      ],
+      "semantic_checks": [
+        "說話者是讀書的人",
+        "書是妹妹昨天在圖書館借的",
+        "不可把關係子句中的借書者與主句讀書者對調"
+      ],
+      "semantic_unknowns": [
+        "閱讀發生的時間未說明",
+        "原文沒有說說話者讀完了多少或書的內容"
+      ],
+      "pair": "N3X-01",
+      "pair_reason": "與 N3X-01 互換借書者和讀書者；地點、物件和時間保持相同。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N3X-03",
+      "level_approx": "N3",
+      "jp": "電気代を減らすため、古い照明をLEDに替えました。",
+      "zh_hant": "為了降低電費，已把舊燈具換成 LED 燈。",
+      "allowed_variants": [
+        "為降低電費，已將舊照明換成 LED 燈。"
+      ],
+      "semantic_checks": [
+        "降低電費是更換照明的目的",
+        "舊照明已換成 LED 燈",
+        "ため在此表示目的；不表示電費已降低"
+      ],
+      "semantic_unknowns": [
+        "原文省略執行更換的人，也沒有說實際電費是否降低"
+      ],
+      "pair": "N3X-04",
+      "pair_reason": "與 N3X-04 比較 ため 的目的與原因用法；本句說明降低電費是意圖。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N3X-04",
+      "level_approx": "N3",
+      "jp": "古い照明が故障したため、LED照明に替えました。",
+      "zh_hant": "因為舊燈具故障，所以換成了 LED 燈。",
+      "allowed_variants": [
+        "舊照明故障了，因此改用 LED 燈。"
+      ],
+      "semantic_checks": [
+        "舊照明故障是更換成 LED 燈的原因",
+        "保留故障先於更換的因果關係",
+        "ため在此表示原因"
+      ],
+      "semantic_unknowns": [
+        "原文省略執行更換的人，也沒有說故障是由誰或何事造成"
+      ],
+      "pair": "N3X-03",
+      "pair_reason": "與 N3X-03 共用照明更換情境，但此句以故障說明原因，不是更換目的。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N3X-05",
+      "level_approx": "N3",
+      "jp": "姉は妹に本を貸しました。",
+      "zh_hant": "姐姐把書借給妹妹了。",
+      "allowed_variants": [
+        "姊姊借書給妹妹了。"
+      ],
+      "semantic_checks": [
+        "姐姐是出借者",
+        "妹妹是借入者",
+        "貸す從出借者的角度描述借用關係"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說借期、書的內容或是否已歸還"
+      ],
+      "pair": "N3X-06",
+      "pair_reason": "與 N3X-06 描述同類借用關係，但更換日文的出借／借入視角。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N3X-06",
+      "level_approx": "N3",
+      "jp": "妹は姉から本を借りました。",
+      "zh_hant": "妹妹向姐姐借了書。",
+      "allowed_variants": [
+        "妹妹從姐姐那裡借了書。"
+      ],
+      "semantic_checks": [
+        "妹妹是借入者",
+        "姐姐是出借者",
+        "借りる從借入者的角度描述借用關係"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說借期、書的內容或是否已歸還"
+      ],
+      "pair": "N3X-05",
+      "pair_reason": "與 N3X-05 更換借用視角；不可把借入者和出借者顛倒。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N3X-07",
+      "level_approx": "N3",
+      "jp": "作業員が古い橋を修理しました。",
+      "zh_hant": "作業人員修理了舊橋。",
+      "allowed_variants": [
+        "工人修理了舊橋。"
+      ],
+      "semantic_checks": [
+        "作業員是修理的執行者",
+        "被修理的是舊橋",
+        "句子使用主動表達"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說工作人員人數、地點或修理結果是否持久"
+      ],
+      "pair": "N3X-08",
+      "pair_reason": "與 N3X-08 表達同一修橋事件；對照主動句明示施事者與被動句的主題焦點。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N3X-08",
+      "level_approx": "N3",
+      "jp": "古い橋は作業員によって修理されました。",
+      "zh_hant": "舊橋是由作業人員修理的。",
+      "allowed_variants": [
+        "舊橋是工人修理的。"
+      ],
+      "semantic_checks": [
+        "舊橋是修理事件的主題",
+        "作業員是修理者",
+        "保留被動語態，不把橋說成執行修理者"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說地點、工作人員人數或修理結果是否持久"
+      ],
+      "pair": "N3X-07",
+      "pair_reason": "與 N3X-07 對照被動與主動；保留作業員施事角色及舊橋受事角色。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N3X-09",
+      "level_approx": "N3",
+      "jp": "注文したケーキはまだ届いていません。",
+      "zh_hant": "訂的蛋糕還沒到。",
+      "allowed_variants": [
+        "訂購的蛋糕目前還沒到。"
+      ],
+      "semantic_checks": [
+        "蛋糕尚未送達",
+        "まだ與否定表達截至目前仍未發生的結果",
+        "不把未送達改成已送達"
+      ],
+      "semantic_unknowns": [
+        "關係子句省略訂購者；原文沒有說送達目的地或預定時間"
+      ],
+      "pair": "N3X-10",
+      "pair_reason": "與 N3X-10 對照尚未送達與已送達結果；不得補出收件者或目的地。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N3X-10",
+      "level_approx": "N3",
+      "jp": "注文したケーキはもう届きました。",
+      "zh_hant": "訂的蛋糕已經到了。",
+      "allowed_variants": [
+        "訂購的蛋糕已經到了。"
+      ],
+      "semantic_checks": [
+        "蛋糕已送達",
+        "もう表示結果已發生",
+        "不把已送達改成尚未送達"
+      ],
+      "semantic_unknowns": [
+        "關係子句省略訂購者；原文沒有說送達目的地或收件者"
+      ],
+      "pair": "N3X-09",
+      "pair_reason": "與 N3X-09 對照已完成結果與尚未發生結果；不指定送到誰或何處。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N2-D01",
+      "level_approx": "N2",
+      "jp": "雨が強まったものの、屋外の受付は予定どおり続けられた。",
+      "zh_hant": "雖然雨勢變大，戶外服務台仍照原定安排繼續運作。",
+      "allowed_variants": [
+        "儘管雨勢轉強，戶外服務台還是按原定安排繼續運作。"
+      ],
+      "semantic_checks": [
+        "雨勢變大",
+        "戶外服務台仍繼續運作",
+        "運作符合原定安排",
+        "明確保留逆接關係"
+      ],
+      "semantic_unknowns": [
+        "未說明服務台由誰負責",
+        "未說明是否有人受影響",
+        "未說明雨勢變大的精確時間"
+      ],
+      "pair": "N2-D02",
+      "pair_reason": "與 N2-D02 共用戶外服務情境，對照「儘管發生某事，結果仍成立」與「若條件成立，則採取措施」。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N2-D02",
+      "level_approx": "N2",
+      "jp": "雨が強まるようなら、屋外の受付を入口の内側へ移す。",
+      "zh_hant": "如果雨勢轉強，就把戶外服務台移到入口內側。",
+      "allowed_variants": [
+        "若雨勢有增強的情況，便將戶外服務台移至入口內側。"
+      ],
+      "semantic_checks": [
+        "雨勢增強是採取措施的條件",
+        "措施是把戶外服務台移到入口內側",
+        "句子沒有表示措施已經執行"
+      ],
+      "semantic_unknowns": [
+        "未說明誰會執行移動",
+        "未說明目前雨勢",
+        "未說明這是命令、規則還是計畫"
+      ],
+      "pair": "N2-D01",
+      "pair_reason": "與 N2-D01 共用戶外服務情境，對照逆接的已述結果和條件成立時才採取的措施。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N2-D03",
+      "level_approx": "N2",
+      "jp": "申請書に記入漏れがあれば、窓口で本人が書き直さなければならない。",
+      "zh_hant": "申請表若有漏填，申請人就必須在櫃台親自重填。",
+      "allowed_variants": [
+        "若申請表有漏填，申請人就必須在櫃台親自重寫。"
+      ],
+      "semantic_checks": [
+        "條件是申請表有漏填",
+        "有條件地要求申請人親自在櫃台重填",
+        "義務對象是申請人"
+      ],
+      "semantic_unknowns": [
+        "未說明哪些欄位有漏填",
+        "未說明是否另有其他補件程序",
+        "未說明申請人的性別"
+      ],
+      "pair": "N2-D04",
+      "pair_reason": "與 N2-D04 對照：前者只在有漏填時要求申請人重填，後者對所有申請都要求附上影本。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N2-D04",
+      "level_approx": "N2",
+      "jp": "申請の際は、記入漏れがなくても身分証のコピーを添付する必要がある。",
+      "zh_hant": "申請時，即使沒有漏填，也必須附上身分證件影本。",
+      "allowed_variants": [
+        "辦理申請時，就算沒有漏填，也需要附上身分證明文件的影本。"
+      ],
+      "semantic_checks": [
+        "義務適用於申請時",
+        "即使沒有漏填也必須附影本",
+        "不得把附件要求限縮為有漏填時"
+      ],
+      "semantic_unknowns": [
+        "未說明可接受的證件種類",
+        "未說明是否接受電子影本",
+        "未說明申請人的性別"
+      ],
+      "pair": "N2-D03",
+      "pair_reason": "與 N2-D03 對照有條件與無條件的義務範圍；不能把「即使沒有漏填」省略成僅針對漏填者。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N2-D05",
+      "level_approx": "N2",
+      "jp": "近所の人の話では、来月この通りに新しい薬局ができるそうだ。",
+      "zh_hant": "據附近居民說，這條街下個月會開新的藥局。",
+      "allowed_variants": [
+        "附近居民表示，這條街下個月會開新的藥局。"
+      ],
+      "semantic_checks": [
+        "消息來源是附近居民的轉述",
+        "轉述內容是這條街下個月會開新的藥局",
+        "句子呈現轉述消息，不將其寫成已獨立確認的事實"
+      ],
+      "semantic_unknowns": [
+        "附近居民是否親自確認消息未知",
+        "消息來源是否可靠未知",
+        "開幕日期與藥局名稱未知",
+        "說話者對消息的確信程度未明"
+      ],
+      "pair": "N2-D06",
+      "pair_reason": "與 N2-D06 對照來自他人轉述的消息與根據可見線索作出的推測；兩者都不得翻成已證實的事實。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N2-D06",
+      "level_approx": "N2",
+      "jp": "店の窓に工事の案内が貼ってあるので、休業するのかもしれない。",
+      "zh_hant": "店窗貼著施工公告，所以店家或許會暫停營業。",
+      "allowed_variants": [
+        "因為店窗貼了施工通知，店家可能會暫停營業。"
+      ],
+      "semantic_checks": [
+        "可觀察到店窗張貼施工公告",
+        "暫停營業只是可能性",
+        "不得把推測改成已確定休業"
+      ],
+      "semantic_unknowns": [
+        "公告內容未提供",
+        "是否休業及休業期間未知",
+        "施工範圍未知"
+      ],
+      "pair": "N2-D05",
+      "pair_reason": "與 N2-D05 對照根據他人轉述形成的消息與根據可見線索作出的推測，兩句都保留未確定狀態。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N2-D07",
+      "level_approx": "N2",
+      "jp": "昼休みには、受付の担当者だけが電話に出られる。",
+      "zh_hant": "午休時，只有櫃台承辦人能接電話。",
+      "allowed_variants": [
+        "午休時，能接電話的只有櫃台承辦人。"
+      ],
+      "semantic_checks": [
+        "時間是午休時",
+        "午休時只有櫃台承辦人能接電話",
+        "限制焦點是能接電話的人，而非可接電話的時段"
+      ],
+      "semantic_unknowns": [
+        "未說明承辦人有幾位",
+        "未說明「能接電話」表示能力、當時有空或獲准接聽中的哪一種",
+        "未說明其他時段由誰接電話",
+        "未說明此安排是規定或現況"
+      ],
+      "pair": "N2-D08",
+      "pair_reason": "與 N2-D08 對照限制範圍：前者限制午休時誰能接電話，後者限制櫃台承辦人可接電話的時段。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N2-D08",
+      "level_approx": "N2",
+      "jp": "受付の担当者は、昼休みに限って電話に出られる。",
+      "zh_hant": "櫃台承辦人只有在午休時才能接電話。",
+      "allowed_variants": [
+        "負責櫃台的人僅能在午休時間接聽電話。"
+      ],
+      "semantic_checks": [
+        "主體是櫃台承辦人",
+        "能接電話的時段僅限午休",
+        "限制焦點是時間而非接電話者身分"
+      ],
+      "semantic_unknowns": [
+        "未說明「能接電話」表示能力、當時有空或獲准接聽中的哪一種",
+        "未說明其他人能否接電話",
+        "未說明此安排是規定或現況"
+      ],
+      "pair": "N2-D07",
+      "pair_reason": "與 N2-D07 對照「只有誰」和「只有何時」的限制焦點；翻譯需保留焦點差異。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N2-D09",
+      "level_approx": "N2",
+      "jp": "新しい案内板は古く見えるが、先週設置されたばかりだ。",
+      "zh_hant": "這面新指示牌看起來很舊，但其實是上週才設置的。",
+      "allowed_variants": [
+        "這面新告示牌外觀看來老舊，不過上週才剛裝設。"
+      ],
+      "semantic_checks": [
+        "原文將指示牌描述為新的",
+        "指示牌外觀看起來老舊",
+        "指示牌上週才設置",
+        "不由近期設置推斷製造日期或功能狀況"
+      ],
+      "semantic_unknowns": [
+        "指示牌製造日期未知",
+        "未說明指示牌的功能狀況",
+        "未說明由誰設置",
+        "未說明外觀看起來老舊的原因"
+      ],
+      "pair": "N2-D10",
+      "pair_reason": "與 N2-D10 對照新指示牌外觀看似老舊與表面有刮痕的不同資訊；上週設置不表示製造日期或功能狀況已知。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N2-D10",
+      "level_approx": "N2",
+      "jp": "新しい案内板は先週設置されたばかりだが、表面には傷が多い。",
+      "zh_hant": "新的指示牌雖然是上週才設置的，表面卻有很多刮痕。",
+      "allowed_variants": [
+        "新指示牌上週才剛裝好，不過表面有不少刮傷。"
+      ],
+      "semantic_checks": [
+        "原文將指示牌描述為新的",
+        "指示牌上週才設置",
+        "表面有很多刮痕",
+        "不由刮痕推斷是否影響功能或整體狀況"
+      ],
+      "semantic_unknowns": [
+        "刮痕形成時間未知",
+        "刮痕原因未知",
+        "刮痕是否影響功能未知",
+        "整體狀況未說明"
+      ],
+      "pair": "N2-D09",
+      "pair_reason": "與 N2-D09 對照新指示牌外觀看似老舊與表面確有刮痕的不同敘述；保留刮痕事實，不推斷功能受損或整體狀況。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N1-D01",
+      "level_approx": "N1",
+      "jp": "担当者が慎重に説明したとはいえ、参加者全員が変更の理由を理解したとは言い切れない。",
+      "zh_hant": "雖然負責人說明得很審慎，但不能斷言所有參與者都理解了變更的理由。",
+      "allowed_variants": [
+        "雖然負責人已仔細說明，仍不能斷言所有參與者都理解了變更理由。"
+      ],
+      "semantic_checks": [
+        "負責人有審慎說明",
+        "不能斷言所有參與者都理解理由",
+        "讓步不等於保證理解"
+      ],
+      "semantic_unknowns": [
+        "實際理解人數未知",
+        "未說明誰是負責人",
+        "未說明變更內容"
+      ],
+      "pair": "N1-D02",
+      "pair_reason": "與 N1-D02 對照已發生的讓步與未來條件；仔細說明本身不足以證明全員理解。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N1-D02",
+      "level_approx": "N1",
+      "jp": "参加者全員が変更の理由を理解したと確認できないかぎり、説明会を終えるべきではない。",
+      "zh_hant": "除非能確認所有參與者都理解了變更理由，否則不應結束說明會。",
+      "allowed_variants": [
+        "只要還不能確認每位參與者都理解變更原因，就不該結束說明會。"
+      ],
+      "semantic_checks": [
+        "條件是能確認所有參與者理解理由",
+        "未達確認條件前不應結束說明會",
+        "義務涉及結束說明會的時機"
+      ],
+      "semantic_unknowns": [
+        "未說明如何確認理解",
+        "未說明說明會目前是否進行中",
+        "未說明由誰決定是否結束"
+      ],
+      "pair": "N1-D01",
+      "pair_reason": "與 N1-D01 對照對理解程度的保留判斷與明確的結束條件；不可把條件句翻成已知事實。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N1-D03",
+      "level_approx": "N1",
+      "jp": "安全確認が済んだ時点で、現場責任者は作業の再開を許可しなければならない。",
+      "zh_hant": "安全確認完成時，現場負責人必須核准恢復作業。",
+      "allowed_variants": [
+        "安全檢查一完成，現場主管就必須同意恢復作業。"
+      ],
+      "semantic_checks": [
+        "安全確認完成是時間條件",
+        "現場負責人有核准恢復作業的義務",
+        "句子沒有說其他人也有此義務"
+      ],
+      "semantic_unknowns": [
+        "未說明安全確認的內容",
+        "未說明負責人性別",
+        "作業目前是否已恢復未知"
+      ],
+      "pair": "N1-D04",
+      "pair_reason": "與 N1-D04 對照安全確認完成後現場負責人有核准恢復作業的義務，以及確認完成前不得恢復作業的一般禁止；禁止也包括負責人員，但未明示適用人數或完整對象範圍。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N1-D04",
+      "level_approx": "N1",
+      "jp": "安全確認が済むまでは、担当者であっても作業を再開してはならない。",
+      "zh_hant": "安全確認完成之前，即使是負責人員也不得恢復作業。",
+      "allowed_variants": [
+        "在安全檢查完成前，就算是承辦人也不能重新開始作業。"
+      ],
+      "semantic_checks": [
+        "禁止持續到安全確認完成之前",
+        "負責人員也包含在禁止對象內",
+        "禁止的是恢復作業"
+      ],
+      "semantic_unknowns": [
+        "未說明安全確認由誰執行",
+        "未說明作業種類",
+        "未說明確認完成後由誰決定恢復"
+      ],
+      "pair": "N1-D03",
+      "pair_reason": "與 N1-D03 對照確認完成前不得恢復作業的一般禁止（明確包括負責人員），以及確認完成後現場負責人的核准義務；不額外限定禁止適用的人數或完整對象範圍。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N1-D05",
+      "level_approx": "N1",
+      "jp": "複数の関係者によれば、改修案は来年度まで見送られるとのことだが、正式決定かどうかは明らかでない。",
+      "zh_hant": "據多位相關人士轉述，改修案將暫緩至下年度；不過是否已正式定案仍不清楚。",
+      "allowed_variants": [
+        "多位相關人士表示，聽說改修案會暫緩至下年度；至於是否已正式決定，仍不明朗。"
+      ],
+      "semantic_checks": [
+        "消息來源是多位相關人士的轉述",
+        "轉述內容是改修案將暫緩至下年度",
+        "是否正式決定仍不明",
+        "不得把轉述本身改寫成正式決定"
+      ],
+      "semantic_unknowns": [
+        "相關人士身分未知",
+        "是否會於下年度恢復處理及其具體安排未知",
+        "正式決定的時間未知",
+        "改修案具體內容未知"
+      ],
+      "pair": "N1-D06",
+      "pair_reason": "與 N1-D06 對照他人轉述與根據公開紀錄缺少資訊所作的有限推論；轉述內容和正式決定狀態須分開表達。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N1-D06",
+      "level_approx": "N1",
+      "jp": "公開された議事録に日程の記載がない以上、延期が決まったとまでは判断できない。",
+      "zh_hant": "既然公開的會議紀錄沒有記載時程，就還不能判斷延期已經定案。",
+      "allowed_variants": [
+        "公開的會議紀錄未記載時程，因此不能據此認定延期已經決定。"
+      ],
+      "semantic_checks": [
+        "公開的會議紀錄沒有記載時程",
+        "僅憑這點不能判定延期已定案",
+        "結論受限於證據不足"
+      ],
+      "semantic_unknowns": [
+        "會議紀錄是否完整未知",
+        "未說明是否有其他資料",
+        "延期是否實際發生未知"
+      ],
+      "pair": "N1-D05",
+      "pair_reason": "與 N1-D05 對照來源轉述與公開紀錄缺少資訊所支持的謹慎推論；不得把「不能判定」改成「沒有延期」。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N1-D07",
+      "level_approx": "N1",
+      "jp": "今回の聞き取りで確認できたのは、当日の担当者が交代したという点に限られる。",
+      "zh_hant": "這次訪談所能確認的，僅限於當天的負責人曾經更換。",
+      "allowed_variants": [
+        "本次訪談只能確認當天的負責人曾經更換。"
+      ],
+      "semantic_checks": [
+        "此次訪談確認到的內容只有當天負責人曾更換",
+        "其他事項不在此句確認範圍內",
+        "限制的是可確認的內容"
+      ],
+      "semantic_unknowns": [
+        "更換原因未知",
+        "更換時間未知",
+        "未說明其他調查是否確認更多事實"
+      ],
+      "pair": "N1-D08",
+      "pair_reason": "與 N1-D08 對照訪談能確認的內容範圍與交接資訊的傳達方式限制。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N1-D08",
+      "level_approx": "N1",
+      "jp": "引き継ぎが必要な事項は、口頭ではなく記録に残る方法でのみ伝えることになっている。",
+      "zh_hant": "需要交接的事項，依照既定安排只能透過可留下紀錄的方式傳達，不能口頭告知。",
+      "allowed_variants": [
+        "需要交接的事項，安排上只可透過可留下紀錄的方式傳達，不可口頭告知。"
+      ],
+      "semantic_checks": [
+        "範圍是需要交接的事項",
+        "既定安排要求只能使用可留下紀錄的方式傳達",
+        "口頭傳達方式被排除"
+      ],
+      "semantic_unknowns": [
+        "可接受的紀錄方式未列明",
+        "未說明這是正式規章、內部安排或慣例",
+        "未說明緊急情況是否有例外"
+      ],
+      "pair": "N1-D07",
+      "pair_reason": "與 N1-D07 對照限制的焦點：一項限制訪談能確認的內容，另一項限制需要交接的資訊可透過何種方式傳達；未指定傳達發生的時間，也不表示這是正式成文規章。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N1-D09",
+      "level_approx": "N1",
+      "jp": "説明資料は一見すると論点を網羅しているようだが、比較の前提となる条件は明記されていない。",
+      "zh_hant": "說明資料乍看之下似乎涵蓋了各項論點，但作為比較前提的條件並未明確記載。",
+      "allowed_variants": [
+        "這份說明資料表面上像是涵蓋所有論點，然而比較所依據的條件沒有明白寫出。"
+      ],
+      "semantic_checks": [
+        "資料乍看似乎涵蓋論點",
+        "比較所需的前提條件未明確記載",
+        "外觀上的完整不等於實際列明前提"
+      ],
+      "semantic_unknowns": [
+        "未說明資料是否另有附件",
+        "未說明缺少條件是否影響結論",
+        "未說明作者意圖"
+      ],
+      "pair": "N1-D10",
+      "pair_reason": "與 N1-D10 對照表面印象和依明確記載所能推出的結論；不可把「未明記」推成條件不存在。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    },
+    {
+      "id": "N1-D10",
+      "level_approx": "N1",
+      "jp": "比較の前提条件が明記されていないからといって、その条件が検討されなかったとは限らない。",
+      "zh_hant": "不能因為比較的前提條件沒有明確記載，就認定那些條件未曾納入檢討。",
+      "allowed_variants": [
+        "前提條件未見明文，不代表那些條件一定沒有經過檢討。"
+      ],
+      "semantic_checks": [
+        "前提條件沒有明確記載",
+        "未明記不能證明未曾檢討",
+        "結論必須保持不確定而非斷言已檢討"
+      ],
+      "semantic_unknowns": [
+        "實際是否檢討未知",
+        "檢討過程未知",
+        "未說明資料為何沒有記載條件"
+      ],
+      "pair": "N1-D09",
+      "pair_reason": "與 N1-D09 對照文件呈現的表面完整度和對缺漏的正式推論限制；兩句均不得把記載狀況等同於實際過程。",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
+    }
+  ]
+}

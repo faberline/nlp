@@ -1,0 +1,61 @@
+# A1 First-Party MIT Japanese Lexicon Additions & Segmentation Fixes
+# surface	variant	cost	decided_upos	upos_mask	lemma	counterpart	meta
+#
+# Class 2: Closed-class adnominal demonstratives (連体詞 / DET)
+この	ja	389	DET	DET	-	這個	src=first_party_mit
+その	ja	535	DET	DET	-	那個	src=first_party_mit
+あの	ja	588	DET	DET	-	那個	src=first_party_mit
+どの	ja	564	DET	DET	-	哪個	src=first_party_mit
+こんな	ja	700	DET	DET	-	這樣	src=first_party_mit
+そんな	ja	420	DET	DET	-	那樣	src=first_party_mit
+あんな	ja	710	DET	DET	-	那樣	src=first_party_mit
+どんな	ja	727	DET	DET	-	什麼樣	src=first_party_mit
+#
+# Class 3: Closed-class polite subsidiary / request forms (ください / 下さい family)
+ください	ja	360	VERB	VERB	くださる	請	src=first_party_mit
+下さい	ja	380	VERB	VERB	下さる	請	src=first_party_mit
+くださいませ	ja	390	VERB	VERB	くださる	請	src=first_party_mit
+下さいませ	ja	400	VERB	VERB	下さる	請	src=first_party_mit
+#
+# Class 4: -い-ending な-adjectives whose adnominal 〜な mis-splits
+きれい	ja	760	ADJ	ADJ	-	美麗	src=first_party_mit
+きれいな	ja	740	ADJ	ADJ	きれい	美麗	src=first_party_mit
+きらい	ja	761	-	ADJ|NOUN	-	討厭	src=first_party_mit
+きらいな	ja	740	ADJ	ADJ	きらい	討厭	src=first_party_mit
+嫌いな	ja	740	ADJ	ADJ	嫌い	討厭	src=first_party_mit
+さいわいな	ja	740	ADJ	ADJ	さいわい	幸運	src=first_party_mit
+幸いな	ja	740	ADJ	ADJ	幸い	幸運	src=first_party_mit
+筋違いな	ja	770	ADJ	ADJ	筋違い	不合情理	src=first_party_mit
+あいまい	ja	804	-	ADJ|NOUN	-	曖昧	src=first_party_mit
+あいまいな	ja	780	ADJ	ADJ	あいまい	曖昧	src=first_party_mit
+#
+# Class 5: Missing core degree/modal hiragana adverbs whose kanji form is in ja.tsv
+ずいぶん	ja	720	ADV	ADV	-	非常	src=first_party_mit
+たいへん	ja	720	ADV	ADV	-	非常	src=first_party_mit
+ほんとう	ja	740	-	ADV|NOUN	-	真的	src=first_party_mit
+いろいろ	ja	720	-	ADJ|ADV	-	各種各樣	src=first_party_mit
+たいてい	ja	740	ADV	ADV	-	通常	src=first_party_mit
+いっそう	ja	740	ADV	ADV	-	更加	src=first_party_mit
+じゅうぶん	ja	740	-	ADJ|ADV|NOUN	-	充分	src=first_party_mit
+おおかた	ja	760	ADV	ADV	-	大概	src=first_party_mit
+#
+# Class 6: Closed-class kinship compound nouns (親族語彙)
+祖父	ja	680	NOUN	NOUN	-	祖父	src=first_party_mit
+祖母	ja	680	NOUN	NOUN	-	祖母	src=first_party_mit
+曾祖父	ja	740	NOUN	NOUN	-	曾祖父	src=first_party_mit
+曾祖母	ja	740	NOUN	NOUN	-	曾祖母	src=first_party_mit
+両親	ja	921	NOUN	NOUN	-	父母	src=first_party_mit
+姉妹	ja	1039	NOUN	NOUN	-	姊妹	src=first_party_mit
+孫	ja	1036	NOUN	NOUN	-	孫子	src=first_party_mit
+伯母	ja	740	NOUN	NOUN	-	伯母	src=first_party_mit
+叔母	ja	996	NOUN	NOUN	-	嬸母	src=first_party_mit
+従兄弟	ja	740	NOUN	NOUN	-	表兄弟	src=first_party_mit
+従姉妹	ja	740	NOUN	NOUN	-	表姊妹	src=first_party_mit
+甥	ja	1135	NOUN	NOUN	-	外甥	src=first_party_mit
+姪	ja	1129	NOUN	NOUN	-	姪女	src=first_party_mit
+義父	ja	740	NOUN	NOUN	-	義父	src=first_party_mit
+義母	ja	740	NOUN	NOUN	-	義母	src=first_party_mit
+義兄	ja	740	NOUN	NOUN	-	義兄	src=first_party_mit
+義姉	ja	740	NOUN	NOUN	-	義姊	src=first_party_mit
+義弟	ja	1039	NOUN	NOUN	-	義弟	src=first_party_mit
+義妹	ja	740	NOUN	NOUN	-	義妹	src=first_party_mit

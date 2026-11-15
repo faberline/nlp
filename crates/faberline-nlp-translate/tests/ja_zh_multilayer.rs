@@ -188,6 +188,103 @@ fn clause_spans_follow_length_changing_simplified_variants() {
 }
 
 #[test]
+fn polite_negative_endings_keep_polarity_and_past_tense() {
+    let mut failures = Vec::new();
+    for (source, hant, hans) in [
+        ("寝ません。", "不睡覺。", "不睡觉。"),
+        ("寝ませんでした。", "沒有睡覺。", "没有睡觉。"),
+        ("寝ます。", "睡覺。", "睡觉。"),
+        ("私は本を読みません。", "我不讀書。", "我不读书。"),
+        ("私は本を読みませんでした。", "我沒有讀書。", "我没有读书。"),
+        ("私は本を読みます。", "我讀書。", "我读书。"),
+        ("私は本を読みました。", "我讀了書。", "我读了书。"),
+    ] {
+        for (target, expected) in [(TargetVariant::ZhHant, hant), (TargetVariant::ZhHans, hans)] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            if doc.target_text != expected {
+                failures.push(format!("{source}: {} != {expected}", doc.target_text));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn polite_negative_is_local_to_the_following_temporal_clause() {
+    for (source, hant, hans) in [
+        ("私は本を読んでから寝ません。", "不睡覺", "不睡觉"),
+        ("私は本を読んでから寝ませんでした。", "沒有睡覺", "没有睡觉"),
+    ] {
+        for (target, expected, after) in [
+            (TargetVariant::ZhHant, hant, '後'),
+            (TargetVariant::ZhHans, hans, '后'),
+        ] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            let (before, following) = doc
+                .target_text
+                .split_once(after)
+                .expect("temporal boundary");
+            assert!(!before.contains(['不', '沒', '没']), "{}", doc.target_text);
+            assert!(following.contains(expected), "{}", doc.target_text);
+            assert!(!following.contains('了'), "{}", doc.target_text);
+        }
+    }
+}
+
+#[test]
+fn quoted_and_opaque_negative_syllables_do_not_negate_positive_actions() {
+    for source in [
+        "「ん」と言います。",
+        "私は `ません` を読みます。",
+        "彼は本を読むんです。",
+    ] {
+        for target in [TargetVariant::ZhHant, TargetVariant::ZhHans] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(
+                !doc.target_text.contains(['不', '沒', '没']),
+                "{source}: {}",
+                doc.target_text
+            );
+            if source.contains("`ません`") {
+                let code = doc
+                    .opaque_spans
+                    .iter()
+                    .find(|record| slice_chars(source, record.source_span) == "`ません`")
+                    .unwrap();
+                assert_eq!(
+                    slice_chars(&doc.target_text, code.target_span.unwrap()),
+                    "`ません`"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn te_kara_keeps_temporal_order_separate_from_cause_and_source() {
     for target in [TargetVariant::ZhHant, TargetVariant::ZhHans] {
         let after = if target == TargetVariant::ZhHant {

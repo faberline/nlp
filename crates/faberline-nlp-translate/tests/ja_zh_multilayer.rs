@@ -321,6 +321,396 @@ fn existence_and_copula_negatives_preserve_locations_quotes_and_locks() {
 }
 
 #[test]
+fn keigo_descriptive_forms_keep_the_action_tense_and_polarity() {
+    let mut failures = Vec::new();
+    for (source, hant, hans) in [
+        ("先生は本をお読みになる。", "老師讀書。", "老师读书。"),
+        ("先生は本をお読みになります。", "老師讀書。", "老师读书。"),
+        ("先生は本をお読みになった。", "老師讀了書。", "老师读了书。"),
+        (
+            "先生は本をお読みになりました。",
+            "老師讀了書。",
+            "老师读了书。",
+        ),
+        (
+            "先生は本をお読みになりません。",
+            "老師不讀書。",
+            "老师不读书。",
+        ),
+        (
+            "先生は本をお読みにならない。",
+            "老師不讀書。",
+            "老师不读书。",
+        ),
+        (
+            "先生は本をお読みになりませんでした。",
+            "老師沒有讀書。",
+            "老师没有读书。",
+        ),
+        ("私は先生をお待ちする。", "我等待老師。", "我等待老师。"),
+        ("私は先生をお待ちします。", "我等待老師。", "我等待老师。"),
+        ("私は先生をお待ちした。", "我等待了老師。", "我等待了老师。"),
+        (
+            "私は先生をお待ちしました。",
+            "我等待了老師。",
+            "我等待了老师。",
+        ),
+        (
+            "私は先生をお待ちしない。",
+            "我不等待老師。",
+            "我不等待老师。",
+        ),
+        (
+            "私は先生をお待ちしませんでした。",
+            "我沒有等待老師。",
+            "我没有等待老师。",
+        ),
+        (
+            "私は先生に本を読んでいただく。",
+            "老師幫我讀書。",
+            "老师帮我读书。",
+        ),
+        (
+            "私は先生に本を読んでいただきます。",
+            "老師幫我讀書。",
+            "老师帮我读书。",
+        ),
+        (
+            "私は先生に本を読んでいただいた。",
+            "老師幫我讀了書。",
+            "老师帮我读了书。",
+        ),
+        (
+            "私は先生に本を読んでいただきました。",
+            "老師幫我讀了書。",
+            "老师帮我读了书。",
+        ),
+        (
+            "私は先生に本を読んでいただきません。",
+            "老師不幫我讀書。",
+            "老师不帮我读书。",
+        ),
+        (
+            "先生は本を読んでくださる。",
+            "老師幫我讀書。",
+            "老师帮我读书。",
+        ),
+        (
+            "先生は本を読んでくださいます。",
+            "老師幫我讀書。",
+            "老师帮我读书。",
+        ),
+        (
+            "先生は本を読んでくださった。",
+            "老師幫我讀了書。",
+            "老师帮我读了书。",
+        ),
+        (
+            "先生は本を読んでくださいました。",
+            "老師幫我讀了書。",
+            "老师帮我读了书。",
+        ),
+        (
+            "先生は本を読んでくださいません。",
+            "老師不幫我讀書。",
+            "老师不帮我读书。",
+        ),
+        (
+            "先生は本を読んでくださいませんでした。",
+            "老師沒有幫我讀書。",
+            "老师没有帮我读书。",
+        ),
+        (
+            "私は先生に本を読んでいただきませんでした。",
+            "老師沒有幫我讀書。",
+            "老师没有帮我读书。",
+        ),
+    ] {
+        for (target, expected) in [(TargetVariant::ZhHant, hant), (TargetVariant::ZhHans, hans)] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            if doc.target_text != expected {
+                failures.push(format!("{source}: {} != {expected}", doc.target_text));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn keigo_lending_keeps_the_beneficiary_as_the_borrower() {
+    for (source, hant, hans) in [
+        (
+            "先生は本を貸してくださる。",
+            "老師借給我書。",
+            "老师借给我书。",
+        ),
+        (
+            "先生は本を貸してくださった。",
+            "老師借給了我書。",
+            "老师借给了我书。",
+        ),
+        (
+            "私は先生に本を貸していただきました。",
+            "老師借給了我書。",
+            "老师借给了我书。",
+        ),
+        (
+            "先生は彼女に本を貸してくださる。",
+            "老師借給她書。",
+            "老师借给她书。",
+        ),
+        (
+            "先生は本を貸してくれた。",
+            "老師借給了我書。",
+            "老师借给了我书。",
+        ),
+        (
+            "私は先生に本を貸してもらう。",
+            "老師借給我書。",
+            "老师借给我书。",
+        ),
+    ] {
+        for (target, expected) in [(TargetVariant::ZhHant, hant), (TargetVariant::ZhHans, hans)] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert_eq!(doc.target_text, expected, "{source}");
+        }
+    }
+}
+
+#[test]
+fn keigo_wrappers_preserve_other_verbs_and_explicit_beneficiaries() {
+    for (source, plain) in [
+        ("先生は手紙をお書きになる。", "先生は手紙を書く。"),
+        ("私は本をお持ちする。", "私は本を持つ。"),
+        ("私は手紙をお書きします。", "私は手紙を書く。"),
+        (
+            "先生は私に手紙を書いてくださる。",
+            "先生は私に手紙を書いてくれる。",
+        ),
+        (
+            "私は先生に手紙を書いていただいた。",
+            "私は先生に手紙を書いてもらった。",
+        ),
+        (
+            "先生は彼女に本を読んでくださいます。",
+            "先生は彼女に本を読んでくれる。",
+        ),
+        (
+            "私は先生から本を読んでいただきます。",
+            "私は先生から本を読んでもらう。",
+        ),
+    ] {
+        for target in [TargetVariant::ZhHant, TargetVariant::ZhHans] {
+            let translate = |text| {
+                analyze_and_translate(
+                    text,
+                    &TranslateOptions::new(target),
+                    &TranslationGlossary::new(),
+                    None,
+                    Backend::Onnx,
+                )
+                .unwrap()
+            };
+            let doc = translate(source);
+            assert_valid_ja_zh_doc(source, &doc);
+            assert_eq!(doc.target_text, translate(plain).target_text, "{source}");
+            assert!(
+                !doc.target_text.contains("您"),
+                "{source}: {}",
+                doc.target_text
+            );
+        }
+    }
+}
+
+#[test]
+fn keigo_does_not_rewrite_lexical_verbs_requests_or_complex_controls() {
+    for target in [TargetVariant::ZhHant, TargetVariant::ZhHans] {
+        let translate = |text| {
+            analyze_and_translate(
+                text,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap()
+        };
+        for source in [
+            "先生は本を読んでください。",
+            "先生は本を読んでくださいませ。",
+            "先生は本を読んでくださいまし。",
+            "先生は本を読まないでください。",
+        ] {
+            let doc = translate(source);
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(
+                doc.target_text.contains('請') || doc.target_text.contains('请'),
+                "{}",
+                doc.target_text
+            );
+            assert!(!doc.target_text.contains("幫我") && !doc.target_text.contains("帮我"));
+        }
+        let meal = translate("いただきます。");
+        assert_eq!(
+            meal.target_text,
+            if target == TargetVariant::ZhHant {
+                "我要開動了。"
+            } else {
+                "我要开动了。"
+            }
+        );
+        for source in [
+            "私は座って寿司をいただいた。",
+            "私は本をいただく。",
+            "先生は私に本をくださる。",
+            "私は先生に本を読ませていただく。",
+            "私は先生に本を読んでいただきたい。",
+        ] {
+            let doc = translate(source);
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(
+                doc.target_text.starts_with(if source.starts_with("私は") {
+                    "我"
+                } else if target == TargetVariant::ZhHant {
+                    "老師"
+                } else {
+                    "老师"
+                }),
+                "{source}: {}",
+                doc.target_text
+            );
+            assert!(!doc.target_text.contains("幫我") && !doc.target_text.contains("帮我"));
+        }
+        let at_home = translate("家でいただきます。");
+        assert!(
+            at_home
+                .target_text
+                .contains(if target == TargetVariant::ZhHant {
+                    "我要開動了"
+                } else {
+                    "我要开动了"
+                }),
+            "{}",
+            at_home.target_text
+        );
+        for source in ["お金になる。", "お茶にする。", "先生になった。"] {
+            let doc = translate(source);
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(!doc.target_text.contains("幫我") && !doc.target_text.contains("帮我"));
+            if source.ends_with("なる。") || source.ends_with("なった。") {
+                assert!(
+                    doc.target_text.contains("變成") || doc.target_text.contains("变成"),
+                    "{}",
+                    doc.target_text
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn keigo_keeps_glossary_opaque_and_quote_spans() {
+    let source = "アリスは `お読みになる` をお読みになりました、私は先生をお待ちします。";
+    for target in [TargetVariant::ZhHant, TargetVariant::ZhHans] {
+        let mut glossary = actor_glossary("Alice");
+        glossary.actors[0]
+            .targets
+            .insert(TargetVariant::ZhHans, "Alice".to_owned());
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(target),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        for hit in &doc.glossary_hits {
+            assert_eq!(slice_chars(&doc.target_text, hit.target_span), "Alice");
+        }
+        assert_eq!(doc.glossary_hits.len(), 1);
+        let code = doc
+            .opaque_spans
+            .iter()
+            .find(|span| slice_chars(source, span.source_span) == "`お読みになる`")
+            .unwrap();
+        assert_eq!(
+            slice_chars(&doc.target_text, code.target_span.unwrap()),
+            "`お読みになる`"
+        );
+        assert_eq!(
+            doc.clause_alignments
+                .iter()
+                .map(|clause| slice_chars(&doc.target_text, clause.target_span))
+                .collect::<String>(),
+            doc.target_text
+        );
+        for (locked_source, term) in [
+            ("先生は本をお読みになる。", "読み"),
+            ("私は先生に本を読んでいただく。", "いただく"),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: BTreeMap::from([(target, "LOCKED".to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            let doc = analyze_and_translate(
+                locked_source,
+                &TranslateOptions::new(target),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(locked_source, &doc);
+            assert_eq!(doc.glossary_hits.len(), 1);
+            let hit = &doc.glossary_hits[0];
+            assert_eq!(slice_chars(locked_source, hit.source_span), term);
+            assert_eq!(slice_chars(&doc.target_text, hit.target_span), "LOCKED");
+        }
+        let quoted = "「私は先生をお待ちします」と言う。";
+        let doc = analyze_and_translate(
+            quoted,
+            &TranslateOptions::new(target),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(quoted, &doc);
+        assert!(
+            doc.target_text
+                .contains(if target == TargetVariant::ZhHant {
+                    "我等待老師"
+                } else {
+                    "我等待老师"
+                }),
+            "{}",
+            doc.target_text
+        );
+    }
+}
+
+#[test]
 fn polite_negative_endings_keep_polarity_and_past_tense() {
     let mut failures = Vec::new();
     for (source, hant, hans) in [

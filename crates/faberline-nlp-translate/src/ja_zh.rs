@@ -120,6 +120,7 @@ pub(crate) fn translate_ja_sentence(
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let atoms = build_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    let atoms = normalize_keigo_atoms(&atoms);
 
     if atoms.is_empty() {
         let masked = lock_table.mask_span(chars, sent_span);
@@ -969,6 +970,195 @@ fn is_te_subsidiary_atom(a: &Atom) -> bool {
                     | "は"
                     | "から"
             ))
+}
+
+fn is_te_form_link(base: &Atom, te: &Atom, auxiliary: &Atom) -> bool {
+    !base.is_locked
+        && !te.is_locked
+        && !auxiliary.is_locked
+        && base.upos == Some(Upos::Verb)
+        && te.upos == Some(Upos::Sconj)
+        && matches!(te.surface.as_str(), "て" | "で")
+        && base.span.end_char == te.span.start_char
+        && te.span.end_char == auxiliary.span.start_char
+}
+
+/// Remove descriptive honorific wrappers before clause splitting. Keep all finite
+/// auxiliaries, source spans and locks so tense, negation and alignment stay local.
+fn normalize_keigo_atoms(atoms: &[Atom]) -> Vec<Atom> {
+    let mut out = Vec::with_capacity(atoms.len());
+    let mut i = 0;
+    while i < atoms.len() {
+        let a = &atoms[i];
+        if !a.is_locked
+            && a.surface == "お"
+            && a.upos == Some(Upos::Intj)
+            && let Some(base) = atoms.get(i + 1)
+            && !base.is_locked
+            && base.upos == Some(Upos::Verb)
+            && base
+                .lemma
+                .as_deref()
+                .is_some_and(|lemma| lemma != base.surface)
+        {
+            let tail = if atoms
+                .get(i + 2)
+                .is_some_and(|ni| !ni.is_locked && ni.surface == "に" && ni.upos == Some(Upos::Adp))
+            {
+                atoms
+                    .get(i + 3)
+                    .filter(|tail| {
+                        !tail.is_locked
+                            && ((tail.upos == Some(Upos::Verb)
+                                && tail.lemma.as_deref().unwrap_or(&tail.surface) == "なる")
+                                || (tail.surface == "なら"
+                                    && tail.upos == Some(Upos::Sconj)
+                                    && atoms.get(i + 4).is_some_and(|neg| {
+                                        !neg.is_locked
+                                            && neg.upos == Some(Upos::Aux)
+                                            && tail.span.end_char == neg.span.start_char
+                                            && matches!(neg.surface.as_str(), "ない" | "なかっ")
+                                    })))
+                    })
+                    .map(|tail| (tail, 4))
+            } else {
+                atoms
+                    .get(i + 2)
+                    .filter(|tail| {
+                        !tail.is_locked
+                            && tail.upos == Some(Upos::Verb)
+                            && tail.lemma.as_deref().unwrap_or(&tail.surface) == "する"
+                    })
+                    .map(|tail| (tail, 3))
+            };
+            if let Some((tail, consumed)) = tail
+                && atoms[i..i + consumed]
+                    .windows(2)
+                    .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+            {
+                let mut verb = base.clone();
+                verb.span = Span {
+                    start_char: a.span.start_char,
+                    end_char: tail.span.end_char,
+                };
+                verb.doc_tok_idx = tail.doc_tok_idx;
+                verb.head = tail.head;
+                verb.deprel.clone_from(&tail.deprel);
+                out.push(verb);
+                i += consumed;
+                continue;
+            }
+        }
+
+        // The tokenizer emits `ください` for the stem of `くださる`, too.
+        // Only a following finite polite ending makes this a statement.
+        let after_te = i >= 2 && is_te_form_link(&atoms[i - 2], &atoms[i - 1], a);
+        if after_te && !a.is_locked && a.lemma.as_deref() == Some("くださる") {
+            let mut verb = a.clone();
+            if a.surface == "ください"
+                && let Some(next) = atoms.get(i + 1)
+                && !next.is_locked
+                && a.span.end_char == next.span.start_char
+            {
+                if next.upos == Some(Upos::Aux)
+                    && (next.surface == "ます"
+                        || (next.surface == "まし"
+                            && atoms.get(i + 2).is_some_and(|ta| {
+                                !ta.is_locked
+                                    && ta.surface == "た"
+                                    && ta.upos == Some(Upos::Aux)
+                                    && next.span.end_char == ta.span.start_char
+                            })))
+                {
+                    verb.surface = "くださる".to_owned();
+                    out.push(verb);
+                    i += 1;
+                    continue;
+                }
+                // `くださいました` can be split as `ください + ま + し + た`.
+                if next.surface == "ま"
+                    && next.upos == Some(Upos::Intj)
+                    && let Some(shi) = atoms.get(i + 2)
+                    && !shi.is_locked
+                    && shi.surface == "し"
+                    && shi.upos == Some(Upos::Verb)
+                    && let Some(ta) = atoms.get(i + 3)
+                    && !ta.is_locked
+                    && ta.surface == "た"
+                    && ta.upos == Some(Upos::Aux)
+                    && next.span.end_char == shi.span.start_char
+                    && shi.span.end_char == ta.span.start_char
+                {
+                    verb.surface = "くださる".to_owned();
+                    out.push(verb);
+                    let mut polite = next.clone();
+                    polite.surface = "まし".to_owned();
+                    polite.lemma = Some("ます".to_owned());
+                    polite.upos = Some(Upos::Aux);
+                    polite.span.end_char = shi.span.end_char;
+                    out.push(polite);
+                    i += 3;
+                    continue;
+                }
+            } else if a.surface == "くださいませ" {
+                let negative = atoms.get(i + 1).is_some_and(|neg| {
+                    !neg.is_locked
+                        && neg.surface == "ん"
+                        && neg.upos == Some(Upos::Aux)
+                        && a.span.end_char == neg.span.start_char
+                });
+                let negative_past = atoms.get(i + 1..i + 4).is_some_and(|tail| {
+                    tail.iter().all(|a| !a.is_locked)
+                        && tail[0].surface == "んで"
+                        && tail[0].upos == Some(Upos::Sconj)
+                        && tail[1].surface == "し"
+                        && tail[1].upos == Some(Upos::Verb)
+                        && tail[2].surface == "た"
+                        && tail[2].upos == Some(Upos::Aux)
+                        && a.span.end_char == tail[0].span.start_char
+                        && tail
+                            .windows(2)
+                            .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+                });
+                if !negative && !negative_past {
+                    out.push(a.clone());
+                    i += 1;
+                    continue;
+                }
+                verb.surface = "くださる".to_owned();
+                verb.span.end_char -= 2;
+                out.push(verb);
+                let mut polite = a.clone();
+                polite.span.start_char = polite.span.end_char - 2;
+                polite.surface = "ませ".to_owned();
+                polite.lemma = Some("ます".to_owned());
+                polite.upos = Some(Upos::Aux);
+                out.push(polite);
+                // `くださいませんでした` may end in `んで + し + た`.
+                if negative_past {
+                    let mut neg = atoms[i + 1].clone();
+                    neg.surface = "ん".to_owned();
+                    neg.lemma = None;
+                    neg.upos = Some(Upos::Aux);
+                    neg.span.end_char = neg.span.start_char + 1;
+                    let mut copula = atoms[i + 2].clone();
+                    copula.span.start_char = neg.span.end_char;
+                    copula.surface = "でし".to_owned();
+                    copula.lemma = Some("です".to_owned());
+                    copula.upos = Some(Upos::Aux);
+                    out.push(neg);
+                    out.push(copula);
+                    i += 3;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+        }
+        out.push(a.clone());
+        i += 1;
+    }
+    out
 }
 
 fn has_temporal_te_kara_tail(atoms: &[Atom]) -> bool {
@@ -3578,11 +3768,18 @@ enum GivingReceivingKind {
 }
 
 #[derive(Clone, Copy)]
+enum BenefactiveCore {
+    Generic,
+    Show,
+    Lend,
+}
+
+#[derive(Clone, Copy)]
 struct GivingReceivingPredicate {
     kind: GivingReceivingKind,
     atom_index: usize,
     auxiliary: bool,
-    shows_to_beneficiary: bool,
+    benefactive_core: BenefactiveCore,
 }
 
 fn giving_receiving_kind(atom: &Atom) -> Option<GivingReceivingKind> {
@@ -3591,8 +3788,8 @@ fn giving_receiving_kind(atom: &Atom) -> Option<GivingReceivingKind> {
     }
     match atom.lemma.as_deref().unwrap_or(&atom.surface) {
         "あげる" => Some(GivingReceivingKind::Give),
-        "くれる" => Some(GivingReceivingKind::GiveTowardSpeaker),
-        "もらう" => Some(GivingReceivingKind::Receive),
+        "くれる" | "くださる" => Some(GivingReceivingKind::GiveTowardSpeaker),
+        "もらう" | "いただく" => Some(GivingReceivingKind::Receive),
         _ => None,
     }
 }
@@ -3624,6 +3821,28 @@ fn giving_receiving_predicate(
         && atoms[..atom_index - 1]
             .iter()
             .any(|a| a.upos == Some(Upos::Verb));
+    // Honorific lexical verbs are ambiguous outside a te-form construction.
+    // Bare `てください` remains a request.
+    if matches!(
+        atoms[atom_index]
+            .lemma
+            .as_deref()
+            .unwrap_or(&atoms[atom_index].surface),
+        "いただく" | "くださる"
+    ) && (!auxiliary
+        || atom_index < 2
+        || !is_te_form_link(
+            atoms[atom_index - 2],
+            atoms[atom_index - 1],
+            atoms[atom_index],
+        )
+        || matches!(
+            atoms[atom_index].surface.as_str(),
+            "ください" | "くださいませ"
+        ))
+    {
+        return None;
+    }
     // Kana `あげる` also means raising something. Require an explicit recipient
     // before interpreting a standalone occurrence as giving.
     if !auxiliary
@@ -3661,8 +3880,9 @@ fn giving_receiving_predicate(
     {
         return None;
     }
-    // Only replace a single show core; extra content must stay on the generic path.
-    let shows_to_beneficiary = auxiliary
+    // Show and lend take the beneficiary as their own recipient. Do not turn
+    // `lend to me` into `help me lend`. Extra cores stay on the generic path.
+    let simple_core = auxiliary
         && atoms.iter().all(|a| {
             !a.is_locked
                 && matches!(
@@ -3674,15 +3894,25 @@ fn giving_receiving_predicate(
             .iter()
             .filter(|a| a.upos == Some(Upos::Verb))
             .count()
-            == 1
-        && atoms[..atom_index - 1]
+            == 1;
+    let benefactive_core = if simple_core {
+        match atoms[..atom_index - 1]
             .iter()
-            .any(|a| !a.is_locked && a.lemma.as_deref().unwrap_or(&a.surface) == "見せる");
+            .find(|a| a.upos == Some(Upos::Verb))
+            .map(|a| a.lemma.as_deref().unwrap_or(&a.surface))
+        {
+            Some("見せる") => BenefactiveCore::Show,
+            Some("貸す") => BenefactiveCore::Lend,
+            _ => BenefactiveCore::Generic,
+        }
+    } else {
+        BenefactiveCore::Generic
+    };
     Some(GivingReceivingPredicate {
         kind,
         atom_index,
         auxiliary,
-        shows_to_beneficiary,
+        benefactive_core,
     })
 }
 
@@ -4605,16 +4835,27 @@ fn translate_clause_bunsetsus(
             } else {
                 transfer_counterpart
             };
-            if transfer.shows_to_beneficiary {
-                if let Some(viewer) = beneficiary {
-                    verb_core = "看".to_owned();
-                    transfer_prefix = Some(format!("給{viewer}"));
-                } else {
-                    verb_core = "展示".to_owned();
+            match transfer.benefactive_core {
+                BenefactiveCore::Show => {
+                    if let Some(viewer) = beneficiary {
+                        verb_core = "看".to_owned();
+                        transfer_prefix = Some(format!("給{viewer}"));
+                    } else {
+                        verb_core = "展示".to_owned();
+                    }
                 }
-            } else {
-                transfer_prefix =
-                    Some(beneficiary.map_or_else(|| "幫忙".to_owned(), |np| format!("幫{np}")));
+                BenefactiveCore::Lend => {
+                    if let Some(borrower) = beneficiary {
+                        verb_core = "借給".to_owned();
+                        transfer_recipient = Some(borrower);
+                    } else {
+                        verb_core = "出借".to_owned();
+                    }
+                }
+                BenefactiveCore::Generic => {
+                    transfer_prefix =
+                        Some(beneficiary.map_or_else(|| "幫忙".to_owned(), |np| format!("幫{np}")));
+                }
             }
         } else if transfer.kind == GivingReceivingKind::Receive {
             transfer_prefix = transfer_counterpart.map(|np| format!("從{np}"));
@@ -5953,6 +6194,9 @@ fn apply_phrase_matches(atoms: &[Atom]) -> Vec<Atom> {
             continue;
         }
         let preceded_by_no = i > 0 && !atoms[i - 1].is_locked && atoms[i - 1].surface == "の";
+        let receiving_auxiliary = i >= 2
+            && is_te_form_link(&atoms[i - 2], &atoms[i - 1], &atoms[i])
+            && atoms[i].lemma.as_deref().unwrap_or(&atoms[i].surface) == "いただく";
         let mut matched_len = 0usize;
         let mut matched_zh: Option<&'static str> = None;
         let max_win = (atoms.len() - i).min(6);
@@ -5971,6 +6215,9 @@ fn apply_phrase_matches(atoms: &[Atom]) -> Vec<Atom> {
                 continue;
             }
             let concat: String = slice.iter().map(|a| a.surface.as_str()).collect();
+            if receiving_auxiliary && concat == "いただきます" {
+                continue;
+            }
             if let Some(zh) = lookup_curated_phrase(&concat) {
                 matched_len = len;
                 matched_zh = Some(zh);
@@ -7123,17 +7370,29 @@ fn synthesize_predicate_complex(
         || joined.contains("ちゃった")
         || joined.contains("じゃう")
         || joined.contains("じゃった");
-    let has_te_iru = joined.contains("ている")
-        || joined.contains("ていた")
-        || joined.contains("てる")
-        || joined.contains("てた")
-        || joined.contains("ています")
-        || joined.contains("ていました")
-        || joined.contains("ていない")
-        || joined.contains("ていなく")
-        || joined.contains("ていなかった")
-        || joined.contains("ていません")
-        || joined.contains("ていませんでした");
+    // `ていただいた` contains the letters `ていた`, but is not progressive.
+    // Keep a boundary at the humble verb while checking the other aspect atoms.
+    let aspect_joined: String = all_atoms
+        .iter()
+        .map(|a| {
+            if !a.is_locked && a.lemma.as_deref().unwrap_or(&a.surface) == "いただく" {
+                "|"
+            } else {
+                a.surface.as_str()
+            }
+        })
+        .collect();
+    let has_te_iru = aspect_joined.contains("ている")
+        || aspect_joined.contains("ていた")
+        || aspect_joined.contains("てる")
+        || aspect_joined.contains("てた")
+        || aspect_joined.contains("ています")
+        || aspect_joined.contains("ていました")
+        || aspect_joined.contains("ていない")
+        || aspect_joined.contains("ていなく")
+        || aspect_joined.contains("ていなかった")
+        || aspect_joined.contains("ていません")
+        || aspect_joined.contains("ていませんでした");
     let has_sugiru =
         joined.contains("すぎる") || joined.contains("すぎた") || joined.contains("過ぎる");
     let has_tai = surfaces

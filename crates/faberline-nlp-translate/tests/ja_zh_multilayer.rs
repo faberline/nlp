@@ -188,6 +188,32 @@ fn clause_spans_follow_length_changing_simplified_variants() {
 }
 
 #[test]
+fn source_kara_before_a_copula_keeps_the_start_point() {
+    for source in [
+        "授業は午前九時からです。",
+        "仕事は明日からです。",
+        "発表は六月一日の午後三時からです。",
+    ] {
+        for (target, start) in [(TargetVariant::ZhHant, '從'), (TargetVariant::ZhHans, '从')] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_valid_ja_zh_doc(source, &doc);
+            assert!(
+                doc.target_text.contains(start),
+                "{source}: {}",
+                doc.target_text
+            );
+        }
+    }
+}
+
+#[test]
 fn giving_and_receiving_keep_explicit_transfer_roles() {
     let cases = [
         ("私は彼に本をあげた。", "我給了他書。", "我给了他书。"),

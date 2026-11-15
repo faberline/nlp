@@ -1102,9 +1102,19 @@ fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span)
             && atoms[i + 1..]
                 .iter()
                 .any(|later| !later.is_locked && later.surface == "過言");
+        // Keep source-plus-copula endings on the boundary path. Grouping `からです`
+        // into one bunsetsu would classify the source phrase as a predicate and lose `從`.
+        let next_is_copula = atoms.get(i + 1).is_some_and(|next| {
+            !next.is_locked
+                && matches!(
+                    next.lemma.as_deref().unwrap_or(&next.surface),
+                    "だ" | "です"
+                )
+        });
         let is_source_kara = a.surface == "から"
             && a.upos == Some(Upos::Adp)
             && i > 0
+            && !next_is_copula
             && !matches!(atoms[i - 1].upos, Some(Upos::Verb | Upos::Adj | Upos::Aux));
         if !a.is_locked
             && !is_obligation_nara

@@ -8,8 +8,8 @@ Outputs (written atomically via os.replace):
 
 from __future__ import annotations
 
+import argparse
 import csv
-import glob
 import os
 import re
 import sys
@@ -17,10 +17,6 @@ from collections import defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRATCH_DIR = Path(
-    "/Users/chrischeng/.gemini/antigravity/brain/"
-    "fcdf5ec7-a63d-4308-93f6-0436229a04ea/scratch/lex_build_ja"
-)
 NLP_CRATE_ROOT = REPO_ROOT / "crates" / "faberline-nlp"
 OUT_JA_TSV = NLP_CRATE_ROOT / "lexicon" / "data" / "ja.tsv"
 OUT_INFLECT_TSV = NLP_CRATE_ROOT / "lexicon" / "data" / "ja_inflect.tsv"
@@ -136,12 +132,22 @@ CTYPE_TO_PARADIGM = {
 }
 
 
-def find_naist_csv() -> Path:
-    matches = sorted(SCRATCH_DIR.glob("mecab-naist-jdic-*/naist-jdic.csv"))
+def find_naist_csv(naist_dir: Path | None) -> Path:
+    if naist_dir is None:
+        env_dir = os.environ.get("NAIST_JDIC_DIR", "").strip()
+        if env_dir:
+            naist_dir = Path(env_dir)
+    if naist_dir is None:
+        raise FileNotFoundError(
+            "NAIST-jdic directory not specified. Pass --naist-dir <path> or set NAIST_JDIC_DIR."
+        )
+    direct = naist_dir / "naist-jdic.csv"
+    if direct.is_file():
+        return direct
+    matches = sorted(naist_dir.glob("mecab-naist-jdic-*/naist-jdic.csv"))
     if not matches:
         raise FileNotFoundError(
-            f"naist-jdic.csv not found under {SCRATCH_DIR}. "
-            "Download mecab-naist-jdic tarball into scratch dir first."
+            f"naist-jdic.csv not found under {naist_dir}."
         )
     return matches[0]
 
@@ -442,24 +448,28 @@ def verify_inflect_rules(rules: list[tuple[str, int, str, int, str, str]]) -> No
 
 def write_atomic(path: Path, lines: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = SCRATCH_DIR / f".tmp_{path.name}.{os.getpid()}"
+    tmp_path = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
     with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
         for line in lines:
             f.write(line)
             f.write("\n")
-    # Note: os.replace requires same filesystem; if /tmp or scratch is on same volume it works,
-    # otherwise write temp next to target or use shutil+replace. Both are on /Users/chrischeng.
-    try:
-        os.replace(tmp_path, path)
-    except OSError:
-        local_tmp = path.with_suffix(path.suffix + f".tmp.{os.getpid()}")
-        local_tmp.write_text(tmp_path.read_text(encoding="utf-8"), encoding="utf-8")
-        tmp_path.unlink(missing_ok=True)
-        os.replace(local_tmp, path)
+    os.replace(tmp_path, path)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--naist-dir",
+        type=Path,
+        default=None,
+        help="Directory containing naist-jdic.csv or mecab-naist-jdic-*/naist-jdic.csv (or set NAIST_JDIC_DIR).",
+    )
+    return parser.parse_args(argv)
 
 
 def main() -> int:
-    csv_path = find_naist_csv()
+    args = parse_args()
+    csv_path = find_naist_csv(args.naist_dir)
     print(f"Reading NAIST-jdic from {csv_path}...", file=sys.stderr)
 
     # 1. Build and verify ja_inflect.tsv

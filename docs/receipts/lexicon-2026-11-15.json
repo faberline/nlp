@@ -1,0 +1,132 @@
+{
+  "schema": "nlp.lexicon.receipt.v1",
+  "date": "2026-11-15",
+  "binary_format": "FNLPLX01",
+  "binary_bytes": 15127359,
+  "total_entries": 350393,
+  "total_rules": 1389,
+  "variants": {
+    "zh-Hant": 69474,
+    "zh-Hans": 73722,
+    "en-US": 12591,
+    "en-GB": 12648,
+    "en": 41158,
+    "ja": 70817,
+    "ko": 69983
+  },
+  "rules": {
+    "ja_inflect": 1248,
+    "ko_morph": 141
+  },
+  "tsv_files": [
+    {
+      "path": "lexicon/data/zh_hant.tsv",
+      "entries": 69474,
+      "bytes": 3067272,
+      "sha256": "7fe39affdfe85597f31003234e9349ec0ca4919fc7cb49f4b622804f3f16752a"
+    },
+    {
+      "path": "lexicon/data/zh_hans.tsv",
+      "entries": 73722,
+      "bytes": 3269612,
+      "sha256": "fb0f7202cd2eb61d855fc697ebbb122548e045c90d7b350f509ead1dabaf4120"
+    },
+    {
+      "path": "lexicon/data/en.tsv",
+      "entries": 66397,
+      "bytes": 2846120,
+      "sha256": "ad16a3493296839b9899bc1a62aa7877e2157dc27bd7753d87e7401bf142b1e0"
+    },
+    {
+      "path": "lexicon/data/ja.tsv",
+      "entries": 70817,
+      "bytes": 2918467,
+      "sha256": "9a927ad674ef687c15b250794ed095fe329c9a3af3560c8cd8057ba61f36096e"
+    },
+    {
+      "path": "lexicon/data/ja_inflect.tsv",
+      "entries": 1248,
+      "bytes": 102075,
+      "sha256": "99d38574dca069b622eba9ca67f731215b4a421eeb740d64feccd62e35d8963f"
+    },
+    {
+      "path": "lexicon/data/ko.tsv",
+      "entries": 69983,
+      "bytes": 3767544,
+      "sha256": "3b2d43a1b288260c68958c17b8b72420424c30406cfa7e758bcfc592a74c11c4"
+    },
+    {
+      "path": "lexicon/data/ko_morph.tsv",
+      "entries": 141,
+      "bytes": 7639,
+      "sha256": "5b547d4b0a84d028798d0f27d7352ef0c78d452afe6f5f5d032c9814c6c39585"
+    }
+  ],
+  "sources": [
+    {
+      "name": "jieba",
+      "variants": [
+        "zh-Hans",
+        "zh-Hant"
+      ],
+      "license": "MIT",
+      "license_file": "LICENSE-JIEBA-MIT.txt"
+    },
+    {
+      "name": "OpenCC",
+      "variants": [
+        "zh-Hant",
+        "zh-Hans"
+      ],
+      "license": "Apache-2.0",
+      "license_file": "LICENSE-OPENCC-APACHE-2.0.txt"
+    },
+    {
+      "name": "Princeton WordNet 3.1",
+      "variants": [
+        "en-US",
+        "en-GB",
+        "en"
+      ],
+      "license": "WordNet BSD-style",
+      "license_file": "LICENSE-WORDNET.txt"
+    },
+    {
+      "name": "SCOWL / VarCon",
+      "variants": [
+        "en-US",
+        "en-GB"
+      ],
+      "license": "SCOWL Permissive",
+      "license_file": "LICENSE-SCOWL.txt"
+    },
+    {
+      "name": "mecab-naist-jdic 0.6.3b-20111013",
+      "variants": [
+        "ja"
+      ],
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE-NAIST-JDIC-BSD.txt"
+    },
+    {
+      "name": "mecab-ko-dic 2.1.1-20180720",
+      "variants": [
+        "ko"
+      ],
+      "license": "Apache-2.0",
+      "license_file": "LICENSE-MECAB-KO-DIC-APACHE-2.0.txt"
+    },
+    {
+      "name": "faberline-first-party-lexicon",
+      "variants": [
+        "ja",
+        "zh-Hant",
+        "zh-Hans"
+      ],
+      "license": "MIT",
+      "license_file": "LICENSE-FABERLINE-FIRST-PARTY-MIT.txt"
+    }
+  ],
+  "lexicon_bin_bytes": 15127359,
+  "lexicon_bin_sha256": "23846b719e8046efbbb32354d3bb4bf3ec7a39f7606a253a9a6ae64b00e774d7"
+}

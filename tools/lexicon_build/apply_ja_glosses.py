@@ -25,6 +25,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 JA_TSV = REPO_ROOT / "crates" / "faberline-nlp" / "lexicon" / "data" / "ja.tsv"
 GLOSS_TSV = Path(__file__).resolve().parent / "data" / "first_party_mit_ja_zh.tsv"
+A4_GLOSS_TSV = Path(__file__).resolve().parent / "data" / "a4_first_party_mit_ja_zh.tsv"
 
 ALLOWED_INSERT_SURFACES = {
     # Step 4 Keigo verb missing from ja.tsv
@@ -119,6 +120,28 @@ def main() -> int:
             rows.append(new_row)
             by_surface.setdefault(surf, []).append(new_row)
             inserted_rows.append(new_row)
+
+    # Apply A4 Sudachi-ranked first-party MIT glosses by exact (surface, variant, decided_upos, upos_mask).
+    a4_updated = 0
+    if A4_GLOSS_TSV.is_file():
+        by_exact_key: dict[tuple[str, str, str, str], list[list[str]]] = {}
+        for r in rows:
+            by_exact_key.setdefault((r[0], r[1], r[3], r[4]), []).append(r)
+        with open(A4_GLOSS_TSV, encoding="utf-8") as f:
+            for line_no, line in enumerate(f, 1):
+                raw = line.rstrip("\n")
+                if not raw.strip() or raw.startswith("#") or raw.startswith("group\t"):
+                    continue
+                cols = raw.split("\t")
+                if len(cols) != 7:
+                    raise ValueError(f"{A4_GLOSS_TSV}:{line_no}: expected 7 cols, got {len(cols)}: {raw!r}")
+                _grp, _rk, surf, var, dupos, mask, cp = (c.strip() for c in cols)
+                for r in by_exact_key.get((surf, var, dupos, mask), []):
+                    if r[6] == "-" and cp != "-":
+                        r[6] = cp
+                        r[7] = merge_meta(r[7], "-")
+                        a4_updated += 1
+        updated_count += a4_updated
 
     # Preserve exact UTF-8 byte row order matching apply_a1_lexemes.py / build_ja.py.
     rows.sort(key=lambda c: (c[0].encode("utf-8"), c[1].encode("utf-8")))

@@ -14,6 +14,7 @@ Permissively licensed, compile-time compiled multilingual lexicon covering 4 lan
   - `ko_morph.tsv` (6-column): Korean Josa, Copula, XSV/XSA, and Eomi suffix rules with batchim conditions and exact character-span decompositions.
 - `LICENSES/` — Upstream permissive license texts (`MIT`, `Apache-2.0`, `BSD-3-Clause`, `Unicode-3.0`, `WordNet`, `SCOWL`). No `CC BY-SA`, `CC BY-NC`, `CC BY-ND`, or `GPL` sources are used.
   - `LICENSE-UNICODE-3.0.txt`: Unicode License V3 (`Unicode-3.0`) covering Unicode Unihan `kTraditionalVariant` / Japanese shinjitai-to-Traditional glyph mappings (`src/lexicon/ja.rs` and `tools/lexicon_build/derive_unihan_kango.py`; `249` `unihan_zh_hant` rows in `ja.tsv`, `342` false-friend blocks in `tools/lexicon_build/data/ja_zh_false_friends.tsv`).
+  - `LICENSE-SUDACHIDICT-APACHE-2.0.txt` & `NOTICE-SUDACHIDICT.txt`: SudachiDict (`20261015`, `Apache-2.0`, including `UniDic` and `NEologd` notices) used offline for frequency/cost ranking only (`tools/lexicon_build/select_a4_sudachi_ranks.py` and `tools/lexicon_build/data/a4_sudachi_ranks.tsv`; no SudachiDict CSV or glosses are checked in). All `2,500` A4 `ja -> zh-Hant` glosses (`1,500` `VERB` + `1,000` `MULTI`) are authored first-party under `MIT` (`src=first_party_mit` in `tools/lexicon_build/data/a4_first_party_mit_ja_zh.tsv`).
 
 ## Build-Time Compilation
 

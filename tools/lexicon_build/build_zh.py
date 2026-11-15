@@ -4,8 +4,9 @@
 Sources (strictly permissive / commercial-safe):
 - jieba-rs dict.txt (MIT)
 - BYVoid/OpenCC dictionary tables (Apache-2.0)
-- In-repo tables (src/doc/pos.rs, src/doc/token.rs, src/text.rs, src/language.rs)
-- Statistical NPMI mining over CC0/PD corpora (scratch/corpora/zh/*.jsonl)
+- In-repo tables (src/doc/pos.rs, src/doc/token.rs, src/text.rs, language.rs,
+  tools/lexicon_build/data/zh_translate_mit_v1.tsv)
+- Public Domain Project Gutenberg Chinese novels (gutenberg:23950, gutenberg:23962; 150 docs)
 
 Outputs (atomic via temp files + os.replace):
 - lexicon/data/zh_hant.tsv
@@ -14,26 +15,26 @@ Outputs (atomic via temp files + os.replace):
 
 from __future__ import annotations
 
-import glob
+import argparse
 import json
 import math
 import os
 import re
+import sys
+import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-JIEBA_DICT = Path("/Users/chrischeng/faberlines/core/vendor/jieba-rs/src/data/dict.txt")
-SCRATCH_DIR = Path(
-    "/Users/chrischeng/.gemini/antigravity/brain/fcdf5ec7-a63d-4308-93f6-0436229a04ea/scratch"
-)
-OPENCC_DIR = SCRATCH_DIR / "lex_build_zh" / "opencc"
-CORPORA_DIR = SCRATCH_DIR / "corpora" / "zh"
-TMP_DIR = SCRATCH_DIR / "lex_build_zh"
+DATA_DIR = Path(__file__).resolve().parent / "data"
+ZH_TRANSLATE_MIT_TSV = DATA_DIR / "zh_translate_mit_v1.tsv"
+ZH_MODERN_MIT_TSV = DATA_DIR / "zh_modern_mit_v1.tsv"
 
 NLP_CRATE_ROOT = REPO_ROOT / "crates" / "faberline-nlp"
 OUT_HANT = NLP_CRATE_ROOT / "lexicon" / "data" / "zh_hant.tsv"
 OUT_HANS = NLP_CRATE_ROOT / "lexicon" / "data" / "zh_hans.tsv"
+
+ALLOWED_ZH_GUTENBERG_SOURCES = frozenset({"gutenberg:23950", "gutenberg:23962"})
 
 VALID_UPOS = frozenset(
     {
@@ -80,6 +81,11 @@ EXCLUDED_WORDS = {
     "停了下來", "停了下来",
     "有一座",
     "天晚上",
+    # Qing-PD 1-char shift boundary restorations (origin/main split parity, distinct from C1 source hygiene):
+    "三本",        # NUM+CLF (script-invariant)
+    "就会",        # ADV+AUX (restores origin/main zh-Hans split while preserving origin/main zh-Hant 就會)
+    "要去",        # AUX/VERB+VERB (script-invariant)
+    "發到", "发到",  # VERB+ADP goal complement (symmetric Hant/Hans restoration of origin/main split)
 }
 
 # Curated person names (PROPN, sem=person) that should stay whole.
@@ -421,30 +427,45 @@ def load_gold_pos() -> dict[str, set[str]]:
     return gold
 
 
-def mine_corpora_npmi(pattern: str, min_count: int = 6, min_pmi: float = 4.5) -> tuple[Counter, dict[str, float]]:
-    """Scan CC0/PD corpora for Han unigram/n-gram counts and high-PMI 2-4 char words."""
+def mine_corpora_npmi(
+    gutenberg_jsonl: Path | None,
+    min_count: int = 10,
+    min_pmi: float = 5.5,
+    transform_fn=None,
+) -> tuple[Counter, dict[str, float], int]:
+    """Scan allowlisted Project Gutenberg PD JSONL for Han unigram/n-gram counts and high-PMI 2-4 char words."""
     unigrams: Counter = Counter()
     ngrams: Counter = Counter()
     total_chars = 0
+    docs = 0
+    if gutenberg_jsonl is None:
+        return unigrams, {}, 0
 
     han_run_re = re.compile(r"[\u4e00-\u9fff]+")
-    for path_str in sorted(glob.glob(str(CORPORA_DIR / pattern))):
-        with open(path_str, "r", encoding="utf-8") as f:
-            for line in f:
-                text = json.loads(line).get("text", "")
-                for run in han_run_re.findall(text):
-                    L = len(run)
-                    total_chars += L
-                    for ch in run:
-                        unigrams[ch] += 1
-                    for n in (2, 3, 4):
-                        if L >= n:
-                            for i in range(L - n + 1):
-                                ngrams[run[i : i + n]] += 1
+    with open(gutenberg_jsonl, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            if d.get("source", "") not in ALLOWED_ZH_GUTENBERG_SOURCES:
+                continue
+            docs += 1
+            text = d.get("text", "")
+            if transform_fn is not None:
+                text = transform_fn(text)
+            for run in han_run_re.findall(text):
+                L = len(run)
+                total_chars += L
+                for ch in run:
+                    unigrams[ch] += 1
+                for n in (2, 3, 4):
+                    if L >= n:
+                        for i in range(L - n + 1):
+                            ngrams[run[i : i + n]] += 1
 
     mined: dict[str, float] = {}
     if total_chars == 0:
-        return unigrams, mined
+        return unigrams, mined, docs
 
     for ng, cnt in ngrams.items():
         if cnt < min_count:
@@ -470,7 +491,7 @@ def mine_corpora_npmi(pattern: str, min_count: int = 6, min_pmi: float = 4.5) ->
         if min_split_pmi >= min_pmi:
             mined[ng] = cnt * min_split_pmi
 
-    return unigrams, mined
+    return unigrams, mined, docs
 
 
 def map_ictclas(word: str, tag: str) -> tuple[str, str, str]:
@@ -592,10 +613,10 @@ def write_tsv_atomic(
     out_path: Path,
     tmp_path: Path,
     variant: str,
-    entries: dict[str, tuple[int, str, str, str, str]],
+    entries: dict[str, tuple[int, str, str, str, str, str]],
 ) -> int:
     """Sort by UTF-8 byte order of (surface, variant), write to tmp, and os.replace."""
-    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     sorted_items = sorted(
@@ -606,7 +627,7 @@ def write_tsv_atomic(
     with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(
             f"# {variant} lexicon (8-col canonical TSV)\n"
-            "# Sources: jieba-rs (MIT), OpenCC (Apache-2.0), in-repo tables, CC0/PD corpora\n"
+            "# Sources: jieba-rs (MIT), OpenCC (Apache-2.0), in-repo tables, first-party MIT additions, PD Project Gutenberg (gutenberg:23950, gutenberg:23962)\n"
             "# surface\tvariant\tcost\tdecided_upos\tupos_mask\tlemma\tcounterpart\tmeta\n"
         )
         for surface, (cost, dec_upos, upos_mask, lemma, counterpart, meta) in [
@@ -700,9 +721,68 @@ def verify_tsv(
     }
 
 
+def load_mit_overrides(
+    path: Path,
+) -> dict[str, dict[str, tuple[int, str, str, str, str, str]]]:
+    """Load first-party MIT additions keyed by variant -> surface -> (cost, dec, mask, lemma, cp, meta)."""
+    by_var: dict[str, dict[str, tuple[int, str, str, str, str, str]]] = {
+        "zh-Hant": {},
+        "zh-Hans": {},
+    }
+    if not path.exists():
+        return by_var
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip() or line.startswith("#"):
+                continue
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) != 8:
+                continue
+            surf, var, cost_s, dec, mask, lemma, cp, meta = cols
+            if var in by_var and is_clean_han(surf):
+                by_var[var][surf] = (int(cost_s), dec, mask, lemma, cp, meta)
+    return by_var
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Build zh_hant.tsv and zh_hans.tsv")
+    p.add_argument(
+        "--jieba-dict",
+        type=Path,
+        default=Path(os.environ["LEX_JIEBA_DICT"]) if "LEX_JIEBA_DICT" in os.environ else None,
+        help="Path to jieba-rs dict.txt (or env LEX_JIEBA_DICT)",
+    )
+    p.add_argument(
+        "--opencc-dir",
+        type=Path,
+        default=Path(os.environ["LEX_OPENCC_DIR"]) if "LEX_OPENCC_DIR" in os.environ else None,
+        help="Path to OpenCC dictionary directory (or env LEX_OPENCC_DIR)",
+    )
+    p.add_argument(
+        "--gutenberg-jsonl",
+        type=Path,
+        default=Path(os.environ["LEX_ZH_GUTENBERG_JSONL"]) if "LEX_ZH_GUTENBERG_JSONL" in os.environ else None,
+        help="Path to JSONL filtered strictly to gutenberg:23950 and gutenberg:23962 (or env LEX_ZH_GUTENBERG_JSONL)",
+    )
+    p.add_argument(
+        "--tmp-dir",
+        type=Path,
+        default=Path(os.environ.get("LEX_TMP_DIR", tempfile.gettempdir())),
+        help="Temporary directory for atomic write (or env LEX_TMP_DIR)",
+    )
+    return p.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    if args.jieba_dict is None or args.opencc_dir is None:
+        raise SystemExit("ERROR: --jieba-dict (or LEX_JIEBA_DICT) and --opencc-dir (or LEX_OPENCC_DIR) are required")
+    jieba_dict: Path = args.jieba_dict
+    opencc_dir: Path = args.opencc_dir
+    tmp_dir: Path = args.tmp_dir
+
     print("Loading OpenCC tables...")
-    conv = OpenCCConverter(OPENCC_DIR)
+    conv = OpenCCConverter(opencc_dir)
 
     print("Parsing src/doc/pos.rs and gold datasets...")
     zh_decided, zh_ambiguous = parse_pos_rs()
@@ -710,14 +790,16 @@ def main() -> None:
     in_repo_words = load_in_repo_zh_words()
     print(f"  ZH_DECIDED={len(zh_decided)}, ZH_AMBIGUOUS={len(zh_ambiguous)}, gold_tokens={len(gold_pos)}")
 
-    print("Mining CC0/PD zh corpora (NPMI + unigram counts)...")
-    hans_uni, hans_mined = mine_corpora_npmi("zh_hans_*.jsonl", min_count=10, min_pmi=5.5)
-    hant_uni, hant_mined = mine_corpora_npmi("zh_hant_*.jsonl", min_count=10, min_pmi=5.5)
-    print(f"  zh-Hans mined={len(hans_mined)}, zh-Hant mined={len(hant_mined)}")
+    print("Mining allowlisted Project Gutenberg PD zh corpus (NPMI + unigram counts)...")
+    hant_uni, hant_mined, hant_docs = mine_corpora_npmi(args.gutenberg_jsonl, min_count=10, min_pmi=5.5)
+    hans_uni, hans_mined, hans_docs = mine_corpora_npmi(
+        args.gutenberg_jsonl, min_count=10, min_pmi=5.5, transform_fn=conv.hant_to_hans
+    )
+    print(f"  zh-Hant PD docs={hant_docs}, mined={len(hant_mined)}; zh-Hans PD-projected docs={hans_docs}, mined={len(hans_mined)}")
 
     print("Loading jieba-rs dict.txt...")
     jieba_entries: dict[str, tuple[int, str]] = {}
-    with open(JIEBA_DICT, "r", encoding="utf-8") as f:
+    with open(jieba_dict, "r", encoding="utf-8") as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) < 2:
@@ -760,14 +842,20 @@ def main() -> None:
         if is_clean_han(k) and 2 <= len(k) <= 6:
             mandatory_hans.add(conv.hant_to_hans(k))
 
-    # Build scored candidate pools for zh-Hans and zh-Hant
+    # Load first-party MIT additions (PR #46 + optional modern terms)
+    mit_translate = load_mit_overrides(ZH_TRANSLATE_MIT_TSV)
+    mit_modern = load_mit_overrides(ZH_MODERN_MIT_TSV)
+    for var_map in (mit_translate, mit_modern):
+        mandatory_hant.update(var_map["zh-Hant"].keys())
+        mandatory_hans.update(var_map["zh-Hans"].keys())
+
+    # Build scored candidate pools for zh-Hans and zh-Hant (1-Char Hanzi Policy: freq >= 80 or Gutenberg PD or mandatory)
     hans_pool: dict[str, tuple[float, str]] = {}
     hant_pool: dict[str, tuple[float, str]] = {}
 
     for w, (freq, tag) in jieba_entries.items():
-        # Filter out 1-char jieba garbage
         if len(w) == 1:
-            if freq < 200 and hans_uni[w] == 0 and w not in mandatory_hans:
+            if freq < 80 and hans_uni[w] == 0 and w not in mandatory_hans:
                 continue
         hans_w = conv.hant_to_hans(w)
         if not is_clean_han(hans_w):
@@ -779,7 +867,7 @@ def main() -> None:
 
         hant_w = conv.hans_to_hant(w)
         if is_clean_han(hant_w):
-            if len(hant_w) == 1 and freq < 200 and hant_uni[hant_w] == 0 and hant_w not in mandatory_hant:
+            if len(hant_w) == 1 and freq < 80 and hant_uni[hant_w] == 0 and hant_w not in mandatory_hant:
                 pass
             else:
                 h_boost = hant_uni[hant_w] * 50.0 if len(hant_w) == 1 else 0.0
@@ -853,12 +941,13 @@ def main() -> None:
             selected[w] = (sc, tag)
         return selected
 
-    hans_sel = select_top(hans_pool, mandatory_hans, target_multi=66000)
-    hant_sel = select_top(hant_pool, mandatory_hant, target_multi=62000)
+    hans_sel = select_top(hans_pool, mandatory_hans, target_multi=68500)
+    hant_sel = select_top(hant_pool, mandatory_hant, target_multi=64200)
 
     def build_rows(
         selected: dict[str, tuple[float, str]],
         is_hant: bool,
+        mit_overrides: dict[str, tuple[int, str, str, str, str, str]],
     ) -> dict[str, tuple[int, str, str, str, str, str]]:
         total_freq = sum(sc for sc, _ in selected.values())
         rows: dict[str, tuple[int, str, str, str, str, str]] = {}
@@ -868,15 +957,25 @@ def main() -> None:
             cp = conv.hant_to_hans(w) if is_hant else conv.hans_to_hant(w)
             if not is_clean_han(cp) or cp == w:
                 cp = "-"
+            if w in mit_overrides and w not in zh_decided and w not in zh_ambiguous and w not in gold_pos:
+                _, m_dec, m_mask, _, m_cp, m_meta = mit_overrides[w]
+                m_mask = "|".join(sorted(set(m_mask.split("|"))))
+                if m_dec != "-" and m_mask != m_dec:
+                    m_dec = "-"
+                dec, mask, meta = m_dec, m_mask, m_meta
+                if m_cp == "-":
+                    cp = "-"
+                elif is_clean_han(m_cp) and m_cp != w:
+                    cp = m_cp
             rows[w] = (cost, dec, mask, "-", cp, meta)
         return rows
 
-    hant_rows = build_rows(hant_sel, is_hant=True)
-    hans_rows = build_rows(hans_sel, is_hant=False)
+    hant_rows = build_rows(hant_sel, is_hant=True, mit_overrides={**mit_translate["zh-Hant"], **mit_modern["zh-Hant"]})
+    hans_rows = build_rows(hans_sel, is_hant=False, mit_overrides={**mit_translate["zh-Hans"], **mit_modern["zh-Hans"]})
 
     print("Writing atomic TSVs...")
-    write_tsv_atomic(OUT_HANT, TMP_DIR / "zh_hant.tsv.tmp", "zh-Hant", hant_rows)
-    write_tsv_atomic(OUT_HANS, TMP_DIR / "zh_hans.tsv.tmp", "zh-Hans", hans_rows)
+    write_tsv_atomic(OUT_HANT, tmp_dir / "zh_hant.tsv.tmp", "zh-Hant", hant_rows)
+    write_tsv_atomic(OUT_HANS, tmp_dir / "zh_hans.tsv.tmp", "zh-Hans", hans_rows)
 
     print("Verifying invariants and gold compatibility...")
     stats_hant = verify_tsv(OUT_HANT, "zh-Hant", zh_decided, zh_ambiguous, gold_pos)

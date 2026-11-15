@@ -35,7 +35,7 @@ fn license_audit_and_receipt_integrity() {
     let licenses_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("lexicon/LICENSES");
     assert!(licenses_dir.is_dir(), "missing lexicon/LICENSES directory");
 
-    let forbidden = ["BY-SA", "BY-NC", "BY-ND", "GPL"];
+    let forbidden = ["BY-SA", "BY-NC", "BY-ND", "GPL", "CC-BY", "CC BY"];
     let mut license_files = HashSet::new();
     for entry in fs::read_dir(&licenses_dir).expect("read lexicon/LICENSES") {
         let entry = entry.expect("license dir entry");
@@ -64,7 +64,7 @@ fn license_audit_and_receipt_integrity() {
         license_files
     );
 
-    let receipt_path = workspace_root().join("docs/receipts/lexicon-2026-11-14.json");
+    let receipt_path = workspace_root().join("docs/receipts/lexicon-2026-11-16.json");
     let receipt_raw = fs::read_to_string(&receipt_path).expect("read lexicon receipt");
     let receipt_upper = receipt_raw.to_uppercase();
     for bad in forbidden {

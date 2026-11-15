@@ -83,6 +83,18 @@ so the table does not show them; they do not matter, because no local model is u
 Allowed: public domain (PD), CC0, CC BY, a government licence compatible with CC BY, and
 self-written text. Not allowed: share-alike, non-commercial, no-derivatives, GPL-like or an
 unclear licence. Universal Dependencies treebank text is out; only its label scheme is used.
+
+> **Note (Embedded Lexicon Policy vs. Offline Neural Training Policy):** The rules in this
+> document govern *offline* Layer 4–6 neural training data (which permits `CC BY`). The embedded
+> runtime lexicon (`crates/faberline-nlp/lexicon/data/*.tsv`) enforces a stricter allowlist:
+> `CC BY` / `CC-BY` / `CC BY-SA` / `CC BY-NC` / `CC BY-ND` / `GPL` and unallowlisted web/social
+> scrapes are strictly excluded from the embedded lexicon. For `zh-Hant` and `zh-Hans`, external
+> corpus mining uses only the `150` allowlisted Project Gutenberg PD texts (`gutenberg:23950`,
+> `gutenberg:23962`): `zh-Hant` uses the raw texts directly, while `zh-Hans` corpus unigram/NPMI
+> input is a deterministic `OpenCC hant_to_hans` projection of those same `150` `zh-Hant` Gutenberg
+> PD texts (`native_external_zh_hans_docs: 0`, `projected_from_zh_hant_pd_docs: 150`), not
+> independently sourced native `zh-Hans` text. Five compositional-bigram boundary restorations are
+> retained in `EXCLUDED_WORDS` (`三本`, `就会`, `要去`, `發到`, `发到`).
 Sizes come from each source's own metadata as read by the previous session on 2026-11-10; this
 session re-checked only the two CC0 casual sources (the `moztw/cc0-sentences` README says "zh-tw
 sentences release under CC0"; the Common Voice `server/data/en/` folder has a `LICENSE` file and

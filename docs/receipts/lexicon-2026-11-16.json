@@ -1,0 +1,309 @@
+{
+  "schema": "nlp.lexicon.receipt.v1",
+  "date": "2026-11-16",
+  "binary_format": "FNLPLX01",
+  "binary_bytes": 15122271,
+  "total_entries": 350906,
+  "total_rules": 1389,
+  "variants": {
+    "zh-Hant": 69909,
+    "zh-Hans": 74187,
+    "en-US": 12591,
+    "en-GB": 12648,
+    "en": 40761,
+    "ja": 70827,
+    "ko": 69983
+  },
+  "rules": {
+    "ja_inflect": 1248,
+    "ko_morph": 141
+  },
+  "tsv_files": [
+    {
+      "path": "lexicon/data/zh_hant.tsv",
+      "entries": 69909,
+      "bytes": 3082743,
+      "sha256": "371644a07583ccc2ed1f93eb91775f73b46a28903cc94538cc4e1e422224b33b"
+    },
+    {
+      "path": "lexicon/data/zh_hans.tsv",
+      "entries": 74187,
+      "bytes": 3287974,
+      "sha256": "6f5c62fa1c57e1f1ada7aa5ffa8da0ff8398c080e14e8fbc377492183c64ced3"
+    },
+    {
+      "path": "lexicon/data/en.tsv",
+      "entries": 66000,
+      "bytes": 2890558,
+      "sha256": "0d61b6d8daa018df433e7d39e7d2d8a056d35376c482c89d7d6c64433e8add48"
+    },
+    {
+      "path": "lexicon/data/ja.tsv",
+      "entries": 70827,
+      "bytes": 3032218,
+      "sha256": "e0b414d2b047eec4958c954984d7da9e6ab03147e47e24daf87fa7e2ad42c731"
+    },
+    {
+      "path": "lexicon/data/ja_inflect.tsv",
+      "entries": 1248,
+      "bytes": 102075,
+      "sha256": "99d38574dca069b622eba9ca67f731215b4a421eeb740d64feccd62e35d8963f"
+    },
+    {
+      "path": "lexicon/data/ko.tsv",
+      "entries": 69983,
+      "bytes": 3767544,
+      "sha256": "3b2d43a1b288260c68958c17b8b72420424c30406cfa7e758bcfc592a74c11c4"
+    },
+    {
+      "path": "lexicon/data/ko_morph.tsv",
+      "entries": 141,
+      "bytes": 7639,
+      "sha256": "5b547d4b0a84d028798d0f27d7352ef0c78d452afe6f5f5d032c9814c6c39585"
+    }
+  ],
+  "sources": [
+    {
+      "name": "jieba",
+      "variants": [
+        "zh-Hans",
+        "zh-Hant"
+      ],
+      "license": "MIT",
+      "license_file": "LICENSE-JIEBA-MIT.txt"
+    },
+    {
+      "name": "OpenCC",
+      "variants": [
+        "zh-Hant",
+        "zh-Hans"
+      ],
+      "license": "Apache-2.0",
+      "license_file": "LICENSE-OPENCC-APACHE-2.0.txt"
+    },
+    {
+      "name": "Princeton WordNet 3.1",
+      "variants": [
+        "en-US",
+        "en-GB",
+        "en"
+      ],
+      "license": "WordNet BSD-style",
+      "license_file": "LICENSE-WORDNET.txt"
+    },
+    {
+      "name": "SCOWL / VarCon",
+      "variants": [
+        "en-US",
+        "en-GB"
+      ],
+      "license": "SCOWL Permissive",
+      "license_file": "LICENSE-SCOWL.txt"
+    },
+    {
+      "name": "mecab-naist-jdic 0.6.3b-20111013",
+      "variants": [
+        "ja"
+      ],
+      "license": "BSD-3-Clause",
+      "license_file": "LICENSE-NAIST-JDIC-BSD.txt"
+    },
+    {
+      "name": "mecab-ko-dic 2.1.1-20180720",
+      "variants": [
+        "ko"
+      ],
+      "license": "Apache-2.0",
+      "license_file": "LICENSE-MECAB-KO-DIC-APACHE-2.0.txt"
+    },
+    {
+      "name": "faberline-first-party-lexicon",
+      "variants": [
+        "ja",
+        "zh-Hant",
+        "zh-Hans"
+      ],
+      "license": "MIT",
+      "license_file": "LICENSE-FABERLINE-FIRST-PARTY-MIT.txt"
+    },
+    {
+      "name": "Unicode Unihan",
+      "variants": [
+        "ja"
+      ],
+      "license": "Unicode-3.0",
+      "license_file": "LICENSE-UNICODE-3.0.txt"
+    },
+    {
+      "name": "SudachiDict 20261015 (offline ranking only; no CSV or glosses in repo)",
+      "variants": [
+        "ja"
+      ],
+      "license": "Apache-2.0",
+      "license_file": "LICENSE-SUDACHIDICT-APACHE-2.0.txt",
+      "notice_file": "NOTICE-SUDACHIDICT.txt",
+      "small_lex_zip_sha256": "981b78cdc532ce058b34c76cd9acd3c9a6c771cc0ce528d7de92424b21172125",
+      "core_lex_zip_sha256": "e9ac06222f0ce401a0fef9b129e61e93d59e3ff395a1b037f498962ee5b8ad8b"
+    }
+  ],
+  "lexicon_bin_bytes": 15122271,
+  "lexicon_bin_sha256": "4d1bade7387a7c2a131e42e18c4f669bf02d09e0998c8ba0aec648a719efb287",
+  "upstream_inputs": {
+    "wordnet_3_1": {
+      "archive": "wn3.1.dict.tar.gz",
+      "bytes": 16358468,
+      "sha256": "3f7d8be8ef6ecc7167d39b10d66954ec734280b5bdcd57f7d9eafe429d11c22a",
+      "license_file": "LICENSE-WORDNET.txt",
+      "license_file_sha256": "5d6a235d57cc076574f81156ff7211c5dff22914219994ffa29f6fd1c30feeb7"
+    },
+    "scowl_varcon": {
+      "file": "varcon.txt",
+      "bytes": 846263,
+      "sha256": "75af63da46ec12d7eb14b9f1ba8d3898d484dd6872755b73c921b215875a3629"
+    },
+    "jieba_rs_dict": {
+      "version": "0.11.0",
+      "file": "dict.txt",
+      "bytes": 5071843,
+      "sha256": "139519822fe8ab9e10d9d07e68ea0451045380aedaf54ecc51e2a28c6b42a13f"
+    },
+    "project_gutenberg_en_pd_books": [
+      {
+        "id": "pg76",
+        "bytes": 622460,
+        "sha256": "d617a37aa7ae1e1a93dcde2634db2bccb86824e31e29a55230bdbf77d6872d59"
+      },
+      {
+        "id": "pg2701",
+        "bytes": 1276315,
+        "sha256": "b5e88b71a1cda068e9ab1d94344c9d932338ba6da1a66def97a1aecd9cfcc87d"
+      },
+      {
+        "id": "pg64317",
+        "bytes": 306553,
+        "sha256": "ce760ec377accd352b41bb8f64504a72d7aa18ab3afb42ded2b56cecacf29e35"
+      },
+      {
+        "id": "pg541",
+        "bytes": 609882,
+        "sha256": "aae279f1a60ac64be53f63357e708a2fdaabdb334a1c92f81fc1c3b5c848a092"
+      },
+      {
+        "id": "pg16643",
+        "bytes": 567493,
+        "sha256": "bd1e8cd9feb2c331b560dbb254cde873cb3db4b5d5464996d98f6e43649ad1e1"
+      },
+      {
+        "id": "pg205",
+        "bytes": 667957,
+        "sha256": "2d9a76a2e3e8195c69430516ebd33c4d0757a53ad432ff6186b7b94e6fe99f9"
+      },
+      {
+        "id": "pg5116",
+        "bytes": 330371,
+        "sha256": "92c8654ebc3052887740ab0ce8cd953456f63ba3f7749d31377488d807765db6"
+      },
+      {
+        "id": "pg408",
+        "bytes": 428742,
+        "sha256": "87f8e832484792b761a510b953d67e3835fa46a9f4231a508bfeb914a98559ca"
+      },
+      {
+        "id": "pg575",
+        "bytes": 324388,
+        "sha256": "4434aa015d325e65816eb0e694e7c573fa4b71523530e45adfeb23e7fcf63bf"
+      },
+      {
+        "id": "pg5827",
+        "bytes": 269536,
+        "sha256": "2505ea57849c64abe7962ffe56972174c9160606348e08cb7876d46b2c5b2d96"
+      },
+      {
+        "id": "pg130",
+        "bytes": 382206,
+        "sha256": "ec525c93afddb05465bf6fa0af8f873078b8e42a2a24f9b999582994f054fdf2"
+      },
+      {
+        "id": "pg470",
+        "bytes": 390270,
+        "sha256": "291fb27d68c0cfca7523032a42d57a743e62a6e58faf9cc728f78ef748703829"
+      }
+    ],
+    "project_gutenberg_zh_pd_books": {
+      "input_file": "zh_hant_novel.jsonl",
+      "input_bytes": 581356,
+      "input_sha256": "9ba954cc67a1ca53d3d7afb16003e55f8a7457bd110804b9aebd48af3e70cd66",
+      "zh_hans_projection": "OpenCC hant_to_hans",
+      "native_external_zh_hans_docs": 0,
+      "projected_from_zh_hant_pd_docs": 150,
+      "books": [
+        {
+          "id": "gutenberg:23950",
+          "docs": 80,
+          "chars": 74465,
+          "canonical_bytes": 219144,
+          "canonical_sha256": "11d64c963d30a3ca13580d5ac1f0a1436941fc7901ab05fcf19ba138e5c9509a"
+        },
+        {
+          "id": "gutenberg:23962",
+          "docs": 70,
+          "chars": 65348,
+          "canonical_bytes": 191995,
+          "canonical_sha256": "a6814df8c4860ca832d142d2af10b1ba4a2a4da825a7c49af67da59c427d58c0"
+        }
+      ]
+    },
+    "opencc_tables": [
+      {
+        "filename": "STPhrases.txt",
+        "bytes": 1008747,
+        "sha256": "24d23700f4f3d1860b899aa90896dcc7ec56c535a0b3a246bbf5a7048c7bdeb8"
+      },
+      {
+        "filename": "STCharacters.txt",
+        "bytes": 36026,
+        "sha256": "a0ca1601c70648cf48b33c3c6210ccbecc5c7eead4b4c3daf76587ba2c03582b"
+      },
+      {
+        "filename": "TWPhrases.txt",
+        "bytes": 20253,
+        "sha256": "4d3f83634d8a02be5fc82def7e6ae418ab2ab501b100952da5ef934460813a41"
+      },
+      {
+        "filename": "TWVariants.txt",
+        "bytes": 978,
+        "sha256": "245b94eb5842957e735dd44b7e7d4ff469a3643126cc8fa511adda5281e9cb86"
+      },
+      {
+        "filename": "TWVariantsPhrases.txt",
+        "bytes": 1107,
+        "sha256": "36df033675a2e9152927fa8419f0732a061cb4909c5060f25a5cfc9b08ffff06"
+      },
+      {
+        "filename": "TSPhrases.txt",
+        "bytes": 9177,
+        "sha256": "1b1e60a3d50492bc088bcd4372152570b5f0ccbe2ded0b66c90b6b8eeb5f849f"
+      },
+      {
+        "filename": "TSCharacters.txt",
+        "bytes": 104520,
+        "sha256": "9ff46a7d30e5765375eb13d33f2b03a34d298913caf2b120380679f33ae1642d"
+      },
+      {
+        "filename": "TWPhrasesRev.txt",
+        "bytes": 20016,
+        "sha256": "46d6165c6ff17dbcb169fe5ee72c410f5a9555b64ca99f067bb2d0b30248a2f6"
+      }
+    ]
+  },
+  "impact_manifests": {
+    "base_ref": "e1f817c33b9d1676474a2d2a24f8d8c0a9f9c9cb",
+    "reproduce_cmd": "python3 -B tools/lexicon_build/generate_c1_manifest.py --out-dir <out_dir>",
+    "files": {
+      "manifest_en.tsv": "1f43e9b77c984a5737847d08529518e06a91559bf74b2103bb2611d2ed1af8da",
+      "manifest_zh_hant.tsv": "802c28a824ce337fd3207b1d9d5d960dc6703683e9512aacb05b1eb09c902daa",
+      "manifest_zh_hans.tsv": "46f04ea982f5332b5b7cb9073f64df48ff03e605381ddd2fb10fce8618b6df93",
+      "manifest_summary.json": "a15067b55f70e8f72779191de3d662f69f0a43140f5d1ef4ea8afb880d630b19"
+    }
+  }
+}

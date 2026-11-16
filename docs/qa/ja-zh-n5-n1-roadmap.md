@@ -72,7 +72,7 @@ The table records Root's approved titles and dependencies. Only one issue may be
 
 | Issue | Approved title | Depends on | Scope note |
 |---|---|---|---|
-| [#80](https://github.com/faberline/nlp/issues/80) | 完成 N5 至 N1 單輪 issue 與依賴盤點 | — | During roadmap setup, this was the selected issue for the roadmap and queue plan. |
+| [#80](https://github.com/faberline/nlp/issues/80) | plan(n5): establish sequential N5–N1 acceptance roadmap | — | During roadmap setup, this was the selected issue for the roadmap and queue plan. |
 | [#85](https://github.com/faberline/nlp/issues/85) | [N5] 建立 N5 採納資料與缺口清單 | [#80](https://github.com/faberline/nlp/issues/80) | Inventory adopted bank hashes, coverage counts, unknowns, and independent-data needs. |
 | [#86](https://github.com/faberline/nlp/issues/86) | [N5] 獨立採納 N1–N5 開發資料提案 | [#80](https://github.com/faberline/nlp/issues/80) | Uses open PR #74. Do not execute its 50 rows before separate data adoption and independent review. |
 | [#87](https://github.com/faberline/nlp/issues/87) | [N5] 檢查並交付移動終點的助詞處理 | [#80](https://github.com/faberline/nlp/issues/80) | Uses open PR #76. Candidate QA is not main quality or acceptance; recheck seven hosted checks before independent review. |
@@ -163,7 +163,7 @@ The 32-row phenomenon map remains unadopted; N5 [issue #90](https://github.com/f
 
 ### Preserved local drafts and evidence
 
-These local fingerprints preserve provenance. They are not public PR heads and do not mean the work is accepted.
+The fingerprints below identify preserved drafts. Their presence here does not establish that draft contents are available through a public PR or that the work is accepted.
 
 | Issue | Preserved draft evidence | State and boundary |
 |---|---|---|
@@ -172,7 +172,7 @@ These local fingerprints preserve provenance. They are not public PR heads and d
 | N4 #102 — meeting-role controls | Private commit `aceb6df548743aa2b6fc4d53a83e2725c92a7627` | The draft was flat on the standing 24-rule metric. It is not accepted and does not justify a rule change. |
 | N4 #103 — basic つもり controls | Private commit `4f03b2a62710b6d307f1a9428d55421934b09498`; data SHA-256 `60e4e0493c46198f0558a35cca0888ccd685996123105c11cab329565c7a5d32` | Eight basic-intention controls remain unadopted. Do not execute them before independent data review and adoption. |
 
-The local hashes above are retained but not published. These drafts have no accepted PR. Do not present their private fingerprints as public commit links.
+The fingerprint values above are listed as provenance identifiers. They do not by themselves establish public availability of draft contents or acceptance. Keep each draft’s recorded state from the table, and do not present private fingerprints as public commit links.
 
 ## Release rule
 
@@ -182,4 +182,4 @@ The required exact-head hosted checks are seven checks, together with the author
 
 ## Public history
 
-The PR links above are the public record for prior product work. Their listed PR SHAs are author/frozen heads, not squash-merge commit SHAs. The main setup source is `4398f28052cb3b6f891cc14ed99ca5c5504bf105`; the actual v0.1.0 release source is `b0ad8bdc0477cfc3432d8dc1950d23cee44832d8`. The milestone pages link the five sequential N-level milestones. The public historical QA record is [Discussion #45, comment 19643372](https://github.com/faberline/nlp/discussions/45#discussioncomment-19643372); it records a prior candidate diagnostic and is not main acceptance. The local draft fingerprints above are retained but not published and have no accepted PR.
+The PR links above are the public record for prior product work. Their listed PR SHAs are author/frozen heads, not squash-merge commit SHAs. The main setup source is `4398f28052cb3b6f891cc14ed99ca5c5504bf105`; the actual v0.1.0 release source is `b0ad8bdc0477cfc3432d8dc1950d23cee44832d8`. The milestone pages link the five sequential N-level milestones. The public historical QA record is [Discussion #45, comment 19643372](https://github.com/faberline/nlp/discussions/45#discussioncomment-19643372); it records a prior candidate diagnostic and is not main acceptance. The draft fingerprints above identify preserved work only. They do not by themselves establish public availability of draft contents or acceptance. Use the state recorded for each draft, and do not present private fingerprints as public commit links.

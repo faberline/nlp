@@ -6,9 +6,9 @@ This bank adds 50 original Japanese sentences. Each approximate level has ten se
 
 Luna (`gpt-6-luna`) wrote the Japanese sentences and provisional Taiwan Traditional Chinese references with AI assistance. No external exam, textbook, game, dictionary or corpus sentence text was copied. The data is `first_party_mit`.
 
-Root reviewed all 50 rows before this freeze. A separate Luna reviewer checked the N5/N4 and N3 drafts. Terra checked the N2/N1 draft. The authors applied the review corrections. These were agent reviews. No human review, gold status or official JLPT difficulty is claimed.
+Before the original freeze, Root reviewed all 50 rows. A separate Luna reviewer checked the N5/N4 and N3 drafts. Terra checked the N2/N1 draft. The authors applied the review corrections. These were agent reviews. No human review, gold status or official JLPT difficulty is claimed.
 
-Formal independent adoption is pending. Antigravity must check the frozen data PR. The authors do not accept their own work. Later semantic rule PRs must wait for adoption before measurement with these rows.
+Formal independent adoption is pending. An independent checker must check the current frozen data PR and its evidence on current main. The authors do not accept their own work. Later semantic rule PRs must wait for adoption before measurement with these rows.
 
 ## Coverage
 

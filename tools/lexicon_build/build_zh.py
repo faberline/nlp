@@ -4,8 +4,9 @@
 Sources (strictly permissive / commercial-safe):
 - jieba-rs dict.txt (MIT)
 - BYVoid/OpenCC dictionary tables (Apache-2.0)
-- In-repo tables (src/doc/pos.rs, src/doc/token.rs, src/text.rs, src/language.rs)
-- Statistical NPMI mining over CC0/PD corpora (scratch/corpora/zh/*.jsonl)
+- In-repo tables (src/doc/pos.rs, src/doc/token.rs, src/text.rs, language.rs,
+  tools/lexicon_build/data/zh_translate_mit_v1.tsv)
+- Public Domain Project Gutenberg Chinese novels (gutenberg:23950, gutenberg:23962; 150 docs)
 
 Outputs (atomic via temp files + os.replace):
 - lexicon/data/zh_hant.tsv
@@ -14,26 +15,26 @@ Outputs (atomic via temp files + os.replace):
 
 from __future__ import annotations
 
-import glob
+import argparse
 import json
 import math
 import os
 import re
+import sys
+import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-JIEBA_DICT = Path("/Users/chrischeng/faberlines/core/vendor/jieba-rs/src/data/dict.txt")
-SCRATCH_DIR = Path(
-    "/Users/chrischeng/.gemini/antigravity/brain/fcdf5ec7-a63d-4308-93f6-0436229a04ea/scratch"
-)
-OPENCC_DIR = SCRATCH_DIR / "lex_build_zh" / "opencc"
-CORPORA_DIR = SCRATCH_DIR / "corpora" / "zh"
-TMP_DIR = SCRATCH_DIR / "lex_build_zh"
+DATA_DIR = Path(__file__).resolve().parent / "data"
+ZH_TRANSLATE_MIT_TSV = DATA_DIR / "zh_translate_mit_v1.tsv"
+ZH_MODERN_MIT_TSV = DATA_DIR / "zh_modern_mit_v1.tsv"
 
 NLP_CRATE_ROOT = REPO_ROOT / "crates" / "faberline-nlp"
 OUT_HANT = NLP_CRATE_ROOT / "lexicon" / "data" / "zh_hant.tsv"
 OUT_HANS = NLP_CRATE_ROOT / "lexicon" / "data" / "zh_hans.tsv"
+
+ALLOWED_ZH_GUTENBERG_SOURCES = frozenset({"gutenberg:23950", "gutenberg:23962"})
 
 VALID_UPOS = frozenset(
     {
@@ -80,11 +81,29 @@ EXCLUDED_WORDS = {
     "停了下來", "停了下来",
     "有一座",
     "天晚上",
+    # Qing-PD 1-char shift boundary restorations (origin/main split parity, distinct from C1 source hygiene):
+    "三本",        # NUM+CLF (script-invariant)
+    "就会",        # ADV+AUX (restores origin/main zh-Hans split while preserving origin/main zh-Hant 就會)
+    "要去",        # AUX/VERB+VERB (script-invariant)
+    "發到", "发到",  # VERB+ADP goal complement (symmetric Hant/Hans restoration of origin/main split)
 }
 
 # Curated person names (PROPN, sem=person) that should stay whole.
 CURATED_PERSON_NAMES = {
     "阿芳", "阿杰", "小芸", "小林", "老王",
+}
+
+# Known historical/literary/common 2-char person names for clean_map_ictclas POS/sem tagging
+# (kept separate from CURATED_PERSON_NAMES so pool membership/costs stay invariant).
+_KNOWN_PERSON_NAMES = CURATED_PERSON_NAMES | {
+    "老張", "老张", "老李", "小王", "小張", "小张", "小李", "小強", "小强",
+    "李白", "杜甫", "呂布", "吕布", "宋江", "曹操", "劉備", "刘备", "孫權", "孙权", "關羽", "关羽",
+    "張飛", "张飞", "周瑜", "魯肅", "鲁肃", "黃忠", "黄忠", "馬超", "马超", "趙雲", "赵云",
+    "袁紹", "袁绍", "董卓", "項羽", "项羽", "劉邦", "刘邦", "韓信", "韩信", "張良", "张良", "蕭何", "萧何",
+    "屈原", "孔子", "孟子", "老子", "莊子", "庄子", "荀子", "墨子", "韓非", "韩非",
+    "蘇軾", "苏轼", "蘇轍", "苏辙", "蘇洵", "苏洵", "韓愈", "韩愈", "王維", "王维", "杜牧",
+    "陸游", "陆游", "岳飛", "岳飞", "朱熹", "魯迅", "鲁迅", "巴金", "老舍", "茅盾", "冰心",
+    "胡適", "胡适", "朱德", "林彪", "陳雲", "陈云", "李四", "張三", "张三",
 }
 
 # Curated domain/classical/Taiwan terms that must have low enough cost to stay whole
@@ -421,30 +440,45 @@ def load_gold_pos() -> dict[str, set[str]]:
     return gold
 
 
-def mine_corpora_npmi(pattern: str, min_count: int = 6, min_pmi: float = 4.5) -> tuple[Counter, dict[str, float]]:
-    """Scan CC0/PD corpora for Han unigram/n-gram counts and high-PMI 2-4 char words."""
+def mine_corpora_npmi(
+    gutenberg_jsonl: Path | None,
+    min_count: int = 10,
+    min_pmi: float = 5.5,
+    transform_fn=None,
+) -> tuple[Counter, dict[str, float], int]:
+    """Scan allowlisted Project Gutenberg PD JSONL for Han unigram/n-gram counts and high-PMI 2-4 char words."""
     unigrams: Counter = Counter()
     ngrams: Counter = Counter()
     total_chars = 0
+    docs = 0
+    if gutenberg_jsonl is None:
+        return unigrams, {}, 0
 
     han_run_re = re.compile(r"[\u4e00-\u9fff]+")
-    for path_str in sorted(glob.glob(str(CORPORA_DIR / pattern))):
-        with open(path_str, "r", encoding="utf-8") as f:
-            for line in f:
-                text = json.loads(line).get("text", "")
-                for run in han_run_re.findall(text):
-                    L = len(run)
-                    total_chars += L
-                    for ch in run:
-                        unigrams[ch] += 1
-                    for n in (2, 3, 4):
-                        if L >= n:
-                            for i in range(L - n + 1):
-                                ngrams[run[i : i + n]] += 1
+    with open(gutenberg_jsonl, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            d = json.loads(line)
+            if d.get("source", "") not in ALLOWED_ZH_GUTENBERG_SOURCES:
+                continue
+            docs += 1
+            text = d.get("text", "")
+            if transform_fn is not None:
+                text = transform_fn(text)
+            for run in han_run_re.findall(text):
+                L = len(run)
+                total_chars += L
+                for ch in run:
+                    unigrams[ch] += 1
+                for n in (2, 3, 4):
+                    if L >= n:
+                        for i in range(L - n + 1):
+                            ngrams[run[i : i + n]] += 1
 
     mined: dict[str, float] = {}
     if total_chars == 0:
-        return unigrams, mined
+        return unigrams, mined, docs
 
     for ng, cnt in ngrams.items():
         if cnt < min_count:
@@ -470,7 +504,209 @@ def mine_corpora_npmi(pattern: str, min_count: int = 6, min_pmi: float = 4.5) ->
         if min_split_pmi >= min_pmi:
             mined[ng] = cnt * min_split_pmi
 
-    return unigrams, mined
+    return unigrams, mined, docs
+
+
+_COMMON_SURNAMES_1 = frozenset(
+    "王李张刘陈杨黄赵周吴徐孙马朱胡郭何林罗高郑梁谢宋唐许韩冯邓曹彭曾萧田董袁潘于蒋蔡余杜叶程苏魏吕丁任沈姚卢姜崔钟谭陆汪范金石廖贾夏韦付方白邹孟熊秦邱江尹薛闫段雷侯龙史陶黎贺顾毛郝龚邵万钱严覃武戴莫孔向汤"
+)
+_COMPOUND_SURNAMES_2 = (
+    "欧阳", "太史", "端木", "上官", "司马", "东方", "独孤", "南宫", "万俟", "闻人",
+    "夏侯", "诸葛", "尉迟", "公羊", "赫连", "澹台", "皇甫", "宗政", "濮阳", "公冶",
+    "太叔", "申屠", "公孙", "慕容", "仲孙", "钟离", "长孙", "宇文", "司徒", "鲜于",
+    "司空", "闾丘", "子车", "亓官", "司寇", "巫马", "公西", "颛孙", "壤驷", "公良",
+    "漆雕", "乐正", "宰父", "谷梁", "拓跋", "夹谷", "轩辕", "令狐", "段干", "百里",
+    "呼延", "东郭", "南门", "羊舌", "微生", "公户", "公玉", "公仪", "梁丘", "公仲",
+    "公上", "公门", "公山", "公坚", "左丘", "公伯", "西门", "公祖", "第五", "公乘",
+    "贯丘", "公皙", "南荣", "东里", "东宫", "仲长", "子书", "子桑", "即墨", "达奚", "褚师",
+)
+_HEADS_LOC = frozenset("宫庙寺观庵殿斋洞峡滩渡堡寨省市县区镇乡村湾岛溪墩棚山河湖海港路街桥")
+_HEADS_ORG = frozenset("院馆所校厂店行司局会部社党军团")
+_HEADS_NOUN = frozenset("器机具品物药剂车船书报单表法制权学感率度网线面体肉米麦豆瓜果菜茶酒糖盐油汤饭面饼")
+_NR_NONSURNAME_1CHAR_NOUN_SUFFIXES = frozenset(
+    "权法学感率力量器机品物剂药病症炎癌筑馆院部会党军国省市区镇乡村路街桥站港场厂店行务费税款价单表书报刊图集录经话语词字号式型类种级等面线点网体质素能米麦豆瓜果菜茶酒肉鱼鸟虫草花树"
+    "木石沙土金银铜铁锦丝布纸墨笔刀剑车船房屋门窗桌椅床灯钟风雪霜雾雷电光声味香气水火油盐糖醋酱汤饭饼糕粥"
+)
+_NRT_KNOWN_NON_PROPN = {
+    "二人": ("-", "-", "-"),
+    "令人": ("VERB", "VERB", "-"),
+    "登基": ("VERB", "VERB", "-"),
+    "崇拜": ("VERB", "VERB", "-"),
+    "多谢": ("VERB", "VERB", "-"),
+    "崇高": ("ADJ", "ADJ", "-"),
+    "保姆": ("NOUN", "NOUN", "-"),
+    "默契": ("-", "-", "-"),
+    "威武": ("ADJ", "ADJ", "-"),
+    "永世": ("ADV", "ADV", "-"),
+    "旭日": ("NOUN", "NOUN", "-"),
+    "新颜": ("NOUN", "NOUN", "-"),
+    "略逊": ("VERB", "VERB", "-"),
+    "顺祝": ("VERB", "VERB", "-"),
+    "大王": ("NOUN", "NOUN", "-"),
+    "法王": ("NOUN", "NOUN", "-"),
+    "二世": ("NOUN", "NOUN", "-"),
+    "五世": ("NOUN", "NOUN", "-"),
+}
+_NRT_KNOWN_LOCATIONS = {
+    "伊拉克", "伊朗", "拉萨", "迦太基", "南斯拉夫", "塞尔维亚", "巴巴多斯", "威尼斯",
+    "瑙鲁", "克里特", "克什米尔", "坎特伯雷", "新罕布什尔", "新罕布夏", "科尔多凡",
+    "若羌", "沔阳", "费拉拉", "朗斯", "亚马逊", "波士顿", "花莲", "特拉华", "柴达木", "萨摩亚",
+}
+_NR_KNOWN_LOCATIONS = {
+    "花莲", "波士顿", "仰光", "万宁", "钟祥", "乐安", "鲁尔", "萨摩亚", "特拉华",
+    "柴达木", "贺兰山", "张家界", "王屋山", "五台山", "峨眉山",
+}
+_NR_ORG_ENDINGS = (
+    "大学", "学院", "农专", "师专", "中学", "银行", "政府", "公司", "集团",
+    "委员会", "联会", "监会", "协会", "学会", "商会", "工会", "研究院", "研究所",
+    "设计院", "博物院", "博物馆", "图书馆", "体育馆", "展览馆", "纪念馆",
+)
+_NR_MULTI_NOUN_SUFFIXES = (
+    "建筑", "礼教", "法权", "政权", "主权", "人权", "霸权", "产权", "股权", "特权",
+    "版权", "债权", "物权", "主义", "制度", "汽车", "列车", "科学", "技术", "词典",
+    "字典", "公报", "报告", "声明", "氏菌", "三角", "昆虫", "维生素", "粟米", "玉米",
+    "大米", "小米", "糯米", "上唇", "下唇", "师傅", "长老", "公公", "大人", "师爷",
+    "帮主", "教主", "掌门", "皇帝", "皇后", "太后", "宰相", "将军", "夫人", "小姐",
+    "先生", "太太", "女儿", "兄弟", "姐妹", "诸侯", "阎王", "龙王", "大王", "魔王",
+    "法王", "顾问团", "宣传画", "郁金香", "天文台", "植物", "动物", "菊花", "银花",
+    "香花", "梅花", "桂花", "荷花", "桃花", "棉花", "雪花",
+)
+_NS_CULTURAL_ENDINGS = frozenset("锦缎绣绸布瓷陶玉茶酒菜饼面粉米梨桃枣橘柑橙柚瓜果鸡鸭鱼肉肠腿戏曲剧腔调语话歌谣舞拳剑刀扇伞纸笔墨砚席帽鞋毯")
+_NS_GEO_SUFFIXES = frozenset("省市县区镇乡村岛湾海湖山河江溪港城国洲州郡")
+_NT_FALSE_ORG_SUFFIXES = (
+    "汽车", "越野车", "中档车", "草药", "公报", "科学", "文学", "法学",
+    "理学", "哲学", "美学", "事物", "楼梯",
+)
+_NZ_STRICT_NOUN_SUFFIXES = (
+    "英文", "中文", "日文", "法文", "德文", "俄文", "韩文", "百科全书", "机器",
+    "病毒", "细菌", "软件", "硬件", "系统", "协议", "算法", "模型", "引擎",
+    "语言", "文字", "字体", "编码", "格式", "标准", "主义", "理论", "定理",
+    "公式", "定律", "方程", "函数", "矩阵", "化学", "物理", "生物", "医学",
+    "疾病", "综合征", "药品", "制剂", "材料", "器件", "设备", "仪器",
+)
+_MODIFIER_NOUN_SUFFIXES = frozenset(
+    "感权率度性单表书品物器者员师家室馆处部科组会业学"
+    "论法制式型类种点线面体网观心意情症病费金款税价额量数"
+    "期代纪史录案件事"
+)
+_MODIFIER_ADJ_WHITELIST = {
+    "高兴", "开心", "满意", "故意", "客观", "主观", "好看", "难看", "好听", "难听",
+    "好吃", "难吃", "好玩", "有趣", "无趣", "有意", "无意", "诚心", "真心", "假意",
+    "热心", "细心", "小心", "粗心", "耐心", "放心", "安心", "担心", "伤心", "痛心",
+    "灰心", "死心", "专心", "用心", "尽心", "偏心", "多心", "好心", "坏心", "良心",
+    "恶心", "贴心", "顺心", "称心", "舒心", "省心", "操心", "费心", "分心", "走心",
+    "可观", "美观", "壮观", "悲观", "乐观", "直观", "宏观", "微观", "达观", "旁观",
+    "自觉", "直觉", "错觉", "幻觉", "知觉", "感觉", "视觉", "听觉", "嗅觉", "味觉", "触觉",
+}
+_Z_LAND_NOUNS = {
+    "湿地", "草地", "土地", "山地", "盆地", "平地", "空地", "工地", "基地", "阵地",
+    "领地", "殖民地", "目的地", "发源地", "栖息地", "根据地", "所在地",
+}
+
+
+def clean_map_ictclas(
+    word: str,
+    tag: str,
+    conv: OpenCCConverter,
+    non_person_2: set[str],
+    high_nr2: set[str],
+) -> tuple[str, str, str]:
+    """Map ICTCLAS tag to (decided_upos, upos_mask, meta) with structural noise repair."""
+    # 1. Single-char entity/unknown tags are unreliable in isolation
+    if len(word) == 1 and tag in ("nr", "nrt", "nrfg", "ns", "nt", "nz", "zg", "g", "x"):
+        return "-", "-", "-"
+
+    s = conv.hant_to_hans(word)
+
+    # 2. Structural repair for person tags (nr / nrt / nrfg)
+    if tag == "nrt":
+        if word in _KNOWN_PERSON_NAMES or s in _KNOWN_PERSON_NAMES:
+            return "PROPN", "PROPN", "sem=person"
+        if s in _NRT_KNOWN_NON_PROPN:
+            return _NRT_KNOWN_NON_PROPN[s]
+        if s.endswith("人"):
+            return "NOUN", "NOUN", "-"
+        if s in _NRT_KNOWN_LOCATIONS or s[-1] in "堡河山岛湾海湖州郡省市县镇城国洲峡港":
+            return "PROPN", "PROPN", "sem=location"
+        return "PROPN", "PROPN", "-"
+
+    if tag in ("nr", "nrfg"):
+        if word in _KNOWN_PERSON_NAMES or s in _KNOWN_PERSON_NAMES:
+            return "PROPN", "PROPN", "sem=person"
+        if s in _NR_KNOWN_LOCATIONS:
+            return "PROPN", "PROPN", "sem=location"
+        if s.endswith(_NR_ORG_ENDINGS):
+            return "PROPN", "PROPN", "sem=organization"
+        if (
+            s.endswith(_NR_MULTI_NOUN_SUFFIXES)
+            or (len(s) >= 3 and s.endswith("树"))
+            or s[-1] in "器素胺酸碱盐酯醇酮醚醛烃酚苯肽酶苷菌虫癌癣症癖剂泵阀"
+        ):
+            return "NOUN", "NOUN", "-"
+        if len(s) == 2:
+            if s[-1] in "米卡铜玉仓府坡庐虎蜂鹃薇芩麻弦冠实":
+                return "NOUN", "NOUN", "-"
+            return "-", "-", "-"
+        if len(s) >= 4:
+            if len(s) == 4 and s.startswith(_COMPOUND_SURNAMES_2):
+                return "PROPN", "PROPN", "sem=person"
+            return "-", "-", "-"
+        # len(s) == 3
+        if s[0] in "那这每各某能会要可敢肯该别莫勿未不没很太更最再又也还就才都只共总全":
+            return "-", "-", "-"
+        if s[1] == "家" and s[2] in "庄村屯集店湾坡沟岭山桥河嘴坪坝台墩棚铺营堡寨界巷":
+            return "PROPN", "PROPN", "sem=location"
+        if s[:2] in high_nr2:
+            return "-", "-", "-"
+        if s[:2] in non_person_2:
+            if s[2] in _HEADS_LOC:
+                return "PROPN", "PROPN", "sem=location"
+            if s[2] in _HEADS_ORG:
+                return "PROPN", "PROPN", "sem=organization"
+            if s[2] in _HEADS_NOUN:
+                return "NOUN", "NOUN", "-"
+        if s[-1] in "宫庙寺观庵殿斋洞峡滩渡堡寨省市县区镇乡村湾岛溪墩棚":
+            return "PROPN", "PROPN", "sem=location"
+        if (
+            s[0] not in _COMMON_SURNAMES_1
+            and not s.startswith(_COMPOUND_SURNAMES_2)
+            and s[0] not in ("小", "老", "阿")
+            and s[-1] in _NR_NONSURNAME_1CHAR_NOUN_SUFFIXES
+        ):
+            return "NOUN", "NOUN", "-"
+        return "PROPN", "PROPN", "sem=person"
+
+    # 3. Cultural/product ns
+    if tag == "ns":
+        if len(s) >= 2 and s[-1] in _NS_CULTURAL_ENDINGS and s[-1] not in _NS_GEO_SUFFIXES:
+            return "NOUN", "NOUN", "-"
+
+    # 4. False-org nt
+    if tag == "nt":
+        if s == "人品出众":
+            return "-", "-", "-"
+        if s.endswith(_NT_FALSE_ORG_SUFFIXES):
+            return "NOUN", "NOUN", "-"
+
+    # 5. Strict noun nz (excluding personal names ending in 文 like 凯文/欧文/达尔文)
+    if tag == "nz":
+        if s not in ("凯文", "欧文", "达尔文") and s.endswith(_NZ_STRICT_NOUN_SUFFIXES):
+            return "NOUN", "NOUN", "-"
+
+    # 6. Noun-headed a / b / l (guarding genuine adjectives)
+    if tag in ("a", "b", "l") and len(s) >= 2 and s[-1] in _MODIFIER_NOUN_SUFFIXES and s not in _MODIFIER_ADJ_WHITELIST:
+        return "NOUN", "NOUN", "-"
+
+    # 7. Descriptive 'z' forms
+    if tag == "z" and len(s) >= 2:
+        if s in _Z_LAND_NOUNS:
+            return "NOUN", "NOUN", "-"
+        if s.endswith("地"):
+            return "ADV", "ADV", "-"
+        if s.endswith("的") and s not in ("目的", "标的", "有的"):
+            return "ADJ", "ADJ", "-"
+
+    return map_ictclas(word, tag)
 
 
 def map_ictclas(word: str, tag: str) -> tuple[str, str, str]:
@@ -532,9 +768,11 @@ def resolve_pos(
     zh_ambiguous: set[str],
     gold_pos: dict[str, set[str]],
     conv: OpenCCConverter,
+    non_person_2: set[str],
+    high_nr2: set[str],
 ) -> tuple[str, str, str]:
     """Determine (decided_upos, upos_mask, meta) with 0 conflicts against pos.rs and gold."""
-    decided, mask, meta = map_ictclas(word, ictclas_tag)
+    decided, mask, meta = clean_map_ictclas(word, ictclas_tag, conv, non_person_2, high_nr2)
 
     # Check gold in both exact form and cross-script form
     gold_tags: set[str] = set()
@@ -562,9 +800,10 @@ def resolve_pos(
 
     # 3. Gold compatibility check
     if gold_tags:
+        base_tags = set(mask.split("|")) if mask != "-" else set()
         if len(gold_tags) > 1:
             # Multi-POS in gold -> MUST be "-"
-            tags = set(mask.split("|")) | gold_tags
+            tags = base_tags | gold_tags
             return "-", "|".join(sorted(tags)), meta
         only_gold = next(iter(gold_tags))
         if decided != "-" and decided != only_gold:
@@ -574,7 +813,10 @@ def resolve_pos(
                 meta = "-"
             return only_gold, only_gold, meta
         if decided == "-":
-            tags = set(mask.split("|")) | gold_tags
+            tags = base_tags | gold_tags
+            if len(tags) == 1:
+                only = next(iter(tags))
+                return only, only, meta
             return "-", "|".join(sorted(tags)), meta
 
     return decided, mask, meta
@@ -592,10 +834,10 @@ def write_tsv_atomic(
     out_path: Path,
     tmp_path: Path,
     variant: str,
-    entries: dict[str, tuple[int, str, str, str, str]],
+    entries: dict[str, tuple[int, str, str, str, str, str]],
 ) -> int:
     """Sort by UTF-8 byte order of (surface, variant), write to tmp, and os.replace."""
-    TMP_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     sorted_items = sorted(
@@ -606,7 +848,7 @@ def write_tsv_atomic(
     with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(
             f"# {variant} lexicon (8-col canonical TSV)\n"
-            "# Sources: jieba-rs (MIT), OpenCC (Apache-2.0), in-repo tables, CC0/PD corpora\n"
+            "# Sources: jieba-rs (MIT), OpenCC (Apache-2.0), in-repo tables, first-party MIT additions, PD Project Gutenberg (gutenberg:23950, gutenberg:23962)\n"
             "# surface\tvariant\tcost\tdecided_upos\tupos_mask\tlemma\tcounterpart\tmeta\n"
         )
         for surface, (cost, dec_upos, upos_mask, lemma, counterpart, meta) in [
@@ -651,7 +893,9 @@ def verify_tsv(
             assert 200 <= cost <= 1800, f"{path}:{line_no}: cost out of range {cost}"
             assert dec == "-" or dec in VALID_UPOS, f"{path}:{line_no}: bad dec {dec!r}"
             mask_parts = mask.split("|")
-            assert all(m in VALID_UPOS for m in mask_parts), f"{path}:{line_no}: bad mask {mask!r}"
+            assert (dec == "-" and mask == "-") or all(
+                m in VALID_UPOS for m in mask_parts
+            ), f"{path}:{line_no}: bad mask {mask!r}"
             assert mask_parts == sorted(set(mask_parts)), f"{path}:{line_no}: unsorted mask {mask!r}"
             if dec != "-":
                 assert mask == dec, f"{path}:{line_no}: dec={dec} != mask={mask}"
@@ -700,9 +944,68 @@ def verify_tsv(
     }
 
 
+def load_mit_overrides(
+    path: Path,
+) -> dict[str, dict[str, tuple[int, str, str, str, str, str]]]:
+    """Load first-party MIT additions keyed by variant -> surface -> (cost, dec, mask, lemma, cp, meta)."""
+    by_var: dict[str, dict[str, tuple[int, str, str, str, str, str]]] = {
+        "zh-Hant": {},
+        "zh-Hans": {},
+    }
+    if not path.exists():
+        return by_var
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            if not line.strip() or line.startswith("#"):
+                continue
+            cols = line.rstrip("\n").split("\t")
+            if len(cols) != 8:
+                continue
+            surf, var, cost_s, dec, mask, lemma, cp, meta = cols
+            if var in by_var and is_clean_han(surf):
+                by_var[var][surf] = (int(cost_s), dec, mask, lemma, cp, meta)
+    return by_var
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Build zh_hant.tsv and zh_hans.tsv")
+    p.add_argument(
+        "--jieba-dict",
+        type=Path,
+        default=Path(os.environ["LEX_JIEBA_DICT"]) if "LEX_JIEBA_DICT" in os.environ else None,
+        help="Path to jieba-rs dict.txt (or env LEX_JIEBA_DICT)",
+    )
+    p.add_argument(
+        "--opencc-dir",
+        type=Path,
+        default=Path(os.environ["LEX_OPENCC_DIR"]) if "LEX_OPENCC_DIR" in os.environ else None,
+        help="Path to OpenCC dictionary directory (or env LEX_OPENCC_DIR)",
+    )
+    p.add_argument(
+        "--gutenberg-jsonl",
+        type=Path,
+        default=Path(os.environ["LEX_ZH_GUTENBERG_JSONL"]) if "LEX_ZH_GUTENBERG_JSONL" in os.environ else None,
+        help="Path to JSONL filtered strictly to gutenberg:23950 and gutenberg:23962 (or env LEX_ZH_GUTENBERG_JSONL)",
+    )
+    p.add_argument(
+        "--tmp-dir",
+        type=Path,
+        default=Path(os.environ.get("LEX_TMP_DIR", tempfile.gettempdir())),
+        help="Temporary directory for atomic write (or env LEX_TMP_DIR)",
+    )
+    return p.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    if args.jieba_dict is None or args.opencc_dir is None:
+        raise SystemExit("ERROR: --jieba-dict (or LEX_JIEBA_DICT) and --opencc-dir (or LEX_OPENCC_DIR) are required")
+    jieba_dict: Path = args.jieba_dict
+    opencc_dir: Path = args.opencc_dir
+    tmp_dir: Path = args.tmp_dir
+
     print("Loading OpenCC tables...")
-    conv = OpenCCConverter(OPENCC_DIR)
+    conv = OpenCCConverter(opencc_dir)
 
     print("Parsing src/doc/pos.rs and gold datasets...")
     zh_decided, zh_ambiguous = parse_pos_rs()
@@ -710,14 +1013,16 @@ def main() -> None:
     in_repo_words = load_in_repo_zh_words()
     print(f"  ZH_DECIDED={len(zh_decided)}, ZH_AMBIGUOUS={len(zh_ambiguous)}, gold_tokens={len(gold_pos)}")
 
-    print("Mining CC0/PD zh corpora (NPMI + unigram counts)...")
-    hans_uni, hans_mined = mine_corpora_npmi("zh_hans_*.jsonl", min_count=10, min_pmi=5.5)
-    hant_uni, hant_mined = mine_corpora_npmi("zh_hant_*.jsonl", min_count=10, min_pmi=5.5)
-    print(f"  zh-Hans mined={len(hans_mined)}, zh-Hant mined={len(hant_mined)}")
+    print("Mining allowlisted Project Gutenberg PD zh corpus (NPMI + unigram counts)...")
+    hant_uni, hant_mined, hant_docs = mine_corpora_npmi(args.gutenberg_jsonl, min_count=10, min_pmi=5.5)
+    hans_uni, hans_mined, hans_docs = mine_corpora_npmi(
+        args.gutenberg_jsonl, min_count=10, min_pmi=5.5, transform_fn=conv.hant_to_hans
+    )
+    print(f"  zh-Hant PD docs={hant_docs}, mined={len(hant_mined)}; zh-Hans PD-projected docs={hans_docs}, mined={len(hans_mined)}")
 
     print("Loading jieba-rs dict.txt...")
     jieba_entries: dict[str, tuple[int, str]] = {}
-    with open(JIEBA_DICT, "r", encoding="utf-8") as f:
+    with open(jieba_dict, "r", encoding="utf-8") as f:
         for line in f:
             parts = line.strip().split()
             if len(parts) < 2:
@@ -734,6 +1039,19 @@ def main() -> None:
             else:
                 jieba_entries[w] = (freq, tag)
     print(f"  Clean Han entries from jieba: {len(jieba_entries)}")
+
+    non_person_2 = {
+        w
+        for w, (fr, tg) in jieba_entries.items()
+        if len(w) == 2
+        and tg in ("n", "vn", "nz", "v", "a", "d", "b", "z", "t", "s", "f", "m", "q", "r", "c", "p")
+        and fr >= 5
+    }
+    high_nr2 = {
+        w
+        for w, (fr, tg) in jieba_entries.items()
+        if len(w) == 2 and tg == "nr" and fr >= 50 and w not in _COMPOUND_SURNAMES_2
+    }
 
     # Mandatory words that MUST be included in both scripts
     mandatory_hans: set[str] = set()
@@ -760,14 +1078,30 @@ def main() -> None:
         if is_clean_han(k) and 2 <= len(k) <= 6:
             mandatory_hans.add(conv.hant_to_hans(k))
 
-    # Build scored candidate pools for zh-Hans and zh-Hant
+    # Load first-party MIT additions (PR #46 + optional modern UPOS/semantic overrides)
+    mit_translate = load_mit_overrides(ZH_TRANSLATE_MIT_TSV)
+    mandatory_hant.update(mit_translate["zh-Hant"].keys())
+    mandatory_hans.update(mit_translate["zh-Hans"].keys())
+
+    mit_modern = load_mit_overrides(ZH_MODERN_MIT_TSV)
+    # Symmetrically propagate mit_modern across Hant & Hans without altering mandatory_* selection sets
+    for src_var, dst_var, fn in (
+        ("zh-Hant", "zh-Hans", conv.hant_to_hans),
+        ("zh-Hans", "zh-Hant", conv.hans_to_hant),
+    ):
+        for w, row in list(mit_modern[src_var].items()):
+            w_dst = fn(w)
+            if is_clean_han(w_dst) and w_dst not in mit_modern[dst_var]:
+                cost, dec, mask, lemma, _cp, meta = row
+                mit_modern[dst_var][w_dst] = (cost, dec, mask, lemma, w if w != w_dst else "-", meta)
+
+    # Build scored candidate pools for zh-Hans and zh-Hant (1-Char Hanzi Policy: freq >= 80 or Gutenberg PD or mandatory)
     hans_pool: dict[str, tuple[float, str]] = {}
     hant_pool: dict[str, tuple[float, str]] = {}
 
     for w, (freq, tag) in jieba_entries.items():
-        # Filter out 1-char jieba garbage
         if len(w) == 1:
-            if freq < 200 and hans_uni[w] == 0 and w not in mandatory_hans:
+            if freq < 80 and hans_uni[w] == 0 and w not in mandatory_hans:
                 continue
         hans_w = conv.hant_to_hans(w)
         if not is_clean_han(hans_w):
@@ -779,7 +1113,7 @@ def main() -> None:
 
         hant_w = conv.hans_to_hant(w)
         if is_clean_han(hant_w):
-            if len(hant_w) == 1 and freq < 200 and hant_uni[hant_w] == 0 and hant_w not in mandatory_hant:
+            if len(hant_w) == 1 and freq < 80 and hant_uni[hant_w] == 0 and hant_w not in mandatory_hant:
                 pass
             else:
                 h_boost = hant_uni[hant_w] * 50.0 if len(hant_w) == 1 else 0.0
@@ -853,30 +1187,50 @@ def main() -> None:
             selected[w] = (sc, tag)
         return selected
 
-    hans_sel = select_top(hans_pool, mandatory_hans, target_multi=66000)
-    hant_sel = select_top(hant_pool, mandatory_hant, target_multi=62000)
+    hans_sel = select_top(hans_pool, mandatory_hans, target_multi=68500)
+    hant_sel = select_top(hant_pool, mandatory_hant, target_multi=64200)
 
     def build_rows(
         selected: dict[str, tuple[float, str]],
         is_hant: bool,
+        mit_overrides: dict[str, tuple[int, str, str, str, str, str]],
     ) -> dict[str, tuple[int, str, str, str, str, str]]:
         total_freq = sum(sc for sc, _ in selected.values())
         rows: dict[str, tuple[int, str, str, str, str, str]] = {}
         for w, (sc, tag) in selected.items():
             cost = compute_cost(sc, total_freq)
-            dec, mask, meta = resolve_pos(w, tag, zh_decided, zh_ambiguous, gold_pos, conv)
+            dec, mask, meta = resolve_pos(w, tag, zh_decided, zh_ambiguous, gold_pos, conv, non_person_2, high_nr2)
             cp = conv.hant_to_hans(w) if is_hant else conv.hans_to_hant(w)
             if not is_clean_han(cp) or cp == w:
                 cp = "-"
+            w_hant = conv.hans_to_hant(w)
+            w_hans = conv.hant_to_hans(w)
+            if (
+                w in mit_overrides
+                and w not in zh_decided
+                and w not in zh_ambiguous
+                and w not in gold_pos
+                and w_hant not in gold_pos
+                and w_hans not in gold_pos
+            ):
+                _, m_dec, m_mask, _, m_cp, m_meta = mit_overrides[w]
+                m_mask = "|".join(sorted(set(m_mask.split("|"))))
+                if m_dec != "-" and m_mask != m_dec:
+                    m_dec = "-"
+                dec, mask, meta = m_dec, m_mask, m_meta
+                if m_cp == "-":
+                    cp = "-"
+                elif is_clean_han(m_cp) and m_cp != w:
+                    cp = m_cp
             rows[w] = (cost, dec, mask, "-", cp, meta)
         return rows
 
-    hant_rows = build_rows(hant_sel, is_hant=True)
-    hans_rows = build_rows(hans_sel, is_hant=False)
+    hant_rows = build_rows(hant_sel, is_hant=True, mit_overrides={**mit_translate["zh-Hant"], **mit_modern["zh-Hant"]})
+    hans_rows = build_rows(hans_sel, is_hant=False, mit_overrides={**mit_translate["zh-Hans"], **mit_modern["zh-Hans"]})
 
     print("Writing atomic TSVs...")
-    write_tsv_atomic(OUT_HANT, TMP_DIR / "zh_hant.tsv.tmp", "zh-Hant", hant_rows)
-    write_tsv_atomic(OUT_HANS, TMP_DIR / "zh_hans.tsv.tmp", "zh-Hans", hans_rows)
+    write_tsv_atomic(OUT_HANT, tmp_dir / "zh_hant.tsv.tmp", "zh-Hant", hant_rows)
+    write_tsv_atomic(OUT_HANS, tmp_dir / "zh_hans.tsv.tmp", "zh-Hans", hans_rows)
 
     print("Verifying invariants and gold compatibility...")
     stats_hant = verify_tsv(OUT_HANT, "zh-Hant", zh_decided, zh_ambiguous, gold_pos)

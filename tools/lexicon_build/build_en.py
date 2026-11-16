@@ -1,38 +1,37 @@
 #!/usr/bin/env python3
 """Build lexicon/data/en.tsv from Princeton WordNet 3.1, SCOWL/VarCon,
-src/doc/pos.rs, and public CC0/PD English corpora.
+src/doc/pos.rs, and allowlisted Public Domain Project Gutenberg English texts.
 
 Strictly permissive commercial-safe sources only:
 - Princeton WordNet 3.1 (WordNet BSD-style license)
 - SCOWL / VarCon (MIT/BSD-like permissive license)
-- In-repo src/doc/pos.rs & public CC0/PD en_corpus.jsonl
+- In-repo src/doc/pos.rs & gold sets (first-party MIT/CC0)
+- Public Domain Project Gutenberg (12 books, 660 docs)
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import os
 import re
 import sys
+import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRATCH_DIR = Path(
-    "/Users/chrischeng/.gemini/antigravity/brain/"
-    "fcdf5ec7-a63d-4308-93f6-0436229a04ea/scratch"
-)
-BUILD_TMP_DIR = SCRATCH_DIR / "lex_build_en"
-WN_DICT_DIR = BUILD_TMP_DIR / "dict"
-VARCON_PATH = BUILD_TMP_DIR / "varcon.txt"
-CORPUS_PATH = SCRATCH_DIR / "corpora" / "en" / "en_corpus.jsonl"
 
 NLP_CRATE_ROOT = REPO_ROOT / "crates" / "faberline-nlp"
 POS_RS_PATH = NLP_CRATE_ROOT / "src" / "doc" / "pos.rs"
 POS_GOLD_PATH = NLP_CRATE_ROOT / "tests" / "data" / "pos_gold.json"
 GOLD_LAYERS_PATH = NLP_CRATE_ROOT / "tests" / "data" / "gold_layers4_6_v1.jsonl"
 OUT_TSV_PATH = NLP_CRATE_ROOT / "lexicon" / "data" / "en.tsv"
+
+ALLOWED_PG_IDS = frozenset(
+    {"76", "2701", "64317", "541", "16643", "205", "5116", "408", "575", "5827", "130", "470"}
+)
 
 WORD_RE = re.compile(r"^[a-z]+(?:[-'][a-z]+)*$")
 CLITICS = {"n't", "'ll", "'ve", "'re", "'m", "'s", "'d"}
@@ -73,7 +72,7 @@ CLOSED_LEMMAS = {
 
 TARGET_MIN = 50_000
 TARGET_MAX = 70_000
-TARGET_GOAL = 62_000
+TARGET_GOAL = 66_000
 
 
 def is_valid_token(w: str) -> bool:
@@ -141,29 +140,49 @@ def load_gold_upos() -> dict[str, set[str]]:
     return gold
 
 
-def load_corpus_freqs() -> Counter[str]:
-    """Count token frequencies from public CC0/PD en_corpus.jsonl."""
+def load_corpus_freqs(
+    corpus_path: Path | None, gutenberg_dir: Path | None
+) -> tuple[Counter[str], int]:
+    """Count token frequencies strictly from the 12 allowlisted Project Gutenberg PD books."""
     counts: Counter[str] = Counter()
-    if not CORPUS_PATH.exists():
-        return counts
+    docs = 0
     tok_re = re.compile(r"[a-z]+(?:[-'][a-z]+)*|n't|'[a-z]+")
-    with CORPUS_PATH.open(encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            d = json.loads(line)
-            text = d.get("text", "").lower().replace("\u2019", "'")
+    if corpus_path is not None:
+        with corpus_path.open(encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                d = json.loads(line)
+                src = d.get("source", "")
+                if not src.startswith("gutenberg:"):
+                    continue
+                parts = src.split(":", 2)
+                if len(parts) < 2 or parts[1] not in ALLOWED_PG_IDS:
+                    continue
+                docs += 1
+                text = d.get("text", "").lower().replace("\u2019", "'")
+                for m in tok_re.finditer(text):
+                    w = m.group(0)
+                    if is_valid_token(w):
+                        counts[w] += 1
+    elif gutenberg_dir is not None:
+        for pg_id in sorted(ALLOWED_PG_IDS):
+            pg_file = gutenberg_dir / f"pg{pg_id}.txt"
+            if not pg_file.exists():
+                raise FileNotFoundError(f"Missing allowlisted Gutenberg file: {pg_file}")
+            docs += 1
+            text = pg_file.read_text(encoding="utf-8", errors="replace").lower().replace("\u2019", "'")
             for m in tok_re.finditer(text):
                 w = m.group(0)
                 if is_valid_token(w):
                     counts[w] += 1
-    return counts
+    return counts, docs
 
 
-def load_cntlist() -> Counter[str]:
+def load_cntlist(wn_dict_dir: Path) -> Counter[str]:
     """Load WordNet cntlist frequencies per lemma."""
     counts: Counter[str] = Counter()
-    cnt_path = WN_DICT_DIR / "cntlist"
+    cnt_path = wn_dict_dir / "cntlist"
     if not cnt_path.exists():
         return counts
     with cnt_path.open(encoding="utf-8", errors="replace") as f:
@@ -181,11 +200,11 @@ def load_cntlist() -> Counter[str]:
     return counts
 
 
-def load_noun_lex_filenums() -> tuple[dict[str, int], set[str]]:
+def load_noun_lex_filenums(wn_dict_dir: Path) -> tuple[dict[str, int], set[str]]:
     """Read data.noun to map synset_offset -> lex_filenum and detect instance-only nouns."""
     offset_to_lex: dict[str, int] = {}
     instance_offsets: set[str] = set()
-    data_noun = WN_DICT_DIR / "data.noun"
+    data_noun = wn_dict_dir / "data.noun"
     with data_noun.open(encoding="utf-8", errors="replace") as f:
         for line in f:
             if line.startswith("  "):
@@ -203,7 +222,7 @@ def load_noun_lex_filenums() -> tuple[dict[str, int], set[str]]:
 
 
 def load_wordnet(
-    offset_to_lex: dict[str, int], instance_offsets: set[str]
+    wn_dict_dir: Path, offset_to_lex: dict[str, int], instance_offsets: set[str]
 ) -> tuple[
     dict[str, set[str]],
     dict[str, int],
@@ -219,7 +238,7 @@ def load_wordnet(
     instance_only_nouns: set[str] = set()
 
     for pos_name, ud_tag in WN_POS_TO_UD.items():
-        idx_path = WN_DICT_DIR / f"index.{pos_name}"
+        idx_path = wn_dict_dir / f"index.{pos_name}"
         with idx_path.open(encoding="utf-8", errors="replace") as f:
             for line in f:
                 if line.startswith("  "):
@@ -260,7 +279,7 @@ def load_wordnet(
     irr_bases: set[str] = set()
     for pos_name in ["noun", "verb", "adj", "adv"]:
         ud_tag = WN_POS_TO_UD[pos_name]
-        exc_path = WN_DICT_DIR / f"{pos_name}.exc"
+        exc_path = wn_dict_dir / f"{pos_name}.exc"
         with exc_path.open(encoding="utf-8", errors="replace") as f:
             for line in f:
                 parts = line.strip().split()
@@ -277,7 +296,7 @@ def load_wordnet(
     return wn_pos, wn_senses, wn_sem, instance_only_nouns, exc_map, irr_bases
 
 
-def load_varcon() -> tuple[dict[str, tuple[str, str]], set[str]]:
+def load_varcon(varcon_path: Path) -> tuple[dict[str, tuple[str, str]], set[str]]:
     """Parse varcon.txt for clean US<->GB pairs.
 
     Returns:
@@ -287,7 +306,7 @@ def load_varcon() -> tuple[dict[str, tuple[str, str]], set[str]]:
     raw_pairs: list[tuple[str, str]] = []
     shared_words: set[str] = set()
 
-    with VARCON_PATH.open(encoding="utf-8", errors="replace") as f:
+    with varcon_path.open(encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.split("#", 1)[0].strip()
             if not line:
@@ -341,9 +360,11 @@ def infer_regular_lemma(
     if word.endswith("ies") and len(word) > 4:
         check(word[:-3] + "y", {"NOUN", "VERB"})
     if word.endswith("es") and len(word) > 3:
-        check(word[:-2], {"NOUN", "VERB"})
+        allowed_es = {"VERB"} if word.endswith(("sises", "sizes")) else {"NOUN", "VERB"}
+        check(word[:-2], allowed_es)
     if word.endswith("s") and len(word) > 2 and not word.endswith("ss"):
-        check(word[:-1], {"NOUN", "VERB"})
+        allowed_s = {"VERB"} if word.endswith(("sises", "sizes")) else {"NOUN", "VERB"}
+        check(word[:-1], allowed_s)
     if word.endswith("ied") and len(word) > 4:
         check(word[:-3] + "y", {"VERB", "ADJ"})
     if word.endswith("ed") and len(word) > 3:
@@ -356,9 +377,13 @@ def infer_regular_lemma(
         check(word[:-3] + "e", {"VERB", "NOUN", "ADJ"})
         if len(word) > 5 and word[-4] == word[-5]:
             check(word[:-4], {"VERB", "NOUN", "ADJ"})
+    if word.endswith("ier") and len(word) > 4:
+        check(word[:-3] + "y", {"ADJ", "ADV"})
     if word.endswith("er") and len(word) > 3:
-        check(word[:-2], {"ADJ", "ADV", "NOUN"})
-        check(word[:-1], {"ADJ", "ADV", "NOUN"})
+        check(word[:-2], {"ADJ", "ADV"})
+        check(word[:-1], {"ADJ", "ADV"})
+    if word.endswith("iest") and len(word) > 5:
+        check(word[:-4] + "y", {"ADJ", "ADV"})
     if word.endswith("est") and len(word) > 4:
         check(word[:-3], {"ADJ", "ADV"})
         check(word[:-2], {"ADJ", "ADV"})
@@ -370,23 +395,251 @@ def infer_regular_lemma(
     return candidates[0]
 
 
+_HYPHEN_ADJ_SUFFIXES = (
+    "-based", "-free", "-related", "-like", "-style", "-wide", "-bound",
+    "-proof", "-rich", "-poor", "-friendly", "-oriented", "-driven", "-led",
+    "-made", "-born", "-aged", "-sized", "-colored", "-coloured", "-shaped",
+    "-lined", "-backed", "-headed", "-sided", "-handed", "-footed", "-eyed",
+    "-legged",
+)
+_HYPHEN_ADV_SUFFIXES = ("-fully", "-lessly", "-wise")
+_PREFIXES = (
+    "un", "re", "non", "pre", "post", "de", "dis", "over", "under",
+    "mis", "sub", "inter", "anti", "counter", "semi", "multi", "super", "trans",
+)
+
+
+def _varcon_orth_variants(w: str) -> list[str]:
+    """Generate productive -ise/-ize, -yse/-yze, and ae/e orthographic equivalents."""
+    swaps = [
+        ("isations", "izations"), ("isation", "ization"),
+        ("isabilities", "izabilities"), ("isability", "izability"),
+        ("isables", "izables"), ("isable", "izable"),
+        ("isabler", "izabler"), ("isablest", "izablest"),
+        ("isers", "izers"), ("iser", "izer"),
+        ("isings", "izings"), ("ising", "izing"),
+        ("ised", "ized"), ("ises", "izes"), ("ise", "ize"),
+        ("ysings", "yzings"), ("ysing", "yzing"),
+        ("ysed", "yzed"), ("yses", "yzes"),
+        ("ysers", "yzers"), ("yser", "yzer"), ("yse", "yze"),
+        ("aemias", "emias"), ("aemia", "emia"), ("aemic", "emic"),
+        ("aevally", "evally"), ("aeval", "eval"),
+    ]
+    out: list[str] = []
+    for a, b in swaps:
+        if w.endswith(a):
+            out.append(w[: -len(a)] + b)
+        if w.endswith(b):
+            out.append(w[: -len(b)] + a)
+    return out
+
+
+def _map_lemma_to_word_orthography(word: str, alt: str, alt_lem: str) -> str:
+    """Map an inferred lemma from `alt` back to `word`'s orthographic style if distinct."""
+    if not alt_lem or alt_lem == "-" or alt_lem == alt:
+        return "-"
+    for cand in _varcon_orth_variants(alt_lem):
+        if cand != alt_lem:
+            return cand
+    return alt_lem
+
+
+def infer_derivational_pos_and_lemma(
+    word: str, known_bases: dict[str, set[str]], depth: int = 0
+) -> tuple[set[str], str]:
+    """Multi-pass morphological/orthographic POS & lemma inference for out-of-WordNet tokens."""
+    # 1. De-hyphenation & hyphenated compound rules
+    if "-" in word:
+        dehyphen = word.replace("-", "")
+        if dehyphen in known_bases:
+            return set(known_bases[dehyphen]), "-"
+        if word.endswith(_HYPHEN_ADV_SUFFIXES):
+            return {"ADV"}, "-"
+        if word.endswith(_HYPHEN_ADJ_SUFFIXES):
+            return {"ADJ"}, "-"
+        tail = word.rsplit("-", 1)[-1]
+        if len(tail) >= 3 and tail in known_bases:
+            return set(known_bases[tail]), "-"
+        if tail.endswith(("ed", "en")) and len(tail) >= 4:
+            return {"ADJ"}, "-"
+
+    # 2. Productive VarCon -ize/-ise, -yze/-yse, ae/e orthographic transfer
+    for alt in _varcon_orth_variants(word):
+        if alt in known_bases:
+            return set(known_bases[alt]), "-"
+        alt_base, alt_pos = infer_regular_lemma(alt, known_bases)
+        if alt_base and alt_pos:
+            mapped = _map_lemma_to_word_orthography(word, alt, alt_base)
+            return alt_pos, (mapped if mapped != word else "-")
+
+    # 3. Inflected derivational suffixes
+    if word.endswith(("izes", "ises", "ifies")) and len(word) > 6:
+        lem = word[:-3] + "y" if word.endswith("ifies") else word[:-1]
+        return {"VERB"}, lem
+    if word.endswith(("ized", "ised", "ified")) and len(word) > 6:
+        if word.startswith("un") and len(word) > 7:
+            return {"ADJ"}, "-"
+        lem = word[:-3] + "y" if word.endswith("ified") else word[:-1]
+        return {"ADJ", "VERB"}, lem
+    if word.endswith(("izing", "ising", "ifying")) and len(word) > 7:
+        if word.startswith("un") and len(word) > 8:
+            return {"ADJ"}, "-"
+        lem = word[:-3] + "y" if word.endswith("ifying") else word[:-3] + "e"
+        return {"ADJ", "VERB"}, lem
+    if (
+        word.endswith(
+            (
+                "izations", "isations", "ments", "nesses", "isms", "ists",
+                "ities", "abilities", "ibilities", "emias", "aemias",
+            )
+        )
+        and len(word) > 7
+    ):
+        if word.endswith(("ities", "abilities", "ibilities")):
+            return {"NOUN"}, word[:-3] + "y"
+        if word.endswith("nesses"):
+            return {"NOUN"}, word[:-2]
+        return {"NOUN"}, word[:-1]
+    if word.endswith(("izers", "isers", "ifiers", "fiers")) and len(word) > 6:
+        return {"NOUN"}, word[:-1]
+    if word.endswith(("abler", "ibler")) and len(word) > 7:
+        return {"ADJ"}, word[:-1]
+    if word.endswith(("ablest", "iblest")) and len(word) > 8:
+        return {"ADJ"}, word[:-2]
+
+    # 4. Base derivational suffixes
+    if word.endswith(("able", "ible", "ative", "ful", "less", "ous", "ish", "emic", "aemic")) and len(word) > 6:
+        return {"ADJ"}, "-"
+    if word.endswith("ic") and len(word) > 5:
+        return {"ADJ"}, "-"
+    if word.endswith(("ally", "ably", "ibly", "fully", "lessly", "ously", "ively")) and len(word) > 6:
+        return {"ADV"}, "-"
+    if word.endswith("ly") and len(word) > 5:
+        stem = word[:-2]
+        if stem in known_bases:
+            if "ADJ" in known_bases[stem]:
+                return {"ADV"}, "-"
+            if known_bases[stem] == {"NOUN"}:
+                return {"ADJ"}, "-"
+            return {"ADV"}, "-"
+        if word.endswith("ily") and (word[:-3] + "y") in known_bases:
+            return {"ADV"}, "-"
+        if len(stem) >= 5:
+            return {"ADV"}, "-"
+    if (
+        word.endswith(
+            (
+                "ness", "ity", "tion", "sion", "ment", "ship", "hood", "ism", "ist",
+                "emia", "aemia", "graphy", "logy", "metry", "scopy",
+                "izer", "iser", "ifier", "fier",
+            )
+        )
+        and len(word) > 6
+    ):
+        return {"NOUN"}, "-"
+    if word.endswith("ers") and len(word) > 6:
+        sg = word[:-1]
+        st = sg[:-2]
+        st_e = sg[:-1]
+        for cand in (st, st_e, *_varcon_orth_variants(st), *_varcon_orth_variants(st_e)):
+            if cand in known_bases and "VERB" in known_bases[cand]:
+                return {"NOUN"}, sg
+    if word.endswith(("er", "or")) and len(word) > 5:
+        stem = word[:-2]
+        stem_e = word[:-1]
+        for st in (stem, stem_e, *_varcon_orth_variants(stem), *_varcon_orth_variants(stem_e)):
+            if st in known_bases and "VERB" in known_bases[st]:
+                return {"NOUN"}, "-"
+    if word.endswith(("ize", "ise", "ify")) and len(word) > 5:
+        return {"VERB"}, "-"
+    if word.endswith("ate") and len(word) > 6:
+        return {"VERB"}, "-"
+
+    # 5. Productive prefix stripping
+    if depth < 2:
+        for pfx in _PREFIXES:
+            for sep in ("-", ""):
+                full_pfx = pfx + sep
+                if word.startswith(full_pfx) and len(word) - len(full_pfx) >= 4:
+                    stem = word[len(full_pfx) :]
+                    if pfx == "un" and word.endswith(("ed", "ing")):
+                        return {"ADJ"}, "-"
+                    if stem in known_bases:
+                        return set(known_bases[stem]), "-"
+                    r_base, r_pos = infer_regular_lemma(stem, known_bases)
+                    if r_base and r_pos:
+                        return r_pos, (full_pfx + r_base if full_pfx + r_base != word else "-")
+                    sub_pos, sub_lem = infer_derivational_pos_and_lemma(stem, known_bases, depth + 1)
+                    if sub_pos:
+                        lem = full_pfx + sub_lem if sub_lem != "-" else "-"
+                        return sub_pos, (lem if lem != word else "-")
+
+    return set(), "-"
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Build crates/faberline-nlp/lexicon/data/en.tsv")
+    p.add_argument(
+        "--wn-dict-dir",
+        type=Path,
+        default=Path(os.environ["LEX_WN_DICT_DIR"]) if "LEX_WN_DICT_DIR" in os.environ else None,
+        help="Path to Princeton WordNet 3.1 dict/ directory (or env LEX_WN_DICT_DIR)",
+    )
+    p.add_argument(
+        "--varcon",
+        type=Path,
+        default=Path(os.environ["LEX_VARCON_PATH"]) if "LEX_VARCON_PATH" in os.environ else None,
+        help="Path to SCOWL/VarCon varcon.txt (or env LEX_VARCON_PATH)",
+    )
+    p.add_argument(
+        "--clean-corpus-jsonl",
+        type=Path,
+        default=Path(os.environ["LEX_EN_CORPUS_JSONL"]) if "LEX_EN_CORPUS_JSONL" in os.environ else None,
+        help="Path to JSONL corpus filtered strictly to allowlisted Gutenberg PD books (or env LEX_EN_CORPUS_JSONL)",
+    )
+    p.add_argument(
+        "--gutenberg-dir",
+        type=Path,
+        default=Path(os.environ["LEX_EN_GUTENBERG_DIR"]) if "LEX_EN_GUTENBERG_DIR" in os.environ else None,
+        help="Directory containing pg<id>.txt for the 12 allowlisted Gutenberg PD books (or env LEX_EN_GUTENBERG_DIR)",
+    )
+    p.add_argument(
+        "--tmp-dir",
+        type=Path,
+        default=Path(os.environ.get("LEX_TMP_DIR", tempfile.gettempdir())),
+        help="Temporary directory for atomic write (or env LEX_TMP_DIR)",
+    )
+    return p.parse_args()
+
+
 def main() -> int:
-    for required in [WN_DICT_DIR / "index.noun", VARCON_PATH, POS_RS_PATH]:
+    args = parse_args()
+    if args.wn_dict_dir is None or args.varcon is None:
+        print(
+            "ERROR: --wn-dict-dir (or LEX_WN_DICT_DIR) and --varcon (or LEX_VARCON_PATH) are required",
+            file=sys.stderr,
+        )
+        return 1
+    wn_dict_dir: Path = args.wn_dict_dir
+    varcon_path: Path = args.varcon
+    tmp_dir: Path = args.tmp_dir
+
+    for required in [wn_dict_dir / "index.noun", varcon_path, POS_RS_PATH]:
         if not required.exists():
             print(f"ERROR: missing required file {required}", file=sys.stderr)
             return 1
 
     en_decided, en_ambiguous = parse_pos_rs()
     gold_upos = load_gold_upos()
-    corpus_freqs = load_corpus_freqs()
-    cntlist_freqs = load_cntlist()
-    offset_to_lex, instance_offsets = load_noun_lex_filenums()
+    corpus_freqs, docs = load_corpus_freqs(args.clean_corpus_jsonl, args.gutenberg_dir)
+    cntlist_freqs = load_cntlist(wn_dict_dir)
+    offset_to_lex, instance_offsets = load_noun_lex_filenums(wn_dict_dir)
     wn_pos, wn_senses, wn_sem, instance_only_nouns, exc_map, irr_bases = load_wordnet(
-        offset_to_lex, instance_offsets
+        wn_dict_dir, offset_to_lex, instance_offsets
     )
-    variant_map, _ = load_varcon()
+    variant_map, shared_words = load_varcon(varcon_path)
 
-    # Build candidate vocabulary
+    # Build candidate vocabulary (Product Vocabulary Policy)
     must_keep: set[str] = set()
     must_keep.update(en_decided.keys())
     must_keep.update(en_ambiguous)
@@ -394,21 +647,23 @@ def main() -> int:
     must_keep.update(exc_map.keys())
     must_keep.update(irr_bases)
     must_keep.update(variant_map.keys())
+    must_keep.update(shared_words)
     must_keep.update(w for w, c in corpus_freqs.items() if c >= 1)
     must_keep.update(w for w, c in cntlist_freqs.items() if c >= 1)
 
-    # Filter remaining WordNet words to hit TARGET_GOAL (~62k)
-    extra_candidates: list[tuple[tuple[int, int, int], str]] = []
+    # Filter remaining WordNet words to hit TARGET_GOAL (66k)
+    extra_candidates: list[tuple[tuple[int, int, int, int], str]] = []
     for w in wn_pos:
         if w in must_keep:
             continue
         is_non_instance = 0 if w in instance_only_nouns else 1
+        is_sem_headword = 1 if (w in wn_sem and w not in instance_only_nouns) else 0
         has_non_noun = 1 if (wn_pos[w] - {"NOUN"}) else 0
         senses = wn_senses.get(w, 1)
-        score = (is_non_instance, has_non_noun, senses)
+        score = (is_non_instance, is_sem_headword, has_non_noun, senses)
         extra_candidates.append((score, w))
 
-    extra_candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    extra_candidates.sort(key=lambda x: (-x[0][0], -x[0][1], -x[0][2], -x[0][3], x[1]))
     need_extra = max(0, TARGET_GOAL - len(must_keep))
     vocab = set(must_keep)
     for _, w in extra_candidates[:need_extra]:
@@ -482,20 +737,40 @@ def main() -> int:
             if counterpart in wn_pos:
                 pos_set.update(wn_pos[counterpart])
 
-        # Infer regular lemma for inflected forms (e.g. colours -> colour, analysed -> analyse)
-        if lemma == "-" and (w not in wn_pos or w in variant_map):
+        # Infer regular lemma for inflected forms (including VarCon participles/inflections)
+        if lemma == "-" and (
+            w not in wn_pos
+            or (w in variant_map and not ({"NOUN", "VERB"} & wn_pos[w] and w.endswith(("er", "or"))))
+        ):
             inf_base, inf_pos = infer_regular_lemma(w, wn_pos)
-            # Only accept inferred lemma for words already in wn_pos if base is also a US/GB variant
-            if inf_base and inf_base != w and (w not in wn_pos or inf_base in variant_map):
+            if inf_base and inf_base != w:
                 pos_set.update(inf_pos)
                 lemma = inf_base
-            elif counterpart != "-":
+            elif counterpart != "-" and (
+                counterpart not in wn_pos
+                or (
+                    counterpart in variant_map
+                    and not ({"NOUN", "VERB"} & wn_pos[counterpart] and counterpart.endswith(("er", "or")))
+                )
+            ):
                 c_base, c_pos = infer_regular_lemma(counterpart, wn_pos)
-                if c_base and c_base != counterpart and (
-                    counterpart not in wn_pos or c_base in variant_map
-                ):
+                if c_base and c_base != counterpart:
                     pos_set.update(c_pos)
                     lemma = c_base
+
+        # Multi-pass morphological/orthographic POS & lemma inference before unknown fallback
+        if not pos_set:
+            d_pos, d_lem = infer_derivational_pos_and_lemma(w, wn_pos)
+            pos_set.update(d_pos)
+            if lemma == "-" and d_lem != "-":
+                lemma = d_lem
+        if not pos_set and counterpart != "-":
+            d_pos, d_lem = infer_derivational_pos_and_lemma(counterpart, wn_pos)
+            pos_set.update(d_pos)
+            if lemma == "-" and d_lem != "-":
+                lemma = _map_lemma_to_word_orthography(w, counterpart, d_lem)
+                if lemma == "-":
+                    lemma = d_lem
 
         # Align lemma spelling with en-GB variant if lemma is an en-US headword
         if variant == "en-GB" and lemma != "-" and lemma in variant_map:
@@ -508,11 +783,7 @@ def main() -> int:
         if w in gold_upos:
             pos_set.update(gold_upos[w])
 
-        # Fallback if still empty (e.g. rare corpus/varcon token)
-        if not pos_set:
-            pos_set.add("NOUN")
-
-        # Determine decided_upos
+        # Determine decided_upos (emit "-", "-" when no reliable POS evidence exists)
         if w in en_ambiguous:
             decided_upos = "-"
         elif w in en_decided and (w not in gold_upos or gold_upos[w] == {en_decided[w]}):
@@ -523,7 +794,7 @@ def main() -> int:
         else:
             decided_upos = "-"
 
-        upos_mask = decided_upos if decided_upos != "-" else "|".join(sorted(pos_set))
+        upos_mask = decided_upos if decided_upos != "-" else ("|".join(sorted(pos_set)) if pos_set else "-")
         if lemma == w:
             lemma = "-"
 
@@ -566,10 +837,11 @@ def main() -> int:
 
     # Write atomically via scratch temp file -> os.replace()
     OUT_TSV_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp_out = BUILD_TMP_DIR / "en.tsv.tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_out = tmp_dir / "en.tsv.tmp"
     with tmp_out.open("w", encoding="utf-8", newline="\n") as f:
         f.write("# faberline-nlp English (en-US / en-GB / en) morphological & semantic lexicon\n")
-        f.write("# Sources: Princeton WordNet 3.1, SCOWL/VarCon, src/doc/pos.rs, CC0/PD en_corpus\n")
+        f.write("# Sources: Princeton WordNet 3.1, SCOWL/VarCon, src/doc/pos.rs, PD Project Gutenberg (12 books)\n")
         f.write("# Format: surface\\tvariant\\tcost\\tdecided_upos\\tupos_mask\\tlemma\\tcounterpart\\tmeta\n")
         for r in deduped:
             f.write(
@@ -583,7 +855,7 @@ def main() -> int:
     sem_count = sum(1 for r in deduped if "sem=" in r[7])
     irr_count = sum(1 for r in deduped if "infl=irr" in r[7])
     lemma_count = sum(1 for r in deduped if r[5] != "-")
-    print(f"Wrote {len(deduped)} entries to {OUT_TSV_PATH}")
+    print(f"Wrote {len(deduped)} entries to {OUT_TSV_PATH} (corpus docs={docs})")
     print(f"  Variants: {dict(var_counts)}")
     print(f"  Decided UPOS: {dec_count}, Ambiguous('-'): {len(deduped) - dec_count}")
     print(f"  With lemma != '-': {lemma_count}, sem=*: {sem_count}, infl=irr: {irr_count}")

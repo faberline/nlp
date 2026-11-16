@@ -35,7 +35,7 @@ fn license_audit_and_receipt_integrity() {
     let licenses_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("lexicon/LICENSES");
     assert!(licenses_dir.is_dir(), "missing lexicon/LICENSES directory");
 
-    let forbidden = ["BY-SA", "BY-NC", "BY-ND", "GPL"];
+    let forbidden = ["BY-SA", "BY-NC", "BY-ND", "GPL", "CC-BY", "CC BY"];
     let mut license_files = HashSet::new();
     for entry in fs::read_dir(&licenses_dir).expect("read lexicon/LICENSES") {
         let entry = entry.expect("license dir entry");
@@ -64,7 +64,7 @@ fn license_audit_and_receipt_integrity() {
         license_files
     );
 
-    let receipt_path = workspace_root().join("docs/receipts/lexicon-2026-11-14.json");
+    let receipt_path = workspace_root().join("docs/receipts/lexicon-2026-11-16.json");
     let receipt_raw = fs::read_to_string(&receipt_path).expect("read lexicon receipt");
     let receipt_upper = receipt_raw.to_uppercase();
     for bad in forbidden {
@@ -89,6 +89,35 @@ fn license_audit_and_receipt_integrity() {
             "receipt references missing license file {lic_file:?}"
         );
     }
+
+    fn assert_sha256_fields_valid(val: &Value, path: &str) {
+        match val {
+            Value::Object(map) => {
+                for (k, v) in map {
+                    let next = format!("{path}.{k}");
+                    if k == "sha256" || k.ends_with("_sha256") {
+                        let hex = v
+                            .as_str()
+                            .unwrap_or_else(|| panic!("{next} must be a string"));
+                        assert!(
+                            hex.len() == 64
+                                && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')),
+                            "{next} must be 64-char lowercase hex, got {hex:?}"
+                        );
+                    } else {
+                        assert_sha256_fields_valid(v, &next);
+                    }
+                }
+            }
+            Value::Array(arr) => {
+                for (i, item) in arr.iter().enumerate() {
+                    assert_sha256_fields_valid(item, &format!("{path}[{i}]"));
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_sha256_fields_valid(&receipt, "receipt");
 }
 
 #[test]
@@ -518,4 +547,185 @@ fn ja_shinjitai_to_traditional_mapping() {
     assert_eq!(map_ja_shinjitai("偽物と戻る"), "偽物と戻る");
     assert_eq!(map_ja_shinjitai("艶"), "豔");
     assert_eq!(map_ja_shinjitai("槙"), "槇");
+}
+
+#[test]
+fn c1_hygiene_en_and_zh_pos_lemma_and_entity_regressions() {
+    let opts = Options {
+        enrich_morphology: true,
+        first_party_zh_segmenter: true,
+        ..Options::default()
+    };
+
+    // EN: non-comparative -er/-ier nouns must not truncate to "-i"/"-", and derivational
+    // / hyphenated / VarCon terms must retain accurate UPOS.
+    for (word, expected_pos) in [
+        ("polariser", Upos::Noun),
+        ("polarizer", Upos::Noun),
+        ("polarisable", Upos::Adj),
+        ("remineralize", Upos::Verb),
+        ("co-operate", Upos::Verb),
+    ] {
+        let hit = lexicon::en::analyze_en_token(word);
+        assert!(
+            hit.upos_candidates.contains(&expected_pos),
+            "{word} expected {expected_pos:?}, got {hit:?}"
+        );
+        assert_ne!(hit.lemma.as_deref(), Some("polari"), "{word}: {hit:?}");
+    }
+
+    let en_text = "A polariser and polarizer are polarisable if we remineralize and co-operate, while studies stopped.";
+    let en_doc = analyze_document(en_text, &opts);
+    assert_eq!(
+        find_token(&en_doc, en_text, "polariser")
+            .canonical_variant
+            .as_deref(),
+        Some("polarizer")
+    );
+    assert_eq!(
+        find_token(&en_doc, en_text, "polarizer")
+            .canonical_variant
+            .as_deref(),
+        Some("polariser")
+    );
+    assert_ne!(
+        find_token(&en_doc, en_text, "polariser").lemma.as_deref(),
+        Some("polari")
+    );
+    assert_ne!(
+        find_token(&en_doc, en_text, "polarizer").lemma.as_deref(),
+        Some("polari")
+    );
+
+    // Near-negative: regular inflections still lemmatize cleanly, and comparatives keep ADJ.
+    assert_eq!(
+        find_token(&en_doc, en_text, "studies").lemma.as_deref(),
+        Some("study")
+    );
+    assert_eq!(
+        find_token(&en_doc, en_text, "stopped").lemma.as_deref(),
+        Some("stop")
+    );
+    assert!(
+        lexicon::en::analyze_en_token("smaller")
+            .upos_candidates
+            .contains(&Upos::Adj)
+    );
+    assert!(
+        lexicon::en::analyze_en_token("bigger")
+            .upos_candidates
+            .contains(&Upos::Adj)
+    );
+
+    // Additional EN VarCon & derivational POS/lemma regressions.
+    for (word, expected_pos, expected_lemma) in [
+        ("anonymized", Upos::Verb, Some("anonymize")),
+        ("anonymises", Upos::Verb, Some("anonymise")),
+        ("sterilisable", Upos::Adj, None),
+        ("mediaevally", Upos::Adv, None),
+        ("anarchize", Upos::Verb, None),
+        ("photosynthesizes", Upos::Verb, Some("photosynthesize")),
+        ("baptised", Upos::Verb, Some("baptise")),
+    ] {
+        let hit = lexicon::en::analyze_en_token(word);
+        assert!(
+            hit.upos_candidates.contains(&expected_pos),
+            "{word} expected {expected_pos:?}, got {hit:?}"
+        );
+        if let Some(lem) = expected_lemma {
+            assert_eq!(hit.lemma.as_deref(), Some(lem), "{word}: {hit:?}");
+        }
+    }
+    assert!(
+        lexicon::en::analyze_en_token("baptised")
+            .upos_candidates
+            .contains(&Upos::Adj)
+    );
+
+    // ZH: non-person nouns/idioms must not be mislabeled SemanticClass::Person.
+    let zh_hant_text = "古建築與司法權、粟米、蜀錦、清單、優越感、封建禮教、相生相剋，以及李白、杜甫、諸葛亮、呂布、史可法、小桂子、阿芳、老王、北京、花蓮、波士頓、沃爾夫斯堡、柴科夫斯基、耶魯大學、中國人民銀行、美國政府。";
+    let zh_hant_doc = analyze_document(zh_hant_text, &opts);
+    for non_person in [
+        "古建築",
+        "司法權",
+        "粟米",
+        "蜀錦",
+        "清單",
+        "優越感",
+        "封建禮教",
+        "相生相剋",
+    ] {
+        let tok = find_token(&zh_hant_doc, zh_hant_text, non_person);
+        assert_ne!(
+            tok.sem_class,
+            Some(SemanticClass::Person),
+            "{non_person} must not be Person: {tok:?}"
+        );
+    }
+    for person in [
+        "李白",
+        "杜甫",
+        "諸葛亮",
+        "呂布",
+        "史可法",
+        "小桂子",
+        "阿芳",
+        "老王",
+    ] {
+        let tok = find_token(&zh_hant_doc, zh_hant_text, person);
+        assert_eq!(
+            tok.sem_class,
+            Some(SemanticClass::Person),
+            "{person} must remain Person: {tok:?}"
+        );
+    }
+    for loc in ["北京", "花蓮", "波士頓", "沃爾夫斯堡"] {
+        let tok = find_token(&zh_hant_doc, zh_hant_text, loc);
+        assert_eq!(
+            tok.sem_class,
+            Some(SemanticClass::Location),
+            "{loc} must remain Location: {tok:?}"
+        );
+    }
+    for org in ["耶魯大學", "中國人民銀行", "美國政府"] {
+        let tok = find_token(&zh_hant_doc, zh_hant_text, org);
+        assert_eq!(
+            tok.sem_class,
+            Some(SemanticClass::Organization),
+            "{org} must remain Organization: {tok:?}"
+        );
+    }
+    let tchaikovsky = lexicon::lookup_zh("柴科夫斯基").expect("柴科夫斯基 in lexicon");
+    assert_eq!(
+        tchaikovsky.decided_upos,
+        Some(Upos::Propn),
+        "柴科夫斯基 expected Propn, got {tchaikovsky:?}"
+    );
+    let wetland = lexicon::lookup_zh("湿地").expect("湿地 in lexicon");
+    assert_eq!(
+        wetland.decided_upos,
+        Some(Upos::Noun),
+        "湿地 expected Noun, got {wetland:?}"
+    );
+
+    let zh_hans_text = "古建筑与司法权、粟米、蜀锦、清单、优越感、封建礼教、相生相克、雷霆万钧。";
+    let zh_hans_doc = analyze_document(zh_hans_text, &opts);
+    for non_person in [
+        "古建筑",
+        "司法权",
+        "粟米",
+        "蜀锦",
+        "清单",
+        "优越感",
+        "封建礼教",
+        "相生相克",
+        "雷霆万钧",
+    ] {
+        let tok = find_token(&zh_hans_doc, zh_hans_text, non_person);
+        assert_ne!(
+            tok.sem_class,
+            Some(SemanticClass::Person),
+            "{non_person} must not be Person: {tok:?}"
+        );
+    }
 }

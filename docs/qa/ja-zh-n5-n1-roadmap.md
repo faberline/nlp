@@ -58,7 +58,9 @@ The discussion check runs every 20 minutes, reads new reports, and routes them t
 
 At roadmap setup, issue #80 was the selected issue. Read live issue records for the current selection and status. The setup record links 32 unique atomic issues and records their verified bodies, milestone assignments, and dependencies.
 
-The latest post-creation REST inventory artifact is timestamped **2026-11-16 17:12:41 UTC**. It contains 115 records: 62 issues (46 open) and 53 pull requests (3 open). This replaces the earlier 16:55:48 snapshot of 30 issues. That earlier count is historical, not current. Refresh live metadata before a later freeze or review.
+The post-creation REST inventory snapshot is timestamped **2026-11-16 17:12:41 UTC**. It recorded 115 items: 62 issues (46 open) and 53 pull requests (3 open). The earlier 16:55:48 snapshot recorded 30 issues. These are dated setup snapshots, not current counts. Refresh live metadata before a later freeze or review.
+
+**Dated post-setup refresh — 2026-11-16:** The N5 CI infrastructure work tracked by [issue #118](https://github.com/faberline/nlp/issues/118) was merged in [PR #119](https://github.com/faberline/nlp/pull/119) at 20:38:30 UTC. The main push workflow [completed successfully](https://github.com/faberline/nlp/actions/runs/43951888164) on `dadd6e22806f01e9c9e32ff3eb14b4c49809b029`. This later work is outside the original 32-issue queue index and its dated setup inventory. It does not accept N5 or any other level.
 
 The snapshot includes issues #80–#116. Issues [#81](https://github.com/faberline/nlp/issues/81), [#82](https://github.com/faberline/nlp/issues/82), [#83](https://github.com/faberline/nlp/issues/83), and [#84](https://github.com/faberline/nlp/issues/84) and milestones #11–#14 cover wider translation planning. Issue #82 is the broader Japanese-to-Taiwan/China parent. It reuses N5–N1 milestones #6–#10 and does not create a competing development schedule. This document remains limited to Japanese → Taiwan Traditional Chinese. Do not change those sibling issues or milestones here.
 
@@ -88,7 +90,7 @@ The table records Root's approved titles and dependencies. Only one issue may be
 | [#97](https://github.com/faberline/nlp/issues/97) | [N5] 建立現象基準單檔資料 | [#96](https://github.com/faberline/nlp/issues/96) | Add one separate phenomenon-baseline file after #96; do not change the standing baseline. |
 | [#98](https://github.com/faberline/nlp/issues/98) | [N5] 啟用必備現象基準檢查 | [#97](https://github.com/faberline/nlp/issues/97) | Require the new baseline after #97. Missing or mismatched data fails; no silent fallback. No extra owner approval is inferred; only a real rule conflict gets a concrete scoped exception request. |
 | [#99](https://github.com/faberline/nlp/issues/99) | [N5] 獨立驗收 N5 語意、完整與自然度 | [#85](https://github.com/faberline/nlp/issues/85), [#87](https://github.com/faberline/nlp/issues/87), [#91](https://github.com/faberline/nlp/issues/91), [#93](https://github.com/faberline/nlp/issues/93), [#98](https://github.com/faberline/nlp/issues/98), [#80](https://github.com/faberline/nlp/issues/80), [#86](https://github.com/faberline/nlp/issues/86), [#90](https://github.com/faberline/nlp/issues/90), [#96](https://github.com/faberline/nlp/issues/96), [#97](https://github.com/faberline/nlp/issues/97), [#89](https://github.com/faberline/nlp/issues/89), [#92](https://github.com/faberline/nlp/issues/92), [#94](https://github.com/faberline/nlp/issues/94), [#95](https://github.com/faberline/nlp/issues/95) | Independent N5 acceptance across meaning, completeness, and Taiwan naturalness. All current and later blockers must be done; unknowns remain open. |
-| [#100](https://github.com/faberline/nlp/issues/100) | [N5] N5 milestone 全平台新版本發布 | [#99](https://github.com/faberline/nlp/issues/99) | One new immutable three-platform release after N5 acceptance; do not move or replace v0.1.0. |
+| [#100](https://github.com/faberline/nlp/issues/100) | [N5] N5 milestone 全平台新版本發布 | [#99](https://github.com/faberline/nlp/issues/99) | Publish one new three-platform release after N5 acceptance. Keep the existing v0.1.0 release unchanged under the project no-overwrite policy. |
 
 ### N4 issue index
 
@@ -96,10 +98,10 @@ The table records Root's approved titles and dependencies. Only one issue may be
 |---|---|---|---|
 | [#101](https://github.com/faberline/nlp/issues/101) | [N4] 盤點 N4 已採納資料及缺口 | [#100](https://github.com/faberline/nlp/issues/100) | Start N4 coverage only after verified N5 release #100. |
 | [#102](https://github.com/faberline/nlp/issues/102) | [N4] 辨識見面對象與授受角色 | [#101](https://github.com/faberline/nlp/issues/101) | N4 meeting-partner and giving/receiving roles with motion and recipient controls. Meeting-role draft belongs here, not N5. |
-| [#103](https://github.com/faberline/nlp/issues/103) | [N4] 獨立採納 N4 基本意圖開發控制 | [#101](https://github.com/faberline/nlp/issues/101) | Adopt eight basic つもり controls. Provenance pin: private commit 4f03b2a62710b6d307f1a9428d55421934b09498; source SHA-256 60e4e0493c46198f0558a35cca0888ccd685996123105c11cab329565c7a5d32. Not yet adopted. |
+| [#103](https://github.com/faberline/nlp/issues/103) | [N4] 獨立採納 N4 基本意圖開發控制 | [#101](https://github.com/faberline/nlp/issues/101) | Adopt eight basic つもり controls. The data remains unadopted pending independent review. |
 | [#104](https://github.com/faberline/nlp/issues/104) | [N4] 一般化 N4 非過去意圖 | [#103](https://github.com/faberline/nlp/issues/103) | Generalize basic N4 nonpast intention only after #103 adoption; keep past-belief examples as controls. |
 | [#105](https://github.com/faberline/nlp/issues/105) | [N4] 獨立驗收 N4 與保持 N5 | [#101](https://github.com/faberline/nlp/issues/101), [#102](https://github.com/faberline/nlp/issues/102), [#103](https://github.com/faberline/nlp/issues/103), [#104](https://github.com/faberline/nlp/issues/104) | Independent N4 acceptance and preservation of pinned N5 quality. |
-| [#106](https://github.com/faberline/nlp/issues/106) | [N4] N4 milestone 全平台新版本發布 | [#105](https://github.com/faberline/nlp/issues/105) | One new immutable three-platform release after N4 acceptance. |
+| [#106](https://github.com/faberline/nlp/issues/106) | [N4] N4 milestone 全平台新版本發布 | [#105](https://github.com/faberline/nlp/issues/105) | One new three-platform release after N4 acceptance. |
 
 ### N3 issue index
 
@@ -108,7 +110,7 @@ The table records Root's approved titles and dependencies. Only one issue may be
 | [#107](https://github.com/faberline/nlp/issues/107) | [N3] 盤點 N3 已採納資料及缺口 | [#106](https://github.com/faberline/nlp/issues/106) | Start N3 coverage only after verified N4 release #106. |
 | [#108](https://github.com/faberline/nlp/issues/108) | [N3] 一般化進階過去意圖與主觀信念結構 | [#107](https://github.com/faberline/nlp/issues/107), [#103](https://github.com/faberline/nlp/issues/103) | Advanced past-belief behavior only; reuse adopted #103 data and do not duplicate or create a dataset. Keep distinct from basic nonpast intention #104. |
 | [#109](https://github.com/faberline/nlp/issues/109) | [N3] 獨立驗收 N3 與保持 N5/N4 | [#107](https://github.com/faberline/nlp/issues/107), [#108](https://github.com/faberline/nlp/issues/108) | Independent N3 acceptance and preservation of N5/N4 quality. |
-| [#110](https://github.com/faberline/nlp/issues/110) | [N3] N3 milestone 全平台新版本發布 | [#109](https://github.com/faberline/nlp/issues/109) | One new immutable three-platform release after N3 acceptance. |
+| [#110](https://github.com/faberline/nlp/issues/110) | [N3] N3 milestone 全平台新版本發布 | [#109](https://github.com/faberline/nlp/issues/109) | One new three-platform release after N3 acceptance. |
 
 ### N2 issue index
 
@@ -116,7 +118,7 @@ The table records Root's approved titles and dependencies. Only one issue may be
 |---|---|---|---|
 | [#111](https://github.com/faberline/nlp/issues/111) | [N2] 盤點 N2 已採納資料及缺口 | [#110](https://github.com/faberline/nlp/issues/110) | Start N2 coverage only after verified N3 release #110. |
 | [#112](https://github.com/faberline/nlp/issues/112) | [N2] 獨立驗收 N2 與保持 N5–N3 | [#111](https://github.com/faberline/nlp/issues/111) | Independent N2 acceptance and preservation of N5–N3 quality. |
-| [#113](https://github.com/faberline/nlp/issues/113) | [N2] N2 milestone 全平台新版本發布 | [#112](https://github.com/faberline/nlp/issues/112) | One new immutable three-platform release after N2 acceptance. |
+| [#113](https://github.com/faberline/nlp/issues/113) | [N2] N2 milestone 全平台新版本發布 | [#112](https://github.com/faberline/nlp/issues/112) | One new three-platform release after N2 acceptance. |
 
 ### N1 issue index
 
@@ -124,7 +126,7 @@ The table records Root's approved titles and dependencies. Only one issue may be
 |---|---|---|---|
 | [#114](https://github.com/faberline/nlp/issues/114) | [N1] 盤點 N1 已採納資料及缺口 | [#113](https://github.com/faberline/nlp/issues/113) | Start N1 coverage only after verified N2 release #113. |
 | [#115](https://github.com/faberline/nlp/issues/115) | [N1] 獨立驗收 N1 與保持 N5–N2 | [#114](https://github.com/faberline/nlp/issues/114) | Independent N1 acceptance and preservation of N5–N2 quality. |
-| [#116](https://github.com/faberline/nlp/issues/116) | [N1] N1 milestone 全平台新版本發布 | [#115](https://github.com/faberline/nlp/issues/115) | One new immutable three-platform release after N1 acceptance. |
+| [#116](https://github.com/faberline/nlp/issues/116) | [N1] N1 milestone 全平台新版本發布 | [#115](https://github.com/faberline/nlp/issues/115) | One new three-platform release after N1 acceptance. |
 
 ### Related existing issue outside the N3 milestone
 
@@ -142,7 +144,7 @@ The table records Root's approved titles and dependencies. Only one issue may be
 
 ## Known evidence and gaps
 
-**SHA labels in the PR table:** these are author/frozen PR heads, not squash-merge commits. The main snapshot for this roadmap is `4398f28052cb3b6f891cc14ed99ca5c5504bf105`. The actual source for historical release v0.1.0 is `b0ad8bdc0477cfc3432d8dc1950d23cee44832d8`.
+**SHA labels in the PR table:** these are author/frozen PR heads, not squash-merge commits. The main snapshot at roadmap setup was `4398f28052cb3b6f891cc14ed99ca5c5504bf105`. The actual source for historical release v0.1.0 is `b0ad8bdc0477cfc3432d8dc1950d23cee44832d8`.
 
 | Evidence | Current state | Roadmap treatment |
 |---|---|---|
@@ -157,29 +159,29 @@ The table records Root's approved titles and dependencies. Only one issue may be
 | [PR #76, frozen head bd96b678de5a428190771fc1894c1e9b69708f1d](https://github.com/faberline/nlp/pull/76) | Open candidate change assigned to N5 [issue #87](https://github.com/faberline/nlp/issues/87). Its provisional model diagnostic on 32 adopted rows reported semantic 3 correct / 14 partial / 15 wrong, and naturalness 3 correct / 4 partial / 25 wrong. This is not human gold or a statistical accuracy estimate. The candidate result is not current-main quality. | Treat it as candidate evidence only. Check exact-head hosted CI and perform independent review before any acceptance. |
 | [PR #79, 50fe8acd52a6f53b6ce7688573b01adf3257577e](https://github.com/faberline/nlp/pull/79) | Open lexicon change, assigned to N5 [issue #88](https://github.com/faberline/nlp/issues/88). | No acceptance claim here. Check its exact head and evidence when it is selected for review. |
 
-An independent audit of the standing visible development references found three high-confidence concerns (jz008, jz086, jz142), seven uncertain cases, and three style-only examples. Each concern also has a neutral alternate reference. These rows are separate from the adopted 32-row bank. This audit does not show that the primary references caused the H1 candidate's 0.87 metric drop. Triage them through N5 [issue #89](https://github.com/faberline/nlp/issues/89). Do not change data or baseline to rescue a candidate. If a real rule conflict remains, submit a concrete, scoped owner exception request.
+An independent audit of the standing visible development references found three high-confidence concerns (jz008, jz086, jz142), seven uncertain cases, and three style-only examples. Each concern also has a neutral alternate reference. These rows are separate from the adopted 32-row bank. This audit does not show that the primary references caused the N5 #91 candidate's 0.87 metric drop. Triage them through N5 [issue #89](https://github.com/faberline/nlp/issues/89). Do not change data or baseline to rescue a candidate. If a real rule conflict remains, submit a concrete, scoped owner exception request.
 
 The 32-row phenomenon map remains unadopted; N5 [issue #90](https://github.com/faberline/nlp/issues/90) owns independent adoption. The standing runner uses the better chrF match across each primary and alternate reference. The adopted-32 reporter uses all primary references only. Both use chrF, but their reference policies differ. Do not combine or directly compare their scores. The reporting, separate baseline, and mandatory activation issues are N5 [#96](https://github.com/faberline/nlp/issues/96), [#97](https://github.com/faberline/nlp/issues/97), and [#98](https://github.com/faberline/nlp/issues/98). The sequence is #90 → #96 → #97 → #98. Missing or mismatched mandatory data must fail; no silent fallback is allowed. This does not weaken the original 24 rules. No extra owner approval is inferred; only a real rule conflict gets a concrete, scoped exception request. Keep author drafts out of counts and measurements until a separate data-only PR records review and adoption. The map draft does not create a new gate or weaken the existing 24-rule ratchet.
 
 ### Preserved local drafts and evidence
 
-The fingerprints below identify preserved drafts. Their presence here does not establish that draft contents are available through a public PR or that the work is accepted.
+This table records preserved draft status through public issue references. Detailed private provenance remains in internal records and is omitted from this roadmap.
 
 | Issue | Preserved draft evidence | State and boundary |
 |---|---|---|
-| N5 #91 — honorific repair | Private base `6f1a9dc31e2629228badca98e87d2f2a7c42c3c5`; dirty-file SHA-256 `77a2fa022696d90fdb2732f98e1c7d8cc845b9891468773d988489b2c0841b54` | The draft scored 6.97 versus 7.84 on the standing katakana group, a 0.87 drop. It failed, has no PR, and is not accepted. Preserve the dirty file. The three reference concerns above do not prove the cause of this drop. |
-| N5 #92 — name inventory | Private commit `9344f4164de2dd28c3bfb8f89da8b53255e5a803` | The 150-row draft has 49 new translation glosses: 17 are tentatively plausible and 32 remain unverified. The other 101 rows are unchanged. No new row or cost change was found. Only a source-verified N5-needed subset may advance. Keep unverified glosses private or unknown. |
-| N4 #102 — meeting-role controls | Private commit `aceb6df548743aa2b6fc4d53a83e2725c92a7627` | The draft was flat on the standing 24-rule metric. It is not accepted and does not justify a rule change. |
-| N4 #103 — basic つもり controls | Private commit `4f03b2a62710b6d307f1a9428d55421934b09498`; data SHA-256 `60e4e0493c46198f0558a35cca0888ccd685996123105c11cab329565c7a5d32` | Eight basic-intention controls remain unadopted. Do not execute them before independent data review and adoption. |
+| [N5 #91 — honorific repair](https://github.com/faberline/nlp/issues/91) | Preserved draft status is summarized here; detailed provenance remains in internal records. | The earlier draft scored 6.97 versus 7.84 on the standing katakana group, a 0.87 drop. It failed and was not accepted at setup. No PR was recorded for this draft at setup; preserve the existing local dirty file. The three reference concerns above do not prove the cause of this drop. |
+| [N5 #92 — name inventory](https://github.com/faberline/nlp/issues/92) | Preserved draft; adoption remains pending. | The 150-row draft has 49 new translation glosses: 17 are tentatively plausible and 32 remain unverified. The other 101 rows are unchanged. No new row or cost change was found. Only a source-verified N5-needed subset may advance. Keep unverified glosses unknown or internal. |
+| [N4 #102 — meeting-role controls](https://github.com/faberline/nlp/issues/102) | Preserved controls draft; no acceptance. | The draft was flat on the standing 24-rule metric. It is not accepted and does not justify a rule change. |
+| [N4 #103 — basic つもり controls](https://github.com/faberline/nlp/issues/103) | Eight basic intention controls remain unadopted. | Do not execute them before independent data review and adoption. |
 
-The fingerprint values above are listed as provenance identifiers. They do not by themselves establish public availability of draft contents or acceptance. Keep each draft’s recorded state from the table, and do not present private fingerprints as public commit links.
+The public issue links and status above do not expose private draft identifiers or checksums. Use internal records for exact draft provenance.
 
 ## Release rule
 
-After all acceptance issues for one milestone pass, publish **one new immutable full CPU NLP version for that milestone**. Do not publish one product version per issue or per intermediate batch. Each milestone release must include the existing seven commands and embedded resources for macOS ARM, macOS Intel, and Windows. Verify native execution, download, source/version identity, and checksums. Close the milestone only after all three platform packages are verified usable.
+After all acceptance issues for one milestone pass, publish **one new full CPU NLP version for that milestone**. As a project policy, never overwrite or replace an existing version, tag, release, or published package; create a new version for each accepted milestone. This is a project rule, not a claim about GitHub platform behavior. Do not publish one product version per issue or per intermediate batch. Each milestone release must include the existing seven commands and embedded resources for macOS ARM, macOS Intel, and Windows. Verify native execution, download, source/version identity, and checksums. Close the milestone only after all three platform packages are verified usable.
 
 The required exact-head hosted checks are seven checks, together with the author's required checks. All must pass on the frozen head. Keep earlier passing evidence, but refresh it after a rebase or source change. Do not infer a pass from missing, stale, or pending checks.
 
 ## Public history
 
-The PR links above are the public record for prior product work. Their listed PR SHAs are author/frozen heads, not squash-merge commit SHAs. The main setup source is `4398f28052cb3b6f891cc14ed99ca5c5504bf105`; the actual v0.1.0 release source is `b0ad8bdc0477cfc3432d8dc1950d23cee44832d8`. The milestone pages link the five sequential N-level milestones. The public historical QA record is [Discussion #45, comment 19643372](https://github.com/faberline/nlp/discussions/45#discussioncomment-19643372); it records a prior candidate diagnostic and is not main acceptance. The draft fingerprints above identify preserved work only. They do not by themselves establish public availability of draft contents or acceptance. Use the state recorded for each draft, and do not present private fingerprints as public commit links.
+The PR links above are the public record for prior product work. Their listed PR SHAs are author/frozen heads, not squash-merge commit SHAs. The roadmap setup source was `4398f28052cb3b6f891cc14ed99ca5c5504bf105`; the actual v0.1.0 release source is `b0ad8bdc0477cfc3432d8dc1950d23cee44832d8`. The milestone pages link the five sequential N-level milestones. The public historical QA record is [Discussion #45, comment 19643372](https://github.com/faberline/nlp/discussions/45#discussioncomment-19643372); it records a prior candidate diagnostic and is not main acceptance. The preserved-draft table uses public issue links and status summaries. Detailed private provenance is omitted from this roadmap.

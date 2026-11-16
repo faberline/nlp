@@ -97,7 +97,7 @@ The table records Root's approved titles and dependencies. Only one issue may be
 | Issue | Approved title | Depends on | Scope note |
 |---|---|---|---|
 | [#101](https://github.com/faberline/nlp/issues/101) | [N4] 盤點 N4 已採納資料及缺口 | [#100](https://github.com/faberline/nlp/issues/100) | Start N4 coverage only after verified N5 release #100. |
-| [#102](https://github.com/faberline/nlp/issues/102) | [N4] 辨識見面對象與授受角色 | [#101](https://github.com/faberline/nlp/issues/101) | N4 meeting-partner and giving/receiving roles with motion and recipient controls. Meeting-role draft belongs here, not N5. |
+| [#102](https://github.com/faberline/nlp/issues/102) | [N4] 辨識見面對象與授受角色 | [#101](https://github.com/faberline/nlp/issues/101) | Improve identifiable meeting-partner handling only; keep giving/receiving, motion-destination, and multi-verb cases as negative controls. Meeting-role draft belongs here, not N5. |
 | [#103](https://github.com/faberline/nlp/issues/103) | [N4] 獨立採納 N4 基本意圖開發控制 | [#101](https://github.com/faberline/nlp/issues/101) | Adopt eight basic つもり controls. The data remains unadopted pending independent review. |
 | [#104](https://github.com/faberline/nlp/issues/104) | [N4] 一般化 N4 非過去意圖 | [#103](https://github.com/faberline/nlp/issues/103) | Generalize basic N4 nonpast intention only after #103 adoption; keep past-belief examples as controls. |
 | [#105](https://github.com/faberline/nlp/issues/105) | [N4] 獨立驗收 N4 與保持 N5 | [#101](https://github.com/faberline/nlp/issues/101), [#102](https://github.com/faberline/nlp/issues/102), [#103](https://github.com/faberline/nlp/issues/103), [#104](https://github.com/faberline/nlp/issues/104) | Independent N4 acceptance and preservation of pinned N5 quality. |

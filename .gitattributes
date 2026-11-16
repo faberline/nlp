@@ -1,2 +1,2 @@
 /scripts/release/licenses/LICENSE-INCLUDE-FLATE-APACHE-2.0.txt text eol=lf
-/crates/faberline-nlp/lexicon/LICENSES/LICENSE-JIEBA-MIT.txt text eol=lf
+/crates/faberline-nlp/lexicon/LICENSES/* -text

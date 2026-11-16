@@ -1,0 +1,37 @@
+name: CPU release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  build:
+    uses: ./.github/workflows/cpu-build.yml
+    permissions:
+      contents: read
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: cpu-*
+          path: artifacts
+          merge-multiple: true
+      - name: Validate provenance, tag, versions, artifacts and release absence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+          EXPECTED_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/release/preflight.py artifacts
+      - name: Create release without replacing an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release create "$TAG_NAME" artifacts/* --verify-tag --title "$TAG_NAME" --notes "CPU rules and embedded dictionary. Formal model weights are not included."

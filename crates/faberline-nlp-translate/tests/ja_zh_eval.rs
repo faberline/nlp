@@ -17,7 +17,7 @@ use faberline_nlp_translate::{
     sha256_hex,
 };
 
-/// Allowed chrF drop (in chrF points, 0-100 scale) before the ratchet fails.
+/// Allowed chrF drop for keys other than overall and set/dev (points, 0-100 scale).
 const CHRF_TOLERANCE: f64 = 0.5;
 const MAX_NGRAM: usize = 6;
 const BETA: f64 = 2.0;
@@ -450,6 +450,39 @@ fn env_flag(name: &str) -> bool {
     std::env::var(name).is_ok_and(|v| !v.is_empty() && v != "0")
 }
 
+fn chrf_below_baseline(key: &str, now: f64, baseline: f64) -> bool {
+    if !now.is_finite() {
+        return true;
+    }
+    if matches!(key, "overall" | "set/dev") {
+        // Baselines are serialized to two decimals; compare at that same precision.
+        let reported_now: f64 = format!("{now:.2}")
+            .parse()
+            .expect("formatted finite chrF is a number");
+        reported_now < baseline
+    } else {
+        now + CHRF_TOLERANCE < baseline
+    }
+}
+
+#[test]
+fn aggregate_ratchet_uses_baseline_precision_and_other_keys_keep_tolerance() {
+    for key in ["overall", "set/dev"] {
+        assert!(chrf_below_baseline(key, 29.47, 29.48));
+        assert!(chrf_below_baseline(key, 29.38, 29.48));
+        assert!(!chrf_below_baseline(key, 29.476, 29.48));
+        assert!(!chrf_below_baseline(key, 29.48, 29.48));
+        assert!(!chrf_below_baseline(key, 29.49, 29.48));
+        assert!(chrf_below_baseline(key, f64::NAN, 29.48));
+        assert!(chrf_below_baseline(key, f64::INFINITY, 29.48));
+    }
+    for key in ["dev/case_particles", "set/test"] {
+        assert!(!chrf_below_baseline(key, 29.0, 29.5));
+        assert!(chrf_below_baseline(key, 28.99, 29.5));
+        assert!(chrf_below_baseline(key, f64::NAN, 29.5));
+    }
+}
+
 #[test]
 fn chrf_metric_sanity() {
     assert!((chrf("我去。", "我去。") - 100.0).abs() < 1e-9);
@@ -680,7 +713,7 @@ fn ja_zh_hant_challenge_ratchet() {
         let base = baseline.chrf[key];
         match current.get(key.as_str()) {
             None => failures.push(format!("{key}: missing from this run")),
-            Some(&now) if !now.is_finite() || now + CHRF_TOLERANCE < base => {
+            Some(&now) if chrf_below_baseline(key, now, base) => {
                 failures.push(format!("{key}: chrF {now:.2} < baseline {base:.2}"));
             }
             Some(_) => {}
@@ -688,7 +721,7 @@ fn ja_zh_hant_challenge_ratchet() {
     }
     assert!(
         failures.is_empty(),
-        "chrF ratchet failed (tolerance {CHRF_TOLERANCE}):\n{}",
+        "chrF ratchet failed (overall and set/dev must not drop at baseline precision; other keys allow {CHRF_TOLERANCE} points):\n{}",
         failures.join("\n")
     );
 }

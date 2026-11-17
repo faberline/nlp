@@ -121,6 +121,7 @@ pub(crate) fn translate_ja_sentence(
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let atoms = build_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     let atoms = normalize_keigo_atoms(&atoms);
+    let atoms = normalize_clock_atoms(&atoms);
 
     if atoms.is_empty() {
         let masked = lock_table.mask_span(chars, sent_span);
@@ -732,6 +733,242 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
     } else {
         out
     }
+}
+
+// Marker used only for atoms synthesized by the clock recognizer.  Protected
+// placeholders retain their own identity and are never classified by this marker.
+const CLOCK_ATOM: &str = "__ja_clock_atom";
+
+fn clock_number(text: &str) -> Option<u32> {
+    if text.is_empty() {
+        return None;
+    }
+    let normalized: String = text
+        .chars()
+        .map(|ch| match ch {
+            '０'..='９' => char::from_u32(ch as u32 - '０' as u32 + '0' as u32).unwrap_or(ch),
+            _ => ch,
+        })
+        .collect();
+    if normalized.chars().all(|ch| ch.is_ascii_digit()) {
+        return normalized.parse::<u32>().ok().filter(|&n| n <= 24);
+    }
+    fn digit(s: &str) -> Option<u32> {
+        match s {
+            "零" | "〇" => Some(0),
+            "一" => Some(1),
+            "二" => Some(2),
+            "三" => Some(3),
+            "四" => Some(4),
+            "五" => Some(5),
+            "六" => Some(6),
+            "七" => Some(7),
+            "八" => Some(8),
+            "九" => Some(9),
+            _ => None,
+        }
+    }
+    if let Some((tens, ones)) = normalized.split_once('十') {
+        if ones.contains('十') {
+            return None;
+        }
+        let tens = if tens.is_empty() { 1 } else { digit(tens)? };
+        let ones = if ones.is_empty() { 0 } else { digit(ones)? };
+        if tens == 0 || ones == 0 && !normalized.ends_with('十') {
+            return None;
+        }
+        return (tens * 10 + ones <= 24).then_some(tens * 10 + ones);
+    }
+    digit(&normalized)
+}
+
+fn clock_hour_text(hour: u32) -> String {
+    const HOURS: [&str; 25] = [
+        "零",
+        "一",
+        "兩",
+        "三",
+        "四",
+        "五",
+        "六",
+        "七",
+        "八",
+        "九",
+        "十",
+        "十一",
+        "十二",
+        "十三",
+        "十四",
+        "十五",
+        "十六",
+        "十七",
+        "十八",
+        "十九",
+        "二十",
+        "二十一",
+        "二十二",
+        "二十三",
+        "二十四",
+    ];
+    HOURS[hour as usize].to_owned()
+}
+
+// Accept a whole token sequence only. This rejects 時間, 時限, fractions,
+// counters and unsupported minutes instead of interpreting a prefix as a clock.
+fn render_clock_surface(text: &str) -> Option<(String, bool)> {
+    let (period, rest) = if let Some(s) = text.strip_prefix("午前") {
+        (Some("am"), s)
+    } else if let Some(s) = text.strip_prefix("午後") {
+        (Some("pm"), s)
+    } else {
+        (None, text)
+    };
+    let (number, suffix) = rest.split_once('時')?;
+    let (half, particle) = match suffix {
+        "" => (false, false),
+        "半" => (true, false),
+        "に" => (false, true),
+        "半に" => (true, true),
+        _ => return None,
+    };
+    let hour = clock_number(number)?;
+    if hour == 24 && (half || period.is_some()) {
+        return None;
+    }
+    if period.is_some() && hour > 12 {
+        return None;
+    }
+    if period == Some("am") && hour == 12 && half {
+        return Some(("十二點半（可能是中午，也可能是凌晨）".to_owned(), particle));
+    }
+    let (prefix, display_hour) = match (period, hour, half) {
+        (Some("am"), 0, _) => ("午夜", 0),
+        (Some("am"), 12, false) => ("中午", 12),
+        (Some("pm"), 0, _) => ("中午", 12),
+        (Some("pm"), 12, _) => ("午夜", 12),
+        (Some("am"), 1..=4, _) => ("凌晨", hour),
+        (Some("am"), _, _) => ("上午", hour),
+        (Some("pm"), _, _) => ("下午", hour),
+        _ => ("", hour),
+    };
+    Some((
+        format!(
+            "{prefix}{}點{}",
+            clock_hour_text(display_hour),
+            if half { "半" } else { "" }
+        ),
+        particle,
+    ))
+}
+
+// The same source clock can be one atom, several numeric atoms, or a final
+// 時に atom. Preserve a separate に so existing case rendering remains local.
+fn normalize_clock_atoms(atoms: &[Atom]) -> Vec<Atom> {
+    let mut out = Vec::with_capacity(atoms.len());
+    let mut i = 0;
+    while i < atoms.len() {
+        // A protected hour is opaque. The visible 時半 suffix establishes the
+        // clock shape without inspecting or translating the placeholder.
+        if atoms[i].is_locked && atoms[i].surface.starts_with("[[PH") {
+            let mut suffix = String::new();
+            let mut found = None;
+            for j in (i + 1)..atoms.len().min(i + 4) {
+                if atoms[j].is_locked || atoms[j - 1].span.end_char != atoms[j].span.start_char {
+                    break;
+                }
+                suffix.push_str(&atoms[j].surface);
+                if suffix == "時半" || suffix == "時半に" {
+                    found = Some((j, suffix.ends_with('に')));
+                }
+            }
+            if let Some((end, particle)) = found {
+                let last = &atoms[end];
+                let clock_end = last.span.end_char - usize::from(particle);
+                out.push(Atom {
+                    span: Span {
+                        start_char: atoms[i].span.start_char,
+                        end_char: clock_end,
+                    },
+                    surface: format!("{}時半", atoms[i].surface),
+                    lemma: Some(CLOCK_ATOM.to_owned()),
+                    upos: Some(Upos::Noun),
+                    doc_tok_idx: None,
+                    head: None,
+                    deprel: String::new(),
+                    is_locked: true,
+                });
+                if particle {
+                    out.push(Atom {
+                        span: Span {
+                            start_char: clock_end,
+                            end_char: last.span.end_char,
+                        },
+                        surface: "に".to_owned(),
+                        lemma: None,
+                        upos: Some(Upos::Adp),
+                        doc_tok_idx: last.doc_tok_idx,
+                        head: last.head,
+                        deprel: "case".to_owned(),
+                        is_locked: false,
+                    });
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        let mut joined = String::new();
+        let mut best = None;
+        for j in i..atoms.len().min(i + 6) {
+            let atom = &atoms[j];
+            if atom.is_locked || (j > i && atoms[j - 1].span.end_char != atom.span.start_char) {
+                break;
+            }
+            joined.push_str(&atom.surface);
+            if let Some((rendered, particle)) = render_clock_surface(&joined) {
+                best = Some((j, rendered, particle));
+            }
+            if joined.chars().count() > 12 {
+                break;
+            }
+        }
+        if let Some((end, rendered, particle)) = best {
+            let last = &atoms[end];
+            let clock_end = last.span.end_char - usize::from(particle);
+            out.push(Atom {
+                span: Span {
+                    start_char: atoms[i].span.start_char,
+                    end_char: clock_end,
+                },
+                surface: rendered,
+                lemma: Some(CLOCK_ATOM.to_owned()),
+                upos: Some(Upos::Noun),
+                doc_tok_idx: None,
+                head: None,
+                deprel: String::new(),
+                is_locked: true,
+            });
+            if particle {
+                out.push(Atom {
+                    span: Span {
+                        start_char: clock_end,
+                        end_char: last.span.end_char,
+                    },
+                    surface: "に".to_owned(),
+                    lemma: None,
+                    upos: Some(Upos::Adp),
+                    doc_tok_idx: last.doc_tok_idx,
+                    head: last.head,
+                    deprel: "case".to_owned(),
+                    is_locked: false,
+                });
+            }
+            i = end + 1;
+        } else {
+            out.push(atoms[i].clone());
+            i += 1;
+        }
+    }
+    out
 }
 
 fn build_sentence_atoms(
@@ -7016,6 +7253,8 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
             "と" | "とも" => BunsetsuRole::Other,
             _ => BunsetsuRole::Other,
         }
+    } else if atoms.iter().any(|a| a.lemma.as_deref() == Some(CLOCK_ATOM)) {
+        BunsetsuRole::Adv
     } else if is_det {
         BunsetsuRole::Other
     } else if frame_role == Some(FrameRole::Arg0) || deprel_hint == "nsubj" {
@@ -7124,7 +7363,8 @@ fn is_instrument_bunsetsu(atoms: &[Atom]) -> bool {
 }
 
 fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
-    is_place_location_bunsetsu(atoms)
+    atoms.iter().any(|a| a.lemma.as_deref() == Some(CLOCK_ATOM))
+        || is_place_location_bunsetsu(atoms)
         || atoms.iter().any(|a| {
             matches!(
                 a.surface.as_str(),
@@ -7165,6 +7405,105 @@ fn predicates_has_passive(predicates: &[Bunsetsu]) -> bool {
                     || a.surface.ends_with("された"))
         })
     })
+}
+
+#[cfg(test)]
+mod clock_rule_tests {
+    use super::{Atom, CLOCK_ATOM, clock_number, normalize_clock_atoms, render_clock_surface};
+    use faberline_nlp::{Span, doc::Upos};
+
+    fn atom(surface: &str, start: usize, locked: bool) -> Atom {
+        Atom {
+            span: Span {
+                start_char: start,
+                end_char: start + surface.chars().count(),
+            },
+            surface: surface.to_owned(),
+            lemma: None,
+            upos: Some(Upos::Noun),
+            doc_tok_idx: None,
+            head: None,
+            deprel: String::new(),
+            is_locked: locked,
+        }
+    }
+
+    #[test]
+    fn clock_numbers_and_half_are_bounded() {
+        assert_eq!(clock_number("二十三"), Some(23));
+        assert_eq!(clock_number("２４"), Some(24));
+        assert_eq!(clock_number("二十五"), None);
+        assert_eq!(
+            render_clock_surface("午後五時半に"),
+            Some(("下午五點半".to_owned(), true))
+        );
+        assert_eq!(
+            render_clock_surface("二十四時"),
+            Some(("二十四點".to_owned(), false))
+        );
+        assert_eq!(render_clock_surface("二十四時半"), None);
+        for non_clock in ["二時間半", "二時限", "半分", "先生に", "五時半分"] {
+            assert_eq!(render_clock_surface(non_clock), None, "{non_clock}");
+        }
+    }
+
+    #[test]
+    fn noon_midnight_and_uncertain_twelve_half_remain_distinct() {
+        assert_eq!(
+            render_clock_surface("午前十二時"),
+            Some(("中午十二點".to_owned(), false))
+        );
+        assert_eq!(
+            render_clock_surface("午後十二時"),
+            Some(("午夜十二點".to_owned(), false))
+        );
+        assert_eq!(
+            render_clock_surface("午前零時"),
+            Some(("午夜零點".to_owned(), false))
+        );
+        assert_eq!(
+            render_clock_surface("午後零時"),
+            Some(("中午十二點".to_owned(), false))
+        );
+        let ambiguous = render_clock_surface("午前十二時半").unwrap().0;
+        assert!(ambiguous.contains("中午") && ambiguous.contains("凌晨"));
+    }
+
+    #[test]
+    fn split_hour_and_particle_become_one_clock_without_swallowing_recipient() {
+        let input = vec![
+            atom("二", 0, false),
+            atom("十", 1, false),
+            atom("三時", 2, false),
+            atom("に", 4, false),
+            atom("先生", 5, false),
+        ];
+        let got = normalize_clock_atoms(&input);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].surface, "二十三點");
+        assert_eq!(got[0].lemma.as_deref(), Some(CLOCK_ATOM));
+        assert_eq!(got[1].surface, "に");
+        assert_eq!(got[2].surface, "先生");
+        let near = vec![atom("二", 0, false), atom("時限", 1, false)];
+        assert_eq!(normalize_clock_atoms(&near).len(), 2);
+    }
+
+    #[test]
+    fn protected_hour_stays_exact_and_unrelated_lock_is_untouched() {
+        let mut protected = atom("[[PH0]]", 0, true);
+        protected.span.end_char = 1; // Span is in the source, not placeholder bytes.
+        let got = normalize_clock_atoms(&[
+            protected.clone(),
+            atom("時半", 1, false),
+            atom("に", 3, false),
+        ]);
+        assert_eq!(got[0].surface, "[[PH0]]時半");
+        assert_eq!(got[0].lemma.as_deref(), Some(CLOCK_ATOM));
+        assert_eq!(got[1].surface, "に");
+        let untouched = normalize_clock_atoms(&[protected, atom("に", 1, false)]);
+        assert_eq!(untouched[0].surface, "[[PH0]]");
+        assert_eq!(untouched[0].lemma, None);
+    }
 }
 
 #[cfg(test)]

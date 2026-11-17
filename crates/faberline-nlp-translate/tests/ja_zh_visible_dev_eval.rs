@@ -1,4 +1,4 @@
-//! Report-only similarity for two adopted, development-visible banks.
+//! Report-only similarity for three adopted, development-visible banks.
 #[path = "support/ja_zh_chrf.rs"]
 mod ja_zh_chrf;
 
@@ -19,9 +19,11 @@ struct Spec<'a> {
     sha256: &'a str,
     count: usize,
     level_field: &'a str,
+    expected: fn() -> BTreeMap<String, String>,
+    row_provenance: bool,
 }
 
-const BANKS: [Spec<'static>; 2] = [
+const BANKS: [Spec<'static>; 3] = [
     Spec {
         name: "nlevels_dev_v1",
         file: "nlevels_dev_v1.json",
@@ -29,6 +31,8 @@ const BANKS: [Spec<'static>; 2] = [
         sha256: "a24d91502b3d361eec1ff2bf97381d0accbf27d7516ba2188e77b3b4e96695c0",
         count: 20,
         level_field: "level",
+        expected: original_membership,
+        row_provenance: true,
     },
     Spec {
         name: "honorific_san_dev_v1",
@@ -37,8 +41,52 @@ const BANKS: [Spec<'static>; 2] = [
         sha256: "870e9e759b65d9f75c277517792315f1cbd0b63ae147c5685690f0eab4f62177",
         count: 12,
         level_field: "level_approx",
+        expected: honorific_membership,
+        row_provenance: false,
+    },
+    Spec {
+        name: "nlevels_expansion_dev_v1",
+        file: "nlevels_expansion_dev_v1.json",
+        schema: "faberline.nlp.ja_zh.nlevels_expansion_dev.v1",
+        sha256: "22d0753fd384ae5f07a118c6417c53b213cc66c1637a8369b8c0315e69ab4fcc",
+        count: 50,
+        level_field: "level_approx",
+        expected: expansion_membership,
+        row_provenance: true,
     },
 ];
+
+fn original_membership() -> BTreeMap<String, String> {
+    (1..=5)
+        .flat_map(|level| (1..=4).map(move |n| (format!("L{level}-{n:02}"), format!("N{level}"))))
+        .collect()
+}
+
+fn honorific_membership() -> BTreeMap<String, String> {
+    (1..=12)
+        .map(|n| {
+            (
+                format!("HS-{n:02}"),
+                if (3..=8).contains(&n) { "N4" } else { "N5" }.to_owned(),
+            )
+        })
+        .collect()
+}
+
+fn expansion_membership() -> BTreeMap<String, String> {
+    (1..=5)
+        .flat_map(|level| {
+            (1..=10).map(move |n| {
+                let id = if level <= 2 {
+                    format!("N{level}-D{n:02}")
+                } else {
+                    format!("N{level}X-{n:02}")
+                };
+                (id, format!("N{level}"))
+            })
+        })
+        .collect()
+}
 
 struct Row {
     id: String,
@@ -75,6 +123,13 @@ fn validate_bank(text: &str, spec: &Spec<'_>) -> Result<Vec<Row>, &'static str> 
     if root.get("schema").and_then(Value::as_str) != Some(spec.schema) {
         return Err("bank schema mismatch");
     }
+    if root
+        .pointer("/provenance/data_license")
+        .and_then(Value::as_str)
+        != Some("first_party_mit")
+    {
+        return Err("invalid bank licence or provenance");
+    }
     let items = root
         .get("items")
         .and_then(Value::as_array)
@@ -96,6 +151,9 @@ fn validate_bank(text: &str, spec: &Spec<'_>) -> Result<Vec<Row>, &'static str> 
         if !ids.insert(id.to_owned()) {
             return Err("duplicate id");
         }
+        if spec.row_provenance && !nonempty(item, "provenance")?.contains("first_party_mit") {
+            return Err("invalid row provenance");
+        }
         let variants = item
             .get("allowed_variants")
             .and_then(Value::as_array)
@@ -114,6 +172,13 @@ fn validate_bank(text: &str, spec: &Spec<'_>) -> Result<Vec<Row>, &'static str> 
             reference: nonempty(item, "zh_hant")?.to_owned(),
         });
     }
+    let actual: BTreeMap<String, String> = rows
+        .iter()
+        .map(|r| (r.id.clone(), r.level.clone()))
+        .collect();
+    if actual != (spec.expected)() {
+        return Err("bank ID or level membership mismatch");
+    }
     let by_id: HashMap<&str, &Row> = rows.iter().map(|r| (r.id.as_str(), r)).collect();
     for row in &rows {
         let partner = by_id.get(row.pair.as_str()).ok_or("missing pair")?;
@@ -122,6 +187,24 @@ fn validate_bank(text: &str, spec: &Spec<'_>) -> Result<Vec<Row>, &'static str> 
         }
     }
     Ok(rows)
+}
+
+fn load_banks<'a>(
+    specs: &'a [Spec<'a>],
+    mut read: impl FnMut(&str) -> Result<String, &'static str>,
+) -> Result<Vec<(&'a Spec<'a>, Vec<Row>)>, &'static str> {
+    let mut loaded = Vec::new();
+    let mut ids = HashSet::new();
+    for spec in specs {
+        let rows = validate_bank(&read(spec.file)?, spec)?;
+        for row in &rows {
+            if !ids.insert(row.id.clone()) {
+                return Err("duplicate ID across banks");
+            }
+        }
+        loaded.push((spec, rows));
+    }
+    Ok(loaded)
 }
 
 #[derive(Default)]
@@ -150,12 +233,10 @@ impl Aggregate {
 #[test]
 fn adopted_banks_report_only() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/ja_zh");
-    let mut loaded = Vec::new();
-    for spec in &BANKS {
-        let text = std::fs::read_to_string(dir.join(spec.file)).expect("read adopted bank");
-        let rows = validate_bank(&text, spec).expect("validate adopted bank");
-        loaded.push((spec, rows));
-    }
+    let loaded = load_banks(&BANKS, |file| {
+        std::fs::read_to_string(dir.join(file)).map_err(|_| "cannot read adopted bank")
+    })
+    .expect("load all adopted banks");
     let rev = Command::new("git")
         .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -173,6 +254,8 @@ fn adopted_banks_report_only() {
     );
     let options = TranslateOptions::new(TargetVariant::ZhHant);
     let glossary = TranslationGlossary::new();
+    let mut executed = HashSet::new();
+    let mut overall: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for (spec, rows) in loaded {
         println!(
             "report-only/{}/metadata\tbank_sha256={}\treference=primary-only",
@@ -180,7 +263,20 @@ fn adopted_banks_report_only() {
         );
         let mut total = Aggregate::default();
         let mut levels: BTreeMap<String, Aggregate> = BTreeMap::new();
+        let mut members: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for row in rows {
+            assert!(
+                executed.insert(row.id.clone()),
+                "row evaluated more than once"
+            );
+            members
+                .entry(row.level.clone())
+                .or_default()
+                .push(row.id.clone());
+            overall
+                .entry(row.level.clone())
+                .or_default()
+                .push(row.id.clone());
             let result =
                 analyze_and_translate(&row.source, &options, &glossary, None, Backend::Onnx)
                     .unwrap_or_else(|_| panic!("translation failed in {}", spec.name));
@@ -192,11 +288,30 @@ fn adopted_banks_report_only() {
             total.add(score, exact);
             levels.entry(row.level).or_default().add(score, exact);
         }
+        for (level, ids) in &mut members {
+            ids.sort();
+            println!(
+                "report-only/{}/{level}/members\tn={}\tids={}",
+                spec.name,
+                ids.len(),
+                ids.join(",")
+            );
+        }
         total.print(&format!("{}/all", spec.name));
         for (level, aggregate) in levels {
             aggregate.print(&format!("{}/{level}", spec.name));
         }
     }
+    assert_eq!(executed.len(), BANKS.iter().map(|s| s.count).sum::<usize>());
+    for (level, ids) in &mut overall {
+        ids.sort();
+        println!(
+            "report-only/all/{level}/members\tn={}\tids={}",
+            ids.len(),
+            ids.join(",")
+        );
+    }
+    println!("report-only/all/count\tn={}", executed.len());
 }
 
 #[cfg(test)]
@@ -205,10 +320,18 @@ mod validation_tests {
     use serde_json::json;
 
     fn fixture() -> Value {
-        json!({"schema":"toy", "items":[
+        json!({"schema":"toy", "provenance":{"data_license":"first_party_mit"}, "items":[
             {"id":"a","pair":"b","level":"N5 approx","jp":"a","zh_hant":"a","allowed_variants":[],"visibility":"development-visible","heldout":false},
             {"id":"b","pair":"a","level":"N5 approx","jp":"b","zh_hant":"b","allowed_variants":[],"visibility":"development-visible","heldout":false}
         ]})
+    }
+    fn toy_membership() -> BTreeMap<String, String> {
+        [
+            ("a".to_owned(), "N5".to_owned()),
+            ("b".to_owned(), "N5".to_owned()),
+        ]
+        .into_iter()
+        .collect()
     }
     fn check(v: &Value, expected_count: usize, schema: &str, expected_hash: Option<&str>) -> bool {
         let text = v.to_string();
@@ -220,6 +343,8 @@ mod validation_tests {
             sha256: &hash,
             count: expected_count,
             level_field: "level",
+            expected: toy_membership,
+            row_provenance: false,
         };
         validate_bank(&text, &spec).is_ok()
     }
@@ -242,6 +367,13 @@ mod validation_tests {
             modified["items"][0][field] = value;
             assert!(!check(&modified, 2, "toy", None));
         }
+        let mut wrong_id = base.clone();
+        wrong_id["items"][0]["id"] = json!("c");
+        wrong_id["items"][1]["pair"] = json!("c");
+        assert!(!check(&wrong_id, 2, "toy", None));
+        let mut wrong_licence = base.clone();
+        wrong_licence["provenance"]["data_license"] = json!("unknown");
+        assert!(!check(&wrong_licence, 2, "toy", None));
         let mut missing_reference = base.clone();
         missing_reference["items"][0]
             .as_object_mut()
@@ -249,7 +381,53 @@ mod validation_tests {
             .remove("zh_hant");
         assert!(!check(&missing_reference, 2, "toy", None));
         let mut different_level = base.clone();
+        different_level["items"][0]["level"] = json!("N4");
         different_level["items"][1]["level"] = json!("N4");
         assert!(!check(&different_level, 2, "toy", None));
+    }
+    #[test]
+    fn missing_bank_and_cross_bank_collision_fail_closed() {
+        let text = fixture().to_string();
+        let hash = sha256_hex(&text);
+        let spec = || Spec {
+            name: "toy",
+            file: "toy",
+            schema: "toy",
+            sha256: &hash,
+            count: 2,
+            level_field: "level",
+            expected: toy_membership,
+            row_provenance: false,
+        };
+        let specs = [spec(), spec()];
+        assert!(load_banks(&specs, |_| Err("missing")).is_err());
+        assert!(load_banks(&specs, |_| Ok(text.clone())).is_err());
+    }
+
+    #[test]
+    fn row_provenance_is_required_when_declared() {
+        let mut v = fixture();
+        let text = v.to_string();
+        let hash = sha256_hex(&text);
+        let spec = Spec {
+            name: "toy",
+            file: "toy",
+            schema: "toy",
+            sha256: &hash,
+            count: 2,
+            level_field: "level",
+            expected: toy_membership,
+            row_provenance: true,
+        };
+        assert!(validate_bank(&text, &spec).is_err());
+        v["items"][0]["provenance"] = json!("first_party_mit");
+        v["items"][1]["provenance"] = json!("first_party_mit");
+        let text = v.to_string();
+        let hash = sha256_hex(&text);
+        let spec = Spec {
+            sha256: &hash,
+            ..spec
+        };
+        assert!(validate_bank(&text, &spec).is_ok());
     }
 }

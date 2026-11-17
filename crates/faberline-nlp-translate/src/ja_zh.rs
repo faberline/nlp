@@ -4456,6 +4456,7 @@ fn finite_predicate_atoms(b: &Bunsetsu) -> Vec<&Atom> {
                     | "でも"
                     | "としても"
                     | "くせに"
+                    | "が"
                     | "と"
             );
         let handled_sfp = b.sfp_tail.as_deref() == Some(last.surface.as_str())
@@ -4585,11 +4586,38 @@ fn translate_clause_bunsetsus(
     let mut is_toshitemo_clause = false;
     let mut has_competing_transfer_recipient = false;
 
-    let candidates: Vec<Bunsetsu> = bunsetsus
+    let mut candidates: Vec<Bunsetsu> = bunsetsus
         .iter()
         .filter(|b| b.role == BunsetsuRole::Predicate)
         .cloned()
         .collect();
+    // Interpret a source-linked terminal が on a clone first. Do not mutate
+    // clause metadata until every standalone existential guard has passed.
+    let mut candidate_contrast = false;
+    if candidates.len() == 1
+        && bunsetsus
+            .last()
+            .is_some_and(|b| b.role == BunsetsuRole::Predicate)
+    {
+        let b = &mut candidates[0];
+        let predicate_idx = b
+            .atoms
+            .iter()
+            .find(|a| {
+                !a.is_locked && a.lemma.as_deref() == Some("いる") && a.upos == Some(Upos::Verb)
+            })
+            .and_then(|a| a.doc_tok_idx);
+        candidate_contrast = matches!(b.sconj_tail.as_deref(), None | Some("が"))
+            && b.atoms.last().is_some_and(|a| {
+                !a.is_locked
+                    && a.surface == "が"
+                    && predicate_idx.is_some()
+                    && a.head == predicate_idx
+            });
+        if candidate_contrast {
+            b.sconj_tail = Some("が".to_owned());
+        }
+    }
     let predicate_idx = candidates
         .first()
         .and_then(|b| {
@@ -4615,7 +4643,8 @@ fn translate_clause_bunsetsus(
         .filter(|b| b.role == BunsetsuRole::Subj)
         .count();
     let animate_existential = standalone_iru_nonpast(&candidates).filter(|_| {
-        linked == 1
+        (candidates[0].sconj_tail.as_deref() != Some("が") || candidate_contrast)
+            && linked == 1
             && ni_count == 1
             && subject_count == 1
             && !bunsetsus.iter().any(|b| b.role == BunsetsuRole::Obj)
@@ -4629,6 +4658,15 @@ fn translate_clause_bunsetsus(
                 .flat_map(|b| &b.atoms)
                 .any(|a| !a.is_locked && a.upos == Some(Upos::Verb))
     });
+    let animate_contrast = animate_existential.is_some() && candidate_contrast;
+    if animate_contrast {
+        if let Some(b) = bunsetsus.last_mut() {
+            b.sconj_tail = Some("が".to_owned());
+            if b.case_particle.as_deref() == Some("が") {
+                b.case_particle = None;
+            }
+        }
+    }
 
     let absence_predicate_idx = candidates.first().and_then(|b| {
         b.atoms
@@ -4715,6 +4753,7 @@ fn translate_clause_bunsetsus(
                 "てから" => sconj_suffix = Some("後"),
                 "から" | "ので" => sconj_prefix = Some("因為"),
                 "からといって" => sconj_prefix = Some("即便因為"),
+                "が" if animate_contrast => sconj_prefix = Some("雖然"),
                 "けれど" | "けれども" | "けど" | "のに" => sconj_suffix = Some("，但是"),
                 "だけど" => sconj_suffix = Some("，不過"),
                 "し" => sconj_suffix = Some("，而且"),
@@ -9711,6 +9750,14 @@ mod existence_rule_tests {
             atom("だけ", None, Upos::Part, 3),
         ]);
         assert_eq!(standalone_iru_nonpast(&[unknown]), None);
+        let mut contrast = predicate(vec![
+            base.clone(),
+            atom("ます", None, Upos::Aux, 1),
+            atom("が", None, Upos::Adp, 3),
+        ]);
+        assert_eq!(standalone_iru_nonpast(&[contrast.clone()]), None);
+        contrast.sconj_tail = Some("が".to_owned());
+        assert_eq!(standalone_iru_nonpast(&[contrast]), Some(false));
         let action = predicate(vec![
             atom("走っ", Some("走る"), Upos::Verb, 0),
             atom("て", None, Upos::Sconj, 2),
@@ -9738,7 +9785,8 @@ mod existence_rule_tests {
         assert!(existential_location_link(&b, 2));
         assert!(!existential_location_link(&b, 3));
         let mut clock = b.clone();
-        clock.atoms[0] = atom("二時", None, Upos::Noun, 0);
+        // normalize_clock_atoms emits CLOCK_ATOM for a recognized clock.
+        clock.atoms[0] = atom("二時", Some(CLOCK_ATOM), Upos::Noun, 0);
         clock.atoms[0].doc_tok_idx = Some(0);
         clock.atoms[0].head = Some(2);
         clock.atoms[0].deprel = "obl".to_owned();
@@ -9854,6 +9902,10 @@ mod existence_rule_tests {
             let text = translate(source, &glossary).target_text;
             let clauses: Vec<&str> = text.split('，').collect();
             assert_eq!(clauses.len(), 2, "{text}");
+            assert!(
+                clauses[0].contains("雖然") || clauses[1].contains('但'),
+                "{text}"
+            );
             assert!(
                 clauses[0].contains('貓') && clauses[0].contains('庭'),
                 "{text}"

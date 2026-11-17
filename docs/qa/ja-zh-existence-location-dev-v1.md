@@ -10,7 +10,7 @@ This data-only proposal contains ten first-party cases. The Japanese and complet
 | EL-R01 / EL-R02 | Same shelf-top relation and box; past absence versus past placing action. The actor in the second case is implicit. |
 | EL-G01 / EL-G02 | A typed glossary place participates in existence; a typed glossary actor is a recipient of an action. |
 | EL-O01 / EL-O02 | An opaque participant is absent; the same opaque literal is a recipient of an action. Its content has no assumed meaning. |
-| EL-S01 / EL-S02 | Both clauses reverse polarity; negation stays with its own predicate. |
+| EL-S01 / EL-S02 | Both clauses reverse polarity; negation stays with its own predicate. The source does not establish a relationship between the dog’s road and the cat’s yard. |
 
 EL-R01 explicitly anchors past time in the reference. EL-G02 uses a gender-neutral target name for the recipient. EL-S01 and EL-S02 preserve the nonpast action contrast without asserting ability or completed action.
 

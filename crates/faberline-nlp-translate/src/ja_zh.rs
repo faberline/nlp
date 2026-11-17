@@ -4888,8 +4888,8 @@ fn translate_clause_bunsetsus(
         parts.push("卻".to_owned());
     }
 
-    // Only a present polite negative question has the invitation form.
-    let polite_invitation = sfp_suffix == Some("嗎")
+    // This form can be an invitation or a negative question. Preserve both.
+    let polite_negative_question = sfp_suffix == Some("嗎")
         && raw_clause
             .trim_end_matches(['。', '？', '?'])
             .ends_with("ませんか")
@@ -4903,7 +4903,7 @@ fn translate_clause_bunsetsus(
             .iter()
             .any(|m| matches!(m.as_str(), "不" | "沒有"));
     // Limit the added time ordering to the same endpoint rule as the motion.
-    let has_spatial_made = (!negative_go || polite_invitation)
+    let has_spatial_made = (!negative_go || polite_negative_question)
         && !has_causative
         && !passive_agent_needed
         && objs.is_empty()
@@ -4920,18 +4920,6 @@ fn translate_clause_bunsetsus(
         }
         adverbs = remaining;
     }
-    // A polite negative question can invite the listener to travel together.
-    // Keep this interpretation inside the bounded endpoint rule.
-    let made_invitation = has_spatial_made && polite_invitation;
-    if made_invitation {
-        sfp_suffix = Some("好嗎");
-        for modal in &mut inner_pre_mods {
-            if modal == "不" {
-                *modal = "一起".to_owned();
-            }
-        }
-    }
-
     let has_front_modal = !front_modals.is_empty();
     let mut manner_adverbs = Vec::new();
     if !has_front_modal {
@@ -5020,7 +5008,7 @@ fn translate_clause_bunsetsus(
     parts.extend(manner_adverbs);
     parts.extend(pre_iobjs);
     parts.extend(others);
-    let preserve_go = made_invitation || inner_pre_mods.iter().any(|m| m == "想");
+    let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
     parts.extend(transfer_prefix);
     // 到 already expresses the destination relation of bare 去. Other motion
@@ -7199,13 +7187,25 @@ mod motion_endpoint_tests {
     }
 
     #[test]
-    fn wishes_and_invitations_keep_the_direction() {
+    fn wishes_and_negative_questions_keep_the_direction() {
         assert_eq!(translate("駅まで行きたいです。"), "想去車站。");
         assert_eq!(translate("公園まで行きたいです。"), "想去公園。");
         assert_eq!(translate("公園まで走りたいです。"), "想跑到公園。");
-        assert_eq!(translate("駅まで行きませんか。"), "一起去車站好嗎。");
-        assert_eq!(translate("公園まで行きませんか。"), "一起去公園好嗎。");
-        assert_eq!(translate("公園まで走りませんか。"), "一起跑到公園好嗎。");
+        assert_eq!(translate("駅まで行きませんか。"), "不去車站嗎。");
+        assert_eq!(translate("公園まで行きませんか。"), "不去公園嗎。");
+        assert_eq!(translate("公園まで走りませんか。"), "不跑到公園嗎。");
+    }
+
+    #[test]
+    fn negative_questions_keep_nonhuman_subjects() {
+        assert_eq!(
+            translate("このバスは駅まで行きませんか。"),
+            "這個的公車不去車站嗎。"
+        );
+        assert_eq!(
+            translate("この電車は駅まで行きませんか。"),
+            "這個的電車不去車站嗎。"
+        );
     }
 
     #[test]
@@ -7235,6 +7235,12 @@ mod motion_endpoint_tests {
         );
         let reversed_source_order = translate("バスで駅まで行った。");
         assert!(reversed_source_order.contains("坐公車到車站"));
+    }
+
+    #[test]
+    fn time_ordering_remains_bounded_to_spatial_motion() {
+        assert_eq!(translate("毎朝新聞を読む。"), "每天早上讀報紙。");
+        assert_eq!(translate("毎晩本を読む。"), "每晚讀書。");
     }
 
     #[test]

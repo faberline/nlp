@@ -1117,16 +1117,15 @@ fn normalize_clock_atoms(atoms: &[Atom]) -> Vec<Atom> {
                     found = Some((j, suffix.ends_with('に')));
                 }
             }
-            if let Some((end, particle)) = found {
-                if !particle
-                    && atoms.get(end + 1).is_some_and(|next| {
-                        atoms[end].span.end_char == next.span.start_char
-                            && !next.is_locked
-                            && next.surface.starts_with('分')
-                    })
-                {
-                    found = None;
-                }
+            if let Some((end, particle)) = found
+                && !particle
+                && atoms.get(end + 1).is_some_and(|next| {
+                    atoms[end].span.end_char == next.span.start_char
+                        && !next.is_locked
+                        && next.surface.starts_with('分')
+                })
+            {
+                found = None;
             }
             if let Some((end, particle)) = found {
                 let last = &atoms[end];
@@ -1178,14 +1177,16 @@ fn normalize_clock_atoms(atoms: &[Atom]) -> Vec<Atom> {
                 break;
             }
         }
-        if let Some((end, _, particle)) = &best {
-            if !particle && atoms.get(end + 1).is_some_and(|next| {
+        if let Some((end, _, particle)) = &best
+            && !particle && atoms.get(end + 1).is_some_and(|next| {
                 atoms[*end].span.end_char == next.span.start_char
                     && !next.is_locked
                     && next.surface.chars().next().is_some_and(|ch| {
                         matches!(ch, '間' | '限' | '分' | '半' | '０'..='９' | '0'..='9' | '零' | '〇' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十')
                     })
-            }) { best = None; }
+            })
+        {
+            best = None;
         }
         if let Some((end, rendered, particle)) = best {
             let last = &atoms[end];

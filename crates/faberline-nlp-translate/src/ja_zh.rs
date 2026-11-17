@@ -1038,6 +1038,22 @@ fn preserve_clock_adjacent_locks(atoms: &[Atom], doc: &Document, sentence_idx: u
     let mut i = 0;
     while i < atoms.len() {
         let a = &atoms[i];
+        // A visible period and an opaque hour form one ordered clock phrase.
+        // Preserve the period text: the protected hour might be a boundary.
+        if !a.is_locked
+            && matches!(a.surface.as_str(), "午前" | "午後")
+            && let Some(next) = atoms.get(i + 1)
+            && a.span.end_char == next.span.start_char
+            && next.lemma.as_deref() == Some(CLOCK_ATOM)
+            && next.surface.starts_with("[[PH")
+        {
+            let mut joined = next.clone();
+            joined.span.start_char = a.span.start_char;
+            joined.surface = format!("{}{}", a.surface, next.surface);
+            out.push(joined);
+            i += 2;
+            continue;
+        }
         let opaque = a.is_locked && a.surface.starts_with("[[PH") && a.lemma.is_none();
         if opaque
             && (i == 0 || atoms[i - 1].surface == "は")
@@ -5139,7 +5155,7 @@ fn translate_clause_bunsetsus(
     if is_goal_verb {
         let mut kept_obls = Vec::new();
         for o in obliques.drain(..) {
-            if o.case_particle.as_deref() == Some("に") {
+            if o.case_particle.as_deref() == Some("に") && !o.is_clock {
                 let raw_np = o
                     .text
                     .strip_prefix('在')
@@ -7853,9 +7869,25 @@ mod clock_rule_tests {
         );
         let partial = public_translate("会議は午後`二`時半に始まります。", &glossary);
         assert!(
-            partial.target_text.contains("`二`時半"),
+            partial.target_text.contains("午後`二`時半"),
             "{}",
             partial.target_text
+        );
+        assert!(
+            partial.target_text.find("午後`二`時半") < partial.target_text.find("開始"),
+            "{}",
+            partial.target_text
+        );
+        let period = public_translate("会議は`午後`二時半に始まります。", &glossary);
+        assert!(
+            period.target_text.contains("`午後`兩點半"),
+            "{}",
+            period.target_text
+        );
+        assert!(
+            period.target_text.find("`午後`兩點半") < period.target_text.find("開始"),
+            "{}",
+            period.target_text
         );
         let topic = public_translate("`会議は`午後二時半に始まります。", &glossary);
         assert!(

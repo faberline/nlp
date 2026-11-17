@@ -38,7 +38,7 @@ const BANKS: [Spec<'static>; 3] = [
         name: "honorific_san_dev_v1",
         file: "honorific_san_dev_v1.json",
         schema: "faberline.nlp.ja_zh.honorific_san_dev.v1",
-        sha256: "870e9e759b65d9f75c277517792315f1cbd0b63ae147c5685690f0eab4f62177",
+        sha256: "280da5014f9069994bce1f23e8cdc10c3cad3200450278c9b4e3618231134229",
         count: 12,
         level_field: "level_approx",
         expected: honorific_membership,

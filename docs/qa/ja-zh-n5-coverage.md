@@ -4,12 +4,14 @@ This record fixes the current N5 seed entries for later planning. It does not de
 
 ## Source and adopted banks
 
-The source is main commit `7edd2e03468b3f2f02cd20d33cdff2acda21005c`, tree `7e1b428ede304e8be37b0d0a80d4050c729a0c16`.
+The historical inventory source is main commit `7edd2e03468b3f2f02cd20d33cdff2acda21005c`, tree `7e1b428ede304e8be37b0d0a80d4050c729a0c16`. The table records that snapshot. Its さん bank hash is the original, not the later metadata revision.
 
 | Adopted bank | Source file | Schema and version | Rows | SHA-256 | Licence | Adoption record |
 |---|---|---|---:|---|---|---|
 | N1–N5 development bank | [nlevels_dev_v1.json](../../crates/faberline-nlp-translate/tests/data/ja_zh/nlevels_dev_v1.json) | `faberline.nlp.ja_zh.nlevels_dev.v1`, `1.0.0-dev.1` | 20 | `a24d91502b3d361eec1ff2bf97381d0accbf27d7516ba2188e77b3b4e96695c0` | `first_party_mit` | [PR #71](https://github.com/faberline/nlp/pull/71), merged |
-| Neutral `さん` development bank | [honorific_san_dev_v1.json](../../crates/faberline-nlp-translate/tests/data/ja_zh/honorific_san_dev_v1.json) | `faberline.nlp.ja_zh.honorific_san_dev.v1`, `1.0.0` | 12 | `870e9e759b65d9f75c277517792315f1cbd0b63ae147c5685690f0eab4f62177` | `first_party_mit` | [PR #73](https://github.com/faberline/nlp/pull/73), merged |
+| Neutral `さん` development bank | [honorific_san_dev_v1.json at 7edd2e](https://github.com/faberline/nlp/blob/7edd2e03468b3f2f02cd20d33cdff2acda21005c/crates/faberline-nlp-translate/tests/data/ja_zh/honorific_san_dev_v1.json) | `faberline.nlp.ja_zh.honorific_san_dev.v1`, `1.0.0` | 12 | `870e9e759b65d9f75c277517792315f1cbd0b63ae147c5685690f0eab4f62177` | `first_party_mit` | [PR #73](https://github.com/faberline/nlp/pull/73), merged |
+
+The [current metadata revision](../../crates/faberline-nlp-translate/tests/data/ja_zh/honorific_san_dev_v1.json) of the 12-row さん bank has SHA-256 `280da5014f9069994bce1f23e8cdc10c3cad3200450278c9b4e3618231134229`. It changes pair descriptions only. The preceding main `0996e8bad59175d1e71529568486b85c7f3c102b` still has the original hash in the table. The report-only evaluator binds the current file hash. Its review and adoption are recorded by [issue #121](https://github.com/faberline/nlp/issues/121) and its separate PR.
 
 [PR #78](https://github.com/faberline/nlp/pull/78) reports adopted development-bank counts by approximate level. The public PR links record the changes. Their author heads are not merge commit IDs.
 
@@ -35,7 +37,7 @@ Use these ten IDs, in this order, as the current N5 seed. The L5 IDs come from [
 | L5-03 | Keep the named traveler, yesterday, past travel, and school destination. Add no gender. | Positive member of the L5-03/L5-04 past-polarity pair. It does not contrast destination with origin or location. |
 | L5-04 | Keep the named traveler, yesterday, past negation, and school destination. Add no gender. | Negative member of that pair. It does not test other destinations or routes. |
 | HS-01 | Keep the named person as presently at the reception desk. Preserve positive present existence/location. Add no gender or gendered title. | HS-02 changes polarity and changes `が` to `は`, so the pair is not minimal and does not isolate polarity. |
-| HS-02 | Keep the named person as not being at the reception desk now. Do not imply that the person does not exist elsewhere. Add no gender. | The existing pair reason says only polarity changes, but `が` also changes to `は`. Both rows use a personal-name honorific; neither is a near-negative control for that behavior. [Issue #121](https://github.com/faberline/nlp/issues/121) owns review of this metadata. |
+| HS-02 | Keep the named person as not being at the reception desk now. Do not imply that the person does not exist elsewhere. Add no gender. | Both rows use a personal-name honorific, so both are positive examples for that behavior. They also change polarity and `が` to `は`. Neither is a feature-specific near-negative control. |
 | HS-09 | Keep the mother relationship, evening time, return, and home destination. | Near-negative lexical control: `さん` is part of a kinship term, not a personal-name suffix. Not a matched name pair. |
 | HS-10 | Keep the clerk as actor, the order as object, confirmation, and past time. Add no direction or gender. | Near-negative role control: `さん` follows an occupation. Not a minimal contrast with a personal-name sentence. |
 | HS-11 | Keep the saury identity (秋刀魚), grilling action, dinner, and past event. Treat the whole ordinary word as lexical content. | Near-negative substring control: the word contains `さん`, but it is not an honorific. Sentence structure differs from HS-12. |
@@ -59,9 +61,9 @@ These tags may overlap. They describe this seed only. They are not new exclusive
 
 ## Data and rule boundaries
 
-Data adoption is separate from engineering. [Issue #86](https://github.com/faberline/nlp/issues/86) reviews the existing, still-unadopted PR #74 proposal only. Do not count or execute its rows before adoption. [Issue #93](https://github.com/faberline/nlp/issues/93) splits observed rule roots. [Issue #95](https://github.com/faberline/nlp/issues/95) owns lexicon work; it does not authorize evaluation data in a lexicon change.
+Data adoption is separate from engineering. At the historical inventory source, the PR #74 proposal was not adopted. [Issue #86](https://github.com/faberline/nlp/issues/86) records its review and current status. Do not count or execute its rows before adoption. [Issue #93](https://github.com/faberline/nlp/issues/93) splits observed rule roots. [Issue #95](https://github.com/faberline/nlp/issues/95) owns lexicon work; it does not authorize evaluation data in a lexicon change.
 
-Two queued data follow-ups were identified, but are not implemented here: [#120](https://github.com/faberline/nlp/issues/120) covers explicit numbers and calendar dates after #85 and #86; [#121](https://github.com/faberline/nlp/issues/121) reviews existing `さん` control metadata after #85. Issue #121 must preserve labels, content, and IDs. Any proposed reclassification needs a separate versioned proposal.
+The queued data follow-up [#120](https://github.com/faberline/nlp/issues/120) covers explicit numbers and calendar dates after #85 and #86. [#121](https://github.com/faberline/nlp/issues/121) reviews existing `さん` control metadata. Its revision preserves labels, content, and IDs. Any proposed reclassification needs a separate versioned proposal.
 
 [Issue #89](https://github.com/faberline/nlp/issues/89) owns standing-reference triage. [Issue #90](https://github.com/faberline/nlp/issues/90) owns adoption of the separate grouping map. Keep the original 24 evaluation rules, baseline, and ratchet unchanged. A new data author must differ from the rule author. Sentences and references must be first-party work, use MIT, Apache-2.0, Unicode-3.0, or public-domain data, and be independently reviewed and adopted in a data-only PR before a rule that uses them is measured.
 

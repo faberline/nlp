@@ -29,7 +29,7 @@
         "不增譯先生、小姐、女士或其他性別稱謂"
       ],
       "pair": "HS-02",
-      "pair_reason": "同一姓名和地點，配對否定句，檢查 さん 的性別中立處理不改變否定。",
+      "pair_reason": "與 HS-02 同用姓名後接 さん，都是姓名敬稱處理的正例；兩句同時改變肯定／否定和 が／は，不能單獨隔離否定。",
       "visibility": "development-visible",
       "heldout": false
     },
@@ -47,7 +47,7 @@
         "不從 さん 推斷性別"
       ],
       "pair": "HS-01",
-      "pair_reason": "與 HS-01 只改變肯定／否定；一般化規則應保留否定。",
+      "pair_reason": "與 HS-01 同用姓名後接 さん，都是姓名敬稱處理的正例；兩句同時改變肯定／否定和 が／は，並非只改變否定。",
       "visibility": "development-visible",
       "heldout": false
     },
@@ -102,7 +102,7 @@
         "過去肯定；さん未說明性別"
       ],
       "pair": "HS-06",
-      "pair_reason": "同名和同一份資料，搭配否定進行／結果表述作近控制，檢查肯定與否定。",
+      "pair_reason": "與 HS-06 同用片假名姓名及資料，但兩句也改變 が／は、時態／體、肯定／否定，以及 その 和 まだ；不能作為單獨隔離否定的近控制。",
       "rendering_notes": [
         "Alex 是暫定羅馬字形式；日文片假名未指定唯一羅馬字拼法。"
       ],
@@ -124,7 +124,7 @@
         "不由名字或 さん 推斷性別"
       ],
       "pair": "HS-05",
-      "pair_reason": "與 HS-05 對照已閱讀和截至目前尚未閱讀；姓名改用片假名原形保存。",
+      "pair_reason": "與 HS-05 同用片假名姓名及資料，對照過去已讀和截至目前尚未讀；兩句也改變 が／は、時態／體，以及 その 和 まだ，不能單獨隔離否定。",
       "rendering_notes": [
         "Alex 是暫定羅馬字形式；日文片假名未指定唯一羅馬字拼法。"
       ],
@@ -163,7 +163,7 @@
         "先生在此是教師職稱，不是 さん 的性別標記"
       ],
       "pair": "HS-07",
-      "pair_reason": "性別／稱謂控制：HS-07 明示男性但沒有職稱；本句以授課脈絡明確指教師，且不從先生推斷性別。",
+      "pair_reason": "性別／稱謂控制：HS-07 明示男性但沒有職稱；本句明示教師職業，以 先生 稱呼，未明示性別。兩句的人物描述不同，並非單一特徵的最小對照。",
       "visibility": "development-visible",
       "heldout": false
     },
@@ -181,7 +181,7 @@
         "不可因字串含 さん 而將親屬關係刪去"
       ],
       "pair": "HS-10",
-      "pair_reason": "詞彙近控制：お母さん 是親屬稱呼，不是某個個人姓名後接 さん。",
+      "pair_reason": "詞彙控制：お母さん 是親屬稱呼，不是個人姓名後接 さん；與 HS-10 的職業稱呼及句子結構不同，不能單獨隔離特徵。",
       "visibility": "development-visible",
       "heldout": false
     },
@@ -199,7 +199,7 @@
         "店員確認的對象是訂單；不添加未提及的移動方向或目的地"
       ],
       "pair": "HS-09",
-      "pair_reason": "詞彙近控制：さん 接在職業名詞後，是對店員的禮貌稱呼；句子本身表達核對訂單，不含性別資訊。",
+      "pair_reason": "詞彙控制：さん 接在職業名詞後，是對店員的禮貌稱呼；句子表達核對訂單，不含性別資訊。與 HS-09 的親屬稱呼及句子結構不同，不能單獨隔離特徵。",
       "visibility": "development-visible",
       "heldout": false
     },
@@ -217,7 +217,7 @@
         "不可對字面字串 さん 做姓名後綴處理"
       ],
       "pair": "HS-12",
-      "pair_reason": "字串近控制：さんま 含有假名連續 さん，但該詞與敬稱無關。",
+      "pair_reason": "字串控制：さんま 含有連續假名 さん，但與敬稱無關；與 HS-12 的姓名敬稱及句子結構不同，不是最小對照。",
       "visibility": "development-visible",
       "heldout": false
     },
@@ -235,7 +235,7 @@
         "原文未標示授課者性別；佐藤さん的性別也未明"
       ],
       "pair": "HS-11",
-      "pair_reason": "Contrasts さんま, where さん is only part of a fish name, with 佐藤さん, where さん is a personal-name honorific; 授業を担当する先生 is a teacher role without gender information.",
+      "pair_reason": "與 HS-11 的魚名 さんま 對照，佐藤さん 是姓名敬稱，先生 是教師角色；本句另有修飾教師的關係子句及交付者／接收者角色，並非結構最小對照，也不能單憑近似 N5 標籤證明基本 N5 文法或官方 JLPT 級別。",
       "visibility": "development-visible",
       "heldout": false
     }

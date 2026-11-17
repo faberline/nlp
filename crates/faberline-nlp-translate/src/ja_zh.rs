@@ -4069,9 +4069,6 @@ fn translate_clause_bunsetsus(
                     if matches!(
                         s.as_str(),
                         "每天"
-                            | "每天早上"
-                            | "每天晚上"
-                            | "每晚"
                             | "今天"
                             | "明天"
                             | "昨天"
@@ -4891,6 +4888,50 @@ fn translate_clause_bunsetsus(
         parts.push("卻".to_owned());
     }
 
+    // Only a present polite negative question has the invitation form.
+    let polite_invitation = sfp_suffix == Some("嗎")
+        && raw_clause
+            .trim_end_matches(['。', '？', '?'])
+            .ends_with("ませんか")
+        && predicates
+            .iter()
+            .flat_map(|b| &b.atoms)
+            .all(|a| !a.is_locked)
+        && inner_pre_mods.iter().any(|m| m == "不");
+    let negative_go = verb_core == "去"
+        && inner_pre_mods
+            .iter()
+            .any(|m| matches!(m.as_str(), "不" | "沒有"));
+    // Limit the added time ordering to the same endpoint rule as the motion.
+    let has_spatial_made = (!negative_go || polite_invitation)
+        && !has_causative
+        && !passive_agent_needed
+        && objs.is_empty()
+        && predicates_is_made_motion_verb(&predicates)
+        && obliques.iter().any(|o| o.is_spatial_made);
+    if has_spatial_made {
+        let mut remaining = Vec::new();
+        for adv in adverbs.drain(..) {
+            if matches!(adv.as_str(), "每天早上" | "每天晚上" | "每晚") {
+                temporal_others.push(adv);
+            } else {
+                remaining.push(adv);
+            }
+        }
+        adverbs = remaining;
+    }
+    // A polite negative question can invite the listener to travel together.
+    // Keep this interpretation inside the bounded endpoint rule.
+    let made_invitation = has_spatial_made && polite_invitation;
+    if made_invitation {
+        sfp_suffix = Some("好嗎");
+        for modal in &mut inner_pre_mods {
+            if modal == "不" {
+                *modal = "一起".to_owned();
+            }
+        }
+    }
+
     let has_front_modal = !front_modals.is_empty();
     let mut manner_adverbs = Vec::new();
     if !has_front_modal {
@@ -4957,11 +4998,6 @@ fn translate_clause_bunsetsus(
     }
     // A place marked by まで is the endpoint of a motion event. Keep this
     // local to まで: the global goal flag also changes recipients and vehicles.
-    let has_spatial_made = !has_causative
-        && !passive_agent_needed
-        && objs.is_empty()
-        && predicates_is_made_motion_verb(&predicates)
-        && obliques.iter().any(|o| o.is_spatial_made);
     let mut made_endpoints = Vec::new();
     for o in obliques {
         let _ = o.is_instrument_de;
@@ -4984,15 +5020,24 @@ fn translate_clause_bunsetsus(
     parts.extend(manner_adverbs);
     parts.extend(pre_iobjs);
     parts.extend(others);
+    let preserve_go = made_invitation || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
     parts.extend(transfer_prefix);
     // 到 already expresses the destination relation of bare 去. Other motion
     // verbs retain their manner: 走到, 跑到.
-    if has_spatial_made && verb_core == "去" {
+    let keep_go = has_spatial_made && preserve_go && verb_core == "去";
+    if has_spatial_made && verb_core == "去" && !preserve_go {
         verb_core.clear();
     }
     if !verb_core.is_empty() {
         parts.push(verb_core);
+    }
+    if keep_go {
+        for endpoint in &mut made_endpoints {
+            if let Some(place) = endpoint.strip_prefix('到') {
+                *endpoint = place.to_owned();
+            }
+        }
     }
     parts.extend(made_endpoints);
     let is_change_of_state_you =
@@ -7151,6 +7196,23 @@ mod motion_endpoint_tests {
         )
         .expect("CPU rules translate the control sentence")
         .target_text
+    }
+
+    #[test]
+    fn wishes_and_invitations_keep_the_direction() {
+        assert_eq!(translate("駅まで行きたいです。"), "想去車站。");
+        assert_eq!(translate("公園まで行きたいです。"), "想去公園。");
+        assert_eq!(translate("公園まで走りたいです。"), "想跑到公園。");
+        assert_eq!(translate("駅まで行きませんか。"), "一起去車站好嗎。");
+        assert_eq!(translate("公園まで行きませんか。"), "一起去公園好嗎。");
+        assert_eq!(translate("公園まで走りませんか。"), "一起跑到公園好嗎。");
+    }
+
+    #[test]
+    fn near_negative_controls_keep_their_existing_meaning() {
+        assert_eq!(translate("駅まで行きませんでしたか。"), "到車站沒有去嗎。");
+        assert_eq!(translate("公園まで描きませんか。"), "連公園都不畫畫嗎。");
+        assert_eq!(translate("駅まで行かなかった。"), "到車站沒有去。");
     }
 
     #[test]

@@ -658,8 +658,9 @@ fn ja_zh_hant_challenge_ratchet() {
     .unwrap_or_else(|e| panic!("baseline.tsv: {e}"));
     assert_eq!(
         baseline.challenge_sha, challenge_sha,
-        "challenge.tsv changed since baseline.tsv was written; \
-         re-run with JA_ZH_EVAL_WRITE_BASELINE=1 and commit both files"
+        "challenge.tsv changed since baseline.tsv was written. \
+         Merge the reflected challenge change first. Then measure a clean, named main \
+         with JA_ZH_EVAL_WRITE_BASELINE=1. Submit the generated baseline.tsv alone in a separate PR."
     );
     let current: BTreeMap<&str, f64> = aggs.iter().map(|(k, a)| (k.as_str(), a.chrf())).collect();
     let mut failures = Vec::new();

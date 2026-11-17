@@ -4659,12 +4659,10 @@ fn translate_clause_bunsetsus(
                 .any(|a| !a.is_locked && a.upos == Some(Upos::Verb))
     });
     let animate_contrast = animate_existential.is_some() && candidate_contrast;
-    if animate_contrast {
-        if let Some(b) = bunsetsus.last_mut() {
-            b.sconj_tail = Some("が".to_owned());
-            if b.case_particle.as_deref() == Some("が") {
-                b.case_particle = None;
-            }
+    if animate_contrast && let Some(b) = bunsetsus.last_mut() {
+        b.sconj_tail = Some("が".to_owned());
+        if b.case_particle.as_deref() == Some("が") {
+            b.case_particle = None;
         }
     }
 
@@ -4728,19 +4726,17 @@ fn translate_clause_bunsetsus(
             .any(|a| !a.is_locked && a.upos == Some(Upos::Verb));
     // A fused spatial adverb can leave N の outside the normal noun merge.
     // Only join the adjacent source constituents for bare past absence.
-    if inanimate_past {
-        if let Some(&idx) = fused_pairs.first() {
-            let mut owner = bunsetsus[idx].clone();
-            let spatial = &bunsetsus[idx + 1];
-            owner.atoms.pop();
-            let owner = render_bunsetsu_np(&owner, target);
-            let stem = spatial.atoms[0].surface.strip_suffix('に').unwrap_or("");
-            let relation = translate_single_ja_term(stem, None, Some(Upos::Noun));
-            if !owner.is_empty() && !relation.is_empty() {
-                bunsetsus.remove(idx);
-                bunsetsus.remove(idx);
-                subjects.push(format!("{owner}{relation}"));
-            }
+    if inanimate_past && let Some(&idx) = fused_pairs.first() {
+        let mut owner = bunsetsus[idx].clone();
+        let spatial = &bunsetsus[idx + 1];
+        owner.atoms.pop();
+        let owner = render_bunsetsu_np(&owner, target);
+        let stem = spatial.atoms[0].surface.strip_suffix('に').unwrap_or("");
+        let relation = translate_single_ja_term(stem, None, Some(Upos::Noun));
+        if !owner.is_empty() && !relation.is_empty() {
+            bunsetsus.remove(idx);
+            bunsetsus.remove(idx);
+            subjects.push(format!("{owner}{relation}"));
         }
     }
 
@@ -5020,35 +5016,33 @@ fn translate_clause_bunsetsus(
         post_verb_mods.retain(|m| m != "了");
     }
 
-    if let Some(negative) = animate_existential {
-        if subj_entries.len() == 1
-            && ((iobjs.len() == 1 && obliques.is_empty())
-                || (obliques.len() == 1 && iobjs.is_empty()))
-        {
-            let location = if iobjs.len() == 1 {
-                iobjs.remove(0).text
-            } else {
-                obliques.remove(0).text
-            };
-            let location = location
-                .strip_prefix('給')
-                .or_else(|| location.strip_prefix('對'))
-                .or_else(|| location.strip_prefix('在'))
-                .unwrap_or(&location)
-                .to_owned();
-            let participant = subj_entries.remove(0);
-            pre_verb_mods.retain(|m| m != "不" && m != "沒有");
-            if participant.had_ga {
-                subjects.push(location);
-                objs.push(participant.text);
-                verb_core = if negative { "沒有" } else { "有" }.to_owned();
-            } else {
-                subjects.push(participant.text);
-                verb_core = if negative { "不在" } else { "在" }.to_owned();
-                objs.push(location);
-            }
-            post_verb_mods.clear();
+    if let Some(negative) = animate_existential
+        && subj_entries.len() == 1
+        && ((iobjs.len() == 1 && obliques.is_empty()) || (obliques.len() == 1 && iobjs.is_empty()))
+    {
+        let location = if iobjs.len() == 1 {
+            iobjs.remove(0).text
+        } else {
+            obliques.remove(0).text
+        };
+        let location = location
+            .strip_prefix('給')
+            .or_else(|| location.strip_prefix('對'))
+            .or_else(|| location.strip_prefix('在'))
+            .unwrap_or(&location)
+            .to_owned();
+        let participant = subj_entries.remove(0);
+        pre_verb_mods.retain(|m| m != "不" && m != "沒有");
+        if participant.had_ga {
+            subjects.push(location);
+            objs.push(participant.text);
+            verb_core = if negative { "沒有" } else { "有" }.to_owned();
+        } else {
+            subjects.push(participant.text);
+            verb_core = if negative { "不在" } else { "在" }.to_owned();
+            objs.push(location);
         }
+        post_verb_mods.clear();
     }
 
     // Comparative preference `[X] ほうが [好き / いい / 良い]`

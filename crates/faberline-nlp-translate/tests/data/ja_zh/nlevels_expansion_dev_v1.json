@@ -1,7 +1,7 @@
 {
   "schema": "faberline.nlp.ja_zh.nlevels_expansion_dev.v1",
   "title": "Independent N1-N5 development expansion: 50 original sentences",
-  "status": "Data-only review candidate; formal independent adoption is pending.",
+  "status": "Development-visible proposal. It is adopted only after this source PR passes all seven exact-head hosted checks, an uninvolved checker accepts it, and the PR is merged. Until then, do not measure rules with these rows.",
   "provenance": {
     "author_role": "Luna (gpt-6-luna), independent QA authoring roles",
     "japanese_sentence_provenance": "Original Japanese sentences composed with AI assistance for this development bank. No exam, textbook, game, dictionary or corpus sentence text was copied.",
@@ -12,7 +12,7 @@
   "review_and_adoption": {
     "author_does_not_accept_own_work": true,
     "human_review_claim": false,
-    "process": "Use a separate data-only PR. Independent Codex and Antigravity review and adoption must finish before a corresponding rule PR is measured with this bank. Independent agent reviews are not human reviews.",
+    "process": "Use a separate data-only source PR. The owner/controller selects an uninvolved Codex checker by task difficulty (Terra or Luna). The author does not accept their own work. Adopt this bank only after all seven exact-head hosted checks pass, the checker accepts the source PR, and the PR is merged. Do not measure a corresponding rule before those conditions. Independent agent review is not human review.",
     "measurement": "These 50 rows are supplemental and development-visible. The current challenge runner does not load this JSON. No score or pass rate is claimed here. Keep the historical challenge, baseline, ratchet and held-out isolation unchanged.",
     "scope_limit": "Ten sentences per approximate level and 25 paired controls are limited probes. They do not prove full N1-N5 translation quality. Human calibration and broader stratified review remain open."
   },
@@ -604,7 +604,7 @@
       "semantic_checks": [
         "舊橋是修理事件的主題",
         "作業員是修理者",
-        "保留被動語態，不把橋說成執行修理者"
+        "保留修理者、受事和話題的角色關係，不把舊橋說成修理者"
       ],
       "semantic_unknowns": [
         "原文沒有說地點、工作人員人數或修理結果是否持久"
@@ -875,7 +875,7 @@
         "未說明外觀看起來老舊的原因"
       ],
       "pair": "N2-D10",
-      "pair_reason": "與 N2-D10 對照新指示牌外觀看似老舊與表面有刮痕的不同資訊；上週設置不表示製造日期或功能狀況已知。",
+      "pair_reason": "與 N2-D10 對照新指示牌外觀看似老舊與表面有傷痕的不同資訊；上週設置不表示製造日期或功能狀況已知。",
       "visibility": "development-visible",
       "heldout": false,
       "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
@@ -884,24 +884,24 @@
       "id": "N2-D10",
       "level_approx": "N2",
       "jp": "新しい案内板は先週設置されたばかりだが、表面には傷が多い。",
-      "zh_hant": "新的指示牌雖然是上週才設置的，表面卻有很多刮痕。",
+      "zh_hant": "新的指示牌雖然是上週才設置的，表面卻有不少傷痕。",
       "allowed_variants": [
-        "新指示牌上週才剛裝好，不過表面有不少刮傷。"
+        "新指示牌上週才剛裝設，不過表面有不少傷痕。"
       ],
       "semantic_checks": [
         "原文將指示牌描述為新的",
         "指示牌上週才設置",
-        "表面有很多刮痕",
-        "不由刮痕推斷是否影響功能或整體狀況"
+        "表面有不少傷痕",
+        "不由傷痕推斷是否影響功能或整體狀況"
       ],
       "semantic_unknowns": [
-        "刮痕形成時間未知",
-        "刮痕原因未知",
-        "刮痕是否影響功能未知",
-        "整體狀況未說明"
+        "傷痕形成時間未知",
+        "傷痕原因未知",
+        "傷痕是否影響功能未知",
+        "指示牌整體狀況未說明"
       ],
       "pair": "N2-D09",
-      "pair_reason": "與 N2-D09 對照新指示牌外觀看似老舊與表面確有刮痕的不同敘述；保留刮痕事實，不推斷功能受損或整體狀況。",
+      "pair_reason": "與 N2-D09 對照新指示牌外觀看似老舊與表面確有傷痕的不同敘述；保留傷痕事實，不推斷功能受損或整體狀況。",
       "visibility": "development-visible",
       "heldout": false,
       "provenance": "Original AI-assisted Japanese sentence and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit. Independent agent cross-review corrections applied. No human review, gold status or level certification is claimed."
@@ -1008,7 +1008,7 @@
       "jp": "複数の関係者によれば、改修案は来年度まで見送られるとのことだが、正式決定かどうかは明らかでない。",
       "zh_hant": "據多位相關人士轉述，改修案將暫緩至下年度；不過是否已正式定案仍不清楚。",
       "allowed_variants": [
-        "多位相關人士表示，聽說改修案會暫緩至下年度；至於是否已正式決定，仍不明朗。"
+        "多位相關人士轉述，改修案將暫緩至下年度；至於是否已正式決定，仍不明朗。"
       ],
       "semantic_checks": [
         "消息來源是多位相關人士的轉述",
@@ -1130,12 +1130,12 @@
       "jp": "比較の前提条件が明記されていないからといって、その条件が検討されなかったとは限らない。",
       "zh_hant": "不能因為比較的前提條件沒有明確記載，就認定那些條件未曾納入檢討。",
       "allowed_variants": [
-        "前提條件未見明文，不代表那些條件一定沒有經過檢討。"
+        "比較所依據的前提條件未見明文，不代表這些條件一定沒有經過檢討。"
       ],
       "semantic_checks": [
-        "前提條件沒有明確記載",
-        "未明記不能證明未曾檢討",
-        "結論必須保持不確定而非斷言已檢討"
+        "比較的前提條件沒有明確記載",
+        "未明記不能證明那些比較條件未曾檢討",
+        "結論不斷言那些比較條件已檢討或未檢討"
       ],
       "semantic_unknowns": [
         "實際是否檢討未知",

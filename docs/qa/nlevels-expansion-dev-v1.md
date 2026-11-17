@@ -8,7 +8,7 @@ Luna (`gpt-6-luna`) wrote the Japanese sentences and provisional Taiwan Traditio
 
 Before the original freeze, Root reviewed all 50 rows. A separate Luna reviewer checked the N5/N4 and N3 drafts. Terra checked the N2/N1 draft. The authors applied the review corrections. These were agent reviews. No human review, gold status or official JLPT difficulty is claimed.
 
-Formal independent adoption is pending. An independent checker must check the current frozen data PR and its evidence on current main. The authors do not accept their own work. Later semantic rule PRs must wait for adoption before measurement with these rows.
+This bank is adopted only after its source PR passes all seven exact-head hosted checks, an uninvolved checker accepts it, and the PR is merged. Until then, do not measure a rule with these rows. The authors do not accept their own work. Independent agent review is not human review.
 
 ## Coverage
 
@@ -20,7 +20,7 @@ Formal independent adoption is pending. An independent checker must check the cu
 | N2 | N2-D01–N2-D10 | Concession and condition; obligation scope; hearsay and inference; person and time focus; appearance and stated facts |
 | N1 | N1-D01–N1-D10 | Concession and evidence limits; role duties and prohibition; hearsay and formal inference; content and method focus; incomplete records and uncertain conclusions |
 
-Each row names its paired control. Each pair stays within one approximate level. The semantic checks preserve participant roles, polarity, scope, time and modality. The unknown fields preserve omitted people, counts, causes and certainty.
+Each row names its paired case. Each pair stays within one approximate level. Some pairs are broad contrasts, not minimal or near-negative controls, and cannot alone prove an isolated rule gain. Every later engine rule still needs its own positive unit case and near-negative unit control; these bank pairs do not replace those required controls. The semantic checks preserve participant roles, polarity, scope, time and modality. The unknown fields preserve omitted people, counts, causes and certainty.
 
 Review corrections include the scope of yesterday in relative clauses, unspecified counts, repair actions versus successful results, intention versus forecast, reported claims versus confirmed facts, newly installed versus newly made objects, schedule versus date, and handover content versus transmission time.
 

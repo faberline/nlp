@@ -6,7 +6,7 @@ The bank contains exactly 13 new rows, CLOCK-C01 through CLOCK-C13. The JSON fil
 
 Japanese sentences and provisional Taiwan Traditional Chinese references were authored with AI assistance for this bank. They were written before any new-row engine execution. No external sentence or gloss source was used. The bank and each row use first_party_mit. Level labels are approximate planning labels, not official JLPT items or human certification. Duration and fraction rows are negative diagnostics, not a higher-level development program.
 
-The [clock time development bank](../../crates/faberline-nlp-translate/tests/data/ja_zh/clock_time_dev_v1.json) uses schema `faberline.nlp.ja_zh.clock_time_dev.v1` and version `1.0.0`. Its SHA-256 is `8e096047bfcae7658c6e84cb0e6a42d55ba6d10c4b52cb3ba3e3f3fe8c377050`.
+The [clock time development bank](../../crates/faberline-nlp-translate/tests/data/ja_zh/clock_time_dev_v1.json) uses schema `faberline.nlp.ja_zh.clock_time_dev.v1` and version `1.0.0`. Its SHA-256 is `01db148efcc90ca4fe025a65c6e39fb712ce6643e5c27d3018cbc6e691e1bf69`.
 
 ## Coverage matrix
 

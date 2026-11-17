@@ -194,12 +194,12 @@
       "id": "CLOCK-C01",
       "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
       "jp": "会議は午前二時に始まります。",
-      "zh_hant": "會議上午兩點開始。",
+      "zh_hant": "會議凌晨兩點開始。",
       "allowed_variants": [
-        "會議在上午兩點開始。"
+        "會議在凌晨兩點開始。"
       ],
       "semantic_checks": [
-        "會議開始於上午兩點整"
+        "會議開始於凌晨兩點整"
       ],
       "semantic_unknowns": [
         "日期、會議地點與參與者未明示。"
@@ -215,12 +215,12 @@
       "id": "CLOCK-C02",
       "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
       "jp": "会議は午前二時半に始まります。",
-      "zh_hant": "會議上午兩點半開始。",
+      "zh_hant": "會議凌晨兩點半開始。",
       "allowed_variants": [
-        "會議在上午兩點三十分開始。"
+        "會議在凌晨兩點三十分開始。"
       ],
       "semantic_checks": [
-        "會議開始於上午兩點三十分"
+        "會議開始於凌晨兩點三十分"
       ],
       "semantic_unknowns": [
         "日期、會議地點與參與者未明示。"

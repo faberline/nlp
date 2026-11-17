@@ -99,27 +99,37 @@ Per-row details for `dev` rows:
 JA_ZH_EVAL_VERBOSE=1 cargo test -p faberline-nlp-translate --test ja_zh_eval -- --nocapture
 ```
 
-The test fails when a chrF number in `baseline.tsv` (overall, a set, or a `dev` phenomenon)
-is lower in this run by more than 0.5. It also fails when `challenge.tsv` changed after the
-baseline was written (the baseline stores its SHA-256), and when `baseline.tsv` is not exactly
-one finite chrF row for each aggregate key (`overall`, `set/dev`, `set/test`, one `dev/<phenomenon>`
-per phenomenon), without duplicates or unknown keys.
+The runner compares current chrF values with the stored baseline. For `overall` and `set/dev`,
+it rounds the current value to the same two decimal places stored in the baseline and fails on
+any decrease. For every other aggregate key, it allows a decrease of up to 0.5 points. This
+includes `set/test` and each `dev/<phenomenon>` key. The runner reports no per-row test details.
+
+The runner also fails when `challenge.tsv` changed after the baseline was written (the baseline
+stores its SHA-256), or when `baseline.tsv` does not contain exactly one finite chrF row for each
+aggregate key (`overall`, `set/dev`, `set/test`, and one `dev/<phenomenon>` per phenomenon), with
+no duplicate or unknown keys.
 
 ## How to update the baseline
 
-After an engine change that raises the scores, or after a change to `challenge.tsv`:
+First merge the engine and data changes that the baseline will reflect. Then start from a clean
+checkout of the named `main` commit and measure that state. Generate a baseline only after those
+changes are on `main`:
 
 ```bash
 JA_ZH_EVAL_WRITE_BASELINE=1 cargo test -p faberline-nlp-translate --test ja_zh_eval -- --nocapture
 ```
 
-Commit `baseline.tsv` with the change. It records the engine revision (`git rev-parse HEAD`
-at the time of writing) and the hash of `challenge.tsv`. Writing fails when an engine input
-(`crates/faberline-nlp-translate/src/`, `crates/faberline-nlp/src/`, `crates/faberline-nlp/lexicon/`,
-`crates/faberline-nlp-narrative/src/`) has uncommitted or untracked changes, so the recorded
-revision always names the engine that produced the numbers. Commit the engine change first.
-Uncommitted evaluation files do not block writing. A baseline that lowers a number needs
-a reason in the PR description.
+Submit the resulting `baseline.tsv` change in its own PR, with no other changed files. The file
+records the engine revision (`git rev-parse HEAD`) and the hash of `challenge.tsv` used for the
+measurement.
+
+The writer checks that these engine input paths have no uncommitted or untracked changes:
+`crates/faberline-nlp-translate/src/`, `crates/faberline-nlp/src/`,
+`crates/faberline-nlp/lexicon/`, and `crates/faberline-nlp-narrative/src/`. It then records the
+current `HEAD`. This check does not require a clean worktree or a named `main` branch, and
+uncommitted evaluation files do not block writing. Those facts do not authorize a baseline from
+unmerged engine or data changes. Use the clean named `main` state described above. A reason in a
+baseline PR cannot make a failing engine or data PR pass by lowering the baseline.
 
 ## Licence rule for sentences
 

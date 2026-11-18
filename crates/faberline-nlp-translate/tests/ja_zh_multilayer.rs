@@ -6,7 +6,8 @@ use faberline_nlp::Span;
 use faberline_nlp::doc::model::Backend;
 use faberline_nlp_translate::{
     GlossaryEntry, PronounClass, SpeechRegister, TRANSLATE_SCHEMA, TargetVariant, TranslateOptions,
-    TranslatedDocument, TranslationGlossary, TranslationTrack, analyze_and_translate, sha256_hex,
+    TranslatedDocument, TranslationGlossary, TranslationTrack, analyze_and_translate,
+    doc_options_for_translate, render_bilingual_jsonl, sha256_hex,
 };
 
 fn assert_valid_ja_zh_doc(src: &str, doc: &TranslatedDocument) {
@@ -1601,6 +1602,176 @@ fn narrative_dialogue_and_pro_drop_both_scripts() {
         "hans dialogue failed: {}",
         hans.target_text
     );
+}
+
+#[test]
+fn direct_reporting_keeps_adopted_roles_and_judgment_scope() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("data/ja_zh/direct_quote_speaker_dev_v1.json")).unwrap();
+    let cases = cases["items"].as_array().unwrap();
+    assert_eq!(cases.len(), 3);
+
+    for case in cases {
+        let src = case["jp"].as_str().unwrap();
+        let roles = &case["expected_roles"];
+        let speaker = roles["speaker"].as_str().unwrap();
+        let listener = roles["listener"].as_str().unwrap();
+        let actor = roles["quoted_actor"].as_str().unwrap();
+        let narrated_judgment = roles["judgment_source"] == "narrator";
+        let doc = analyze_and_translate(
+            src,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &doc);
+        let (prefix, rest) = doc.target_text.split_once('「').unwrap();
+        let (quote, after) = rest.split_once('」').unwrap();
+        assert_eq!(prefix, format!("{speaker}告訴{listener}："), "{src}");
+        assert!(quote.contains(actor), "{src}: {quote}");
+        assert!(quote.ends_with('。'), "{src}: {quote}");
+        assert!(!after.starts_with('。'), "{src}: {after}");
+        assert_eq!(quote.contains("正式"), !narrated_judgment, "{src}");
+        assert_eq!(after.contains("正式"), narrated_judgment, "{src}");
+        assert!(!after.contains("告訴"), "{src}: {after}");
+        assert_eq!(doc.sentences.len(), 2, "{src}");
+    }
+}
+
+#[test]
+fn direct_reporting_places_attached_roles_and_outer_time_before_the_quote() {
+    let translate = |src| {
+        let doc = analyze_and_translate(
+            src,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &doc);
+        doc.target_text
+    };
+    for src in [
+        "先生は学生に「私は家に帰ります」と伝えた。",
+        "「私は家に帰ります」と先生は学生に伝えた。",
+        "先生は「私は家に帰ります」と学生に伝えた。",
+    ] {
+        assert_eq!(translate(src), "老師告訴學生：「我回到家。」", "{src}");
+    }
+    assert_eq!(
+        translate("先生は朝、学生に「私は家に帰ります」と伝えた。"),
+        "老師早上告訴學生：「我回到家。」"
+    );
+    let inner_time = translate("先生は学生に「私は朝、家に帰ります」と伝えた。");
+    let quote = inner_time
+        .strip_prefix("老師告訴學生：「")
+        .and_then(|text| text.strip_suffix("。」"))
+        .unwrap();
+    assert!(quote.contains("早上"), "{inner_time}");
+}
+
+#[test]
+fn direct_reporting_keeps_terminal_marks_in_their_own_scope() {
+    for (quoted, report_end, expected_end) in [
+        ("明日また来ます。", '。', "。」"),
+        ("明日また来ます？", '。', "？」"),
+        ("明日また来ます！", '。', "！」"),
+        ("資料を確認します。明日また来ます？", '。', "？」"),
+        ("明日また来ます", '？', "」？"),
+        ("明日また来ます", '！', "」！"),
+    ] {
+        let src = format!("佐藤は田中に「{quoted}」と伝えた{report_end}");
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        let doc = analyze_and_translate(&src, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(&src, &doc);
+        let translated = &doc.target_text;
+        assert!(
+            translated.starts_with("佐藤告訴田中：「"),
+            "{src}: {translated}"
+        );
+        assert!(translated.ends_with(expected_end), "{src}: {translated}");
+        assert_eq!(translated.matches("告訴").count(), 1, "{src}: {translated}");
+        assert!(!translated.contains("。。"), "{src}: {translated}");
+        if report_end == '。' && quoted.ends_with(['。', '？', '！']) {
+            let source_doc = faberline_nlp::doc::analyze_document(
+                &src,
+                &doc_options_for_translate(&options, &glossary),
+            );
+            assert!(source_doc.segmentation.sentences.len() > 1, "{src}");
+            assert_eq!(doc.sentences.len(), 1, "{src}");
+            let jsonl = render_bilingual_jsonl(&doc, &src).unwrap();
+            let row: serde_json::Value = serde_json::from_str(&jsonl).unwrap();
+            assert_eq!(row["source_text"], src);
+            assert_eq!(row["target_text"], *translated);
+            assert_eq!(slice_chars(&src, doc.sentences[0].source_span), src);
+        }
+    }
+}
+
+#[test]
+fn direct_reporting_keeps_following_alignment_after_consuming_a_tail() {
+    let src = "佐藤は田中に「明日また来ます？」と伝えた。田中は学生に資料を見せた。";
+    let doc = analyze_and_translate(
+        src,
+        &TranslateOptions::new(TargetVariant::ZhHant),
+        &TranslationGlossary::new(),
+        None,
+        Backend::Onnx,
+    )
+    .unwrap();
+    assert_valid_ja_zh_doc(src, &doc);
+    assert_eq!(doc.sentences.len(), 2);
+    assert_eq!(
+        slice_chars(src, doc.sentences[0].source_span),
+        "佐藤は田中に「明日また来ます？」と伝えた。"
+    );
+    assert_eq!(
+        slice_chars(src, doc.sentences[1].source_span),
+        "田中は学生に資料を見せた。"
+    );
+    assert!(
+        doc.clause_alignments
+            .iter()
+            .any(|clause| clause.sentence == 1)
+    );
+}
+
+#[test]
+fn direct_reporting_preserves_locked_text_across_multiple_sentences() {
+    let src = "佐藤は田中に「資料を読みます。`x」y`を見ます。窓を開けます」と伝えた。";
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let glossary = TranslationGlossary::new();
+    let doc = analyze_and_translate(src, &options, &glossary, None, Backend::Onnx).unwrap();
+    assert_valid_ja_zh_doc(src, &doc);
+    assert!(
+        doc.target_text.starts_with("佐藤告訴田中：「"),
+        "{}",
+        doc.target_text
+    );
+    assert_eq!(doc.sentences.len(), 3);
+    assert_eq!(doc.opaque_spans.len(), 1);
+    let locked = &doc.opaque_spans[0];
+    assert_eq!(slice_chars(src, locked.source_span), "`x」y`");
+    assert_eq!(
+        slice_chars(&doc.target_text, locked.target_span.unwrap()),
+        "`x」y`"
+    );
+    assert_eq!(doc.target_text.matches("告訴").count(), 1);
+
+    for src in [
+        "佐藤は田中に「資料を読みます」と伝えなかった。",
+        "佐藤は田中に「資料を読みます」と言った。",
+        "佐藤は田中に「資料を読みます。",
+        "佐藤は田中に資料を読むように伝えた。",
+    ] {
+        let doc = analyze_and_translate(src, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(src, &doc);
+        assert!(!doc.target_text.starts_with("佐藤告訴田中："), "{src}");
+    }
 }
 
 #[test]

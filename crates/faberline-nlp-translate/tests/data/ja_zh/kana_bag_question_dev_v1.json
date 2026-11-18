@@ -1,0 +1,126 @@
+{
+  "schema": "faberline.nlp.ja_zh.kana_bag_question_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "reused_existing_controls": [
+    {
+      "file": "nlevels_expansion_dev_v1.json",
+      "sha256": "22d0753fd384ae5f07a118c6417c53b213cc66c1637a8369b8c0315e69ab4fcc",
+      "ids": [
+        "N5X-05",
+        "N4X-05"
+      ]
+    }
+  ],
+  "reused_standing_controls": [],
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "KBQ-N5-01",
+      "level_approx": "N5",
+      "jp": "姉はかばんを持っています。",
+      "zh_hant": "姊姊帶著包包。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "姉 is the participant.",
+        "かばん is the object being carried.",
+        "The Japanese sentence is a plain statement, not a question."
+      ],
+      "semantic_unknowns": [
+        "No runtime tokenizer or rule path has been checked.",
+        "An independent reviewer should confirm the Taiwan wording before adoption."
+      ],
+      "control": {
+        "kind": "kana_bag_declaration",
+        "contrast_ids": [
+          "KBQ-N5-02"
+        ],
+        "stable": [
+          "The same participant, かばん noun, 持つ action, and nonpast polite form appear in both rows.",
+          "Both Japanese rows end with the same full stop 。",
+          "Both rows use the same fixed fixture."
+        ],
+        "changed": [
+          "KBQ-N5-02 adds only the final particle か before 。"
+        ],
+        "limits": [
+          "The pair checks the sentence-final question distinction only.",
+          "It does not prove how a tokenizer or translation rule handles either sentence."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "KBQ-N5-02",
+      "level_approx": "N5",
+      "jp": "姉はかばんを持っていますか。",
+      "zh_hant": "姊姊帶著包包嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "姉 is the participant.",
+        "かばん is the object being carried.",
+        "The sentence asks whether 姉 is carrying a bag."
+      ],
+      "semantic_unknowns": [
+        "No runtime tokenizer or rule path has been checked.",
+        "An independent reviewer should confirm the Taiwan wording before adoption."
+      ],
+      "control": {
+        "kind": "kana_bag_final_question",
+        "contrast_ids": [
+          "KBQ-N5-01"
+        ],
+        "stable": [
+          "The same participant, かばん noun, 持つ action, and nonpast polite form appear in both rows.",
+          "Both Japanese rows end with the same full stop 。",
+          "Both rows use the same fixed fixture."
+        ],
+        "changed": [
+          "This row adds only the final particle か before 。 compared with KBQ-N5-01."
+        ],
+        "limits": [
+          "The pair checks the sentence-final question distinction only.",
+          "It does not prove how a tokenizer or translation rule handles either sentence."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

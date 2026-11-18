@@ -1,0 +1,141 @@
+{
+  "schema": "faberline.nlp.ja_zh.nominal_condition_polarity_dev.v1",
+  "version": 1,
+  "status": "development-visible-proposal",
+  "source_main": "51c639573691d3ebe1ebc4dcfbca212344311663",
+  "source_tree": "c491e6901d65a157919bb3d2df8caa44ff4305ad",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "author": "Codex data_author",
+    "issue": 205
+  },
+  "reused_existing_controls": [
+    {
+      "file": "nlevels_dev_v1.json",
+      "sha256": "a24d91502b3d361eec1ff2bf97381d0accbf27d7516ba2188e77b3b4e96695c0",
+      "ids": [
+        "L2-01",
+        "L2-02"
+      ]
+    },
+    {
+      "file": "nlevels_expansion_dev_v1.json",
+      "sha256": "22d0753fd384ae5f07a118c6417c53b213cc66c1637a8369b8c0315e69ab4fcc",
+      "ids": [
+        "N2-D03",
+        "N2-D04"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "NCP-01",
+      "jp": "規定上、申請者が外部委員であれば、会議資料を閲覧できますか。",
+      "zh_hant": "依規定，如果申請人是外部委員，可以查閱會議資料嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "條件是申請人是外部委員。",
+        "依規定詢問在此條件下是否可以查閱會議資料。",
+        "保留疑問語氣。查閱者承接條件中的申請人。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代申請人實際是否為外部委員。",
+        "原文未交代規定給出的答案。"
+      ],
+      "control": {
+        "condition_polarity": "affirmative",
+        "main_polarity": "affirmative",
+        "condition_contrast_id": "NCP-03",
+        "main_contrast_id": "NCP-02"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "NCP-02",
+      "jp": "規定上、申請者が外部委員であれば、会議資料を閲覧できませんか。",
+      "zh_hant": "依規定，如果申請人是外部委員，不能查閱會議資料嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "條件是申請人是外部委員。",
+        "依規定詢問在此條件下是否不能查閱會議資料。",
+        "保留疑問語氣。查閱者承接條件中的申請人。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代申請人實際是否為外部委員。",
+        "原文未交代規定給出的答案。"
+      ],
+      "control": {
+        "condition_polarity": "affirmative",
+        "main_polarity": "negative",
+        "condition_contrast_id": "NCP-04",
+        "main_contrast_id": "NCP-01"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "NCP-03",
+      "jp": "規定上、申請者が外部委員でなければ、会議資料を閲覧できますか。",
+      "zh_hant": "依規定，如果申請人不是外部委員，可以查閱會議資料嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "條件是申請人不是外部委員。",
+        "依規定詢問在此條件下是否可以查閱會議資料。",
+        "保留疑問語氣。查閱者承接條件中的申請人。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代申請人實際是否為外部委員。",
+        "原文未交代規定給出的答案。"
+      ],
+      "control": {
+        "condition_polarity": "negative",
+        "main_polarity": "affirmative",
+        "condition_contrast_id": "NCP-01",
+        "main_contrast_id": "NCP-04"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "NCP-04",
+      "jp": "規定上、申請者が外部委員でなければ、会議資料を閲覧できませんか。",
+      "zh_hant": "依規定，如果申請人不是外部委員，不能查閱會議資料嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "條件是申請人不是外部委員。",
+        "依規定詢問在此條件下是否不能查閱會議資料。",
+        "保留疑問語氣。查閱者承接條件中的申請人。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代申請人實際是否為外部委員。",
+        "原文未交代規定給出的答案。"
+      ],
+      "control": {
+        "condition_polarity": "negative",
+        "main_polarity": "negative",
+        "condition_contrast_id": "NCP-02",
+        "main_contrast_id": "NCP-03"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

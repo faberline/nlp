@@ -3153,6 +3153,7 @@ fn translate_clause_atoms(
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
     let merged_atoms = apply_phrase_matches(body);
     let mut norm_atoms = normalize_ja_atoms(&merged_atoms);
+    recover_route_predicate(&mut norm_atoms, body);
     let motion_go = motion_purpose_governor(&norm_atoms, ctx.inside_quote);
     if let Some(go) = motion_go {
         recover_split_purpose_stems(&mut norm_atoms, go);
@@ -6593,9 +6594,16 @@ fn translate_clause_bunsetsus(
     // A place marked by まで is the endpoint of a motion event. Keep this
     // local to まで: the global goal flag also changes recipients and vehicles.
     let mut made_endpoints = Vec::new();
+    let mut route_directions = Vec::new();
     for o in obliques {
         let _ = o.is_instrument_de;
-        if has_spatial_made && o.is_spatial_made {
+        if route.is_some()
+            && o.case_particle.as_deref() == Some("へ")
+            && o.physical_goal_head.is_some()
+            && o.physical_goal_head == motion_head
+        {
+            route_directions.push(o.text);
+        } else if has_spatial_made && o.is_spatial_made {
             made_endpoints.push(o.text);
         } else if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
             let raw_np = o.text.strip_prefix('到').unwrap_or(&o.text);
@@ -6626,7 +6634,14 @@ fn translate_clause_bunsetsus(
     let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
     parts.extend(go_together);
+    if route.is_some()
+        && (verb_core == "進展"
+            || (verb_core == "去" && goal_tails.is_empty() && made_endpoints.is_empty()))
+    {
+        verb_core = "前進".to_owned();
+    }
     parts.extend(route);
+    parts.extend(route_directions);
     parts.extend(transfer_prefix);
     if let Some(object) = affected_object {
         parts.push(format!("把{object}"));
@@ -10672,6 +10687,14 @@ mod motion_endpoint_tests {
     fn motion_routes_keep_their_manner_and_polarity() {
         for (source, expected) in [
             ("犬は道を走ります。", "狗沿著道路跑。"),
+            ("道を走っています。", "正在沿著道路跑。"),
+            ("犬が道を走っていません。", "狗沒有沿著道路跑。"),
+            ("列車はトンネルを通ります。", "列車經過隧道。"),
+            ("私は公園の中を歩きました。", "我在公園裡面走了。"),
+            ("国道を走ります。", "沿著國道跑。"),
+            ("道を学校へ走ります。", "沿著道路往學校跑。"),
+            ("道路を進みます。", "沿著道路前進。"),
+            ("予想通りです。", "是按照予想。"),
             ("犬は道を走りません。", "狗不沿著道路跑。"),
             ("私は道路を歩きます。", "我沿著道路走。"),
             ("子供は橋を走りました。", "孩子沿著橋跑了。"),
@@ -11070,31 +11093,62 @@ fn is_existing_spatial_head(a: &Atom) -> bool {
 // Intransitive manner verbs can take a traversed space with を. Verbs such
 // as 渡る and 通る already express that relation in their Chinese gloss.
 fn manner_motion_head(predicates: &[Bunsetsu], source: &[Atom]) -> Option<usize> {
-    let [predicate] = predicates else { return None };
-    let mut verbs = predicate
-        .atoms
+    let mut verbs = predicates
         .iter()
+        .flat_map(|p| &p.atoms)
         .filter(|a| !a.is_locked && a.upos == Some(Upos::Verb));
-    let verb = verbs.next()?;
+    let first = verbs.next()?;
+    let second = verbs.next();
+    if verbs.next().is_some() {
+        return None;
+    }
+    // The grouped predicate may contain just the aspect verb or both verbs.
+    let verb = if let Some(aspect) =
+        second.or_else(|| (first.lemma.as_deref() == Some("いる")).then_some(first))
+    {
+        let [motion, _, _] = source.windows(3).find(|w| {
+            let (motion, te, iru) = (&w[0], &w[1], &w[2]);
+            iru.lemma.as_deref() == Some("いる")
+                && iru.doc_tok_idx == aspect.doc_tok_idx
+                && iru.doc_tok_idx.is_some()
+                && motion.head == iru.doc_tok_idx
+                && motion.deprel == "advcl"
+                && te.head == motion.doc_tok_idx
+                && te.deprel == "mark"
+                && is_te_form_link(motion, te, iru)
+                && (first.doc_tok_idx == motion.doc_tok_idx || first.doc_tok_idx == iru.doc_tok_idx)
+        })?
+        else {
+            return None;
+        };
+        motion
+    } else {
+        first
+    };
     let head = verb.doc_tok_idx?;
-    if verbs.next().is_some()
-        || !matches!(
-            verb.lemma.as_deref().unwrap_or(&verb.surface),
-            "走る" | "歩く" | "駆ける" | "歩き回る" | "散歩する" | "泳ぐ" | "飛ぶ"
-        )
-        || source.iter().any(|a| {
-            a.head == Some(head)
-                && a.upos == Some(Upos::Aux)
-                && matches!(
-                    a.lemma.as_deref().unwrap_or(&a.surface),
-                    "せる" | "させる" | "れる" | "られる"
-                )
-        })
-        || source
-            .iter()
-            .filter(|a| a.head == Some(head) && a.deprel == "obj")
-            .count()
-            != 1
+    if !matches!(
+        verb.lemma.as_deref().unwrap_or(&verb.surface),
+        "走る"
+            | "歩く"
+            | "駆ける"
+            | "歩き回る"
+            | "散歩する"
+            | "泳ぐ"
+            | "飛ぶ"
+            | "進む"
+            | "行く"
+    ) || source.iter().any(|a| {
+        a.head == Some(head)
+            && a.upos == Some(Upos::Aux)
+            && matches!(
+                a.lemma.as_deref().unwrap_or(&a.surface),
+                "せる" | "させる" | "れる" | "られる"
+            )
+    }) || source
+        .iter()
+        .filter(|a| a.head == Some(head) && a.deprel == "obj")
+        .count()
+        != 1
     {
         return None;
     }
@@ -11120,13 +11174,110 @@ fn route_marker(group: &Bunsetsu, source: &[Atom], motion: usize) -> Option<&'st
     {
         return None;
     }
-    // A linear route licenses 沿著. A larger area only licenses activity
-    // within that space. An event or duration licenses neither.
+    if let Some(marker) = spatial_route_marker(place) {
+        return Some(marker);
+    }
+    // 中 can also describe time. Verify the place in 公園の中 before moving
+    // the complete phrase in front of its governing verb.
+    if !matches!(
+        place.surface.as_str(),
+        "中" | "外" | "上" | "下" | "奥" | "前" | "後ろ"
+    ) {
+        return None;
+    }
+    source
+        .windows(2)
+        .any(|pair| {
+            let (owner, no) = (&pair[0], &pair[1]);
+            !owner.is_locked
+                && !no.is_locked
+                && owner.head == Some(head)
+                && owner.deprel == "nmod"
+                && owner.doc_tok_idx.is_some()
+                && no.head == owner.doc_tok_idx
+                && no.surface == "の"
+                && no.deprel == "case"
+                && no.upos == Some(Upos::Adp)
+                && owner.span.end_char == no.span.start_char
+                && no.span.end_char == place.span.start_char
+                && (spatial_route_marker(owner).is_some()
+                    || is_existing_spatial_head(owner)
+                    || matches!(owner.surface.as_str(), "庭" | "教室" | "建物" | "店"))
+        })
+        .then_some("在")
+}
+
+fn spatial_route_marker(place: &Atom) -> Option<&'static str> {
     match place.surface.as_str() {
         "道" | "道路" | "歩道" | "山道" | "坂道" | "車道" | "遊歩道" | "街道" | "小道" | "通路"
-        | "廊下" | "路地" | "橋" | "海岸" | "河岸" | "川岸" => Some("沿著"),
-        "公園" | "広場" | "校庭" | "空" | "海" | "川" | "河" => Some("在"),
+        | "廊下" | "路地" | "橋" | "海岸" | "河岸" | "川岸" | "国道" | "県道" | "林道" | "農道" => {
+            Some("沿著")
+        }
+        "公園" | "広場" | "校庭" | "空" | "海" | "川" | "河" | "トンネル" => {
+            Some("在")
+        }
         _ => None,
+    }
+}
+
+// 通り can be tagged as the noun even before ます. A directly governed
+// traversal object and the same continuative before ません verify its verb.
+fn recover_route_predicate(groups: &mut [Atom], source: &[Atom]) {
+    let Some(stem) = groups
+        .iter_mut()
+        .find(|a| !a.is_locked && a.upos == Some(Upos::Noun) && a.deprel == "root")
+    else {
+        return;
+    };
+    let Some(head) = stem.doc_tok_idx else { return };
+    let polite = source.iter().any(|a| {
+        !a.is_locked
+            && a.surface == "ます"
+            && a.upos == Some(Upos::Aux)
+            && a.head == Some(head)
+            && a.deprel == "aux"
+            && stem.span.end_char == a.span.start_char
+    });
+    if !polite
+        || !source.windows(2).any(|pair| {
+            let (place, wo) = (&pair[0], &pair[1]);
+            !place.is_locked
+                && place.upos == Some(Upos::Noun)
+                && place.deprel == "obj"
+                && place.head == Some(head)
+                && place.doc_tok_idx.is_some()
+                && (spatial_route_marker(place).is_some() || is_existing_spatial_head(place))
+                && !wo.is_locked
+                && wo.surface == "を"
+                && wo.deprel == "case"
+                && wo.head == place.doc_tok_idx
+                && place.span.end_char == wo.span.start_char
+        })
+    {
+        return;
+    }
+    let surface: Vec<_> = stem.surface.chars().chain("ません".chars()).collect();
+    let segments = faberline_nlp::lexicon::ja::segment_ja(&surface, 0);
+    let [verb, polite, negative] = segments.as_slice() else {
+        return;
+    };
+    let len = stem.span.end_char - stem.span.start_char;
+    if verb.span.start_char == 0
+        && verb.span.end_char == len
+        && verb.decided_upos == Some(Upos::Verb)
+        && polite.span.start_char == len
+        && polite.span.end_char == len + 2
+        && polite.decided_upos == Some(Upos::Aux)
+        && negative.span.start_char == len + 2
+        && negative.span.end_char == surface.len()
+        && negative.decided_upos == Some(Upos::Aux)
+        && matches!(
+            verb.lemma.as_deref(),
+            Some("通る" | "渡る" | "くぐる" | "横切る")
+        )
+    {
+        stem.upos = Some(Upos::Verb);
+        stem.lemma = verb.lemma.clone();
     }
 }
 

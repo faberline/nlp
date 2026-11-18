@@ -12118,12 +12118,9 @@ fn place_companion(source: &[Atom], predicate: usize) -> Option<usize> {
     use faberline_nlp::lexicon::SemanticClass;
     let mut person = None;
     let mut has_place = false;
+    let mut after_companion = false;
     for (i, marker) in source.iter().enumerate() {
-        if marker.is_locked
-            || marker.upos != Some(Upos::Adp)
-            || marker.deprel != "case"
-            || !matches!(marker.surface.as_str(), "と" | "へ" | "に" | "で" | "まで")
-        {
+        if marker.is_locked || marker.upos != Some(Upos::Adp) || marker.deprel != "case" {
             continue;
         }
         let prefix = &source[..i];
@@ -12140,28 +12137,38 @@ fn place_companion(source: &[Atom], predicate: usize) -> Option<usize> {
             || noun.doc_tok_idx.is_none()
             || noun.doc_tok_idx != marker.head
             || noun.head != Some(predicate)
-            || noun.deprel != "obl"
+            || !matches!(noun.deprel.as_str(), "obl" | "nsubj" | "obj" | "iobj")
             || last.span.end_char != marker.span.start_char
         {
             continue;
         }
         let class = faberline_nlp::lexicon::lookup_ja(&noun.surface).and_then(|hit| hit.sem_class);
+        let human = match noun.upos {
+            Some(Upos::Pron) => matches!(
+                noun.surface.as_str(),
+                "誰" | "だれ" | "私" | "僕" | "彼" | "彼女" | "君" | "あなた" | "みんな" | "皆"
+            ),
+            Some(Upos::Propn) => {
+                class == Some(SemanticClass::Person) || is_honorific_suffix(&noun.surface)
+            }
+            Some(Upos::Noun) => is_demonstrative_person_noun(noun),
+            _ => false,
+        };
+        // 私と先生が and 先生と学生を can share the second noun's case.
+        // A later location does not establish a separate companion there.
+        if after_companion && human {
+            return None;
+        }
+        after_companion = false;
+        if noun.deprel != "obl" {
+            continue;
+        }
         if marker.surface == "と" {
-            let human = match noun.upos {
-                Some(Upos::Pron) => matches!(
-                    noun.surface.as_str(),
-                    "誰" | "だれ" | "私" | "僕" | "彼" | "彼女" | "君" | "あなた" | "みんな" | "皆"
-                ),
-                Some(Upos::Propn) => {
-                    class == Some(SemanticClass::Person) || is_honorific_suffix(&noun.surface)
-                }
-                Some(Upos::Noun) => is_demonstrative_person_noun(noun),
-                _ => false,
-            };
             if human && person.replace(noun.doc_tok_idx?).is_some() {
                 return None;
             }
-        } else {
+            after_companion = human;
+        } else if matches!(marker.surface.as_str(), "へ" | "に" | "で" | "まで") {
             let place = is_place_location_bunsetsu(std::slice::from_ref(noun))
                 || class == Some(SemanticClass::Location)
                 || noun.surface == "どこ"

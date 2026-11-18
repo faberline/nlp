@@ -70,6 +70,124 @@ fn actor_glossary(alice: &str) -> TranslationGlossary {
 }
 
 #[test]
+fn homework_dasu_keeps_roles_and_physical_sources() {
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let glossary = TranslationGlossary::new();
+    let translate = |source: &str| {
+        let doc = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        doc.target_text
+    };
+
+    let bank: serde_json::Value =
+        serde_json::from_str(include_str!("data/ja_zh/homework_role_dev_v1.json")).unwrap();
+    let items = bank["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    for (id, expected) in [
+        ("HWR-N5-01", "學生把作業交給老師。"),
+        ("HWR-N5-02", "老師出作業給學生。"),
+    ] {
+        let row = items.iter().find(|row| row["id"] == id).unwrap();
+        assert_eq!(translate(row["jp"].as_str().unwrap()), expected, "{id}");
+    }
+
+    let physical = items.iter().find(|row| row["id"] == "HWR-N5-03").unwrap();
+    let actual = translate(physical["jp"].as_str().unwrap());
+    assert!(
+        matches!(
+            actual.as_str(),
+            "我從書桌抽屜拿出作業。" | "我從書桌的抽屜拿出作業。"
+        ),
+        "{actual}"
+    );
+    for (source, expected) in [
+        ("先生は書類を出します。", "老師拿出書類。"),
+        ("私は引き出しから鍵を出します。", "我從抽屜拿出鑰匙。"),
+        (
+            "私は二階で引き出しから宿題を出しました。",
+            "我在二樓從抽屜拿出了作業。",
+        ),
+        (
+            "私は教室で引き出しから宿題を出しました。",
+            "我在教室從抽屜拿出了作業。",
+        ),
+        ("宿題を出します。", "拿出作業。"),
+        ("まだ宿題が終わっていない。", "作業還沒有結束。"),
+    ] {
+        assert_eq!(translate(source), expected, "{source}");
+    }
+}
+
+#[test]
+fn homework_dasu_preserves_modifiers_tense_and_transfer_direction() {
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let glossary = TranslationGlossary::new();
+    for (source, expected) in [
+        (
+            "教室で生徒は先生に宿題を出しました。",
+            "學生在教室把作業交給老師了。",
+        ),
+        (
+            "先生は教室で生徒に宿題を出しました。",
+            "老師在教室出作業給學生了。",
+        ),
+        (
+            "先生は二階で生徒に宿題を出しました。",
+            "老師在二樓出作業給學生了。",
+        ),
+        (
+            "先生は教室で生徒に宿題を出しませんでした。",
+            "老師在教室沒有出作業給學生。",
+        ),
+        (
+            "生徒は数学の宿題を先生に出しました。",
+            "學生把數學的作業交給老師了。",
+        ),
+        (
+            "教師は学生に今日の宿題を出しました。",
+            "老師出今天的作業給學生了。",
+        ),
+        (
+            "生徒は午後に先生に宿題を出しました。",
+            "學生下午把作業交給老師了。",
+        ),
+        ("大学生は先生に宿題を出します。", "大學生把作業交給老師。"),
+        (
+            "生徒は鍵を引き出しから出しました。",
+            "生徒從抽屜拿出了鑰匙。",
+        ),
+        ("生徒は先生に鍵を渡しました。", "生徒給老師遞給了鑰匙。"),
+        ("生徒は宿題を出しました。", "生徒拿出了作業。"),
+        ("先生に宿題を出しませんでした。", "給老師沒有拿出作業。"),
+        (
+            "会社員は先生に宿題を出しました。",
+            "會社員給老師拿出了作業。",
+        ),
+    ] {
+        let doc = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert_eq!(doc.target_text, expected, "{source}");
+    }
+}
+
+#[test]
+fn homework_dasu_keeps_a_locked_homework_modifier_on_its_existing_path() {
+    let source = "生徒は数学の宿題を先生に出しました。";
+    let mut glossary = TranslationGlossary::new();
+    glossary.objects.push(GlossaryEntry {
+        canonical: "数学".to_owned(),
+        surfaces: vec!["数学".to_owned()],
+        targets: BTreeMap::from([(TargetVariant::ZhHant, "數學科".to_owned())]),
+        ..GlossaryEntry::default()
+    });
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let doc = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+    assert_valid_ja_zh_doc(source, &doc);
+    assert_eq!(doc.target_text, "生徒給老師拿出了數學科的作業。");
+    assert_eq!(doc.glossary_hits.len(), 1);
+}
+
+#[test]
 fn shinjitai_fallback_keeps_word_glosses_and_mixed_script_terms() {
     for (source, target, expected) in [
         ("私は製糸を見る。", TargetVariant::ZhHant, "我看製絲。"),

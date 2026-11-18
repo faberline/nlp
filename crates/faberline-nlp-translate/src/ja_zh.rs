@@ -89,6 +89,7 @@ enum JointManner {
     Together,
     Everyone,
     Counted,
+    Companion,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3178,7 +3179,7 @@ fn translate_clause_atoms(
     if let Some(go) = motion_go {
         mark_motion_purpose(&mut grouped, &norm_atoms, go);
     }
-    mark_joint_question(&mut grouped, &norm_atoms);
+    mark_joint_question(&mut grouped, &norm_atoms, body);
     let grouped = compose_relative_daypart(grouped);
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, target);
     if let Some(tail) = condition_tail
@@ -5780,6 +5781,10 @@ fn translate_clause_bunsetsus(
                 wh_question,
             } => {
                 joint_participants = match manner {
+                    JointManner::Companion => {
+                        joint_companions.push(format!("和{}", render_bunsetsu_np(&b, target)));
+                        None
+                    }
                     JointManner::Together => None,
                     JointManner::Everyone => Some("大家".to_owned()),
                     JointManner::Counted => {
@@ -8459,7 +8464,7 @@ fn compose_relative_daypart(groups: Vec<Bunsetsu>) -> Vec<Bunsetsu> {
 
 // An overt joint participant or a joint manner can invite the listener.
 // With an overt third party, the same finite form asks a negative question.
-fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
+fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[Atom]) {
     let [body @ .., verb, polite, neg, ka] = source else {
         return;
     };
@@ -8622,11 +8627,27 @@ fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
         };
         Some((i, text))
     });
-    let Some((i, text)) = markers.next() else {
-        return;
-    };
+    let explicit = markers.next();
     if markers.next().is_some() {
         return;
+    }
+    // Use the source case heads before floor normalization and noun folding.
+    // A companion can identify the joint activity without an explicit 一緒.
+    let companion = action
+        .doc_tok_idx
+        .and_then(|id| place_companion(original, id));
+    let companion_group = companion.and_then(|id| {
+        groups.iter().position(|group| {
+            group.atoms.iter().any(|atom| atom.doc_tok_idx == Some(id))
+                && group.atoms.last().is_some_and(|atom| atom.surface == "と")
+        })
+    });
+    let Some((i, text)) = explicit.or_else(|| companion_group.map(|i| (i, JointManner::Companion)))
+    else {
+        return;
+    };
+    if let Some(partner) = companion_group {
+        groups[partner].role = BunsetsuRole::JointCompanion;
     }
     groups[i].role = BunsetsuRole::JointManner {
         manner: text,
@@ -8665,6 +8686,11 @@ fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
             BunsetsuRole::Obj
         } else {
             match (word.surface.as_str(), word.deprel.as_str(), marker) {
+                ("誰", "obl", Some("と"))
+                    if matches!(group.role, BunsetsuRole::JointManner { .. }) =>
+                {
+                    group.role
+                }
                 ("誰", "obl", Some("と")) => BunsetsuRole::JointCompanion,
                 ("誰" | "何", "nsubj", Some("が" | "は" | "も")) => BunsetsuRole::Subj,
                 ("どこ", "obl", Some("へ" | "に" | "で")) => group.role,
@@ -9062,7 +9088,12 @@ fn ends_in_coord_ya(b: &Bunsetsu) -> bool {
 fn ends_in_coord_to(b: &Bunsetsu) -> bool {
     !matches!(
         b.role,
-        BunsetsuRole::JointCompanion | BunsetsuRole::PurposeCompanion
+        BunsetsuRole::JointCompanion
+            | BunsetsuRole::PurposeCompanion
+            | BunsetsuRole::JointManner {
+                manner: JointManner::Companion,
+                ..
+            }
     ) && is_noun_bunsetsu(b)
         && b.atoms
             .last()
@@ -11128,6 +11159,18 @@ mod motion_endpoint_tests {
             ),
             ("友達と一緒に映画を見ませんか。", "要不要和朋友一起看電影？"),
             ("誰かと一緒に歌いませんか。", "要不要和某個人一起唱歌？"),
+            (
+                "誰かと図書館へ行きませんか。",
+                "要不要和某個人一起去圖書館？",
+            ),
+            (
+                "先生と図書館の二階に行きませんか。",
+                "要不要和老師一起去圖書館的二樓？",
+            ),
+            (
+                "友達と図書館で勉強しませんか。",
+                "要不要和朋友一起在圖書館學習？",
+            ),
             ("一緒に誰かと歩きませんか。", "要不要和某個人一起走？"),
             (
                 "誰かと何かを一緒に読みませんか。",
@@ -11157,6 +11200,14 @@ mod motion_endpoint_tests {
             "這輛公車不去機場嗎？"
         );
         assert_eq!(translate("行きませんか。"), "不去嗎？");
+        assert_eq!(
+            translate("駅と図書館に行きませんか。"),
+            "不去到車站和圖書館嗎？"
+        );
+        assert_eq!(
+            translate("先生は友達と図書館に行きませんか。"),
+            "老師不和朋友一起去圖書館嗎？"
+        );
         assert_eq!(translate("一緒に遊べませんか。"), "不能一起玩嗎？");
         assert_eq!(
             translate("みんなで何を読みませんか。"),

@@ -108,21 +108,27 @@ struct Bunsetsu {
 
 pub(crate) struct DirectQuoteOpening {
     prefix_span: Span,
-    prefix: String,
+    roles: DirectQuoteRoles,
     pub(crate) close: Option<char>,
+}
+
+pub(crate) struct DirectQuotePrefix {
+    span: Span,
+    text: String,
 }
 
 pub(crate) enum DirectQuoteEnd {
     Continues,
     Closed,
-    Reports(Span),
+    Reports(Span, DirectQuotePrefix),
     Other,
 }
 
 #[derive(Default)]
 pub(crate) struct DirectQuotePlacement {
-    pub(crate) opening: Option<DirectQuoteOpening>,
+    pub(crate) opening: Option<DirectQuotePrefix>,
     pub(crate) report: Option<Span>,
+    pub(crate) detached_from: Option<usize>,
 }
 
 /// Translate a single Japanese (or Ja-dominant Mixed) sentence into `target` (`zh-Hant` / `zh-Hans`),
@@ -183,13 +189,43 @@ pub(crate) fn translate_ja_sentence(
     let mut skip_next_seg = false;
     let mut moved_report = direct_quote.and_then(|quote| quote.report);
     let opening = direct_quote.and_then(|quote| quote.opening.as_ref());
+    let mut direct_quote_prefix_segments = 0;
 
     for (seg_idx, seg) in segments.iter().enumerate() {
+        if direct_quote_prefix_segments > 0 {
+            direct_quote_prefix_segments -= 1;
+            continue;
+        }
         if skip_next_seg {
             skip_next_seg = false;
             continue;
         }
         let tgt_start = out.chars().count();
+        if target == TargetVariant::ZhHant
+            && moved_report.is_none()
+            && let Some((prefix, report, quote_index)) =
+                local_direct_quote(&segments[seg_idx..], doc, lock_table)
+        {
+            out.push_str(&prefix);
+            moved_report = Some(report);
+            is_first_non_quote_clause = false;
+            sentence_has_overt_topic = true;
+            prev_was_quote = false;
+            emitted_pre_quote_verb = false;
+            if quote_index > 0 {
+                let target_span = Span {
+                    start_char: tgt_start,
+                    end_char: out.chars().count(),
+                };
+                for prefix_segment in &segments[seg_idx..seg_idx + quote_index] {
+                    if let Segment::Clause { span, .. } = prefix_segment {
+                        seg_target_spans.push((*span, target_span));
+                    }
+                }
+                direct_quote_prefix_segments = quote_index - 1;
+                continue;
+            }
+        }
         let next_post_quote = segments.get(seg_idx + 1).and_then(|nx| match nx {
             Segment::Clause { atoms: ca, .. } => {
                 Some((is_kagon_clause(ca), classify_post_quote_clause(ca)))
@@ -203,6 +239,9 @@ pub(crate) fn translate_ja_sentence(
                 close_q,
                 span,
             } => {
+                if let Some(prefix) = opening.filter(|quote| quote.span == *span) {
+                    out.push_str(&prefix.text);
+                }
                 emitted_pre_quote_verb = false;
                 if let Some((is_kagon, post_kind)) = next_post_quote {
                     if is_kagon {
@@ -272,6 +311,9 @@ pub(crate) fn translate_ja_sentence(
                 inner_atoms,
                 span,
             } => {
+                if let Some(prefix) = opening.filter(|quote| quote.span == *span) {
+                    out.push_str(&prefix.text);
+                }
                 out.push(localize_open_quote(*open_q, target));
                 let inner_segs = split_atoms_into_segments(inner_atoms, chars, *span);
                 for iseg in &inner_segs {
@@ -353,45 +395,20 @@ pub(crate) fn translate_ja_sentence(
                     continue;
                 }
 
-                if target == TargetVariant::ZhHant
-                    && is_direct_quote_prefix_separator(trailing_punct.as_deref())
-                {
-                    let prefix =
-                        if let Some(quote) = opening.filter(|quote| quote.prefix_span == *span) {
-                            Some(quote.prefix.clone())
-                        } else if let [
-                            Segment::Quote { inner_atoms, .. },
-                            Segment::Clause {
-                                atoms: report,
-                                span: report_span,
-                                ..
-                            },
-                            ..,
-                        ] = &segments[seg_idx + 1..]
-                            && !inner_atoms.iter().any(is_quote_mark)
-                            && is_direct_quote_report(report)
-                            && let Some(prefix) = direct_quote_prefix(catoms, doc, lock_table)
-                        {
-                            moved_report = Some(*report_span);
-                            Some(prefix)
-                        } else {
-                            None
-                        };
-                    if let Some(prefix) = prefix {
-                        out.push_str(&prefix);
-                        is_first_non_quote_clause = false;
-                        sentence_has_overt_topic = true;
-                        prev_was_quote = false;
-                        emitted_pre_quote_verb = false;
-                        seg_target_spans.push((
-                            *span,
-                            Span {
-                                start_char: tgt_start,
-                                end_char: out.chars().count(),
-                            },
-                        ));
-                        continue;
-                    }
+                if let Some(prefix) = opening.filter(|quote| quote.span == *span) {
+                    out.push_str(&prefix.text);
+                    is_first_non_quote_clause = false;
+                    sentence_has_overt_topic = true;
+                    prev_was_quote = false;
+                    emitted_pre_quote_verb = false;
+                    seg_target_spans.push((
+                        *span,
+                        Span {
+                            start_char: tgt_start,
+                            end_char: out.chars().count(),
+                        },
+                    ));
+                    continue;
                 }
 
                 if prev_was_quote && is_kagon_clause(catoms) {
@@ -2253,19 +2270,163 @@ fn is_direct_quote_prefix_separator(punctuation: Option<&str>) -> bool {
     matches!(punctuation, None | Some("、" | "，"))
 }
 
-fn is_direct_quote_report(atoms: &[Atom]) -> bool {
-    let [marker, verb, tail @ ..] = atoms else {
-        return false;
-    };
-    !marker.is_locked
-        && marker.surface == "と"
-        && !verb.is_locked
-        && verb.lemma.as_deref() == Some("伝える")
-        && match tail {
-            [] => verb.surface == "伝えた",
-            [past] => !past.is_locked && verb.surface == "伝え" && past.surface == "た",
-            _ => false,
+fn direct_quote_report_parts(atoms: &[Atom]) -> Option<(&[Atom], &Atom)> {
+    let (marker, rest) = atoms.split_first()?;
+    if marker.is_locked || marker.surface != "と" {
+        return None;
+    }
+    let (args, verb) = match rest {
+        [args @ .., verb, past]
+            if !past.is_locked && past.surface == "た" && verb.surface == "伝え" =>
+        {
+            (args, verb)
         }
+        [args @ .., verb] if verb.surface == "伝えた" => (args, verb),
+        _ => return None,
+    };
+    if verb.is_locked || verb.lemma.as_deref() != Some("伝える") {
+        return None;
+    }
+    if !args.is_empty() && (verb.doc_tok_idx.is_none() || marker.head != verb.doc_tok_idx) {
+        return None;
+    }
+    Some((args, verb))
+}
+
+#[derive(Clone, Default)]
+struct DirectQuoteRoles {
+    speaker: Option<String>,
+    listener: Option<String>,
+    time: Option<String>,
+}
+
+impl DirectQuoteRoles {
+    fn prefix(self) -> Option<String> {
+        let speaker = self.speaker?;
+        let listener = self.listener?;
+        let time = self.time.unwrap_or_default();
+        Some(format!("{speaker}{time}告訴{listener}："))
+    }
+}
+
+fn direct_quote_time(atom: &Atom, doc: &Document) -> Option<String> {
+    if atom.is_locked {
+        return None;
+    }
+    if is_clock_atom(atom) {
+        return Some(atom.surface.clone());
+    }
+    let class = atom
+        .doc_tok_idx
+        .and_then(|index| doc.tokens.get(index))
+        .filter(|token| token.span == atom.span)
+        .and_then(|token| token.sem_class);
+    if class == Some(SemanticClass::Time)
+        || matches!(
+            atom.surface.as_str(),
+            "朝" | "昼" | "夜" | "午前" | "午後" | "今日" | "明日" | "昨日"
+        )
+    {
+        let text = translate_single_ja_term(&atom.surface, atom.lemma.as_deref(), atom.upos);
+        return (!text.is_empty()).then_some(text);
+    }
+    None
+}
+
+fn read_direct_quote_roles(
+    atoms: &[Atom],
+    doc: &Document,
+    locks: &SpanLockTable,
+    report_verb: Option<&Atom>,
+    roles: &mut DirectQuoteRoles,
+) -> Option<()> {
+    let mut args = atoms;
+    while !args.is_empty() {
+        if let Some(time) = direct_quote_time(&args[0], doc) {
+            if roles.time.is_some()
+                || report_verb.is_some_and(|verb| {
+                    args[0].head != verb.doc_tok_idx || args[0].deprel != "advmod"
+                })
+            {
+                return None;
+            }
+            roles.time = Some(time);
+            args = &args[1..];
+            continue;
+        }
+        let marker = args.iter().position(|atom| {
+            !atom.is_locked && matches!(atom.surface.as_str(), "は" | "が" | "に")
+        })?;
+        let listener = args[marker].surface == "に";
+        let person = &args[..marker];
+        if let Some(verb) = report_verb
+            && !person.iter().any(|atom| {
+                atom.head == verb.doc_tok_idx
+                    && if listener {
+                        atom.deprel == "iobj" || atom.deprel.split(':').next() == Some("obl")
+                    } else {
+                        atom.deprel.split(':').next() == Some("nsubj")
+                    }
+            })
+        {
+            return None;
+        }
+        let role = if listener {
+            &mut roles.listener
+        } else {
+            &mut roles.speaker
+        };
+        if role.is_some() {
+            return None;
+        }
+        *role = Some(render_direct_quote_person(person, doc, locks)?);
+        args = &args[marker + 1..];
+    }
+    Some(())
+}
+
+fn local_direct_quote(
+    segments: &[Segment],
+    doc: &Document,
+    locks: &SpanLockTable,
+) -> Option<(String, Span, usize)> {
+    let quote_index = segments
+        .iter()
+        .take(3)
+        .position(|segment| matches!(segment, Segment::Quote { .. }))?;
+    let [
+        Segment::Quote { inner_atoms, .. },
+        Segment::Clause {
+            atoms: report,
+            span,
+            ..
+        },
+        ..,
+    ] = &segments[quote_index..]
+    else {
+        return None;
+    };
+    if inner_atoms.iter().any(is_quote_mark) {
+        return None;
+    }
+    let (after, verb) = direct_quote_report_parts(report)?;
+    let mut roles = DirectQuoteRoles::default();
+    for before in &segments[..quote_index] {
+        let Segment::Clause {
+            atoms,
+            trailing_punct,
+            ..
+        } = before
+        else {
+            return None;
+        };
+        if !is_direct_quote_prefix_separator(trailing_punct.as_deref()) {
+            return None;
+        }
+        read_direct_quote_roles(atoms, doc, locks, None, &mut roles)?;
+    }
+    read_direct_quote_roles(after, doc, locks, Some(verb), &mut roles)?;
+    Some((roles.prefix()?, *span, quote_index))
 }
 
 fn render_direct_quote_person(
@@ -2317,17 +2478,24 @@ fn render_direct_quote_person(
     (!person.is_empty()).then_some(person)
 }
 
-fn direct_quote_prefix(atoms: &[Atom], doc: &Document, locks: &SpanLockTable) -> Option<String> {
-    let (listener_marker, people) = atoms.split_last()?;
-    if listener_marker.is_locked || listener_marker.surface != "に" {
+fn complete_cross_sentence_direct_quote(
+    opening: &DirectQuoteOpening,
+    report: &[Atom],
+    doc: &Document,
+    locks: &SpanLockTable,
+) -> Option<DirectQuotePrefix> {
+    let (after, verb) = direct_quote_report_parts(report)?;
+    if after.iter().any(|atom| atom.is_locked) {
+        // A placeholder from the reporting sentence cannot move to the opening
+        // sentence. The two sentences restore locks from different tables.
         return None;
     }
-    let topic = people
-        .iter()
-        .position(|atom| !atom.is_locked && matches!(atom.surface.as_str(), "は" | "が"))?;
-    let speaker = render_direct_quote_person(&people[..topic], doc, locks)?;
-    let listener = render_direct_quote_person(&people[topic + 1..], doc, locks)?;
-    Some(format!("{speaker}告訴{listener}："))
+    let mut roles = opening.roles.clone();
+    read_direct_quote_roles(after, doc, locks, Some(verb), &mut roles)?;
+    Some(DirectQuotePrefix {
+        span: opening.prefix_span,
+        text: roles.prefix()?,
+    })
 }
 
 pub(crate) fn direct_quote_opening(
@@ -2340,37 +2508,44 @@ pub(crate) fn direct_quote_opening(
     let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, tokens, locks);
     let segments =
         split_atoms_into_segments(&atoms, chars, doc.segmentation.sentences[sentence_idx].span);
-    let [
-        ..,
-        Segment::Clause {
-            atoms: people,
-            trailing_punct,
-            span,
-        },
-        quote,
-    ] = segments.as_slice()
-    else {
-        return None;
-    };
-    let (inner_atoms, close) = match quote {
+    let (quote, before) = segments.split_last()?;
+    let (inner_atoms, span, close) = match quote {
         Segment::OpenQuote {
             open_q,
             inner_atoms,
-            ..
-        } => (inner_atoms, Some(if *open_q == '「' { '」' } else { '』' })),
+            span,
+        } => (
+            inner_atoms,
+            span,
+            Some(if *open_q == '「' { '」' } else { '』' }),
+        ),
         Segment::Quote {
             inner_atoms, span, ..
-        } if terminal_before_quote(chars, span.end_char - 1) => (inner_atoms, None),
+        } if terminal_before_quote(chars, span.end_char - 1) => (inner_atoms, span, None),
         _ => return None,
     };
-    if !is_direct_quote_prefix_separator(trailing_punct.as_deref())
-        || inner_atoms.iter().any(is_quote_mark)
-    {
+    if inner_atoms.iter().any(is_quote_mark) {
         return None;
     }
+    let mut roles = DirectQuoteRoles::default();
+    let prefix_span = match before {
+        [] => *span,
+        [
+            ..,
+            Segment::Clause {
+                atoms,
+                trailing_punct,
+                span,
+            },
+        ] if is_direct_quote_prefix_separator(trailing_punct.as_deref()) => {
+            read_direct_quote_roles(atoms, doc, locks, None, &mut roles)?;
+            *span
+        }
+        _ => return None,
+    };
     Some(DirectQuoteOpening {
-        prefix_span: *span,
-        prefix: direct_quote_prefix(people, doc, locks)?,
+        prefix_span,
+        roles,
         close,
     })
 }
@@ -2381,17 +2556,18 @@ pub(crate) fn direct_quote_end(
     doc: &Document,
     tokens: &[&Token],
     locks: &SpanLockTable,
-    close_quote: Option<char>,
+    opening: &DirectQuoteOpening,
 ) -> DirectQuoteEnd {
     let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, tokens, locks);
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
-    let Some(close_quote) = close_quote else {
-        return match split_atoms_into_segments(&atoms, chars, sent_span).first() {
-            Some(Segment::Clause { atoms, span, .. }) if is_direct_quote_report(atoms) => {
-                DirectQuoteEnd::Reports(*span)
-            }
-            _ => DirectQuoteEnd::Other,
-        };
+    let Some(close_quote) = opening.close else {
+        if let Some(Segment::Clause { atoms, span, .. }) =
+            split_atoms_into_segments(&atoms, chars, sent_span).first()
+            && let Some(prefix) = complete_cross_sentence_direct_quote(opening, atoms, doc, locks)
+        {
+            return DirectQuoteEnd::Reports(*span, prefix);
+        }
+        return DirectQuoteEnd::Other;
     };
     let Some(delimiter) = atoms.iter().find(|atom| is_quote_mark(atom)) else {
         return DirectQuoteEnd::Continues;
@@ -2410,9 +2586,9 @@ pub(crate) fn direct_quote_end(
             },
         ] = segments
             && *close_span == delimiter.span
-            && is_direct_quote_report(report)
+            && let Some(prefix) = complete_cross_sentence_direct_quote(opening, report, doc, locks)
         {
-            return DirectQuoteEnd::Reports(*span);
+            return DirectQuoteEnd::Reports(*span, prefix);
         }
     }
     if matches!(segments.last(), Some(Segment::CloseQuote(_, span)) if *span == delimiter.span)

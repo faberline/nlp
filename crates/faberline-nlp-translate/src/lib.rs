@@ -251,6 +251,7 @@ pub fn translate_document(
     let mut out_opaque_records: Vec<OpaqueSpanRecord> =
         Vec::with_capacity(doc.segmentation.opaque.len());
     let mut out_unknown: Vec<TranslateUnknown> = Vec::new();
+    let mut consumed_direct_reports = HashMap::new();
 
     for (span, item) in items {
         if span.start_char > cursor {
@@ -352,6 +353,16 @@ pub fn translate_document(
                 let start = target_char_pos;
                 let s_chars = outcome.target_text.chars().count();
                 let end = start + s_chars;
+                if s_chars == 0
+                    && outcome.glossary_hits.is_empty()
+                    && outcome.opaque_records.is_empty()
+                    && outcome.unknown.is_empty()
+                    && let Some(first) = direct_quote_placements
+                        .get(&si)
+                        .and_then(|quote| quote.detached_from)
+                {
+                    consumed_direct_reports.insert(first, si);
+                }
                 target_text.push_str(&outcome.target_text);
                 target_char_pos = end;
 
@@ -404,6 +415,25 @@ pub fn translate_document(
                 target_text.push(ch);
             }
             target_char_pos += source_chars - gap_start;
+        }
+    }
+
+    if let Some(sentence_ids) =
+        pair_consumed_direct_reports(&mut out_sentences, &consumed_direct_reports, &target_text)
+    {
+        for clause in &mut out_clauses {
+            clause.sentence = sentence_ids[clause.sentence];
+        }
+        for sentence in out_glossary_hits
+            .iter_mut()
+            .filter_map(|hit| hit.sentence.as_mut())
+            .chain(
+                out_unknown
+                    .iter_mut()
+                    .filter_map(|item| item.sentence.as_mut()),
+            )
+        {
+            *sentence = sentence_ids[*sentence];
         }
     }
 
@@ -463,6 +493,47 @@ struct SentenceOutcome {
     opaque_records: Vec<OpaqueSpanRecord>,
     clause_alignments: Vec<ClauseAlignment>,
     unknown: Vec<TranslateUnknown>,
+}
+
+// A consumed standalone report still belongs to the source of the translated
+// quote. Group only that empty tail and its quote; the Japanese analysis is unchanged.
+fn pair_consumed_direct_reports(
+    sentences: &mut Vec<TranslatedSentence>,
+    consumed: &HashMap<usize, usize>,
+    target_text: &str,
+) -> Option<Vec<usize>> {
+    if consumed.is_empty()
+        || !sentences
+            .iter()
+            .enumerate()
+            .all(|(i, sentence)| sentence.sentence == i)
+    {
+        return None;
+    }
+    let target: Vec<char> = target_text.chars().collect();
+    let mut ids = vec![0; sentences.len()];
+    let mut aligned = Vec::with_capacity(sentences.len());
+    let mut old = std::mem::take(sentences).into_iter();
+    while let Some(mut sentence) = old.next() {
+        let index = sentence.sentence;
+        let new_id = aligned.len();
+        sentence.sentence = new_id;
+        ids[index] = new_id;
+        if let Some(&last) = consumed.get(&index) {
+            for following in old.by_ref().take(last - index) {
+                ids[following.sentence] = new_id;
+                sentence.source_span.end_char = following.source_span.end_char;
+                sentence.target_span.end_char = following.target_span.end_char;
+            }
+            sentence.target_text = target
+                [sentence.target_span.start_char..sentence.target_span.end_char]
+                .iter()
+                .collect();
+        }
+        aligned.push(sentence);
+    }
+    *sentences = aligned;
+    Some(ids)
 }
 
 fn sentence_opaques<'a>(inline_opaques: &[&'a Opaque], sentence: Span) -> Vec<&'a Opaque> {
@@ -535,7 +606,7 @@ fn plan_cross_sentence_direct_quotes(
         );
         let tokens = &tokens_by_sent[index];
         if let Some((first, mut frame)) = opening.take() {
-            match ja_zh::direct_quote_end(index, chars, doc, tokens, &locks, frame.close) {
+            match ja_zh::direct_quote_end(index, chars, doc, tokens, &locks, &frame) {
                 ja_zh::DirectQuoteEnd::Continues => {
                     opening = Some((first, frame));
                     continue;
@@ -545,9 +616,14 @@ fn plan_cross_sentence_direct_quotes(
                     opening = Some((first, frame));
                     continue;
                 }
-                ja_zh::DirectQuoteEnd::Reports(report) => {
-                    placements.entry(first).or_default().opening = Some(frame);
-                    placements.entry(index).or_default().report = Some(report);
+                ja_zh::DirectQuoteEnd::Reports(report, prefix) => {
+                    let detached = frame.close.is_none();
+                    placements.entry(first).or_default().opening = Some(prefix);
+                    let ending = placements.entry(index).or_default();
+                    ending.report = Some(report);
+                    if detached {
+                        ending.detached_from = Some(first);
+                    }
                 }
                 ja_zh::DirectQuoteEnd::Other => {}
             }

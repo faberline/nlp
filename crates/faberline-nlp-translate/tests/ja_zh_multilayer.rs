@@ -6,7 +6,8 @@ use faberline_nlp::Span;
 use faberline_nlp::doc::model::Backend;
 use faberline_nlp_translate::{
     GlossaryEntry, PronounClass, SpeechRegister, TRANSLATE_SCHEMA, TargetVariant, TranslateOptions,
-    TranslatedDocument, TranslationGlossary, TranslationTrack, analyze_and_translate, sha256_hex,
+    TranslatedDocument, TranslationGlossary, TranslationTrack, analyze_and_translate,
+    doc_options_for_translate, render_bilingual_jsonl, sha256_hex,
 };
 
 fn assert_valid_ja_zh_doc(src: &str, doc: &TranslatedDocument) {
@@ -1640,6 +1641,39 @@ fn direct_reporting_keeps_adopted_roles_and_judgment_scope() {
 }
 
 #[test]
+fn direct_reporting_places_attached_roles_and_outer_time_before_the_quote() {
+    let translate = |src| {
+        let doc = analyze_and_translate(
+            src,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &doc);
+        doc.target_text
+    };
+    for src in [
+        "先生は学生に「私は家に帰ります」と伝えた。",
+        "「私は家に帰ります」と先生は学生に伝えた。",
+        "先生は「私は家に帰ります」と学生に伝えた。",
+    ] {
+        assert_eq!(translate(src), "老師告訴學生：「我回到家。」", "{src}");
+    }
+    assert_eq!(
+        translate("先生は朝、学生に「私は家に帰ります」と伝えた。"),
+        "老師早上告訴學生：「我回到家。」"
+    );
+    let inner_time = translate("先生は学生に「私は朝、家に帰ります」と伝えた。");
+    let quote = inner_time
+        .strip_prefix("老師告訴學生：「")
+        .and_then(|text| text.strip_suffix("。」"))
+        .unwrap();
+    assert!(quote.contains("早上"), "{inner_time}");
+}
+
+#[test]
 fn direct_reporting_keeps_terminal_marks_in_their_own_scope() {
     for (quoted, report_end, expected_end) in [
         ("明日また来ます。", '。', "。」"),
@@ -1650,14 +1684,9 @@ fn direct_reporting_keeps_terminal_marks_in_their_own_scope() {
         ("明日また来ます", '！', "」！"),
     ] {
         let src = format!("佐藤は田中に「{quoted}」と伝えた{report_end}");
-        let doc = analyze_and_translate(
-            &src,
-            &TranslateOptions::new(TargetVariant::ZhHant),
-            &TranslationGlossary::new(),
-            None,
-            Backend::Onnx,
-        )
-        .unwrap();
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        let doc = analyze_and_translate(&src, &options, &glossary, None, Backend::Onnx).unwrap();
         assert_valid_ja_zh_doc(&src, &doc);
         let translated = &doc.target_text;
         assert!(
@@ -1667,7 +1696,48 @@ fn direct_reporting_keeps_terminal_marks_in_their_own_scope() {
         assert!(translated.ends_with(expected_end), "{src}: {translated}");
         assert_eq!(translated.matches("告訴").count(), 1, "{src}: {translated}");
         assert!(!translated.contains("。。"), "{src}: {translated}");
+        if report_end == '。' && quoted.ends_with(['。', '？', '！']) {
+            let source_doc = faberline_nlp::doc::analyze_document(
+                &src,
+                &doc_options_for_translate(&options, &glossary),
+            );
+            assert!(source_doc.segmentation.sentences.len() > 1, "{src}");
+            assert_eq!(doc.sentences.len(), 1, "{src}");
+            let jsonl = render_bilingual_jsonl(&doc, &src).unwrap();
+            let row: serde_json::Value = serde_json::from_str(&jsonl).unwrap();
+            assert_eq!(row["source_text"], src);
+            assert_eq!(row["target_text"], *translated);
+            assert_eq!(slice_chars(&src, doc.sentences[0].source_span), src);
+        }
     }
+}
+
+#[test]
+fn direct_reporting_keeps_following_alignment_after_consuming_a_tail() {
+    let src = "佐藤は田中に「明日また来ます？」と伝えた。田中は学生に資料を見せた。";
+    let doc = analyze_and_translate(
+        src,
+        &TranslateOptions::new(TargetVariant::ZhHant),
+        &TranslationGlossary::new(),
+        None,
+        Backend::Onnx,
+    )
+    .unwrap();
+    assert_valid_ja_zh_doc(src, &doc);
+    assert_eq!(doc.sentences.len(), 2);
+    assert_eq!(
+        slice_chars(src, doc.sentences[0].source_span),
+        "佐藤は田中に「明日また来ます？」と伝えた。"
+    );
+    assert_eq!(
+        slice_chars(src, doc.sentences[1].source_span),
+        "田中は学生に資料を見せた。"
+    );
+    assert!(
+        doc.clause_alignments
+            .iter()
+            .any(|clause| clause.sentence == 1)
+    );
 }
 
 #[test]

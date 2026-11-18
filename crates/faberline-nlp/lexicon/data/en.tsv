@@ -9095,8 +9095,8 @@ cha-cha	en	1453	-	NOUN|VERB	-	-	-
 chabad	en	1700	NOUN	NOUN	-	-	sem=organization
 chabad-lubavitch	en	1700	NOUN	NOUN	-	-	sem=organization
 chablis	en	1700	NOUN	NOUN	-	-	sem=location
-chaces	en-US	1650	-	-	-	chacoes	-
-chacoes	en-GB	1650	-	-	-	chaces	-
+chaces	en-US	1650	-	-	-	-	-
+chacoes	en-GB	1650	-	-	-	-	-
 chadar	en	1700	NOUN	NOUN	-	-	sem=artifact
 chadarim	en	1700	NOUN	NOUN	cheder	-	infl=irr
 chaddar	en	1700	NOUN	NOUN	-	-	sem=artifact
@@ -9967,8 +9967,8 @@ cim	en	1700	NOUN	NOUN	-	-	sem=organization
 cimetidine	en	1700	NOUN	NOUN	-	-	sem=artifact
 cimex	en	1700	NOUN	NOUN	-	-	infl=irr
 cimices	en	1700	NOUN	NOUN	cimex	-	infl=irr
-cimicidae	en-GB	1650	NOUN	NOUN	-	cimicide	-
-cimicide	en-US	1650	NOUN	NOUN	-	cimicidae	-
+cimicidae	en-GB	1650	NOUN	NOUN	-	-	-
+cimicide	en-US	1650	NOUN	NOUN	-	-	-
 cinch	en	1384	-	NOUN|VERB	-	-	-
 cinchonisation	en-GB	1650	NOUN	NOUN	-	cinchonization	-
 cinchonisations	en-GB	1650	NOUN	NOUN	cinchonisation	cinchonizations	-

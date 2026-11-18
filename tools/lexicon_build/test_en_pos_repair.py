@@ -17,6 +17,7 @@ class PosRepairTests(unittest.TestCase):
             "recolouring": {"NOUN", "VERB"},
             "moulder": {"NOUN", "VERB"},
             "morselling": {"NOUN", "VERB"},
+            "cimicide": {"NOUN"},
         }.items():
             self.assertEqual(
                 builder.apply_reviewed_pos_evidence(word, set(), builder.REVIEWED_POS_EVIDENCE),
@@ -24,6 +25,8 @@ class PosRepairTests(unittest.TestCase):
             )
         self.assertEqual(builder.REVIEWED_LEMMA_EVIDENCE["reedifying"], "reedify")
         self.assertEqual(builder.REVIEWED_LEMMA_EVIDENCE["initialer"], "-")
+        self.assertNotIn("chaces", builder.REVIEWED_POS_EVIDENCE)
+        self.assertNotIn("chacoes", builder.REVIEWED_POS_EVIDENCE)
         for counterpart in ("initialler", "sceptres", "recoloring", "molder", "morseling", "reaedifying"):
             self.assertNotIn(counterpart, builder.REVIEWED_POS_EVIDENCE)
             self.assertNotIn(counterpart, builder.REVIEWED_LEMMA_EVIDENCE)
@@ -34,12 +37,16 @@ class PosRepairTests(unittest.TestCase):
             "creatin": ("en-GB", "ceratin"),
             "ceratins": ("en-US", "creatins"),
             "creatins": ("en-GB", "ceratins"),
+            "chaces": ("en-US", "chacoes"),
+            "chacoes": ("en-GB", "chaces"),
+            "cimicide": ("en-US", "cimicidae"),
+            "cimicidae": ("en-GB", "cimicide"),
             "color": ("en-US", "colour"),
             "colour": ("en-GB", "color"),
             "unpaired": ("en-US", "-"),
         }
         repaired = builder.remove_reviewed_bad_counterparts(pairs)
-        for word in ("ceratin", "creatin", "ceratins", "creatins"):
+        for word in ("ceratin", "creatin", "ceratins", "creatins", "chaces", "chacoes", "cimicide", "cimicidae"):
             self.assertEqual(repaired[word], (pairs[word][0], "-"))
         for word in ("color", "colour", "unpaired"):
             self.assertEqual(repaired[word], pairs[word])

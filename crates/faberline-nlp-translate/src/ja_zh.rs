@@ -1774,6 +1774,265 @@ fn is_te_form_link(base: &Atom, te: &Atom, auxiliary: &Atom) -> bool {
         && te.span.end_char == auxiliary.span.start_char
 }
 
+struct TeHelpRequest<'a> {
+    action: &'a [Atom],
+    person: Option<TeHelpPerson<'a>>,
+    child_suffix: Option<usize>,
+    humble: bool,
+    negative_form: bool,
+}
+
+struct TeHelpPerson<'a> {
+    phrase: &'a [Atom],
+    start: usize,
+    end: usize,
+    role: TeHelpPersonRole,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TeHelpPersonRole {
+    Recipient,
+    Performer,
+}
+
+fn te_help_person<'a>(
+    arguments: &'a [Atom],
+    particle_index: usize,
+    verb: &Atom,
+    helper_idx: usize,
+) -> Option<TeHelpPerson<'a>> {
+    let noun_index = particle_index.checked_sub(1)?;
+    let noun = &arguments[noun_index];
+    let particle = &arguments[particle_index];
+    let noun_idx = noun.doc_tok_idx?;
+    let action_idx = verb.doc_tok_idx?;
+    if noun.is_locked
+        || particle.is_locked
+        || !matches!(noun.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+        || !is_demonstrative_person_noun(noun)
+        || !matches!(noun.deprel.as_str(), "obl" | "iobj")
+        || !matches!(noun.head, Some(head) if head == action_idx || head == helper_idx)
+        || particle.head != Some(noun_idx)
+        || particle.deprel != "case"
+        || noun.span.end_char != particle.span.start_char
+    {
+        return None;
+    }
+    let start = noun_index
+        .checked_sub(1)
+        .filter(|&index| attached_demonstrative(&arguments[index], noun).is_some())
+        .unwrap_or(noun_index);
+    if arguments[..start].iter().any(|atom| {
+        atom.head == Some(noun_idx) && matches!(atom.deprel.as_str(), "det" | "compound" | "nmod")
+    }) {
+        return None;
+    }
+
+    let mut objects = arguments
+        .iter()
+        .filter(|atom| atom.deprel == "obj" && atom.head == Some(action_idx));
+    let object = objects.next();
+    let has_object = object.is_some();
+    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    let has_sending_recipient = lemma == "送る"
+        && noun.deprel == "iobj"
+        && object.is_some_and(|item| {
+            !item.is_locked
+                && matches!(
+                    item.surface.as_str(),
+                    "手紙"
+                        | "メール"
+                        | "電子メール"
+                        | "葉書"
+                        | "はがき"
+                        | "小包"
+                        | "荷物"
+                        | "書類"
+                        | "資料"
+                        | "写真"
+                        | "ファイル"
+                        | "メッセージ"
+                )
+        })
+        && objects.next().is_none();
+    let role = if noun.head == Some(helper_idx) {
+        TeHelpPersonRole::Performer
+    } else if has_sending_recipient || (has_object && matches!(lemma, "返す" | "渡す" | "手渡す"))
+    {
+        TeHelpPersonRole::Recipient
+    } else if has_object && lemma == "描く" {
+        // Ordinary drawing takes the drawing as its object, not a recipient.
+        TeHelpPersonRole::Performer
+    } else {
+        // The ordinary clause renderer keeps the original case argument.
+        return None;
+    };
+    Some(TeHelpPerson {
+        phrase: &arguments[start..particle_index],
+        start,
+        end: particle_index + 1,
+        role,
+    })
+}
+
+// Some lexical child compounds contain ども even when the tokenizer gives it
+// a connective tag. The nominal modifier and its の must both be source-linked.
+fn te_help_child_suffix(arguments: &[Atom], action_idx: usize) -> Option<usize> {
+    arguments.windows(3).enumerate().find_map(|(index, group)| {
+        let child = &group[0];
+        let suffix = &group[1];
+        let genitive = &group[2];
+        let child_idx = child.doc_tok_idx?;
+        (!group.iter().any(|atom| atom.is_locked)
+            && child.surface == "子"
+            && child.upos == Some(Upos::Noun)
+            && child.deprel == "nmod"
+            && suffix.surface == "ども"
+            && suffix.upos == Some(Upos::Sconj)
+            && suffix.deprel == "mark"
+            && suffix.head == Some(child_idx)
+            && genitive.surface == "の"
+            && genitive.upos == Some(Upos::Adp)
+            && genitive.deprel == "case"
+            && genitive.head == Some(child_idx)
+            && child.span.end_char == suffix.span.start_char
+            && suffix.span.end_char == genitive.span.start_char
+            && arguments[index + 3..].iter().any(|object| {
+                object.doc_tok_idx.is_some()
+                    && child.head == object.doc_tok_idx
+                    && object.deprel == "obj"
+                    && object.head == Some(action_idx)
+            }))
+        .then_some(index + 1)
+    })
+}
+
+fn te_help_request(atoms: &[Atom]) -> Option<TeHelpRequest<'_>> {
+    let (body, helper, polite, question, negative_form) = match atoms {
+        [body @ .., helper, mase, n, question] if mase.surface == "ませ" && n.surface == "ん" => {
+            (
+                body,
+                helper,
+                &atoms[body.len() + 1..atoms.len() - 1],
+                question,
+                true,
+            )
+        }
+        [body @ .., helper, masu, question] if masu.surface == "ます" => {
+            (body, helper, std::slice::from_ref(masu), question, false)
+        }
+        _ => return None,
+    };
+    let humble = match (helper.surface.as_str(), helper.lemma.as_deref()) {
+        ("いただけ", Some("いただける")) => true,
+        ("もらえ", Some("もらえる")) => false,
+        _ => return None,
+    };
+    let helper_idx = helper.doc_tok_idx?;
+    let [arguments @ .., verb, link] = body else {
+        return None;
+    };
+    let action_idx = verb.doc_tok_idx?;
+    if !is_te_form_link(verb, link, helper)
+        || helper.upos != Some(Upos::Verb)
+        || helper.deprel != "root"
+        || verb.head != Some(helper_idx)
+        || verb.deprel != "advcl"
+        || link.head != Some(action_idx)
+        || link.deprel != "mark"
+        || polite.iter().any(|atom| {
+            atom.is_locked
+                || atom.upos != Some(Upos::Aux)
+                || atom.head != Some(helper_idx)
+                || atom.deprel != "aux"
+        })
+        || question.is_locked
+        || question.surface != "か"
+        || question.upos != Some(Upos::Part)
+        || question.head != Some(helper_idx)
+        || question.deprel != "discourse"
+        || atoms[body.len()..]
+            .windows(2)
+            .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
+        // Show and lend have their own recipient. Do not turn either into
+        // an action the speaker would perform with the listener's help.
+        || matches!(verb.lemma.as_deref(), Some("見せる" | "貸す"))
+        || verb.surface.ends_with("ない")
+    {
+        return None;
+    }
+
+    let child_suffix = te_help_child_suffix(arguments, action_idx);
+    let mut datives = arguments
+        .iter()
+        .enumerate()
+        .filter(|(_, atom)| atom.upos == Some(Upos::Adp) && atom.surface == "に");
+    let person = if let Some((index, _)) = datives.next() {
+        if datives.next().is_some() {
+            return None;
+        }
+        Some(te_help_person(arguments, index, verb, helper_idx)?)
+    } else {
+        None
+    };
+    for (index, atom) in arguments.iter().enumerate() {
+        if person
+            .as_ref()
+            .is_some_and(|bound| (bound.start..bound.end).contains(&index))
+        {
+            continue;
+        }
+        if atom.is_locked {
+            if atom.deprel != "obj" || atom.head != Some(action_idx) {
+                return None;
+            }
+            continue;
+        }
+        if (matches!(atom.upos, Some(Upos::Verb | Upos::Sconj)) && Some(index) != child_suffix)
+            || matches!(atom.deprel.as_str(), "nsubj" | "iobj")
+            || (atom.upos == Some(Upos::Aux)
+                && matches!(
+                    atom.surface.as_str(),
+                    "ない" | "なく" | "なかった" | "なかっ"
+                ))
+            || (atom.upos == Some(Upos::Adp)
+                && matches!(atom.surface.as_str(), "は" | "が" | "へ" | "から"))
+        {
+            return None;
+        }
+    }
+
+    if let Some(comma) = arguments.iter().position(is_punct_atom) {
+        let (lead, rest) = arguments.split_at(comma);
+        if !matches!(rest[0].surface.as_str(), "、" | "，" | ",")
+            || lead.is_empty()
+            || rest[1..].iter().any(is_punct_atom)
+            || !lead.iter().all(|adverb| {
+                !adverb.is_locked
+                    && adverb.upos == Some(Upos::Adv)
+                    && adverb.deprel == "advmod"
+                    && (adverb.head == Some(action_idx)
+                        || rest[1..].iter().any(|next| {
+                            next.doc_tok_idx.is_some()
+                                && adverb.head == next.doc_tok_idx
+                                && next.deprel == "advmod"
+                                && next.head == Some(action_idx)
+                        }))
+            })
+        {
+            return None;
+        }
+    }
+
+    Some(TeHelpRequest {
+        action: &body[..body.len() - 1],
+        person,
+        child_suffix,
+        humble,
+        negative_form,
+    })
+}
+
 /// Remove descriptive honorific wrappers before clause splitting. Keep all finite
 /// auxiliaries, source spans and locks so tense, negation and alignment stay local.
 fn normalize_keigo_atoms(atoms: &[Atom]) -> Vec<Atom> {
@@ -2011,6 +2270,19 @@ fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span)
             out.push(Segment::Punct(p, parent_span));
         }
     };
+
+    // Keep a verified whole request together. The ordinary splitter can
+    // otherwise treat its potential helper as a separate lexical action.
+    let request_atoms = core_non_punct(atoms);
+    let ending = &atoms[request_atoms.len()..];
+    if (ending.is_empty()
+        || matches!(ending, [punct] if !punct.is_locked && matches!(punct.surface.as_str(), "。" | "？" | "?")))
+        && te_help_request(request_atoms).is_some()
+    {
+        let punctuation = (!ending.is_empty()).then(|| "？".to_owned());
+        flush_clause(&mut request_atoms.to_vec(), punctuation, &mut segments);
+        return segments;
+    }
 
     while i < atoms.len() {
         let a = &atoms[i];
@@ -3393,6 +3665,12 @@ fn translate_clause_atoms(
         return (String::new(), false);
     }
 
+    if let Some(request) = te_help_request(core_non_punct(atoms))
+        && let Some(rendered) = render_te_help_request(request, doc, sentence_idx, ctx, target)
+    {
+        return (rendered, false);
+    }
+
     // Fast path: bare `正直` clause opener -> `老實說`.
     let non_punct: Vec<&Atom> = atoms.iter().filter(|a| !is_punct_atom(a)).collect();
     if non_punct.len() == 1 && !non_punct[0].is_locked && non_punct[0].surface == "正直" {
@@ -4077,6 +4355,133 @@ fn try_translate_polite_request_closing(atoms: &[Atom]) -> Option<(String, bool)
         return None;
     }
     Some((format!("若能請您{body}，將不勝感激"), false))
+}
+
+fn render_te_help_request(
+    request: TeHelpRequest<'_>,
+    doc: &Document,
+    sentence_idx: usize,
+    ctx: &ClauseDiscourseCtx,
+    target: TargetVariant,
+) -> Option<String> {
+    let mut repeat = false;
+    let mut action: Vec<_> = request
+        .action
+        .iter()
+        .enumerate()
+        .filter_map(|(index, atom)| {
+            if request
+                .person
+                .as_ref()
+                .is_some_and(|person| (person.start..person.end).contains(&index))
+                || request.child_suffix == Some(index)
+                || is_punct_atom(atom)
+            {
+                return None;
+            }
+            if !atom.is_locked && atom.surface == "もう一度" && atom.deprel == "advmod" {
+                repeat = true;
+                return None;
+            }
+            let mut localized = atom.clone();
+            if request.child_suffix == Some(index + 1) {
+                localized.surface = "子供".to_owned();
+                localized.lemma = None;
+                localized.span.end_char = request.action[index + 1].span.end_char;
+            }
+            Some(localized)
+        })
+        .collect();
+    let action_head = request.action.last().and_then(|atom| atom.doc_tok_idx);
+    if let Some(index) = action.iter().position(|atom| {
+        !atom.is_locked
+            && atom.upos == Some(Upos::Noun)
+            && atom.deprel == "obj"
+            && atom.head == action_head
+            && matches!(atom.surface.as_str(), "荷物" | "書類")
+    }) {
+        let object = &action[index];
+        let (noun, classifier) = if object.surface == "荷物" {
+            ("行李", "件")
+        } else {
+            ("文件", "份")
+        };
+        let mut localized = object.clone();
+        let mut start = index;
+        localized.surface = noun.to_owned();
+        if let Some(det_index) = index.checked_sub(1)
+            && let Some(demonstrative) = attached_demonstrative(&action[det_index], object)
+        {
+            start = det_index;
+            localized.span.start_char = action[start].span.start_char;
+            localized.surface = format!("{demonstrative}{classifier}{noun}");
+        }
+        localized.lemma = None;
+        localized.is_locked = true;
+        action.splice(start..=index, [localized]);
+    }
+    if request
+        .person
+        .as_ref()
+        .is_some_and(|person| person.role == TeHelpPersonRole::Performer)
+        && let Some(verb) = action.last_mut()
+        && verb.lemma.as_deref() == Some("描く")
+    {
+        // 畫畫 is intransitive in Mandarin. The explicit drawing object
+        // licenses 畫 in this request.
+        verb.surface = "畫".to_owned();
+        verb.lemma = None;
+    }
+    let (body, _) = translate_clause_atoms(&action, doc, sentence_idx, None, false, ctx, target);
+    let with_repeat = |text: &str| {
+        if repeat {
+            format!("再{text}一次")
+        } else {
+            text.to_owned()
+        }
+    };
+    if let Some(person) = request.person {
+        let name = render_bunsetsu_np(
+            &Bunsetsu {
+                atoms: person.phrase.to_vec(),
+                role: BunsetsuRole::Other,
+                case_particle: None,
+                sconj_tail: None,
+                sfp_tail: None,
+            },
+            target,
+        );
+        let polite = if request.negative_form {
+            "可以麻煩"
+        } else {
+            "可以請"
+        };
+        if person.role == TeHelpPersonRole::Performer {
+            return Some(format!("{polite}{name}幫我{}嗎", with_repeat(&body)));
+        }
+        // Use the bare transfer verb so the linked recipient follows one 給.
+        // If rendering did not keep the verb and object, keep the original clause.
+        let verb = request.action.last()?;
+        let transfer = translate_single_ja_term(&verb.surface, verb.lemma.as_deref(), verb.upos);
+        let verb = purpose_transfer_action(&transfer)?;
+        let (modifiers, object) = body
+            .split_once(&transfer)
+            .filter(|(_, object)| !object.is_empty())?;
+        let listener = if request.humble || request.negative_form {
+            "您"
+        } else {
+            "你"
+        };
+        let action_body = format!("{modifiers}把{object}{verb}給{name}");
+        return Some(format!("{polite}{listener}{}嗎", with_repeat(&action_body)));
+    }
+    let opening = match (request.humble, request.negative_form) {
+        (true, false) => "可以請您幫我",
+        (true, true) => "可以麻煩您幫我",
+        (false, false) => "可以幫我",
+        (false, true) => "可以麻煩你幫我",
+    };
+    Some(format!("{opening}{}嗎", with_repeat(&body)))
 }
 
 fn try_translate_tsumori_clause(
@@ -15177,6 +15582,183 @@ mod existence_rule_tests {
             .unwrap();
             assert_eq!(doc.target_text, expected, "{source}");
         }
+    }
+
+    #[test]
+    fn te_help_request_preserves_action_object_and_politeness() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "この荷物を持っていただけますか。",
+                "可以請您幫我拿著這件行李嗎？",
+            ),
+            (
+                "この荷物を持っていただけませんか。",
+                "可以麻煩您幫我拿著這件行李嗎？",
+            ),
+            ("写真を撮ってもらえますか。", "可以幫我拍攝照片嗎？"),
+            (
+                "この書類を確認していただけますか。",
+                "可以請您幫我確認這份文件嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+
+        let repeat = translate("もう一度、ゆっくり話していただけませんか。", &glossary);
+        assert!(
+            repeat.target_text.starts_with("可以麻煩您幫我再")
+                && repeat.target_text.contains("慢慢")
+                && repeat.target_text.ends_with("一次嗎？"),
+            "{}",
+            repeat.target_text
+        );
+    }
+
+    #[test]
+    fn te_help_request_binds_recipient_and_performer_separately() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "この本を先生に返していただけますか。",
+                "可以請您把這本書還給老師嗎？",
+            ),
+            (
+                "先生にこの本を返してもらえませんか。",
+                "可以麻煩您把這本書還給老師嗎？",
+            ),
+            (
+                "先生に地図を描いていただけますか。",
+                "可以請老師幫我畫地圖嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+
+        let ambiguous = translate("先生に本を読んでいただけますか。", &glossary).target_text;
+        assert!(
+            ambiguous.contains("老師")
+                && ambiguous.contains("讀")
+                && ambiguous.ends_with("嗎？")
+                && !ambiguous.contains("關於"),
+            "{ambiguous}"
+        );
+        let statement = translate("私は先生に写真を撮ってもらいました。", &glossary).target_text;
+        assert!(
+            statement.starts_with("老師幫我") && !statement.contains('嗎'),
+            "{statement}"
+        );
+    }
+
+    #[test]
+    fn te_help_request_keeps_the_linked_recipient_of_a_delivery() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "友達に手紙を送ってもらえますか。",
+                "可以請你把信寄給朋友嗎？",
+            ),
+            (
+                "手紙を友達に送ってもらえますか。",
+                "可以請你把信寄給朋友嗎？",
+            ),
+            (
+                "先生にメールを送っていただけますか。",
+                "可以請您把電子郵件寄給老師嗎？",
+            ),
+            (
+                "友達にこの本を渡していただけますか。",
+                "可以請您把這本書遞給朋友嗎？",
+            ),
+            ("友達に手紙を書いてもらえますか。", "給朋友寫信，もらえ嗎？"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+
+        for source in [
+            "先生に子供を送っていただけますか。",
+            "先生に幼児を送っていただけますか。",
+        ] {
+            let escort = translate(source, &glossary).target_text;
+            assert!(
+                escort.contains("老師") && !escort.contains("寄給") && !escort.contains("關於"),
+                "{source}: {escort}"
+            );
+        }
+        let source = "手紙を送ってもらえますか。";
+        let implicit = translate(source, &glossary).target_text;
+        assert!(
+            implicit.contains("幫我")
+                && implicit.contains('寄')
+                && implicit.contains('信')
+                && !implicit.contains("寄給"),
+            "{source}: {implicit}"
+        );
+    }
+
+    #[test]
+    fn te_help_request_keeps_linked_child_possessive_inside_the_object() {
+        let glossary = TranslationGlossary::new();
+        for (source, owner) in [
+            ("子どもの写真を撮ってもらえますか。", "孩子"),
+            ("犬の写真を撮ってもらえますか。", "狗"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                format!("可以幫我拍攝{owner}的照片嗎？"),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_request_leaves_other_roles_and_protected_text_intact() {
+        let glossary = TranslationGlossary::new();
+        for source in [
+            "この資料をいただけませんか。",
+            "田中さんご本人に、母のためにこの書類を確認していただけませんか。",
+            "私が内容を確認してから、窓口で控えを一部いただけますか。",
+            "写真を撮って送ってもらえますか。",
+        ] {
+            let output = translate(source, &glossary).target_text;
+            assert!(!output.contains("幫我"), "{source}: {output}");
+        }
+        for (source, ability) in [("泳げますか。", "能游泳"), ("泳げませんか。", "不能游泳")]
+        {
+            let output = translate(source, &glossary).target_text;
+            assert!(
+                output.contains(ability) && !output.contains("幫我"),
+                "{source}: {output}"
+            );
+        }
+
+        let locked = translate("この`資料A`を確認していただけませんか。", &glossary);
+        assert!(locked.target_text.starts_with("可以麻煩您幫我確認"));
+        assert!(locked.target_text.ends_with("嗎？"));
+        assert_eq!(locked.target_text.matches("`資料A`").count(), 1);
+        let [record] = locked.opaque_spans.as_slice() else {
+            panic!("expected one protected object");
+        };
+        let span = record.target_span.expect("restored object");
+        let slice: String = locked
+            .target_text
+            .chars()
+            .take(span.end_char)
+            .skip(span.start_char)
+            .collect();
+        assert_eq!(slice, "`資料A`");
     }
 
     #[test]

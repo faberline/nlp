@@ -5347,14 +5347,12 @@ fn has_floor_order_context(atoms: &[Atom], floor: usize, predicate: usize) -> bo
     })
 }
 
-// Identify the complete floor label in the source before changing how it is
-// rendered. Keep the head of 階 and the span of the entire numeral and suffix.
-fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<usize> {
+// Identify the complete unlocked floor label in the source.
+fn building_floor_label_start(atoms: &[Atom], end: usize) -> Option<usize> {
     let floor = &atoms[end];
     if floor.is_locked || floor.upos != Some(Upos::Noun) {
         return None;
     }
-    let floor_idx = floor.doc_tok_idx?;
     let prefix = floor.surface.strip_suffix('階')?;
     let mut start = end;
     if prefix.is_empty() {
@@ -5400,7 +5398,22 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
             return None;
         }
     }
+    Some(start)
+}
 
+fn has_floor_number_link(label: &[Atom], floor: &Atom, floor_idx: usize) -> bool {
+    floor.surface != "階"
+        || label.iter().any(|number| {
+            number.head == Some(floor_idx)
+                && number.deprel == "nummod"
+                && is_floor_number(&number.surface)
+        })
+}
+
+fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<usize> {
+    let start = building_floor_label_start(atoms, end)?;
+    let floor = &atoms[end];
+    let floor_idx = floor.doc_tok_idx?;
     let tail = atoms.get(end + 1)?;
     if tail.is_locked || floor.span.end_char != tail.span.start_char {
         return None;
@@ -5452,20 +5465,23 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
         "で" => {
             // A numbered floor linked to an event by で normally gives its
             // venue. An explicit building modifier resolves math contexts.
-            let has_number_link = !prefix.is_empty()
-                || atoms[start..end].iter().any(|number| {
-                    number.head == Some(floor_idx)
-                        && number.deprel == "nummod"
-                        && is_floor_number(&number.surface)
-                });
             spatial_case
-                && has_number_link
+                && has_floor_number_link(&atoms[start..end], floor, floor_idx)
                 && (has_place_genitive(&atoms[..start], floor_idx, doc)
                     || !has_floor_order_context(atoms, floor_idx, governor))
         }
         _ => false,
     };
     is_spatial.then_some(start)
+}
+
+fn building_floor_atom(label: &[Atom], floor: &Atom) -> Atom {
+    // Keep the source head of 階 and the complete numeral and suffix span.
+    let mut floor = floor.clone();
+    floor.span.start_char = label[0].span.start_char;
+    floor.surface = label.iter().map(|a| a.surface.as_str()).collect();
+    floor.lemma = Some(BUILDING_FLOOR.to_owned());
+    floor
 }
 
 fn normalize_building_floors(mut atoms: Vec<Atom>, doc: &Document) -> Vec<Atom> {
@@ -5475,13 +5491,7 @@ fn normalize_building_floors(mut atoms: Vec<Atom>, doc: &Document) -> Vec<Atom> 
         let Some(start) = building_floor_start(&atoms, end, doc) else {
             continue;
         };
-        let mut floor = atoms[end].clone();
-        floor.span.start_char = atoms[start].span.start_char;
-        floor.surface = atoms[start..=end]
-            .iter()
-            .map(|a| a.surface.as_str())
-            .collect();
-        floor.lemma = Some(BUILDING_FLOOR.to_owned());
+        let floor = building_floor_atom(&atoms[start..=end], &atoms[end]);
         atoms.splice(start..=end, [floor]);
         end = start;
     }
@@ -8539,6 +8549,46 @@ fn motion_purpose_governor(source: &[Atom], inside_quote: bool) -> Option<usize>
     roots.next().is_none().then_some(id)
 }
 
+fn purpose_floor_goal(
+    group: &Bunsetsu,
+    source: &[Atom],
+    purpose_id: usize,
+    purpose_sets_value: bool,
+) -> Option<Atom> {
+    let [label @ .., floor, case] = group.atoms.as_slice() else {
+        return None;
+    };
+    let floor_idx = floor.doc_tok_idx?;
+    if floor.head != Some(purpose_id)
+        || floor.deprel != "obl"
+        || case.is_locked
+        || case.upos != Some(Upos::Adp)
+        || !matches!(case.surface.as_str(), "に" | "へ")
+        || case.deprel != "case"
+        || case.head != Some(floor_idx)
+        || floor.span.end_char != case.span.start_char
+    {
+        return None;
+    }
+    let end = source
+        .iter()
+        .position(|a| a.doc_tok_idx == Some(floor_idx))?;
+    let start = building_floor_label_start(source, end)?;
+    // Require the whole floor label and case to form one argument. The source
+    // check also sees a preceding ordinal or lock outside this group.
+    if end - start != label.len() || !has_floor_number_link(label, floor, floor_idx) {
+        return None;
+    }
+    // A change verb with mathematical context can take a new order in に.
+    if case.surface == "に"
+        && purpose_sets_value
+        && has_floor_order_context(source, floor_idx, purpose_id)
+    {
+        return None;
+    }
+    Some(building_floor_atom(&source[start..=end], floor))
+}
+
 fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom], motion_go: usize) {
     use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
     let mut found = None;
@@ -8608,6 +8658,7 @@ fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom], motion_go: usiz
     let direct_object = source
         .iter()
         .any(|a| a.deprel == "obj" && (a.head == Some(id) || (nominal_stem && a.head == go)));
+    let purpose_sets_value = direct_object && matches!(lemma.as_str(), "する" | "戻す" | "変える");
     let transfer = direct_object
         && purpose_transfer_action(&translate_single_ja_term(
             &lemma,
@@ -8618,6 +8669,12 @@ fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom], motion_go: usiz
     groups[index].role = BunsetsuRole::MotionPurpose;
     groups[index].atoms[0].lemma = Some(lemma);
     for group in groups {
+        // A floor can attach to the purpose verb even though it is where
+        // the person is going. Keep its source link and case particle.
+        if let Some(floor) = purpose_floor_goal(group, source, id, purpose_sets_value) {
+            group.atoms.splice(..group.atoms.len() - 1, [floor]);
+            continue;
+        }
         let [noun, ni] = group.atoms.as_slice() else {
             continue;
         };
@@ -10844,6 +10901,59 @@ mod motion_endpoint_tests {
             ("友達に会いに行きます。", "去和朋友見面。"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn motion_purpose_keeps_a_source_linked_floor_as_the_destination() {
+        for (source, expected) in [
+            ("私は三階に本を返しに行きます。", "我去三樓還書。"),
+            ("私は二階に友達を探しに行きます。", "我去二樓找朋友。"),
+            ("三階へ本を借りに行きますか。", "往三樓去借書嗎？"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn motion_purpose_floor_distinguishes_math_order_from_a_place_to_write() {
+        for source in [
+            "私は式を二階にしに行きます。",
+            "私は式を二階に戻しに行きます。",
+        ] {
+            let output = translate(source);
+            assert!(
+                output.contains("二階") && output.contains('式') && !output.contains('樓'),
+                "{source}: {output}"
+            );
+        }
+        let source = "私は三階に数式を書きに行きます。";
+        let output = translate(source);
+        assert!(
+            output.contains("去三樓寫") && output.contains('式'),
+            "{source}: {output}"
+        );
+    }
+
+    #[test]
+    fn motion_purpose_floor_keeps_other_roles_and_locks() {
+        let source = "私は三階で本を返します。";
+        let output = translate(source);
+        assert!(
+            output.contains("在三樓") && output.contains('書') && !output.contains('去'),
+            "{source}: {output}"
+        );
+        for (source, kept) in [
+            ("この微分方程式は二階です。", "二階"),
+            ("私は二階堂さんに本を返しに行きます。", "二階堂"),
+            ("私は`三階`に本を返しに行きます。", "`三階`"),
+            ("私は三階の図書室に本を返しに行きます。", "三階"),
+        ] {
+            let output = translate(source);
+            assert!(
+                output.contains(kept) && !output.contains('樓'),
+                "{source}: {output}"
+            );
         }
     }
 

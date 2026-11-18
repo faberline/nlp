@@ -12,12 +12,12 @@ Strict A2 rules:
      on existing rows; fill unglossed (`cols[6] == '-'`) rows. The sole
      reviewed exception replaces the `午後` noun/adverb identity gloss using
      its matching first-party noun gloss and adds first-party provenance.
-  3. Only insert missing rows (<= 35 total) for the explicit closed paradigms and two
+  3. Only insert missing rows (<= 35 total) for the explicit closed paradigms and
      approved everyday nouns:
      (a) Step 4 Keigo verbs (`拝見する`)
      (b) 4-kana reduplicated ABAB / mimetic adverbs (`ざあざあ`, `ざわざわ`, `くたくた`,
          `にゃあにゃあ`, `ちゅんちゅん`, `ねばねば`, `ぽっちゃり`, `さらっと`, `しーん`).
-     (c) The NOUN entries `かばん` and `みかん`.
+     (c) The NOUN entries `かばん`, `みかん`, and `店長`.
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ ALLOWED_INSERT_SURFACES = {
     # Approved first-party everyday noun entries.
     "かばん",
     "みかん",
+    "店長",
     # Step 4 Keigo verb missing from ja.tsv
     "拝見する",
     # Closed 4-kana reduplicated ABAB / mimetic adverbs missing from ja.tsv

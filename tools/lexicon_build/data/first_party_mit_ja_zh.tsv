@@ -18,6 +18,8 @@
 財布	NOUN	錢包	650	-
 社長	NOUN	社長	650	-
 部長	NOUN	部長	650	-
+# Cost follows the existing ja.tsv management title 部長 (956).
+店長	NOUN	店長	956	-
 部下	NOUN	部下	650	-
 資料	NOUN	資料	650	-
 意見	NOUN	意見	650	-

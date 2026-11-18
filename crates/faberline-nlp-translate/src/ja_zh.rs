@@ -876,6 +876,8 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
 // Marker used only for atoms synthesized by the clock recognizer.  Protected
 // placeholders retain their own identity and are never classified by this marker.
 const CLOCK_ATOM: &str = "__ja_clock_atom";
+// A typed compound time created only while assembling a continuation endpoint.
+const TEMPORAL_MADE_COMPOUND_ATOM: &str = "__ja_temporal_made_compound";
 // An opaque component in an explicitly period-qualified clock-shaped phrase.
 // Its value remains unknown and its placeholder remains untouched.
 const OPAQUE_PERIOD_CLOCK: &str = "__ja_opaque_period_clock";
@@ -5246,6 +5248,7 @@ fn translate_clause_bunsetsus(
         case_particle: Option<String>,
         is_instrument_de: bool,
         is_spatial_made: bool,
+        temporal_made_time: Option<String>,
         is_clock: bool,
         is_plain_clock_ni: bool,
         transfer_dative: bool,
@@ -5565,6 +5568,7 @@ fn translate_clause_bunsetsus(
                         case_particle: b.case_particle.clone(),
                         is_instrument_de: is_inst,
                         is_spatial_made: is_spatial_made_bunsetsu(&b),
+                        temporal_made_time: temporal_made_time(&b),
                         is_clock: b.atoms.iter().any(is_clock_atom),
                         is_plain_clock_ni: is_plain_clock_ni(&b),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
@@ -5608,6 +5612,7 @@ fn translate_clause_bunsetsus(
                         case_particle: b.case_particle.clone(),
                         is_instrument_de: false,
                         is_spatial_made: false,
+                        temporal_made_time: None,
                         is_clock: false,
                         is_plain_clock_ni: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
@@ -5999,6 +6004,7 @@ fn translate_clause_bunsetsus(
                     case_particle: Some("と".to_owned()),
                     is_instrument_de: false,
                     is_spatial_made: false,
+                    temporal_made_time: None,
                     is_clock: false,
                     is_plain_clock_ni: false,
                     transfer_dative: false,
@@ -6589,9 +6595,21 @@ fn translate_clause_bunsetsus(
     // A place marked by まで is the endpoint of a motion event. Keep this
     // local to まで: the global goal flag also changes recipients and vehicles.
     let mut made_endpoints = Vec::new();
+    let mut temporal_made_tails = Vec::new();
+    let predicate_is_negative = inner_pre_mods
+        .iter()
+        .any(|m| matches!(m.as_str(), "不" | "沒有"));
     for o in obliques {
         let _ = o.is_instrument_de;
-        if has_spatial_made && o.is_spatial_made {
+        if let Some(time) = o.temporal_made_time {
+            if predicate_is_negative {
+                // Put an "until" frame before the negated event and retain its negation.
+                parts.push(format!("到{time}為止"));
+            } else {
+                // The endpoint follows the full activity, including a direct object.
+                temporal_made_tails.push(format!("到{time}"));
+            }
+        } else if has_spatial_made && o.is_spatial_made {
             made_endpoints.push(o.text);
         } else if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
             let raw_np = o.text.strip_prefix('到').unwrap_or(&o.text);
@@ -6653,6 +6671,11 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
+    // A temporal continuation endpoint already bounds the activity. Omit the
+    // ordinary perfective marker rather than break up the activity and endpoint.
+    if !temporal_made_tails.is_empty() {
+        post_verb_mods.retain(|modifier| modifier != "了");
+    }
     if !goal_tails.is_empty() {
         parts.extend(goal_tails);
         parts.append(&mut post_verb_mods);
@@ -6682,6 +6705,7 @@ fn translate_clause_bunsetsus(
     parts.extend(transfer_recipient);
     parts.extend(objs);
     parts.extend(purpose_recipients);
+    parts.extend(temporal_made_tails);
     if let Some(le) = trailing_change_le {
         parts.push(le);
     }
@@ -8792,6 +8816,10 @@ fn merge_adnominal_bunsetsus(
                             inner.push('的');
                         }
                         prepend_locked_atom(&mut b, inner);
+                        continue;
+                    }
+
+                    if merge_temporal_made_anchor(&mut b, &mod_b.atoms) {
                         continue;
                     }
 
@@ -10918,6 +10946,97 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn temporal_made_follows_the_activity_and_preserves_the_time_reading() {
+        assert_eq!(
+            translate("私は六時まで日本語を勉強します。"),
+            "我學習日本語到六點。"
+        );
+        assert_eq!(
+            translate("私は午後六時まで日本語を勉強します。"),
+            "我學習日本語到下午六點。"
+        );
+        assert_eq!(
+            translate("私は日曜日まで日本語を勉強します。"),
+            "我學習日本語到星期日。"
+        );
+        assert_eq!(
+            translate("図書館で夕方まで本を読みます。"),
+            "在圖書館讀書到傍晚。"
+        );
+    }
+
+    #[test]
+    fn temporal_made_places_the_past_activity_and_location_before_the_endpoint() {
+        for (source, expected) in [
+            ("私は六時まで働きます。", "我工作到六點。"),
+            ("私は六時まで働きました。", "我工作到六點。"),
+            ("私は日曜日まで家で働きました。", "我在家工作到星期日。"),
+            ("子供は夕方まで公園で遊びました。", "孩子在公園玩到傍晚。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        // Author controls derived from TMD-N5-01 and the work example above.
+        assert_eq!(
+            translate("私は六時まで日本語を勉強しました。"),
+            "我學習日本語到六點。"
+        );
+        assert_eq!(
+            translate("私は六時まで働きませんでした。"),
+            "我到六點為止沒有工作。"
+        );
+    }
+
+    #[test]
+    fn compound_temporal_made_keeps_both_time_parts_after_the_activity() {
+        for (source, expected) in [
+            (
+                "私は明日の朝まで日本語を勉強します。",
+                "我學習日本語到明天早上。",
+            ),
+            (
+                "私は来週の月曜日まで日本語を勉強します。",
+                "我學習日本語到下週一。",
+            ),
+            (
+                "私は明日の午前六時まで日本語を勉強します。",
+                "我學習日本語到明天上午六點。",
+            ),
+            ("私は来週の金曜日まで働きます。", "我工作到下週五。"),
+            ("私は明日の朝まで働きません。", "我到明天早上為止不工作。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn compound_temporal_made_leaves_other_genitive_roles_unchanged() {
+        for (source, expected) in [
+            ("明日の朝までに手紙を書きます。", "在明天的早上寫信。"),
+            ("私は明日の朝に手紙を書きます。", "我在明天的早上寫信。"),
+            ("朝の電車まで走りました。", "連早上的電車都跑了。"),
+            ("私は学校の先生まで歩いた。", "我連學校的老師都走了。"),
+            ("学校の図書館まで歩いた。", "走到學校的圖書館了。"),
+            (
+                "来週の会議まで日本語を勉強します。",
+                "連下週的會議都學習日本語。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn temporal_made_leaves_deadlines_and_other_endpoints_alone() {
+        assert_eq!(
+            translate("私は六時までに手紙を書きます。"),
+            "我在六點寫信。"
+        );
+        assert_eq!(translate("私は六時に手紙を書きます。"), "我在六點寫信。");
+        assert_eq!(translate("先生まで歩いた。"), "連老師都走了。");
+        assert_eq!(translate("駅まで歩いた。"), "走到車站了。");
+    }
+
+    #[test]
     fn negative_motion_and_a_following_clause_keep_their_scope() {
         let negative = translate("駅まで歩かなかった。");
         assert!(negative.contains("沒有走到車站"), "{negative}");
@@ -10993,6 +11112,113 @@ fn negative_go_place_head(b: &Bunsetsu) -> Option<usize> {
         }
     }
     noun.head
+}
+
+// Compose time-on-time の before the generic adnominal merge renders it as 的
+// and loses the source type. Keep non-time modifiers on their original path.
+fn merge_temporal_made_anchor(b: &mut Bunsetsu, modifier: &[Atom]) -> bool {
+    let [anchor, no] = modifier else {
+        return false;
+    };
+    if no.is_locked
+        || no.upos != Some(Upos::Adp)
+        || no.surface != "の"
+        || anchor.span.end_char != no.span.start_char
+        || b.atoms
+            .first()
+            .is_none_or(|head| no.span.end_char != head.span.start_char)
+    {
+        return false;
+    }
+    let Some(time) = temporal_made_time(b) else {
+        return false;
+    };
+    let Some(anchor_text) = render_temporal_made_atom(anchor) else {
+        return false;
+    };
+
+    // A weekday within a named week has the compact reading 下週一, 上週五, etc.
+    let tail = if matches!(anchor.surface.as_str(), "先週" | "今週" | "来週") {
+        time.strip_prefix("星期").unwrap_or(&time)
+    } else {
+        &time
+    };
+    let head = &mut b.atoms[0];
+    head.span.start_char = anchor.span.start_char;
+    head.surface = format!("{anchor_text}{tail}");
+    head.lemma = Some(TEMPORAL_MADE_COMPOUND_ATOM.to_owned());
+    head.is_locked = true;
+    true
+}
+
+// Only a typed time with adjacent, bare まで licenses the continuation
+// reading. Leave までに, opaque groups and other nouns alone.
+fn temporal_made_time(b: &Bunsetsu) -> Option<String> {
+    let [time, particle] = b.atoms.as_slice() else {
+        return None;
+    };
+    if b.case_particle.as_deref() != Some("まで")
+        || particle.is_locked
+        || particle.upos != Some(Upos::Adp)
+        || particle.surface != "まで"
+        || time.span.end_char != particle.span.start_char
+    {
+        return None;
+    }
+    render_temporal_made_atom(time)
+}
+
+fn render_temporal_made_atom(time: &Atom) -> Option<String> {
+    if matches!(
+        time.lemma.as_deref(),
+        Some(CLOCK_ATOM | TEMPORAL_MADE_COMPOUND_ATOM)
+    ) && !time.surface.contains("[[PH")
+    {
+        return Some(time.surface.clone());
+    }
+    if time.is_locked || !matches!(time.upos, Some(Upos::Noun | Upos::Adv)) {
+        return None;
+    }
+
+    // The existing weekday glosses are indexed by the abbreviated form.
+    let weekday = time.surface.strip_suffix('日').unwrap_or(&time.surface);
+    if matches!(
+        weekday,
+        "月曜" | "火曜" | "水曜" | "木曜" | "金曜" | "土曜" | "日曜"
+    ) {
+        return Some(translate_single_ja_term(weekday, None, time.upos));
+    }
+    // These date and daypart heads are unambiguous as standalone time words.
+    let is_time = matches!(
+        time.surface.as_str(),
+        "今" | "昨日"
+            | "今日"
+            | "明日"
+            | "明後日"
+            | "翌日"
+            | "先週"
+            | "今週"
+            | "来週"
+            | "週末"
+            | "先月"
+            | "今月"
+            | "来月"
+            | "月末"
+            | "去年"
+            | "今年"
+            | "来年"
+            | "年末"
+            | "朝"
+            | "午前"
+            | "正午"
+            | "昼"
+            | "午後"
+            | "夕方"
+            | "夜"
+            | "深夜"
+    ) || faberline_nlp::lexicon::lookup_ja(&time.surface)
+        .is_some_and(|entry| entry.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Time));
+    is_time.then(|| translate_single_ja_term(&time.surface, time.lemma.as_deref(), time.upos))
 }
 
 fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {

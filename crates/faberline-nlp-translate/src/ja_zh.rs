@@ -8198,7 +8198,7 @@ fn compose_relative_daypart(groups: Vec<Bunsetsu>) -> Vec<Bunsetsu> {
 
 // An overt joint participant or a joint manner can invite the listener.
 // With an overt third party, the same finite form asks a negative question.
-fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
+fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
     let [body @ .., verb, polite, neg, ka] = source else {
         return;
     };
@@ -8381,7 +8381,7 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
         groups[before].role = BunsetsuRole::JointCompanion;
     }
     let has_object = body.iter().any(|a| a.deprel == "obj" && governs(a));
-    for group in groups {
+    for group in groups.iter_mut() {
         let Some(word) = group.atoms.first().filter(|word| governs(word)) else {
             continue;
         };
@@ -8414,6 +8414,22 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
         group.atoms.push(noun);
         group.atoms.extend(case);
         group.role = role;
+    }
+    // In 何か作業をする, 何か modifies 作業. Keep the entire noun phrase
+    // in the original object's position.
+    for i in (1..groups.len()).rev() {
+        let modifier = groups[i]
+            .atoms
+            .first()
+            .filter(|object| governs(object))
+            .and_then(|object| object.head)
+            .and_then(|predicate| {
+                indefinite_object_modifier(&groups[i - 1], &groups[i], predicate)
+            });
+        if let Some(modifier) = modifier {
+            groups[i].atoms.insert(0, modifier);
+            groups.remove(i - 1);
+        }
     }
 }
 
@@ -10893,7 +10909,10 @@ mod motion_endpoint_tests {
         );
         assert_eq!(translate("一緒に誰かが来ませんか。"), "某個人不一起來嗎？");
         assert!(!translate("一緒に何か起きませんか。").contains("點什麼"));
-        assert!(!translate("みんなで何か作業をしませんか。").contains("點什麼"));
+        assert_eq!(
+            translate("みんなで何か作業をしませんか。"),
+            "要不要大家一起做一些作業？"
+        );
         assert_eq!(translate("二人で何を読みませんか。"), "兩人不一起讀什麼？");
         assert_eq!(translate("一緒に飲めませんか。"), "不能一起喝嗎？");
         assert_eq!(

@@ -10969,6 +10969,35 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn indefinite_arguments_keep_the_deadline_statement_or_question() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "誰かが六時までに会場に来ることができません。",
+                "某個人沒辦法在六點前來到會場。",
+            ),
+            (
+                "誰かは六時までに会場に来ることができますか。",
+                "某個人可以在六點前來到會場嗎？",
+            ),
+            (
+                "彼は六時までに何か読むことができますか。",
+                "他可以在六點前讀點什麼嗎？",
+            ),
+            (
+                "明日までに何か作業をすることができます。",
+                "可以在明天截止前做一些作業。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn glossary_clock_components_keep_literal_and_order() {
         let source = "会議は午後二時半に始まります。";
         for (surface, target) in [

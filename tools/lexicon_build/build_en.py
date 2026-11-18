@@ -74,6 +74,24 @@ TARGET_MIN = 50_000
 TARGET_MAX = 70_000
 TARGET_GOAL = 66_000
 
+# First-party reviewed POS facts; an empty set withholds an unsupported
+# inferred assignment while still allowing independently sourced exact POS.
+REVIEWED_POS_EVIDENCE: dict[str, frozenset[str]] = {
+    "weftwise": frozenset({"ADJ", "ADV"}),
+    "weftwize": frozenset(),
+}
+
+
+def apply_reviewed_pos_evidence(
+    word: str,
+    direct_pos: set[str],
+    evidence: dict[str, frozenset[str]],
+) -> set[str] | None:
+    """Return reviewed and direct POS, or None when no review applies."""
+    if word not in evidence:
+        return None
+    return set(evidence[word]) | direct_pos
+
 
 def is_valid_token(w: str) -> bool:
     return bool(WORD_RE.match(w) or w in CLITICS)
@@ -354,6 +372,10 @@ def infer_regular_lemma(
     def check(base: str, allowed_pos: set[str]) -> None:
         if base in known_bases:
             overlap = known_bases[base] & allowed_pos
+            # An -ising form can coincide with a noun in -sis after stripping
+            # -ing. That spelling overlap does not establish a noun lemma.
+            if word.endswith(("ising", "izing")) and base.endswith("sis") and overlap == {"NOUN"}:
+                return
             if overlap:
                 candidates.append((base, overlap))
 
@@ -442,6 +464,14 @@ def _map_lemma_to_word_orthography(word: str, alt: str, alt_lem: str) -> str:
         if cand != alt_lem:
             return cand
     return alt_lem
+
+
+def infer_paired_wize_adverb(word: str, counterpart: str, known_bases: dict[str, set[str]]) -> bool:
+    """Recognize only a paired -wise spelling supported by a known noun stem."""
+    if not word.endswith("wize") or len(word) <= 5:
+        return False
+    stem = word[:-4]
+    return counterpart == stem + "wise" and "NOUN" in known_bases.get(stem, set())
 
 
 def infer_derivational_pos_and_lemma(
@@ -550,6 +580,12 @@ def infer_derivational_pos_and_lemma(
         for st in (stem, stem_e, *_varcon_orth_variants(stem), *_varcon_orth_variants(stem_e)):
             if st in known_bases and "VERB" in known_bases[st]:
                 return {"NOUN"}, "-"
+    if word.endswith("wise") and len(word) > 5:
+        # The spelling partner may supply a known noun stem.
+        # Do not infer POS from -wise alone or fall through to the -ise rule.
+        if "NOUN" in known_bases.get(word[:-4], set()):
+            return {"ADV"}, "-"
+        return set(), "-"
     if word.endswith(("ize", "ise", "ify")) and len(word) > 5:
         return {"VERB"}, "-"
     if word.endswith("ate") and len(word) > 6:
@@ -758,6 +794,11 @@ def main() -> int:
                     pos_set.update(c_pos)
                     lemma = c_base
 
+        # An explicit VarCon pair and known noun stem support the -wize adverb.
+        # Exact and regular source evidence retain precedence.
+        if not pos_set and infer_paired_wize_adverb(w, counterpart, wn_pos):
+            pos_set.add("ADV")
+
         # Multi-pass morphological/orthographic POS & lemma inference before unknown fallback
         if not pos_set:
             d_pos, d_lem = infer_derivational_pos_and_lemma(w, wn_pos)
@@ -783,8 +824,21 @@ def main() -> int:
         if w in gold_upos:
             pos_set.update(gold_upos[w])
 
+        # Evidence belongs to the exact spelling, never to the generic suffix
+        # inference or an unverified spelling counterpart.
+        reviewed_pos = None
+        if w in REVIEWED_POS_EVIDENCE:
+            direct_pos = set(wn_pos.get(w, set())) | set(gold_upos.get(w, set()))
+            if w in en_decided:
+                direct_pos.add(en_decided[w])
+            reviewed_pos = apply_reviewed_pos_evidence(w, direct_pos, REVIEWED_POS_EVIDENCE)
+        if reviewed_pos is not None:
+            pos_set = reviewed_pos
+
         # Determine decided_upos (emit "-", "-" when no reliable POS evidence exists)
-        if w in en_ambiguous:
+        if reviewed_pos is not None:
+            decided_upos = next(iter(pos_set)) if len(pos_set) == 1 else "-"
+        elif w in en_ambiguous:
             decided_upos = "-"
         elif w in en_decided and (w not in gold_upos or gold_upos[w] == {en_decided[w]}):
             decided_upos = en_decided[w]

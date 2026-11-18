@@ -3422,6 +3422,7 @@ fn try_translate_homework_transfer(
             }
             ("obl", "で")
                 if noun.surface == "教室"
+                    || is_building_floor(noun)
                     || is_existing_spatial_head(noun)
                     || faberline_nlp::lexicon::lookup_ja(&noun.surface)
                         .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Location)) =>

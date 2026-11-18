@@ -1,0 +1,386 @@
+{
+  "schema": "faberline.nlp.ja_zh.short_kanji_source_hint_dev.v1",
+  "version": 1,
+  "status": "development-visible-proposal",
+  "source_main": "31ba2ff719a06f04daa6e949a48c12c80593ddd0",
+  "source_tree": "3b98b31fe9fe7585d14fb081fa5b725a2d6382ba",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "author": "Codex condition_author",
+    "issue": 219
+  },
+  "reference_inputs": {
+    "source_lexicon": {
+      "file": "crates/faberline-nlp/lexicon/data/ja.tsv",
+      "sha256": "e0b414d2b047eec4958c954984d7da9e6ab03147e47e24daf87fa7e2ad42c731"
+    },
+    "first_party_glosses": {
+      "file": "tools/lexicon_build/data/first_party_mit_ja_zh.tsv",
+      "sha256": "79392886ed5cb7aebb50dcf09dfde17dd37198f088d2363da0482692f85f233f"
+    }
+  },
+  "comparisons": [
+    {
+      "id": "same_surface_hint",
+      "items": ["SKH-01", "SKH-02", "SKH-03"],
+      "varies": ["fixture.translate_options.source_hint"]
+    },
+    {
+      "id": "unknown_term_hint",
+      "items": ["SKH-06", "SKH-07"],
+      "varies": ["fixture.translate_options.source_hint"]
+    },
+    {
+      "id": "recognized_japanese_hint",
+      "items": ["SKH-05", "SKH-08"],
+      "varies": ["fixture.translate_options.source_hint"]
+    }
+  ],
+  "items": [
+    {
+      "id": "SKH-01",
+      "jp": "午後",
+      "zh_hant": "下午",
+      "allowed_variants": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": "ja",
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "expected_route": "japanese_cpu_lexicon",
+      "source_preservation": "meaning",
+      "reference_dependency": {
+        "pull_request": 214,
+        "applies_to": "exact_zh_hant_wording",
+        "fixed_main_ja_counterpart": "午後"
+      },
+      "semantic_checks": [
+        "明示日文來源時，使用完整日文詞「午後」的詞義。",
+        "保留一般時段。先核對日文詞庫路徑，再依安裝的詞表核對詞義。"
+      ],
+      "semantic_unknowns": ["原文省略日期、鐘點和事件。"],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    },
+    {
+      "id": "SKH-02",
+      "jp": "午後",
+      "zh_hant": "午後",
+      "allowed_variants": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": "zh-Hant",
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "expected_route": "chinese_variant",
+      "source_preservation": "verbatim",
+      "semantic_checks": [
+        "明示台灣繁中來源時，保留同語系轉換及原字「午後」。"
+      ],
+      "semantic_unknowns": ["原文省略日期、鐘點和事件。"],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    },
+    {
+      "id": "SKH-03",
+      "jp": "午後",
+      "zh_hant": "午後",
+      "allowed_variants": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "expected_route": "keep_unhinted_default",
+      "source_preservation": "verbatim",
+      "semantic_checks": [
+        "無提示時沿用固定主線的預設分流。",
+        "同一寫法可屬於中文或日文。保留原字「午後」。"
+      ],
+      "semantic_unknowns": ["單憑這兩字無法確認原文語言。"],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    },
+    {
+      "id": "SKH-04",
+      "jp": "新聞",
+      "zh_hant": "報紙",
+      "allowed_variants": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": "ja",
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "expected_route": "japanese_cpu_lexicon",
+      "source_preservation": "meaning",
+      "semantic_checks": [
+        "明示日文來源時，使用固定日文詞表的整詞譯法「報紙」。",
+        "以第二個獨立詞條核對短純漢字的分流。"
+      ],
+      "semantic_unknowns": ["原文省略報紙名稱、日期和份數。"],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    },
+    {
+      "id": "SKH-05",
+      "jp": "図書館で新聞を読みます。",
+      "zh_hant": "在圖書館看報紙。",
+      "allowed_variants": ["在圖書館讀報紙。"],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "expected_route": "keep_recognized_japanese_cpu",
+      "source_preservation": "meaning",
+      "semantic_checks": [
+        "含假名的完整句沿用既有日文路徑。",
+        "保留看報紙的動作和圖書館的場所。保留省略的主語。"
+      ],
+      "semantic_unknowns": ["原文省略讀者、時間和報紙名稱。"],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    },
+    {
+      "id": "SKH-06",
+      "jp": "雲銅紋",
+      "zh_hant": "雲銅紋",
+      "allowed_variants": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": "ja",
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "expected_route": "safe_fallback_for_unknown",
+      "source_preservation": "verbatim",
+      "semantic_checks": [
+        "明示日文不足以確定未收錄的整詞詞義。保留完整原字和順序。"
+      ],
+      "semantic_unknowns": ["這是自造詞。詞義、讀音和原文語言皆未指定。"],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    },
+    {
+      "id": "SKH-07",
+      "jp": "雲銅紋",
+      "zh_hant": "雲銅紋",
+      "allowed_variants": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "expected_route": "safe_fallback_for_unknown",
+      "source_preservation": "verbatim",
+      "semantic_checks": [
+        "無提示的未知整詞仍保留原字和順序。",
+        "以相同原文核對提示前後的保全結果。"
+      ],
+      "semantic_unknowns": ["這是自造詞。詞義、讀音和原文語言皆未指定。"],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    },
+    {
+      "id": "SKH-08",
+      "jp": "図書館で新聞を読みます。",
+      "zh_hant": "在圖書館看報紙。",
+      "allowed_variants": ["在圖書館讀報紙。"],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": "ja",
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "expected_route": "keep_recognized_japanese_cpu",
+      "source_preservation": "meaning",
+      "semantic_checks": [
+        "含假名的完整句沿用既有日文路徑。",
+        "保留看報紙的動作和圖書館的場所。保留省略的主語。"
+      ],
+      "semantic_unknowns": ["原文省略讀者、時間和報紙名稱。"],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    },
+    {
+      "id": "SKH-09",
+      "jp": "我去市場買菜。",
+      "zh_hant": "我去市場買菜。",
+      "allowed_variants": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "expected_route": "chinese_variant",
+      "source_preservation": "verbatim",
+      "semantic_checks": [
+        "日常台灣繁中在無提示時沿用中文同語系處理。保留原文字句及句號。"
+      ],
+      "semantic_unknowns": ["原文省略買菜的時間和市場名稱。"],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    }
+  ]
+}

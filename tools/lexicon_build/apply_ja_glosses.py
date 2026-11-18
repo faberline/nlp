@@ -10,10 +10,12 @@ Strict A2 rules:
      matching apply_a1_lexemes.py / build_ja.py so diffs only touch modified/inserted rows.
   2. Never modify `cost` or any column other than `counterpart` (col 6) and `meta` (col 7)
      on existing rows; only fill existing unglossed (`cols[6] == '-'`) rows.
-  3. Only insert missing rows for the two explicit closed paradigms (<= 35 total):
+  3. Only insert missing rows (<= 35 total) for the explicit closed paradigms and two
+     approved everyday nouns:
      (a) Step 4 Keigo verbs (`拝見する`)
      (b) 4-kana reduplicated ABAB / mimetic adverbs (`ざあざあ`, `ざわざわ`, `くたくた`,
          `にゃあにゃあ`, `ちゅんちゅん`, `ねばねば`, `ぽっちゃり`, `さらっと`, `しーん`).
+     (c) The NOUN entries `かばん` and `みかん`.
 """
 
 from __future__ import annotations
@@ -28,6 +30,9 @@ GLOSS_TSV = Path(__file__).resolve().parent / "data" / "first_party_mit_ja_zh.ts
 A4_GLOSS_TSV = Path(__file__).resolve().parent / "data" / "a4_first_party_mit_ja_zh.tsv"
 
 ALLOWED_INSERT_SURFACES = {
+    # Approved first-party everyday noun entries.
+    "かばん",
+    "みかん",
     # Step 4 Keigo verb missing from ja.tsv
     "拝見する",
     # Closed 4-kana reduplicated ABAB / mimetic adverbs missing from ja.tsv

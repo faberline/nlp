@@ -8,11 +8,11 @@
 use std::collections::HashMap;
 
 use faberline_nlp::Span;
-use faberline_nlp::doc::{Document, FrameRole, Token, Upos};
+use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
 
 use crate::conditioning::zh_pronoun_for_hint;
 use crate::lock::{LockOrigin, SpanLockTable};
-use crate::schema::{ClauseAlignment, SentenceConditioning, TargetVariant};
+use crate::schema::{ClauseAlignment, GlossaryKind, SentenceConditioning, TargetVariant};
 use crate::variant::{convert_zh_text_to_target, convert_zh_text_to_target_with_spans};
 
 /// Returns `true` if `text` contains Hiragana or Katakana and no Hangul.
@@ -106,9 +106,29 @@ struct Bunsetsu {
     sfp_tail: Option<String>,
 }
 
+pub(crate) struct DirectQuoteOpening {
+    prefix_span: Span,
+    prefix: String,
+    pub(crate) close: Option<char>,
+}
+
+pub(crate) enum DirectQuoteEnd {
+    Continues,
+    Closed,
+    Reports(Span),
+    Other,
+}
+
+#[derive(Default)]
+pub(crate) struct DirectQuotePlacement {
+    pub(crate) opening: Option<DirectQuoteOpening>,
+    pub(crate) report: Option<Span>,
+}
+
 /// Translate a single Japanese (or Ja-dominant Mixed) sentence into `target` (`zh-Hant` / `zh-Hans`),
 /// returning the masked target string (with `[[PHk]]` placeholders intact for `SpanLockTable::restore`)
 /// and `ClauseAlignment` entries relative to sentence start (0-based within the sentence).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn translate_ja_sentence(
     sentence_idx: usize,
     chars: &[char],
@@ -117,13 +137,10 @@ pub(crate) fn translate_ja_sentence(
     lock_table: &SpanLockTable,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
+    direct_quote: Option<&DirectQuotePlacement>,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
-    let atoms = build_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
-    let atoms = normalize_keigo_atoms(&atoms);
-    let atoms = normalize_glossary_clocks(&atoms, chars, lock_table);
-    let atoms = normalize_clock_atoms(&atoms);
-    let atoms = preserve_clock_adjacent_locks(&atoms, doc, sentence_idx);
+    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
 
     if atoms.is_empty() {
         let masked = lock_table.mask_span(chars, sent_span);
@@ -164,6 +181,8 @@ pub(crate) fn translate_ja_sentence(
     let mut sentence_topic_pronoun: Option<&'static str> = None;
     let mut sonomono_antecedent: Option<String> = None;
     let mut skip_next_seg = false;
+    let mut moved_report = direct_quote.and_then(|quote| quote.report);
+    let opening = direct_quote.and_then(|quote| quote.opening.as_ref());
 
     for (seg_idx, seg) in segments.iter().enumerate() {
         if skip_next_seg {
@@ -231,7 +250,13 @@ pub(crate) fn translate_ja_sentence(
                         out.push_str(&localize_punct(p));
                     }
                 }
-                out.push(close_zh);
+                emit_quote_close(
+                    &mut out,
+                    close_zh,
+                    segments.get(seg_idx + 1),
+                    moved_report,
+                    false,
+                );
                 prev_was_quote = true;
                 let tgt_end = out.chars().count();
                 seg_target_spans.push((
@@ -285,7 +310,15 @@ pub(crate) fn translate_ja_sentence(
                 ));
             }
             Segment::CloseQuote(close_q, span) => {
-                out.push(localize_close_quote(*close_q, target));
+                let closes_after_previous_terminal =
+                    out.is_empty() && terminal_before_quote(chars, span.start_char);
+                emit_quote_close(
+                    &mut out,
+                    localize_close_quote(*close_q, target),
+                    segments.get(seg_idx + 1),
+                    moved_report,
+                    closes_after_previous_terminal,
+                );
                 prev_was_quote = true;
                 let tgt_end = out.chars().count();
                 seg_target_spans.push((
@@ -301,6 +334,66 @@ pub(crate) fn translate_ja_sentence(
                 trailing_punct,
                 span,
             } => {
+                if moved_report == Some(*span) {
+                    // The reporting verb belongs to the opening frame. A period belongs
+                    // inside the quote, but an outside question or exclamation stays here.
+                    moved_report = None;
+                    prev_was_quote = false;
+                    emitted_pre_quote_verb = false;
+                    if let Some(p) = trailing_punct.as_deref().filter(|p| *p != "。") {
+                        out.push_str(&localize_punct(p));
+                    }
+                    seg_target_spans.push((
+                        *span,
+                        Span {
+                            start_char: tgt_start,
+                            end_char: out.chars().count(),
+                        },
+                    ));
+                    continue;
+                }
+
+                if target == TargetVariant::ZhHant
+                    && is_direct_quote_prefix_separator(trailing_punct.as_deref())
+                {
+                    let prefix =
+                        if let Some(quote) = opening.filter(|quote| quote.prefix_span == *span) {
+                            Some(quote.prefix.clone())
+                        } else if let [
+                            Segment::Quote { inner_atoms, .. },
+                            Segment::Clause {
+                                atoms: report,
+                                span: report_span,
+                                ..
+                            },
+                            ..,
+                        ] = &segments[seg_idx + 1..]
+                            && !inner_atoms.iter().any(is_quote_mark)
+                            && is_direct_quote_report(report)
+                            && let Some(prefix) = direct_quote_prefix(catoms, doc, lock_table)
+                        {
+                            moved_report = Some(*report_span);
+                            Some(prefix)
+                        } else {
+                            None
+                        };
+                    if let Some(prefix) = prefix {
+                        out.push_str(&prefix);
+                        is_first_non_quote_clause = false;
+                        sentence_has_overt_topic = true;
+                        prev_was_quote = false;
+                        emitted_pre_quote_verb = false;
+                        seg_target_spans.push((
+                            *span,
+                            Span {
+                                start_char: tgt_start,
+                                end_char: out.chars().count(),
+                            },
+                        ));
+                        continue;
+                    }
+                }
+
                 if prev_was_quote && is_kagon_clause(catoms) {
                     prev_was_quote = false;
                     emitted_pre_quote_verb = false;
@@ -720,8 +813,16 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
         let sent_tokens: Vec<&Token> = doc.tokens.iter().filter(|t| t.sentence == si).collect();
         let lock_table = SpanLockTable::build(Vec::new());
         let cond = SentenceConditioning::default();
-        let (tr, _) =
-            translate_ja_sentence(si, &chars, &doc, &sent_tokens, &lock_table, &cond, target);
+        let (tr, _) = translate_ja_sentence(
+            si,
+            &chars,
+            &doc,
+            &sent_tokens,
+            &lock_table,
+            &cond,
+            target,
+            None,
+        );
         out.push_str(&tr);
         cursor = sent.span.end_char;
     }
@@ -1351,6 +1452,20 @@ fn build_sentence_atoms(
 
     // Re-attach any `[[PHk]]` literal tokens if `translate_ja_fragment` was called on pre-masked text.
     merge_literal_placeholders(atoms)
+}
+
+fn normalized_sentence_atoms(
+    sentence_idx: usize,
+    chars: &[char],
+    doc: &Document,
+    tokens: &[&Token],
+    locks: &SpanLockTable,
+) -> Vec<Atom> {
+    let atoms = build_sentence_atoms(sentence_idx, chars, doc, tokens, locks);
+    let atoms = normalize_keigo_atoms(&atoms);
+    let atoms = normalize_glossary_clocks(&atoms, chars, locks);
+    let atoms = normalize_clock_atoms(&atoms);
+    preserve_clock_adjacent_locks(&atoms, doc, sentence_idx)
 }
 
 fn merge_literal_placeholders(atoms: Vec<Atom>) -> Vec<Atom> {
@@ -2093,6 +2208,220 @@ fn classify_post_quote_clause(atoms: &[Atom]) -> PostQuoteKind {
         return PostQuoteKind::QuotePlainSay;
     }
     PostQuoteKind::Other
+}
+
+fn is_quote_mark(atom: &Atom) -> bool {
+    !atom.is_locked && matches!(atom.surface.as_str(), "「" | "」" | "『" | "』")
+}
+
+fn is_quote_terminal(ch: char) -> bool {
+    matches!(ch, '。' | '？' | '！' | '?' | '!')
+}
+
+fn terminal_before_quote(chars: &[char], close_start: usize) -> bool {
+    chars[..close_start]
+        .iter()
+        .rev()
+        .find(|ch| !ch.is_whitespace())
+        .copied()
+        .is_some_and(is_quote_terminal)
+}
+
+fn emit_quote_close(
+    out: &mut String,
+    close: char,
+    next: Option<&Segment>,
+    moved_report: Option<Span>,
+    previous_terminal: bool,
+) {
+    if let Some(Segment::Clause {
+        span,
+        trailing_punct: Some(punctuation),
+        ..
+    }) = next
+        && Some(*span) == moved_report
+        && punctuation == "。"
+        && !previous_terminal
+        && !out.chars().next_back().is_some_and(is_quote_terminal)
+    {
+        out.push('。');
+    }
+    out.push(close);
+}
+
+fn is_direct_quote_prefix_separator(punctuation: Option<&str>) -> bool {
+    matches!(punctuation, None | Some("、" | "，"))
+}
+
+fn is_direct_quote_report(atoms: &[Atom]) -> bool {
+    let [marker, verb, tail @ ..] = atoms else {
+        return false;
+    };
+    !marker.is_locked
+        && marker.surface == "と"
+        && !verb.is_locked
+        && verb.lemma.as_deref() == Some("伝える")
+        && match tail {
+            [] => verb.surface == "伝えた",
+            [past] => !past.is_locked && verb.surface == "伝え" && past.surface == "た",
+            _ => false,
+        }
+}
+
+fn render_direct_quote_person(
+    atoms: &[Atom],
+    doc: &Document,
+    locks: &SpanLockTable,
+) -> Option<String> {
+    let person_like = |atom: &Atom| {
+        if atom.is_locked {
+            return locks.locks.iter().any(|lock| {
+                lock.source_span == atom.span
+                    && matches!(
+                        lock.origin,
+                        LockOrigin::Glossary {
+                            kind: GlossaryKind::Actor,
+                            ..
+                        }
+                    )
+            });
+        }
+        let class = atom
+            .doc_tok_idx
+            .and_then(|index| doc.tokens.get(index))
+            .filter(|token| token.span == atom.span)
+            .and_then(|token| token.sem_class);
+        class.map_or_else(
+            || is_person_like_atom(atom),
+            |kind| kind == SemanticClass::Person,
+        )
+    };
+    if !atoms.iter().any(person_like)
+        || is_time_or_place_bunsetsu(atoms)
+        || !atoms.iter().all(|atom| {
+            atom.is_locked || matches!(atom.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+        })
+    {
+        return None;
+    }
+    let person = render_bunsetsu_np(
+        &Bunsetsu {
+            atoms: atoms.to_vec(),
+            role: BunsetsuRole::Other,
+            case_particle: None,
+            sconj_tail: None,
+            sfp_tail: None,
+        },
+        TargetVariant::ZhHant,
+    );
+    (!person.is_empty()).then_some(person)
+}
+
+fn direct_quote_prefix(atoms: &[Atom], doc: &Document, locks: &SpanLockTable) -> Option<String> {
+    let (listener_marker, people) = atoms.split_last()?;
+    if listener_marker.is_locked || listener_marker.surface != "に" {
+        return None;
+    }
+    let topic = people
+        .iter()
+        .position(|atom| !atom.is_locked && matches!(atom.surface.as_str(), "は" | "が"))?;
+    let speaker = render_direct_quote_person(&people[..topic], doc, locks)?;
+    let listener = render_direct_quote_person(&people[topic + 1..], doc, locks)?;
+    Some(format!("{speaker}告訴{listener}："))
+}
+
+pub(crate) fn direct_quote_opening(
+    sentence_idx: usize,
+    chars: &[char],
+    doc: &Document,
+    tokens: &[&Token],
+    locks: &SpanLockTable,
+) -> Option<DirectQuoteOpening> {
+    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, tokens, locks);
+    let segments =
+        split_atoms_into_segments(&atoms, chars, doc.segmentation.sentences[sentence_idx].span);
+    let [
+        ..,
+        Segment::Clause {
+            atoms: people,
+            trailing_punct,
+            span,
+        },
+        quote,
+    ] = segments.as_slice()
+    else {
+        return None;
+    };
+    let (inner_atoms, close) = match quote {
+        Segment::OpenQuote {
+            open_q,
+            inner_atoms,
+            ..
+        } => (inner_atoms, Some(if *open_q == '「' { '」' } else { '』' })),
+        Segment::Quote {
+            inner_atoms, span, ..
+        } if terminal_before_quote(chars, span.end_char - 1) => (inner_atoms, None),
+        _ => return None,
+    };
+    if !is_direct_quote_prefix_separator(trailing_punct.as_deref())
+        || inner_atoms.iter().any(is_quote_mark)
+    {
+        return None;
+    }
+    Some(DirectQuoteOpening {
+        prefix_span: *span,
+        prefix: direct_quote_prefix(people, doc, locks)?,
+        close,
+    })
+}
+
+pub(crate) fn direct_quote_end(
+    sentence_idx: usize,
+    chars: &[char],
+    doc: &Document,
+    tokens: &[&Token],
+    locks: &SpanLockTable,
+    close_quote: Option<char>,
+) -> DirectQuoteEnd {
+    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, tokens, locks);
+    let sent_span = doc.segmentation.sentences[sentence_idx].span;
+    let Some(close_quote) = close_quote else {
+        return match split_atoms_into_segments(&atoms, chars, sent_span).first() {
+            Some(Segment::Clause { atoms, span, .. }) if is_direct_quote_report(atoms) => {
+                DirectQuoteEnd::Reports(*span)
+            }
+            _ => DirectQuoteEnd::Other,
+        };
+    };
+    let Some(delimiter) = atoms.iter().find(|atom| is_quote_mark(atom)) else {
+        return DirectQuoteEnd::Continues;
+    };
+    if !delimiter.surface.starts_with(close_quote) {
+        return DirectQuoteEnd::Other;
+    }
+    let segments = split_atoms_into_segments(&atoms, chars, sent_span);
+    for segments in segments.windows(2) {
+        if let [
+            Segment::CloseQuote(_, close_span),
+            Segment::Clause {
+                atoms: report,
+                span,
+                ..
+            },
+        ] = segments
+            && *close_span == delimiter.span
+            && is_direct_quote_report(report)
+        {
+            return DirectQuoteEnd::Reports(*span);
+        }
+    }
+    if matches!(segments.last(), Some(Segment::CloseQuote(_, span)) if *span == delimiter.span)
+        && terminal_before_quote(chars, delimiter.span.start_char)
+    {
+        DirectQuoteEnd::Closed
+    } else {
+        DirectQuoteEnd::Other
+    }
 }
 
 #[derive(Clone, Default)]

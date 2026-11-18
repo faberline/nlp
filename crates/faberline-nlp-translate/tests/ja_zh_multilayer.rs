@@ -1604,6 +1604,107 @@ fn narrative_dialogue_and_pro_drop_both_scripts() {
 }
 
 #[test]
+fn direct_reporting_keeps_adopted_roles_and_judgment_scope() {
+    let cases: serde_json::Value =
+        serde_json::from_str(include_str!("data/ja_zh/direct_quote_speaker_dev_v1.json")).unwrap();
+    let cases = cases["items"].as_array().unwrap();
+    assert_eq!(cases.len(), 3);
+
+    for case in cases {
+        let src = case["jp"].as_str().unwrap();
+        let roles = &case["expected_roles"];
+        let speaker = roles["speaker"].as_str().unwrap();
+        let listener = roles["listener"].as_str().unwrap();
+        let actor = roles["quoted_actor"].as_str().unwrap();
+        let narrated_judgment = roles["judgment_source"] == "narrator";
+        let doc = analyze_and_translate(
+            src,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &doc);
+        let (prefix, rest) = doc.target_text.split_once('「').unwrap();
+        let (quote, after) = rest.split_once('」').unwrap();
+        assert_eq!(prefix, format!("{speaker}告訴{listener}："), "{src}");
+        assert!(quote.contains(actor), "{src}: {quote}");
+        assert!(quote.ends_with('。'), "{src}: {quote}");
+        assert!(!after.starts_with('。'), "{src}: {after}");
+        assert_eq!(quote.contains("正式"), !narrated_judgment, "{src}");
+        assert_eq!(after.contains("正式"), narrated_judgment, "{src}");
+        assert!(!after.contains("告訴"), "{src}: {after}");
+        assert_eq!(doc.sentences.len(), 2, "{src}");
+    }
+}
+
+#[test]
+fn direct_reporting_keeps_terminal_marks_in_their_own_scope() {
+    for (quoted, report_end, expected_end) in [
+        ("明日また来ます。", '。', "。」"),
+        ("明日また来ます？", '。', "？」"),
+        ("明日また来ます！", '。', "！」"),
+        ("資料を確認します。明日また来ます？", '。', "？」"),
+        ("明日また来ます", '？', "」？"),
+        ("明日また来ます", '！', "」！"),
+    ] {
+        let src = format!("佐藤は田中に「{quoted}」と伝えた{report_end}");
+        let doc = analyze_and_translate(
+            &src,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(&src, &doc);
+        let translated = &doc.target_text;
+        assert!(
+            translated.starts_with("佐藤告訴田中：「"),
+            "{src}: {translated}"
+        );
+        assert!(translated.ends_with(expected_end), "{src}: {translated}");
+        assert_eq!(translated.matches("告訴").count(), 1, "{src}: {translated}");
+        assert!(!translated.contains("。。"), "{src}: {translated}");
+    }
+}
+
+#[test]
+fn direct_reporting_preserves_locked_text_across_multiple_sentences() {
+    let src = "佐藤は田中に「資料を読みます。`x」y`を見ます。窓を開けます」と伝えた。";
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let glossary = TranslationGlossary::new();
+    let doc = analyze_and_translate(src, &options, &glossary, None, Backend::Onnx).unwrap();
+    assert_valid_ja_zh_doc(src, &doc);
+    assert!(
+        doc.target_text.starts_with("佐藤告訴田中：「"),
+        "{}",
+        doc.target_text
+    );
+    assert_eq!(doc.sentences.len(), 3);
+    assert_eq!(doc.opaque_spans.len(), 1);
+    let locked = &doc.opaque_spans[0];
+    assert_eq!(slice_chars(src, locked.source_span), "`x」y`");
+    assert_eq!(
+        slice_chars(&doc.target_text, locked.target_span.unwrap()),
+        "`x」y`"
+    );
+    assert_eq!(doc.target_text.matches("告訴").count(), 1);
+
+    for src in [
+        "佐藤は田中に「資料を読みます」と伝えなかった。",
+        "佐藤は田中に「資料を読みます」と言った。",
+        "佐藤は田中に「資料を読みます。",
+        "佐藤は田中に資料を読むように伝えた。",
+    ] {
+        let doc = analyze_and_translate(src, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(src, &doc);
+        assert!(!doc.target_text.starts_with("佐藤告訴田中："), "{src}");
+    }
+}
+
+#[test]
 fn content_neutral_adult_erotic_and_anatomical_ja_to_zh() {
     let src = concat!(
         "「気持ちいい……もう、我慢できない」と彼女は声を漏らす。",

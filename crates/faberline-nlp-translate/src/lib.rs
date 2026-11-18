@@ -14,7 +14,7 @@ pub mod render;
 pub mod schema;
 pub mod variant;
 
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::model::{Backend, ModelError};
@@ -227,6 +227,19 @@ pub fn translate_document(
         }
     }
 
+    let direct_quote_placements = if options.target == TargetVariant::ZhHant && seq2seq.is_none() {
+        plan_cross_sentence_direct_quotes(
+            &chars,
+            doc,
+            &tokens_by_sent,
+            &inline_opaques,
+            options,
+            &compiled_glossary,
+        )
+    } else {
+        HashMap::new()
+    };
+
     let mut target_text = String::with_capacity(text.len() + 32);
     let mut target_char_pos = 0usize;
     let mut cursor = 0usize;
@@ -320,14 +333,7 @@ pub fn translate_document(
             }
             TopItem::Sentence(si) => {
                 let sent = &doc.segmentation.sentences[si];
-                let sent_inline_opaques: Vec<&Opaque> = inline_opaques
-                    .iter()
-                    .copied()
-                    .filter(|op| {
-                        op.span.start_char >= sent.span.start_char
-                            && op.span.end_char <= sent.span.end_char
-                    })
-                    .collect();
+                let sent_inline_opaques = sentence_opaques(&inline_opaques, sent.span);
 
                 let outcome = translate_single_sentence(
                     si,
@@ -340,6 +346,7 @@ pub fn translate_document(
                     glossary,
                     &compiled_glossary,
                     seq2seq,
+                    direct_quote_placements.get(&si),
                 );
 
                 let start = target_char_pos;
@@ -458,6 +465,162 @@ struct SentenceOutcome {
     unknown: Vec<TranslateUnknown>,
 }
 
+fn sentence_opaques<'a>(inline_opaques: &[&'a Opaque], sentence: Span) -> Vec<&'a Opaque> {
+    inline_opaques
+        .iter()
+        .copied()
+        .filter(|op| {
+            op.span.start_char >= sentence.start_char && op.span.end_char <= sentence.end_char
+        })
+        .collect()
+}
+
+fn is_unsupported_sentence(doc: &Document, span: Span) -> bool {
+    doc.unknown.iter().any(|u| {
+        u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage && u.span == span
+    })
+}
+
+fn plan_cross_sentence_direct_quotes(
+    chars: &[char],
+    doc: &Document,
+    tokens_by_sent: &[Vec<&Token>],
+    inline_opaques: &[&Opaque],
+    options: &TranslateOptions,
+    compiled_glossary: &CompiledGlossary,
+) -> HashMap<usize, ja_zh::DirectQuotePlacement> {
+    let sentences = &doc.segmentation.sentences;
+    let mut placements: HashMap<usize, ja_zh::DirectQuotePlacement> = HashMap::new();
+    let mut opening: Option<(usize, ja_zh::DirectQuoteOpening)> = None;
+    for (index, sent) in sentences.iter().enumerate() {
+        let raw = &chars[sent.span.start_char..sent.span.end_char];
+        if let Some(previous) = index.checked_sub(1).and_then(|i| sentences.get(i))
+            && opening.is_some()
+            && (previous.paragraph != sent.paragraph
+                || previous.span.end_char > sent.span.start_char
+                || !chars[previous.span.end_char..sent.span.start_char]
+                    .iter()
+                    .all(|c| c.is_whitespace()))
+        {
+            opening = None;
+        }
+        let has_open = raw.iter().any(|c| matches!(c, '「' | '『'));
+        let has_close = raw.iter().any(|c| matches!(c, '」' | '』'));
+        if opening.is_none() && !has_open {
+            continue;
+        }
+        let raw_sent: String = raw.iter().collect();
+        if !(sent.lang == Lang::Ja
+            || (sent.lang == Lang::Mixed && ja_zh::has_kana_no_hangul(&raw_sent)))
+            || is_unsupported_sentence(doc, sent.span)
+        {
+            opening = None;
+            continue;
+        }
+        let follows_a_terminal_quote = opening
+            .as_ref()
+            .is_some_and(|(_, frame)| frame.close.is_none());
+        if !has_open && !has_close && !follows_a_terminal_quote {
+            continue;
+        }
+
+        let locks = build_sentence_locks(
+            index,
+            chars,
+            doc,
+            &sentence_opaques(inline_opaques, sent.span),
+            &raw_sent,
+            options,
+            compiled_glossary,
+        );
+        let tokens = &tokens_by_sent[index];
+        if let Some((first, mut frame)) = opening.take() {
+            match ja_zh::direct_quote_end(index, chars, doc, tokens, &locks, frame.close) {
+                ja_zh::DirectQuoteEnd::Continues => {
+                    opening = Some((first, frame));
+                    continue;
+                }
+                ja_zh::DirectQuoteEnd::Closed => {
+                    frame.close = None;
+                    opening = Some((first, frame));
+                    continue;
+                }
+                ja_zh::DirectQuoteEnd::Reports(report) => {
+                    placements.entry(first).or_default().opening = Some(frame);
+                    placements.entry(index).or_default().report = Some(report);
+                }
+                ja_zh::DirectQuoteEnd::Other => {}
+            }
+        }
+        if has_open
+            && let Some(frame) = ja_zh::direct_quote_opening(index, chars, doc, tokens, &locks)
+        {
+            opening = Some((index, frame));
+        }
+    }
+    placements
+}
+
+fn build_sentence_locks(
+    sentence_idx: usize,
+    chars: &[char],
+    doc: &Document,
+    sent_inline_opaques: &[&Opaque],
+    raw_sent: &str,
+    options: &TranslateOptions,
+    compiled_glossary: &CompiledGlossary,
+) -> SpanLockTable {
+    let sent_span = doc.segmentation.sentences[sentence_idx].span;
+    // Build `SpanLockTable` over inline opaques (priority 0), glossary hits (priority 1), and
+    // optional localized entities (priority 2).
+    let mut lock_candidates: Vec<(u8, Span, String, LockOrigin, bool)> = Vec::new();
+    let mut blocked_for_glossary: Vec<Span> = Vec::with_capacity(sent_inline_opaques.len());
+
+    for op in sent_inline_opaques {
+        let slice: String = chars[op.span.start_char..op.span.end_char].iter().collect();
+        blocked_for_glossary.push(op.span);
+        lock_candidates.push((0, op.span, slice, LockOrigin::InlineOpaque(op.kind), true));
+    }
+
+    // Also protect `EntityKind::Email` spans verbatim.
+    for ent in &doc.entities {
+        if ent.sentence == sentence_idx && ent.kind == faberline_nlp::doc::EntityKind::Email {
+            let slice: String = chars[ent.span.start_char..ent.span.end_char]
+                .iter()
+                .collect();
+            blocked_for_glossary.push(ent.span);
+            lock_candidates.push((0, ent.span, slice, LockOrigin::Entity, true));
+        }
+    }
+
+    for gm in
+        compiled_glossary.find_matches(raw_sent, chars, sent_span.start_char, &blocked_for_glossary)
+    {
+        lock_candidates.push((
+            1,
+            gm.span,
+            gm.target_text,
+            LockOrigin::Glossary {
+                canonical: gm.canonical,
+                kind: gm.kind,
+            },
+            true,
+        ));
+    }
+
+    if options.localize_entities {
+        for ent in &doc.entities {
+            if ent.sentence == sentence_idx
+                && let Some(formatted) = format_entity_for_target(ent, options.target)
+            {
+                lock_candidates.push((2, ent.span, formatted, LockOrigin::Entity, false));
+            }
+        }
+    }
+
+    SpanLockTable::build(lock_candidates)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn translate_single_sentence(
     sentence_idx: usize,
@@ -471,6 +634,7 @@ fn translate_single_sentence(
     glossary: &TranslationGlossary,
     compiled_glossary: &CompiledGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
+    direct_quote: Option<&ja_zh::DirectQuotePlacement>,
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
@@ -479,10 +643,7 @@ fn translate_single_sentence(
         .collect();
 
     // Check if Layer 1 flagged this sentence as `unsupported_language` (e.g. Cyrillic/Arabic).
-    let is_unsupported_script = doc.unknown.iter().any(|u| {
-        u.layer == "segmentation" && u.reason == Reason::UnsupportedLanguage && u.span == sent_span
-    });
-    if is_unsupported_script {
+    if is_unsupported_sentence(doc, sent_span) {
         let opaque_records = sent_inline_opaques
             .iter()
             .map(|op| OpaqueSpanRecord {
@@ -512,57 +673,15 @@ fn translate_single_sentence(
         };
     }
 
-    // Build `SpanLockTable` over inline opaques (priority 0), glossary hits (priority 1), and
-    // optional localized entities (priority 2).
-    let mut lock_candidates: Vec<(u8, Span, String, LockOrigin, bool)> = Vec::new();
-    let mut blocked_for_glossary: Vec<Span> = Vec::with_capacity(sent_inline_opaques.len());
-
-    for op in sent_inline_opaques {
-        let slice: String = chars[op.span.start_char..op.span.end_char].iter().collect();
-        blocked_for_glossary.push(op.span);
-        lock_candidates.push((0, op.span, slice, LockOrigin::InlineOpaque(op.kind), true));
-    }
-
-    // Also protect `EntityKind::Email` spans verbatim.
-    for ent in &doc.entities {
-        if ent.sentence == sentence_idx && ent.kind == faberline_nlp::doc::EntityKind::Email {
-            let slice: String = chars[ent.span.start_char..ent.span.end_char]
-                .iter()
-                .collect();
-            blocked_for_glossary.push(ent.span);
-            lock_candidates.push((0, ent.span, slice, LockOrigin::Entity, true));
-        }
-    }
-
-    for gm in compiled_glossary.find_matches(
-        &raw_sent,
+    let lock_table = build_sentence_locks(
+        sentence_idx,
         chars,
-        sent_span.start_char,
-        &blocked_for_glossary,
-    ) {
-        lock_candidates.push((
-            1,
-            gm.span,
-            gm.target_text,
-            LockOrigin::Glossary {
-                canonical: gm.canonical,
-                kind: gm.kind,
-            },
-            true,
-        ));
-    }
-
-    if options.localize_entities {
-        for ent in &doc.entities {
-            if ent.sentence == sentence_idx
-                && let Some(formatted) = format_entity_for_target(ent, options.target)
-            {
-                lock_candidates.push((2, ent.span, formatted, LockOrigin::Entity, false));
-            }
-        }
-    }
-
-    let lock_table = SpanLockTable::build(lock_candidates);
+        doc,
+        sent_inline_opaques,
+        &raw_sent,
+        options,
+        compiled_glossary,
+    );
 
     // Determine routing track for this sentence.
     let same_zh = sent.lang == Lang::Zh && options.target.is_zh();
@@ -647,6 +766,7 @@ fn translate_single_sentence(
             &lock_table,
             &conditioning,
             options.target,
+            direct_quote,
         );
         let mut clause_spans: Vec<Span> = clause_alignments
             .iter()

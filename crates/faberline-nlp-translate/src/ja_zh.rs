@@ -11735,11 +11735,47 @@ fn indefinite_content_object(
                 && end == action.span.start_char
                 && matches!(
                     action.lemma.as_deref().unwrap_or(&action.surface),
-                    "読む" | "飲む" | "食べる" | "書く" | "買う" | "作る" | "見る" | "聞く" | "選ぶ"
+                    "読む"
+                        | "飲む"
+                        | "食べる"
+                        | "書く"
+                        | "買う"
+                        | "作る"
+                        | "見る"
+                        | "聞く"
+                        | "選ぶ"
                 )
         }
         _ => false,
     }
+}
+
+// In 何か作業を the pronoun modifies the following object noun. The
+// noun supplies the object, and the two-token modifier contributes 一些.
+fn indefinite_object_modifier(
+    prior: &Bunsetsu,
+    argument: &Bunsetsu,
+    predicate: usize,
+) -> Option<Atom> {
+    let object = argument.atoms.first()?;
+    let word = prior.atoms.first()?;
+    if argument.role != BunsetsuRole::Obj
+        || object.is_locked
+        || object.deprel != "obj"
+        || object.head != Some(predicate)
+        || word.surface != "何"
+        || word.deprel != "nmod"
+    {
+        return None;
+    }
+    let (mut modifier, None) = indefinite_argument(&prior.atoms, object.doc_tok_idx?)? else {
+        return None;
+    };
+    if modifier.span.end_char != object.span.start_char {
+        return None;
+    }
+    modifier.surface = "一些".to_owned();
+    Some(modifier)
 }
 
 fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {

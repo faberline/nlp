@@ -11475,6 +11475,18 @@ mod motion_endpoint_tests {
             translate("先生は友達と図書館に行きませんか。"),
             "老師不和朋友一起去圖書館嗎？"
         );
+        assert_eq!(
+            translate("私と先生が図書館に行きませんか。"),
+            "我和老師不去圖書館嗎？"
+        );
+        assert_eq!(
+            translate("先生と私の友達が図書館に行きませんか。"),
+            "老師和我的朋友不去圖書館嗎？"
+        );
+        assert_eq!(
+            translate("先生と学生を駅で待ちませんか。"),
+            "在車站不等待老師和學生嗎？"
+        );
         assert_eq!(translate("一緒に遊べませんか。"), "不能一起玩嗎？");
         assert_eq!(
             translate("みんなで何を読みませんか。"),

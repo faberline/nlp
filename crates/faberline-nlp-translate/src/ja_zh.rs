@@ -11013,6 +11013,7 @@ mod motion_endpoint_tests {
             ("子供は橋を走りました。", "孩子沿著橋跑了。"),
             ("犬は道を歩きませんでした。", "狗沒有沿著道路走。"),
             ("道を駅まで走ります。", "沿著道路跑到車站。"),
+            ("私は二階まで道を走ります。", "我沿著道路跑到二樓。"),
             ("公園を散歩します。", "在公園散步。"),
             ("犬は公園まで走ります。", "狗跑到公園。"),
             ("私は道を選びます。", "我選擇道路。"),
@@ -11031,6 +11032,8 @@ mod motion_endpoint_tests {
         }
         let commute = translate("学校に通っています。");
         assert!(commute.contains("學校") && commute.contains("上學") && !commute.contains("經過"));
+        let corridor = translate("私は三階から廊下を二階まで歩きます。");
+        assert!(corridor.starts_with("我從三樓沿著") && corridor.ends_with("走到二樓。"));
     }
 
     #[test]

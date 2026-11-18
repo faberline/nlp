@@ -876,6 +876,8 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
 // Marker used only for atoms synthesized by the clock recognizer.  Protected
 // placeholders retain their own identity and are never classified by this marker.
 const CLOCK_ATOM: &str = "__ja_clock_atom";
+// A typed compound time created only while assembling a continuation endpoint.
+const TEMPORAL_MADE_COMPOUND_ATOM: &str = "__ja_temporal_made_compound";
 // An opaque component in an explicitly period-qualified clock-shaped phrase.
 // Its value remains unknown and its placeholder remains untouched.
 const OPAQUE_PERIOD_CLOCK: &str = "__ja_opaque_period_clock";
@@ -8812,6 +8814,10 @@ fn merge_adnominal_bunsetsus(
                         continue;
                     }
 
+                    if merge_temporal_made_anchor(&mut b, &mod_b.atoms) {
+                        continue;
+                    }
+
                     // Pure `N の` modifier (e.g. `美咲の`, `机の`, `3冊の`, `今回の`).
                     mod_b.atoms.pop();
                     let omit_de = starts_with_num_counter(&mod_b)
@@ -10955,6 +10961,45 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn compound_temporal_made_keeps_both_time_parts_after_the_activity() {
+        for (source, expected) in [
+            (
+                "私は明日の朝まで日本語を勉強します。",
+                "我學習日本語到明天早上。",
+            ),
+            (
+                "私は来週の月曜日まで日本語を勉強します。",
+                "我學習日本語到下週一。",
+            ),
+            (
+                "私は明日の午前六時まで日本語を勉強します。",
+                "我學習日本語到明天上午六點。",
+            ),
+            ("私は来週の金曜日まで働きます。", "我工作到下週五。"),
+            ("私は明日の朝まで働きません。", "我到明天早上為止不工作。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn compound_temporal_made_leaves_other_genitive_roles_unchanged() {
+        for (source, expected) in [
+            ("明日の朝までに手紙を書きます。", "在明天的早上寫信。"),
+            ("私は明日の朝に手紙を書きます。", "我在明天的早上寫信。"),
+            ("朝の電車まで走りました。", "連早上的電車都跑了。"),
+            ("私は学校の先生まで歩いた。", "我連學校的老師都走了。"),
+            ("学校の図書館まで歩いた。", "走到學校的圖書館了。"),
+            (
+                "来週の会議まで日本語を勉強します。",
+                "連下週的會議都學習日本語。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
     fn temporal_made_keeps_negation_and_leaves_deadlines_and_other_endpoints_alone() {
         assert_eq!(
             translate("私は六時まで働きませんでした。"),
@@ -11047,8 +11092,45 @@ fn negative_go_place_head(b: &Bunsetsu) -> Option<usize> {
     noun.head
 }
 
-// Only a self-contained time with adjacent, bare まで licenses the
-// continuation reading. Leave までに, opaque groups and other nouns alone.
+// Compose time-on-time の before the generic adnominal merge renders it as 的
+// and loses the source type. Keep non-time modifiers on their original path.
+fn merge_temporal_made_anchor(b: &mut Bunsetsu, modifier: &[Atom]) -> bool {
+    let [anchor, no] = modifier else {
+        return false;
+    };
+    if no.is_locked
+        || no.upos != Some(Upos::Adp)
+        || no.surface != "の"
+        || anchor.span.end_char != no.span.start_char
+        || b.atoms
+            .first()
+            .is_none_or(|head| no.span.end_char != head.span.start_char)
+    {
+        return false;
+    }
+    let Some(time) = temporal_made_time(b) else {
+        return false;
+    };
+    let Some(anchor_text) = render_temporal_made_atom(anchor) else {
+        return false;
+    };
+
+    // A weekday within a named week has the compact reading 下週一, 上週五, etc.
+    let tail = if matches!(anchor.surface.as_str(), "先週" | "今週" | "来週") {
+        time.strip_prefix("星期").unwrap_or(&time)
+    } else {
+        &time
+    };
+    let head = &mut b.atoms[0];
+    head.span.start_char = anchor.span.start_char;
+    head.surface = format!("{anchor_text}{tail}");
+    head.lemma = Some(TEMPORAL_MADE_COMPOUND_ATOM.to_owned());
+    head.is_locked = true;
+    true
+}
+
+// Only a typed time with adjacent, bare まで licenses the continuation
+// reading. Leave までに, opaque groups and other nouns alone.
 fn temporal_made_time(b: &Bunsetsu) -> Option<String> {
     let [time, particle] = b.atoms.as_slice() else {
         return None;
@@ -11061,7 +11143,15 @@ fn temporal_made_time(b: &Bunsetsu) -> Option<String> {
     {
         return None;
     }
-    if time.lemma.as_deref() == Some(CLOCK_ATOM) && !time.surface.contains("[[PH") {
+    render_temporal_made_atom(time)
+}
+
+fn render_temporal_made_atom(time: &Atom) -> Option<String> {
+    if matches!(
+        time.lemma.as_deref(),
+        Some(CLOCK_ATOM | TEMPORAL_MADE_COMPOUND_ATOM)
+    ) && !time.surface.contains("[[PH")
+    {
         return Some(time.surface.clone());
     }
     if time.is_locked || !matches!(time.upos, Some(Upos::Noun | Upos::Adv)) {

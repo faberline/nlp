@@ -1,0 +1,242 @@
+{
+  "schema": "faberline.nlp.ja_zh.relative_daypart_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "reused_existing_controls": [
+    {
+      "file": "clock_time_dev_v1.json",
+      "sha256": "01db148efcc90ca4fe025a65c6e39fb712ce6643e5c27d3018cbc6e691e1bf69",
+      "ids": [
+        "CLOCK-C03"
+      ]
+    }
+  ],
+  "reused_standing_controls": [
+    {
+      "id": "jz151",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    },
+    {
+      "id": "jz160",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    }
+  ],
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "DAYPART-N5-01",
+      "level_approx": "N5",
+      "jp": "明日の午後、私は家で本を読みます。",
+      "zh_hant": "明天下午，我在家看書。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "明日の午後 refers to the afternoon of the following day.",
+        "The initial time phrase modifies the same reading event in the shared sentence body."
+      ],
+      "semantic_unknowns": [
+        "The source gives no hour within the afternoon.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "relative_day_with_afternoon",
+        "contrast_ids": [
+          "DAYPART-N5-02",
+          "DAYPART-N5-03",
+          "DAYPART-N5-04",
+          "DAYPART-N5-05",
+          "jz151",
+          "jz160",
+          "CLOCK-C03"
+        ],
+        "stable": [
+          "All five rows keep the exact event body 私は家で本を読みます。",
+          "All five rows keep the same subject, action, object, location and punctuation."
+        ],
+        "changed": [
+          "This row places the relative day 明日 before the daypart 午後."
+        ],
+        "limits": [
+          "The Japanese gives a daypart, not a numeric clock time.",
+          "jz151 has the same composite phrase but a polite request context."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DAYPART-N5-02",
+      "level_approx": "N5",
+      "jp": "明日、私は家で本を読みます。",
+      "zh_hant": "明天，我在家看書。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "明日 places the reading event on the following day.",
+        "The event has no daypart modifier."
+      ],
+      "semantic_unknowns": [
+        "The source gives no hour or part of day.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "relative_day_only",
+        "contrast_ids": [
+          "DAYPART-N5-01"
+        ],
+        "stable": [
+          "The shared sentence body and event are unchanged from DAYPART-N5-01."
+        ],
+        "changed": [
+          "This row uses 明日 without adding a daypart."
+        ],
+        "limits": [
+          "This is one relative-day example and does not cover other date expressions."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DAYPART-N5-03",
+      "level_approx": "N5",
+      "jp": "午後、私は家で本を読みます。",
+      "zh_hant": "下午，我在家看書。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "午後 places the reading event in an afternoon.",
+        "The source does not name a relative day or a clock hour."
+      ],
+      "semantic_unknowns": [
+        "The surrounding context does not identify which calendar day.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "afternoon_only",
+        "contrast_ids": [
+          "DAYPART-N5-01"
+        ],
+        "stable": [
+          "The shared sentence body and event are unchanged from DAYPART-N5-01."
+        ],
+        "changed": [
+          "This row uses 午後 without 明日."
+        ],
+        "limits": [
+          "The source leaves the calendar day unspecified; the reference does not add 今日."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DAYPART-N5-04",
+      "level_approx": "N5",
+      "jp": "私は家で本を読みます。",
+      "zh_hant": "我在家看書。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The source states the same reading event without a temporal phrase."
+      ],
+      "semantic_unknowns": [
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "no_temporal_phrase",
+        "contrast_ids": [
+          "DAYPART-N5-01"
+        ],
+        "stable": [
+          "The same subject, action, object, location and punctuation remain."
+        ],
+        "changed": [
+          "This row omits the temporal phrase."
+        ],
+        "limits": [
+          "The source makes no claim about when the reading happens."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DAYPART-N5-05",
+      "level_approx": "N5",
+      "jp": "明日の朝、私は家で本を読みます。",
+      "zh_hant": "明天早上，我在家看書。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "明日の朝 refers to the morning of the following day.",
+        "The initial time phrase modifies the same reading event in the shared sentence body."
+      ],
+      "semantic_unknowns": [
+        "The source gives no hour within the morning.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "relative_day_with_morning",
+        "contrast_ids": [
+          "DAYPART-N5-01"
+        ],
+        "stable": [
+          "The shared sentence body and event are unchanged from DAYPART-N5-01."
+        ],
+        "changed": [
+          "This row uses 明日の朝 instead of 明日の午後."
+        ],
+        "limits": [
+          "The Japanese gives a daypart, not a numeric clock time."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

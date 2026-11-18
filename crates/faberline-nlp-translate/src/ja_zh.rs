@@ -11844,6 +11844,7 @@ fn synthesize_predicate_complex(
 
     let mut pre: Vec<String> = Vec::new();
     let mut cores: Vec<String> = Vec::new();
+    let mut durative_gloss_index = None;
     let mut post: Vec<String> = Vec::new();
     let mut passive_agent = false;
 
@@ -12140,6 +12141,9 @@ fn synthesize_predicate_complex(
             .unwrap_or(&a.surface);
         let tr = translate_single_ja_term(surf_clean, a.lemma.as_deref(), a.upos);
         if !tr.is_empty() {
+            if a.upos == Some(Upos::Verb) && tr.ends_with(['著', '着']) {
+                durative_gloss_index = Some(cores.len());
+            }
             cores.push(tr);
         }
     }
@@ -12215,11 +12219,20 @@ fn synthesize_predicate_complex(
             Some("知道" | "認識" | "了解" | "像" | "相似" | "結婚" | "有錯" | "錯" | "弄錯")
         )
     {
-        post.push(if target == TargetVariant::ZhHans {
-            "着".to_owned()
+        let marker = if target == TargetVariant::ZhHans {
+            '着'
         } else {
-            "著".to_owned()
-        });
+            '著'
+        };
+        if let Some(index) = durative_gloss_index
+            && index + 1 == cores.len()
+        {
+            // The final verb gloss already carries the aspect, e.g. 拿著.
+            cores[index].pop();
+            cores[index].push(marker);
+        } else {
+            post.push(marker.to_string());
+        }
     } else if has_past
         && !has_neg_past
         && !is_sole_existential_neg
@@ -13016,6 +13029,43 @@ mod existence_rule_tests {
                 end_char: 6
             }
         );
+    }
+
+    #[test]
+    fn stative_te_iru_marks_the_verb_once_and_preserves_the_object() {
+        for (source, target, expected) in [
+            (
+                "妹は傘を持っていますか。",
+                TargetVariant::ZhHant,
+                "妹妹拿著傘嗎？",
+            ),
+            (
+                "妹は傘を持っていますか。",
+                TargetVariant::ZhHans,
+                "妹妹拿着伞吗？",
+            ),
+            ("ご飯が残っています。", TargetVariant::ZhHant, "飯留著。"),
+            (
+                "姉は`著著`を持っています。",
+                TargetVariant::ZhHant,
+                "姊姊拿著`著著`。",
+            ),
+            (
+                "かばんを持っていません。",
+                TargetVariant::ZhHant,
+                "沒有拿著包包。",
+            ),
+        ] {
+            let doc = analyze_and_translate(
+                source,
+                &TranslateOptions::new(target),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(doc.target_text, expected, "{source}");
+        }
     }
 
     #[test]

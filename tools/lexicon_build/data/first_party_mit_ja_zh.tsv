@@ -1,6 +1,9 @@
 # First-party MIT Japanese -> Taiwan Traditional Chinese (zh-Hant) glosses
 # surface	upos	counterpart	cost	infl
 # --- Core everyday compounds (non-kinship; kinship belongs to A1) ---
+# Costs follow existing ja.tsv nouns: 鞄 (1043) and オレンジ (536).
+かばん	NOUN	包包	1043	-
+みかん	NOUN	橘子	536	-
 昔話	NOUN	民間故事	650	-
 誕生日	NOUN	生日	650	-
 喫茶店	NOUN	咖啡廳	650	-

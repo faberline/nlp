@@ -5321,7 +5321,7 @@ fn translate_clause_bunsetsus(
     }
 
     // Resolve time and result roles while the other arguments of the predicate are available.
-    let restored = restored_time_frame(&bunsetsus);
+    let restored = time_adjustment_frame(&bunsetsus, source);
     let mut restored_object = None;
     let mut restored_value = None;
     let daypart_groups: Vec<_> = bunsetsus
@@ -5615,8 +5615,8 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
-    if restored.is_some() {
-        verb_core = "改回".to_owned();
+    if let Some(frame) = restored {
+        verb_core = frame.action.to_owned();
     }
 
     if inanimate_past {
@@ -8806,48 +8806,31 @@ fn is_daypart_surface(surface: &str) -> bool {
 // relation for the selected value and for an ordinary event-time modifier.
 fn selects_time_value(lemma: &str) -> bool {
     let stem = lemma.strip_suffix("する").unwrap_or(lemma);
+    if time_adjustment_action(stem).is_some() {
+        return true;
+    }
     // Result and selection, e.g. 会議を夕方に決める.
     const CHOOSES_VALUE: &[&str] = &[
         "なる",
         "成る",
         "変わる",
-        "変える",
-        "決める",
         "決まる",
-        "定める",
         "定まる",
         "選ぶ",
         "選択",
-        "決定",
-        "設定",
-        "指定",
-        "変更",
         "予定",
         "予約",
     ];
     // Rescheduling a source time, including verbal nouns followed by する.
     const RESCHEDULES: &[&str] = &[
-        "調整",
-        "合わせる",
         "合う",
-        "ずらす",
         "ずれる",
         "ずれ込む",
-        "移す",
-        "戻す",
-        "延期",
-        "延ばす",
         "延びる",
-        "遅らせる",
         "遅れる",
-        "早める",
         "早まる",
-        "繰り上げる",
         "繰り上がる",
-        "繰り下げる",
         "繰り下がる",
-        "前倒し",
-        "先送り",
     ];
     // The time can be a reference or endpoint rather than when one acts.
     const TAKES_REFERENCE: &[&str] = &[
@@ -8869,27 +8852,47 @@ fn has_verb_reading(surface: &str) -> bool {
 }
 
 #[derive(Clone, Copy)]
-struct RestoredTime {
+struct TimeAdjustment {
     when: usize,
     object: usize,
     value: usize,
+    action: &'static str,
 }
 
-// Tに [setting を] Vに 戻す has two time arguments. Their positions
+// The transitive members of the time-value predicates can set a new value.
+// A comparison, an intransitive change, or a plain temporal adjunct cannot.
+fn time_adjustment_action(stem: &str) -> Option<&'static str> {
+    match stem {
+        "戻す" => Some("改回"),
+        "変える" | "変更" => Some("改到"),
+        "合わせる" | "調整" => Some("調到"),
+        "ずらす" | "移す" => Some("移到"),
+        "決める" | "定める" | "決定" | "設定" | "指定" => Some("定在"),
+        "延期" | "延ばす" | "遅らせる" | "繰り下げる" | "先送り" => Some("延到"),
+        "早める" | "繰り上げる" | "前倒し" => Some("提前到"),
+        _ => None,
+    }
+}
+
+// Tに [setting を] Vに [change] has two time arguments. Their positions
 // around the affected object and attachment to the same predicate identify
-// the restored value even when the two source times are exchanged.
-fn restored_time_frame(groups: &[Bunsetsu]) -> Option<RestoredTime> {
+// the new value even when the two source times are exchanged.
+fn time_adjustment_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimeAdjustment> {
     let mut predicates = groups.iter().filter(|b| b.role == BunsetsuRole::Predicate);
     let predicate = predicates.next()?;
     if predicates.next().is_some() || predicates_has_passive(std::slice::from_ref(predicate)) {
         return None;
     }
-    let verb = predicate.atoms.iter().find(|a| {
+    let verb = source.iter().find(|a| {
         !a.is_locked
             && a.upos == Some(Upos::Verb)
             && a.deprel == "root"
-            && a.lemma.as_deref().unwrap_or(&a.surface) == "戻す"
+            && predicate.atoms.iter().any(|p| {
+                p.span.start_char <= a.span.start_char && a.span.end_char <= p.span.end_char
+            })
     })?;
+    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    let action = time_adjustment_action(lemma.strip_suffix("する").unwrap_or(lemma))?;
     let id = verb.doc_tok_idx?;
     let mut objects = groups
         .iter()
@@ -8941,10 +8944,11 @@ fn restored_time_frame(groups: &[Bunsetsu]) -> Option<RestoredTime> {
         && first_end <= noun.span.start_char
         && wo.span.end_char <= second_start
         && second_end == verb.span.start_char)
-        .then_some(RestoredTime {
+        .then_some(TimeAdjustment {
             when,
             object,
             value,
+            action,
         })
 }
 
@@ -9754,6 +9758,42 @@ mod motion_endpoint_tests {
         assert_eq!(translate("駅まで行きませんか。"), "不去車站嗎。");
         assert_eq!(translate("公園まで行きませんか。"), "不去公園嗎。");
         assert_eq!(translate("公園まで走りませんか。"), "不跑到公園嗎。");
+    }
+
+    #[test]
+    fn changing_a_schedule_keeps_the_event_time_and_result_value_distinct() {
+        for (source, expected) in [
+            (
+                "先生は朝に出発の時刻を夕方に変更しました。",
+                "老師早上把出發的時刻改到傍晚了。",
+            ),
+            (
+                "先生は夕方に出発の時刻を朝に変更しました。",
+                "老師傍晚把出發的時刻改到早上了。",
+            ),
+            (
+                "朝に集合時刻を夕方に変更しませんでした。",
+                "早上沒有把集合時刻改到傍晚。",
+            ),
+            (
+                "母は正午に時計を夕方に合わせました。",
+                "母親正午把手錶調到傍晚了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for source in [
+            "母は正午に先生に時計を返しました。",
+            "朝に車を車庫に戻しました。",
+            "生徒は先生に時計を友達に渡しました。",
+            "私は正午に会議の時間を朝と比べました。",
+        ] {
+            let text = translate(source);
+            assert!(
+                !text.contains('把') && !text.contains("改到") && !text.contains("調到"),
+                "{source}: {text}"
+            );
+        }
     }
 
     #[test]

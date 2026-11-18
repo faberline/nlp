@@ -8887,13 +8887,18 @@ fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool
         .filter(|a| a.head == Some(head) && a.deprel == "nsubj")
         .all(|a| {
             !a.is_locked
-                && ((a.upos == Some(Upos::Noun) && is_demonstrative_person_noun(a))
-                    || matches!(
+                && match a.upos {
+                    Some(Upos::Noun) => is_demonstrative_person_noun(a),
+                    Some(Upos::Pron) => matches!(
                         a.surface.as_str(),
                         "私" | "僕" | "俺" | "彼" | "彼女" | "あなた" | "君"
-                    )
-                    || lookup_ja(&a.surface)
-                        .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Person)))
+                    ),
+                    Some(Upos::Propn) => lookup_ja(&a.surface).is_some_and(|hit| {
+                        hit.sem_class == Some(SemanticClass::Person)
+                            && hit.upos_candidates.as_slice() == [Upos::Propn]
+                    }),
+                    _ => false,
+                }
         })
 }
 

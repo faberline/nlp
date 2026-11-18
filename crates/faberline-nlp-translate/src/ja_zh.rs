@@ -8819,9 +8819,7 @@ fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[
                 "誰" | "何" | "どれ" | "どこ" | "いつ"
             )
     });
-    let can_offer = listeners_only
-        && actionable_gloss
-        && !wh_question
+    let intentional_action = actionable_gloss
         && !matches!(
             lemma,
             "ある"
@@ -8839,6 +8837,7 @@ fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[
                 | "いただく"
                 | "いただける"
         );
+    let can_offer = listeners_only && intentional_action && !wh_question;
     let attached_case = |noun: &Atom, tail: &Atom| {
         !noun.is_locked
             && !tail.is_locked
@@ -8895,7 +8894,7 @@ fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[
         Some((i, text))
     });
     let explicit = markers.next();
-    if markers.next().is_some() {
+    if markers.next().is_some() || (explicit.is_none() && !intentional_action) {
         return;
     }
     // Use the source case heads before floor normalization and noun folding.

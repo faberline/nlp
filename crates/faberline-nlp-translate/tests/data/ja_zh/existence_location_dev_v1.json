@@ -1,0 +1,653 @@
+{
+  "schema": "nlp.ja_zh.existence_location_dev.v1",
+  "status": "PROPOSED_UNADOPTED",
+  "source_main": "a3f253ad358fe7d54f669ca18340a2cda360919e",
+  "source_tree": "abb56c5f82b910e6088431734e8c171975f9d840",
+  "source_catalog_sha256": "6997e8c145551dd6fa62088c5a64bc1225b97645a2a6f1c85b35d15b44560134",
+  "scope_plan_sha256": "8448322bdc764ff9219b82c1eedd1aeefb6a3f3c6de02d66c28edd2be8ef5d09",
+  "source_proof_sha256": "c4e71b8b8276834bc24d213d7f940d1bf518f613313fedb8692b8ac90683713b",
+  "provenance": "First-party original neutral sentences and provisional AI-assisted Taiwan Traditional Chinese references; first_party_mit. Not human gold or level certification.",
+  "span_convention": "Zero-based half-open Unicode scalar ranges and UTF-8 byte ranges into exact source or named reference. Inline opaque literal includes both backtick delimiters; actual segmentation and restoration are unverified.",
+  "dedup_method": "Compare exact and NFKC Japanese against all 259 adopted catalog records and all other new records. For any text collision compare canonical sorted full fixture JSON including options, glossary, backend and models_directory; no collisions found.",
+  "reused_existing_controls": {
+    "animate": [
+      "nlevels_expansion_dev_v1::N5X-01",
+      "nlevels_expansion_dev_v1::N5X-02",
+      "honorific_san_dev_v1::HS-01",
+      "honorific_san_dev_v1::HS-02"
+    ],
+    "relational": [
+      "issue86_standing_dev_export_059c10a::jz155",
+      "issue86_standing_dev_export_059c10a::jz056",
+      "issue86_standing_dev_export_059c10a::jz099",
+      "issue86_standing_dev_export_059c10a::jz124"
+    ],
+    "roles": [
+      "clock_time_dev_v1::CLOCK-C10",
+      "clock_time_dev_v1::CLOCK-C11",
+      "clock_time_dev_v1::CLOCK-C12",
+      "clock_time_dev_v1::CLOCK-C13",
+      "issue86_standing_dev_export_059c10a::jz002"
+    ],
+    "locks": [
+      "clock_boundary_lock_dev_v1::CB-L02",
+      "clock_boundary_lock_dev_v1::CB-L08"
+    ],
+    "scope": [
+      "nlevels_expansion_dev_v1::N2-D03",
+      "nlevels_expansion_dev_v1::N2-D04",
+      "nlevels_expansion_dev_v1::N1-D06"
+    ]
+  },
+  "aliases_not_new_rows": [
+    "CB-B10",
+    "CB-B25",
+    "CB-L01"
+  ],
+  "items": [
+    {
+      "id": "EL-A01",
+      "canonical_id": "existence_location_dev_v1::EL-A01",
+      "jp": "庭に猫がいます。",
+      "zh_hant": "院子裡有貓。",
+      "allowed_variants": [],
+      "meaning": "A cat exists in the yard now; affirmative.",
+      "control": "EL-A02",
+      "control_relationship": "Same cat, place and particles; opposite existence polarity.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write issue94 engine rule",
+      "provenance": "Original first-party Japanese and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit; not human gold or level certification.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "EL-A02",
+      "canonical_id": "existence_location_dev_v1::EL-A02",
+      "jp": "庭に猫がいません。",
+      "zh_hant": "院子裡沒有貓。",
+      "allowed_variants": [],
+      "meaning": "A cat is absent from the yard now; negation applies to existence.",
+      "control": "EL-A01",
+      "control_relationship": "Same cat, place and particles; opposite existence polarity.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write issue94 engine rule",
+      "provenance": "Original first-party Japanese and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit; not human gold or level certification.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "EL-R01",
+      "canonical_id": "existence_location_dev_v1::EL-R01",
+      "jp": "棚の上に箱がなかった。",
+      "zh_hant": "當時架子上沒有盒子。",
+      "allowed_variants": [],
+      "meaning": "In the past no box was on top of the shelf. The reference explicitly anchors past time.",
+      "control": "EL-R02",
+      "control_relationship": "Different relation and anchor from jz155; compare nonexistential action at same relation.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write issue94 engine rule",
+      "provenance": "Original first-party Japanese and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit; not human gold or level certification.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "EL-R02",
+      "canonical_id": "existence_location_dev_v1::EL-R02",
+      "jp": "棚の上に箱を置いた。",
+      "zh_hant": "把盒子放在架子上了。",
+      "allowed_variants": [],
+      "meaning": "An implicit agent placed a box on top of the shelf in the past. No agent gender or identity is specified.",
+      "control": "EL-R01",
+      "control_relationship": "Same relation, anchor and object; an action rather than existence.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write issue94 engine rule",
+      "provenance": "Original first-party Japanese and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit; not human gold or level certification.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "EL-G01",
+      "canonical_id": "existence_location_dev_v1::EL-G01",
+      "jp": "青葉公園に犬がいます。",
+      "zh_hant": "青葉公園裡有狗。",
+      "allowed_variants": [],
+      "meaning": "A dog is present at the named park now; affirmative.",
+      "control": "EL-G02",
+      "control_relationship": "Protected place in an existential clause versus protected recipient in an action.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write issue94 engine rule",
+      "provenance": "Original first-party Japanese and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit; not human gold or level certification.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [
+            {
+              "canonical": "青葉公園",
+              "surfaces": [
+                "青葉公園"
+              ],
+              "targets": {
+                "zh-Hant": "青葉公園"
+              },
+              "pronoun_class": "unspecified",
+              "speech_register": "unspecified"
+            }
+          ],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [
+        {
+          "kind": "typed_glossary",
+          "source": {
+            "literal": "青葉公園",
+            "occurrence_count": 1,
+            "occurrence_index_1based": 1,
+            "scalar_half_open": [
+              0,
+              4
+            ],
+            "utf8_byte_half_open": [
+              0,
+              12
+            ]
+          },
+          "references": [
+            {
+              "field": "zh_hant",
+              "literal": "青葉公園",
+              "occurrence_count": 1,
+              "occurrence_index_1based": 1,
+              "scalar_half_open": [
+                0,
+                4
+              ],
+              "utf8_byte_half_open": [
+                0,
+                12
+              ]
+            }
+          ],
+          "relative_position": "Source place before location marker, participant and predicate; target place before participant and predicate.",
+          "opaque_semantics": null
+        }
+      ],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "EL-G02",
+      "canonical_id": "existence_location_dev_v1::EL-G02",
+      "jp": "私は青木さんに手紙を書きます。",
+      "zh_hant": "我寫信給青木。",
+      "allowed_variants": [],
+      "meaning": "The speaker writes a letter to Aoki; Aoki is the recipient, not a place. The source honorific does not establish gender; the target avoids gender inference.",
+      "control": "EL-G01",
+      "control_relationship": "Protected recipient in a nonexistential action.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write issue94 engine rule",
+      "provenance": "Original first-party Japanese and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit; not human gold or level certification.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [
+            {
+              "canonical": "青木さん",
+              "surfaces": [
+                "青木さん"
+              ],
+              "targets": {
+                "zh-Hant": "青木"
+              },
+              "pronoun_class": "unspecified",
+              "speech_register": "unspecified"
+            }
+          ],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [
+        {
+          "kind": "typed_glossary",
+          "source": {
+            "literal": "青木さん",
+            "occurrence_count": 1,
+            "occurrence_index_1based": 1,
+            "scalar_half_open": [
+              2,
+              6
+            ],
+            "utf8_byte_half_open": [
+              6,
+              18
+            ]
+          },
+          "references": [
+            {
+              "field": "zh_hant",
+              "literal": "青木",
+              "occurrence_count": 1,
+              "occurrence_index_1based": 1,
+              "scalar_half_open": [
+                4,
+                6
+              ],
+              "utf8_byte_half_open": [
+                12,
+                18
+              ]
+            }
+          ],
+          "relative_position": "Source recipient before recipient marker and object; target recipient after action and recipient marker.",
+          "opaque_semantics": null
+        }
+      ],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "EL-O01",
+      "canonical_id": "existence_location_dev_v1::EL-O01",
+      "jp": "庭に`QX`がいません。",
+      "zh_hant": "院子裡沒有`QX`。",
+      "allowed_variants": [],
+      "meaning": "The opaque participant is absent from the yard now. Its identity and nature are unknown.",
+      "control": "EL-O02",
+      "control_relationship": "Opaque participant in negative existence versus opaque recipient in action.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write issue94 engine rule",
+      "provenance": "Original first-party Japanese and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit; not human gold or level certification.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [
+        {
+          "kind": "inline_opaque",
+          "source": {
+            "literal": "`QX`",
+            "occurrence_count": 1,
+            "occurrence_index_1based": 1,
+            "scalar_half_open": [
+              2,
+              6
+            ],
+            "utf8_byte_half_open": [
+              6,
+              10
+            ]
+          },
+          "references": [
+            {
+              "field": "zh_hant",
+              "literal": "`QX`",
+              "occurrence_count": 1,
+              "occurrence_index_1based": 1,
+              "scalar_half_open": [
+                5,
+                9
+              ],
+              "utf8_byte_half_open": [
+                15,
+                19
+              ]
+            }
+          ],
+          "relative_position": "Source participant after place and before subject marker and predicate; target after place and negation.",
+          "opaque_semantics": "unknown; infer only visible syntactic role"
+        }
+      ],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "EL-O02",
+      "canonical_id": "existence_location_dev_v1::EL-O02",
+      "jp": "私は`QX`に手紙を書きます。",
+      "zh_hant": "我寫信給`QX`。",
+      "allowed_variants": [],
+      "meaning": "The speaker writes a letter to the opaque recipient. Its identity and nature are unknown.",
+      "control": "EL-O01",
+      "control_relationship": "Opaque recipient is not a place or existential participant.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write issue94 engine rule",
+      "provenance": "Original first-party Japanese and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit; not human gold or level certification.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [
+        {
+          "kind": "inline_opaque",
+          "source": {
+            "literal": "`QX`",
+            "occurrence_count": 1,
+            "occurrence_index_1based": 1,
+            "scalar_half_open": [
+              2,
+              6
+            ],
+            "utf8_byte_half_open": [
+              6,
+              10
+            ]
+          },
+          "references": [
+            {
+              "field": "zh_hant",
+              "literal": "`QX`",
+              "occurrence_count": 1,
+              "occurrence_index_1based": 1,
+              "scalar_half_open": [
+                4,
+                8
+              ],
+              "utf8_byte_half_open": [
+                12,
+                16
+              ]
+            }
+          ],
+          "relative_position": "Source recipient before recipient marker and object; target after action and recipient marker.",
+          "opaque_semantics": "unknown; infer only visible syntactic role"
+        }
+      ],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "EL-S01",
+      "canonical_id": "existence_location_dev_v1::EL-S01",
+      "jp": "庭に猫がいますが、犬は道を走りません。",
+      "zh_hant": "院子裡有貓，但狗不沿著道路奔跑。",
+      "allowed_variants": [],
+      "meaning": "A cat is present in the yard, but the dog does not run along the road. The running clause is negative and nonpast; the source does not establish a relationship between the road and the cat’s yard.",
+      "control": "EL-S02",
+      "control_relationship": "Same cat, yard, dog, road, clause connection and nonpast predicates as EL-S02; each clause reverses polarity.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write issue94 engine rule",
+      "provenance": "Original first-party Japanese and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit; not human gold or level certification.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "EL-S02",
+      "canonical_id": "existence_location_dev_v1::EL-S02",
+      "jp": "庭に猫がいませんが、犬は道を走ります。",
+      "zh_hant": "院子裡沒有貓，但狗沿著道路奔跑。",
+      "allowed_variants": [],
+      "meaning": "A cat is absent from the yard, but the dog runs along the road. The running clause is affirmative and nonpast; the source does not establish a relationship between the road and the cat’s yard.",
+      "control": "EL-S01",
+      "control_relationship": "Same cat, yard, dog, road, clause connection and nonpast predicates as EL-S01; each clause reverses polarity.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write issue94 engine rule",
+      "provenance": "Original first-party Japanese and provisional AI-assisted Taiwan Traditional Chinese reference; first_party_mit; not human gold or level certification.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    }
+  ]
+}

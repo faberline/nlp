@@ -1,0 +1,2434 @@
+{
+  "schema": "faberline.nlp.ja_zh.clock_boundary_lock_dev.v1",
+  "version": "1.0.0",
+  "status": "Proposed data; independent formal review and adoption are pending. No new row has been executed.",
+  "membership": [
+    "CB-B01",
+    "CB-B02",
+    "CB-B03",
+    "CB-B04",
+    "CB-B05",
+    "CB-B06",
+    "CB-B07",
+    "CB-B08",
+    "CB-B09",
+    "CB-B11",
+    "CB-B12",
+    "CB-B13",
+    "CB-B14",
+    "CB-B15",
+    "CB-B16",
+    "CB-B17",
+    "CB-B18",
+    "CB-B19",
+    "CB-B20",
+    "CB-B21",
+    "CB-B22",
+    "CB-B23",
+    "CB-B24",
+    "CB-B26",
+    "CB-L02",
+    "CB-L03",
+    "CB-L04",
+    "CB-L05",
+    "CB-L06",
+    "CB-L07",
+    "CB-L08",
+    "CB-L09",
+    "CB-L10",
+    "CB-L11"
+  ],
+  "membership_and_aliases": {
+    "planned_new_rows": 34,
+    "new_sentence_intents": 24,
+    "derived_glossary_options": 6,
+    "derived_markup_sources": 4,
+    "new_case_ids": [
+      "CB-B01",
+      "CB-B02",
+      "CB-B03",
+      "CB-B04",
+      "CB-B05",
+      "CB-B06",
+      "CB-B07",
+      "CB-B08",
+      "CB-B09",
+      "CB-B11",
+      "CB-B12",
+      "CB-B13",
+      "CB-B14",
+      "CB-B15",
+      "CB-B16",
+      "CB-B17",
+      "CB-B18",
+      "CB-B19",
+      "CB-B20",
+      "CB-B21",
+      "CB-B22",
+      "CB-B23",
+      "CB-B24",
+      "CB-B26",
+      "CB-L02",
+      "CB-L03",
+      "CB-L04",
+      "CB-L05",
+      "CB-L06",
+      "CB-L07",
+      "CB-L08",
+      "CB-L09",
+      "CB-L10",
+      "CB-L11"
+    ],
+    "matrix_aliases": {
+      "CB-B10": "CB-B06; same input and complete options, one row and one execution unit",
+      "CB-B25": "CLOCK-C07 and CLOCK-C08; external existing duration guards, no new row",
+      "CB-L01": "CLOCK-C04 with default options; external unlocked baseline, no new row"
+    },
+    "provisional_unique_source_strings": {
+      "newly_authored": 28,
+      "existing_C04": 1,
+      "total": 29,
+      "basis": "24 distinct planned new sentence intents plus 4 source-markup variants; 6 glossary variants reuse C04. Provisional only until wording, normalized comparison, and actual source-plus-option uniqueness checks; do not assert observed counts."
+    },
+    "provisional_source_plus_complete_options_units": {
+      "newly_stored": 34,
+      "including_one_reused_C04": 35,
+      "basis": "Each typed glossary variation uses a distinct full glossary object; each opaque variant changes source. Count existing duration guard units only in an expanded reuse manifest, not new membership. Verify all combinations after full wording and canonical options."
+    },
+    "duplicate_policy": "Compare canonicalized full input plus complete options, including glossary, backend and default flags; report text-only equality separately. For B07/B08/B09 NFKC may normalize script differences intentionally, so preserve raw distinct scripts and identify the contrast rather than silently treat them as wholly new semantic examples. Root must check 225 allowed rows and record source-qualified reuse."
+  },
+  "observed_static_counts": {
+    "new_rows": 34,
+    "new_sentence_intents": 24,
+    "derived_glossary_options": 6,
+    "derived_markup_sources": 4,
+    "unique_new_source_strings": 28,
+    "unique_source_strings_with_reused_C04": 29,
+    "new_source_plus_complete_options_units": 34,
+    "units_with_external_C04_default": 35,
+    "old_dev_rows_compared": 225
+  },
+  "base": {
+    "commit": "4ee92af3dac317e7f0829adc6962d6fe9579f3ae",
+    "tree": "e8d9a373c55fb29c27b19203c3ee6640c18a3691",
+    "qualification": "controller verified actual main; author did not mutate or inspect git"
+  },
+  "provenance": "New sentences, Chinese references and fixture targets were independently authored with AI assistance; first_party_mit, development-visible, heldout=false. Independent data adoption remains pending; no official JLPT or human certification claim.",
+  "source_banks": [
+    {
+      "file": "nlevels_dev_v1.json",
+      "sha256": "a24d91502b3d361eec1ff2bf97381d0accbf27d7516ba2188e77b3b4e96695c0",
+      "count": 20
+    },
+    {
+      "file": "honorific_san_dev_v1.json",
+      "sha256": "280da5014f9069994bce1f23e8cdc10c3cad3200450278c9b4e3618231134229",
+      "count": 12
+    },
+    {
+      "file": "nlevels_expansion_dev_v1.json",
+      "sha256": "22d0753fd384ae5f07a118c6417c53b213cc66c1637a8369b8c0315e69ab4fcc",
+      "count": 50
+    },
+    {
+      "file": "clock_time_dev_v1.json",
+      "sha256": "01db148efcc90ca4fe025a65c6e39fb712ce6643e5c27d3018cbc6e691e1bf69",
+      "count": 13
+    },
+    {
+      "file": "issue86-standing-dev-export-059c10a.json",
+      "sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d",
+      "source_head": "059c10a260ec75d92ee0867c1649ddc0a0db10be",
+      "count": 130
+    }
+  ],
+  "source_code_sha256": {
+    "schema.rs": "a9410bf91d83d70c4460a8826e87a2565495f1b52e77f69eba08f13151563d8d",
+    "lib.rs": "c4a85111d1b498837af2eaf18da2473618daa9a1e61b85d6a75954ec5f06b1e2",
+    "glossary.rs": "9b3057df4dced0c21f312a2f308c968ee32d8b94f2bd72a2eba296404870a8ed",
+    "lock.rs": "99e419d48b8def31343467e974afc7a86fb12bd1308ecdab0ac0167a5114f290",
+    "bin/nlp_translate.rs": "3987b4d45d0eed5e62b6c085b75e9074f80d3a7a0bf193b4a9816762169988eb",
+    "tests/ja_zh_multilayer.rs": "72c1dd4c41ec97c822d555498a19c29fabb145b4d1e0cfc5d5a1ea8ec1347be8",
+    "faberline-nlp/src/lib.rs": "6cb9f34b7c2041fbb72797cf022f47ca40b81c14de21b35f904181a6a4ef40b8"
+  },
+  "reused_controls": [
+    {
+      "ids": [
+        "CLOCK-C01",
+        "CLOCK-C02",
+        "CLOCK-C03",
+        "CLOCK-C04",
+        "CLOCK-C05",
+        "CLOCK-C06",
+        "CLOCK-C07",
+        "CLOCK-C08",
+        "CLOCK-C09",
+        "CLOCK-C10",
+        "CLOCK-C11",
+        "CLOCK-C12",
+        "CLOCK-C13"
+      ],
+      "source": "clock_time_dev_v1.json",
+      "reason": "Already adopted original clock, half, numeric form, roles and negatives; C04 is source for lock option contrasts, not a newly authored JP sentence."
+    },
+    {
+      "ids": [
+        "N5X-03",
+        "N5X-04",
+        "N5X-01",
+        "N5X-02",
+        "N5X-06",
+        "N5X-09",
+        "N5X-10"
+      ],
+      "source": "nlevels_expansion_dev_v1.json",
+      "reason": "Hour nine and partial non-temporal role, counter, floor guards."
+    },
+    {
+      "ids": [
+        "L3-01",
+        "L3-02"
+      ],
+      "source": "nlevels_dev_v1.json",
+      "reason": "Distant event boundary guard; no numeric clock."
+    },
+    {
+      "ids": [
+        "jz002",
+        "jz020",
+        "jz073",
+        "jz075",
+        "jz078",
+        "jz080"
+      ],
+      "source": "issue86-standing-dev-export-059c10a.json",
+      "reason": "Recipient, duration, time noun, counters, confounded date+clock; no row assumed passing."
+    },
+    {
+      "ids": [
+        "source_kara_before_a_copula_keeps_the_start_point:授業は午前九時からです。"
+      ],
+      "source": "crates/faberline-nlp-translate/tests/ja_zh_multilayer.rs",
+      "sha256": "72c1dd4c41ec97c822d555498a19c29fabb145b4d1e0cfc5d5a1ea8ec1347be8",
+      "reason": "Existing から fixture supports start marker and alignment only, not a full-clock semantic pass; retain as source context, do not count as newly adopted bank row."
+    }
+  ],
+  "period_policy": {
+    "whole_hour": "NAOJ: 午前12時 and 午後0時 express noon; 午前0時 and 午後12時 express midnight. Its historical-definition qualification for 午後0時 is recorded, not used to mislabel all four as ambiguous. No English AM/PM mapping.",
+    "minutes": "NAOJ warns 午前12 plus minutes can be interpreted as midday or midnight. The B26 reference explicitly expresses uncertainty between both source-supported readings of one meeting time. The wording was independently reviewed for reference drafting under the issue 133 policy; full-bank adoption remains pending. Do not force one reading, assert an intentional scheduling choice, or invent context. A technical no-invention guard alone is not a full quality pass.",
+    "4_5_boundary": "For 1–4 explicit 午前, 凌晨 is a proposed Taiwan usage; 5–11 上午 is proposed. This is a conventional wording judgment, not a hard law; checker must review whole and half cases. PM 1–11 should preserve afternoon, event and hour.",
+    "zero_twenty_four": "Use D at 24:00 and D+1 at 00:00 for the same boundary; retain each stated day association. This data guard does not implement date conversion. Bare 13:00 and 23:00 test representative valid values, not universal coverage.",
+    "background": "https://www.nao.ac.jp/faq/a0401.html; factual background only; no copied sentences or dictionary references."
+  },
+  "portable_options_and_spans": {
+    "api": "analyze_and_translate(source, TranslateOptions::new(TargetVariant::ZhHant), &TranslationGlossary, None, Backend::Onnx), with default localize_entities=false, cjk_latin_spacing=false and other defaults from schema.rs; no caller-supplied arbitrary opaque span field. CLI translate --target zh-Hant --format json --glossary <fixture> supplies JSON TranslationGlossary; source_hint and other flags fixed explicitly at fixture freeze. Do not run either before data adoption.",
+    "glossary": "domain_terms entry canonical and surfaces bound to intended source fragment; targets map ZhHant to an independently authored explicit target. For whole clock, replacement must express same time; for partial fixtures retain the exact matched source fragment as target where needed to avoid forcing an unnatural mixed natural translation. Record exact surface, replacement, full options and source case in each final row. Canonical and target are distinct fields; explicitly set all.",
+    "matching": "glossary.rs uses leftmost-longest exact matching and ASCII alphanumeric edge guards. Japanese fragments here have non-ASCII edges and are eligible by source-level matcher; actual segmentation, placeholder application and behavior unverified. Opaque spans block overlapping glossary; inline opaque has priority 0, glossary 1, entities 2. No arbitrary lock combination or executed reachability claimed.",
+    "opaque": "Inline backticks express code-like opaque candidates through document segmentation; no public option sets arbitrary character spans. Source must actually contain delimiters, so opaque variants differ from base JP; full segmentation and whether lock intersects clock atoms require later observation. Do not claim byte-range locks can be injected via TranslateOptions.",
+    "span_contract": "For every case fix explicit half-open Unicode scalar [start_char,end_char) source and target coordinates against the exact independently fixed source and expected target; compute corresponding UTF-8 byte boundaries separately from these strings. Public API spans are scalar, not bytes. Validate slices, actual encoded bytes, target replacement, each expected lock occurrence, position relative to surrounding arguments and clock, and clause alignment. Dynamic positions if variants differ must be recorded per variant; never invent offsets before wording.",
+    "quality": "Lock restoration and span correctness are separate from a complete natural sentence; preserve full reference and semantic constraints without treating an unchanged bad output as a full pass. Partial clocks are deliberate negative safety controls, not evidence of support for rewriting them.",
+    "token_contract": "Pairs B07/B08/B09 supply text-form candidates for numeric+時 joined/split analysis. They do not specify or guarantee actual tokenizer/atom shape. After adoption and explicit authorization, capture both shapes where genuinely reachable. If no same-call route can achieve a required shape, report source-bound proof and remaining untested scope rather than invent a fixture.",
+    "complete_options_blueprint": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1",
+      "models_directory": null,
+      "backend": "Onnx",
+      "glossary_schema": "nlp.translate.glossary.v1",
+      "glossary_keys": [
+        "schema",
+        "actors",
+        "places",
+        "objects",
+        "domain_terms"
+      ],
+      "entry_keys": [
+        "canonical",
+        "surfaces",
+        "targets",
+        "pronoun_class",
+        "speech_register"
+      ],
+      "entry_default_enums": "unspecified where omitted according to typed serde defaults; canonical and surfaces nonempty, targets contains zh-Hant literal; exact complete object frozen before any execution",
+      "constraints": "Metadata and byte/scalar spans belong in dataset wrapper, never as invented TranslationGlossary keys. Statically reject unknown keys and wrong schema even though serde may ignore them."
+    },
+    "fixture_matrix": {
+      "CB-L02": {
+        "kind": "glossary",
+        "surface": "午後二時半",
+        "target_policy": "explicit independently authored zh-Hant target preserving 14:30; set targets zh-Hant",
+        "span": "whole clock"
+      },
+      "CB-L03": {
+        "kind": "glossary",
+        "surface": "二",
+        "target_policy": "explicit literal target 二; partial-lock integrity, not full quality",
+        "span": "hour"
+      },
+      "CB-L04": {
+        "kind": "glossary",
+        "surface": "時",
+        "target_policy": "explicit literal target 時; partial-lock integrity, not full quality",
+        "span": "unit"
+      },
+      "CB-L05": {
+        "kind": "glossary",
+        "surface": "半",
+        "target_policy": "explicit literal target 半; independent exact protection and quality",
+        "span": "half"
+      },
+      "CB-L06": {
+        "kind": "glossary",
+        "surface": "午後",
+        "target_policy": "explicit literal target 午後; independent exact protection and quality",
+        "span": "period"
+      },
+      "CB-L07": {
+        "kind": "glossary",
+        "surface": "会議は",
+        "target_policy": "explicit independently authored target preserving meeting topic; source fragment adjacent to clock",
+        "span": "non-clock adjacent"
+      },
+      "CB-L08": "balanced inline backticks around whole clock",
+      "CB-L09": "balanced inline backticks around hour",
+      "CB-L10": "balanced inline backticks around period",
+      "CB-L11": "balanced inline backticks around adjacent non-clock fragment"
+    },
+    "restoration": "Restorer repairs a missing mandatory placeholder but source does not guarantee exact-once: repeated placeholders can each be expanded. Assert separately one corresponding record and occurrence per specified locked source occurrence, exact replacement/opaque bytes, intended location and source/target alignments. Do not assert global substring uniqueness when other occurrences are legitimate.",
+    "full_quality_policy": "Each case needs a complete provisional reference; for a partial lock whose mandated literal causes mixed language, record the literal fixture output as an integrity constraint only. If no complete natural translation preserving the exact lock can be defended, mark full-quality expectation explicitly unresolved for independent review, not full success from unchanged mixed output. Contrasting unlocked case remains a full-semantic control."
+  },
+  "dedup": {
+    "method": "raw and NFKC whitespace-normalized Japanese; complete fixture comparisons; 225 permitted DEV rows",
+    "raw_matches_existing": [
+      {
+        "new": "CB-L02",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      },
+      {
+        "new": "CB-L03",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      },
+      {
+        "new": "CB-L04",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      },
+      {
+        "new": "CB-L05",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      },
+      {
+        "new": "CB-L06",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      },
+      {
+        "new": "CB-L07",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      }
+    ],
+    "normalized_matches_existing": [
+      {
+        "new": "CB-L02",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      },
+      {
+        "new": "CB-L03",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      },
+      {
+        "new": "CB-L04",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      },
+      {
+        "new": "CB-L05",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      },
+      {
+        "new": "CB-L06",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      },
+      {
+        "new": "CB-L07",
+        "source": "clock_time_dev_v1.json",
+        "id": "CLOCK-C04"
+      }
+    ],
+    "new_normalized_pairs": [
+      [
+        "CB-B08",
+        "CB-B09"
+      ],
+      [
+        "CB-L02",
+        "CB-L03"
+      ],
+      [
+        "CB-L02",
+        "CB-L04"
+      ],
+      [
+        "CB-L02",
+        "CB-L05"
+      ],
+      [
+        "CB-L02",
+        "CB-L06"
+      ],
+      [
+        "CB-L02",
+        "CB-L07"
+      ],
+      [
+        "CB-L03",
+        "CB-L04"
+      ],
+      [
+        "CB-L03",
+        "CB-L05"
+      ],
+      [
+        "CB-L03",
+        "CB-L06"
+      ],
+      [
+        "CB-L03",
+        "CB-L07"
+      ],
+      [
+        "CB-L04",
+        "CB-L05"
+      ],
+      [
+        "CB-L04",
+        "CB-L06"
+      ],
+      [
+        "CB-L04",
+        "CB-L07"
+      ],
+      [
+        "CB-L05",
+        "CB-L06"
+      ],
+      [
+        "CB-L05",
+        "CB-L07"
+      ],
+      [
+        "CB-L06",
+        "CB-L07"
+      ]
+    ],
+    "limits": "Normalized script variants and same-JP different-option derivations are intentional; normalized equality is not semantic identity."
+  },
+  "adoption_record": "https://github.com/faberline/nlp/issues/133",
+  "items": [
+    {
+      "id": "CB-B01",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午前四時に始まります。",
+      "zh_hant": "會議凌晨四點開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "4 AM whole",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B02",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same event and period; hour 4 to 5",
+      "contrast_limit": "boundary AM early versus morning; natural references separately reviewed",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B02",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午前五時に始まります。",
+      "zh_hant": "會議上午五點開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "5 AM whole",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B01",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same event and period; hour 4 to 5",
+      "contrast_limit": "4/5 policy boundary; no exhaustive hour claim",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B03",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午前四時半に始まります。",
+      "zh_hant": "會議凌晨四點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "4 AM half",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B01",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same hour, AM and event; add half",
+      "contrast_limit": "whole versus half at boundary",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B04",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午前五時半に始まります。",
+      "zh_hant": "會議上午五點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "5 AM half",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B02",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same hour, AM and event; add half",
+      "contrast_limit": "whole versus half at boundary",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B05",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後四時に始まります。",
+      "zh_hant": "會議下午四點開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "4 PM whole",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B01",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same hour/event, change AM to PM",
+      "contrast_limit": "same numeral, explicit period",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B06",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後五時に始まります。",
+      "zh_hant": "會議下午五點開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "5 PM whole in natural event-time marked に; serves also as original B10",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B11",
+      "stable_features": "Same meeting, 5 PM whole time, start event and polite mood.",
+      "changed_features": "B11 omits に, moves the clock to the sentence opening and adds a comma.",
+      "contrast_limit": "The particle, phrase position and punctuation change together; this is a close control, not a strict minimal pair.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B07",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後五時半に始まります。",
+      "zh_hant": "會議下午五點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "5 PM half kanji numeral",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B08",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same event/time; numeral script only",
+      "contrast_limit": "non-2/9 hour and half",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B08",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後5時半に始まります。",
+      "zh_hant": "會議下午五點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "5 PM half ASCII numeral",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B07",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same event/time; numeral script only",
+      "contrast_limit": "token shape remains unknown",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B09",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後５時半に始まります。",
+      "zh_hant": "會議下午五點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "5 PM half fullwidth numeral",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B07",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same event/time; numeral script only",
+      "contrast_limit": "token shape remains unknown",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B11",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "午後五時、会議は始まります。",
+      "zh_hant": "下午五點，會議開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "5 PM whole in same natural event without に",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B06",
+      "stable_features": "Same meeting, 5 PM whole time, start event and polite mood.",
+      "changed_features": "B11 omits に, moves the clock to the sentence opening and adds a comma.",
+      "contrast_limit": "The particle, phrase position and punctuation change together; this is a close control, not a strict minimal pair.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B12",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後五時に終わります。",
+      "zh_hant": "會議下午五點結束。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "5 PM whole with alternate event predicate",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B06",
+      "stable_features": "5 PM whole, に, participant roles when semantically applicable",
+      "changed_features": "alternate event and predicate",
+      "contrast_limit": "Event and predicate change together; not a strict minimal pair.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B13",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "午後五時に会議が始まります。",
+      "zh_hant": "下午五點會議開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "5 PM whole in a natural alternate position",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B06",
+      "stable_features": "5 PM whole, event, participant roles and mood",
+      "changed_features": "Move the clock phrase to the opening and change the meeting marker from は to が.",
+      "contrast_limit": "Clock position and the は-to-が marker change together; this is not a strict minimal pair.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B14",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は五月二日零時に終わります。",
+      "zh_hant": "會議在五月二日零點結束。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "00:00 at the beginning of day D+1; both denote the same boundary between D and D+1",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "年份、地點與參與者未明示。"
+      ],
+      "contrast": "CB-B15",
+      "stable_features": "Same boundary instant, event, mood and participant roles; day D is explicit and D+1 is the next calendar day",
+      "changed_features": "00:00 associated with day D+1 versus 24:00 associated with day D",
+      "contrast_limit": "The calendar date wording changes necessarily; require complete reference preserving each association. Data guard only; no calendar conversion or date-rule implementation implied.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B15",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は五月一日二十四時に終わります。",
+      "zh_hant": "會議在五月一日二十四點結束。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "24:00 at the end of day D; both denote the same boundary between D and D+1",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "年份、地點與參與者未明示。"
+      ],
+      "contrast": "CB-B14",
+      "stable_features": "Same boundary instant, event, mood and participant roles; day D is explicit and D+1 is the next calendar day",
+      "changed_features": "00:00 associated with day D+1 versus 24:00 associated with day D",
+      "contrast_limit": "The calendar date wording changes necessarily; require complete reference preserving each association. Data guard only; no calendar conversion or date-rule implementation implied.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B16",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "昼の十二時に会議を始めます。",
+      "zh_hant": "中午十二點開始開會。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "noon with the explicit 昼 cue and unambiguous 12-hour clock",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B17",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "noon cue versus midnight cue and period change",
+      "contrast_limit": "retain explicit day boundary and clock value",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B17",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "真夜中の零時に会議を始めます。",
+      "zh_hant": "午夜零點開始開會。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Explicit midnight cue and 0-hour notation, without English AM/PM mapping; preserve any stated date association.",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B16",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "noon vs midnight; cue and numeric form differ",
+      "contrast_limit": "no arbitrary mapping of 12 AM/PM",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B18",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午前十二時に始まります。",
+      "zh_hant": "會議中午十二點開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "午前12時 denotes noon at the whole hour; preserve original period and number as applicable while rendering intended boundary accurately",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B21",
+      "stable_features": "Same neutral event and explicit whole-hour clock context where natural",
+      "changed_features": "Exact period or numeral changes among four distinct forms",
+      "contrast_limit": "Conventional meaning follows NAOJ; source notes historic legal-definition qualification for 午後0時. Date association and the event context must be preserved, not invented.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B19",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後十二時に始まります。",
+      "zh_hant": "會議午夜十二點開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "午後12時 denotes midnight at the whole hour; preserve original period and number as applicable while rendering intended boundary accurately",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B20",
+      "stable_features": "Same neutral event and explicit whole-hour clock context where natural",
+      "changed_features": "Exact period or numeral changes among four distinct forms",
+      "contrast_limit": "Conventional meaning follows NAOJ; source notes historic legal-definition qualification for 午後0時. Date association and the event context must be preserved, not invented.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B20",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午前零時に始まります。",
+      "zh_hant": "會議午夜零點開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "午前0時 denotes midnight at the whole hour; preserve original period and number as applicable while rendering intended boundary accurately",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B19",
+      "stable_features": "Same neutral event and explicit whole-hour clock context where natural",
+      "changed_features": "Exact period or numeral changes among four distinct forms",
+      "contrast_limit": "Conventional meaning follows NAOJ; source notes historic legal-definition qualification for 午後0時. Date association and the event context must be preserved, not invented.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B21",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後零時に始まります。",
+      "zh_hant": "會議中午十二點開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "午後0時 denotes noon at the whole hour; preserve original period and number as applicable while rendering intended boundary accurately",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B18",
+      "stable_features": "Same neutral event and explicit whole-hour clock context where natural",
+      "changed_features": "Exact period or numeral changes among four distinct forms",
+      "contrast_limit": "Conventional meaning follows NAOJ; source notes historic legal-definition qualification for 午後0時. Date association and the event context must be preserved, not invented.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B22",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は十三時に始まります。",
+      "zh_hant": "會議十三點開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "unqualified 24-hour representative 13:00",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B23",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "hour 13 vs 23, time of day differs",
+      "contrast_limit": "event context must make notation clear; preserve exact value",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B23",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は二十三時に始まります。",
+      "zh_hant": "會議二十三點開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "unqualified 24-hour representative 23:00",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CB-B22",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "hour 13 vs 23",
+      "contrast_limit": "same event; high 24-hour value is not grounds for fictional preservation policy",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B24",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "二時限目は音楽です。",
+      "zh_hant": "第二節課是音樂課。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "non-clock lexical 時 compound near numeric material",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Both include a number and 時 in the source surface; events, referents and constructions differ.",
+      "changed_features": "lexeme and construction differ",
+      "contrast_limit": "negative guard; preserve lexical meaning; not strict minimal pair",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-B26",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午前十二時半に始まります。",
+      "zh_hant": "會議在十二點半開始，可能是中午，也可能是凌晨。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "A clock expression using 午前12 with a half-hour or explicit minutes, without a clarifying context; preserve the ambiguity described by NAOJ rather than choose noon or midnight.",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。"
+      ],
+      "semantic_unknowns": [
+        "十二點半可能指中午或凌晨；原文未明確選定其中一種。",
+        "日期、地點與參與者未明示。"
+      ],
+      "contrast": "CB-B18",
+      "stable_features": "Same event, period and 12-hour numeral, source context and mood where natural.",
+      "changed_features": "Whole hour versus attached half-hour or minutes; ambiguity applies only to the latter expression.",
+      "contrast_limit": "This semantic boundary guard uses the independently reviewed reference-drafting policy for issue 133: the complete reference states uncertainty between both source-supported readings of one meeting time. Do not force one reading, imply an intentional scheduling choice, or invent contextual facts. Full-bank adoption remains pending.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": null,
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": null
+    },
+    {
+      "id": "CB-L02",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後二時半に始まります。",
+      "zh_hant": "會議下午兩點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "CLOCK-C04 with whole 午後二時半 glossary lock",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。",
+        "遵守明列的保護內容、一次出現、來源與目標位置及對齊；這些與完整句子品質分開判定。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same JP, new glossary surface and target",
+      "contrast_limit": "whole span replacement expected exactly once; lock integrity separately from full translation",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": "clock_time_dev_v1.json#CLOCK-C04",
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": [
+            {
+              "canonical": "午後二時半",
+              "surfaces": [
+                "午後二時半"
+              ],
+              "targets": {
+                "zh-Hant": "下午兩點半"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "source_surface": "午後二時半",
+        "target_text": "下午兩點半",
+        "source_span": {
+          "scalar": [
+            3,
+            8
+          ],
+          "utf8_bytes": [
+            9,
+            24
+          ],
+          "slice": "午後二時半"
+        },
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              2,
+              7
+            ],
+            "utf8_bytes": [
+              6,
+              21
+            ],
+            "slice": "下午兩點半"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "Protected contribution remains in the relevant meeting/time phrase and before the event start.",
+        "independent_assertions": [
+          "exact target and source slices",
+          "one corresponding record and target occurrence per source occurrence",
+          "source and target scalar and UTF-8 byte boundaries",
+          "relative position and clause alignment",
+          "complete sentence meaning and naturalness"
+        ],
+        "runtime_status": "Unobserved: matcher, atom materialization, restoration and alignment."
+      }
+    },
+    {
+      "id": "CB-L03",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後二時半に始まります。",
+      "zh_hant": "會議下午二時半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "CLOCK-C04 with 二 glossary lock",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。",
+        "遵守明列的保護內容、一次出現、來源與目標位置及對齊；這些與完整句子品質分開判定。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same JP, hour substring glossary option",
+      "contrast_limit": "partial lock; ASCII boundary not involved; alignment reachability unverified",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": "clock_time_dev_v1.json#CLOCK-C04",
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": [
+            {
+              "canonical": "二",
+              "surfaces": [
+                "二"
+              ],
+              "targets": {
+                "zh-Hant": "二"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "source_surface": "二",
+        "target_text": "二",
+        "source_span": {
+          "scalar": [
+            5,
+            6
+          ],
+          "utf8_bytes": [
+            15,
+            18
+          ],
+          "slice": "二"
+        },
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              4,
+              5
+            ],
+            "utf8_bytes": [
+              12,
+              15
+            ],
+            "slice": "二"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "Protected contribution remains in the relevant meeting/time phrase and before the event start.",
+        "independent_assertions": [
+          "exact target and source slices",
+          "one corresponding record and target occurrence per source occurrence",
+          "source and target scalar and UTF-8 byte boundaries",
+          "relative position and clause alignment",
+          "complete sentence meaning and naturalness"
+        ],
+        "runtime_status": "Unobserved: matcher, atom materialization, restoration and alignment."
+      }
+    },
+    {
+      "id": "CB-L04",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後二時半に始まります。",
+      "zh_hant": "會議下午兩時半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "CLOCK-C04 with 時 glossary lock",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。",
+        "遵守明列的保護內容、一次出現、來源與目標位置及對齊；這些與完整句子品質分開判定。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same JP, 時 substring glossary option",
+      "contrast_limit": "partial unit lock; no claim tokenizer reaches a separate atom",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": "clock_time_dev_v1.json#CLOCK-C04",
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": [
+            {
+              "canonical": "時",
+              "surfaces": [
+                "時"
+              ],
+              "targets": {
+                "zh-Hant": "時"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "source_surface": "時",
+        "target_text": "時",
+        "source_span": {
+          "scalar": [
+            6,
+            7
+          ],
+          "utf8_bytes": [
+            18,
+            21
+          ],
+          "slice": "時"
+        },
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              5,
+              6
+            ],
+            "utf8_bytes": [
+              15,
+              18
+            ],
+            "slice": "時"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "Protected contribution remains in the relevant meeting/time phrase and before the event start.",
+        "independent_assertions": [
+          "exact target and source slices",
+          "one corresponding record and target occurrence per source occurrence",
+          "source and target scalar and UTF-8 byte boundaries",
+          "relative position and clause alignment",
+          "complete sentence meaning and naturalness"
+        ],
+        "runtime_status": "Unobserved: matcher, atom materialization, restoration and alignment."
+      }
+    },
+    {
+      "id": "CB-L05",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後二時半に始まります。",
+      "zh_hant": "會議下午兩點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "CLOCK-C04 with 半 glossary lock",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。",
+        "遵守明列的保護內容、一次出現、來源與目標位置及對齊；這些與完整句子品質分開判定。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same JP, half substring glossary option",
+      "contrast_limit": "Partial 半 glossary lock: exact lock integrity and span obligations apply; recognizer behavior and whether any whole-clock rewrite is admissible remain unknown until source-specific independent assessment and permitted runtime observation.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": "clock_time_dev_v1.json#CLOCK-C04",
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": [
+            {
+              "canonical": "半",
+              "surfaces": [
+                "半"
+              ],
+              "targets": {
+                "zh-Hant": "半"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "source_surface": "半",
+        "target_text": "半",
+        "source_span": {
+          "scalar": [
+            7,
+            8
+          ],
+          "utf8_bytes": [
+            21,
+            24
+          ],
+          "slice": "半"
+        },
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              6,
+              7
+            ],
+            "utf8_bytes": [
+              18,
+              21
+            ],
+            "slice": "半"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "Protected contribution remains in the relevant meeting/time phrase and before the event start.",
+        "independent_assertions": [
+          "exact target and source slices",
+          "one corresponding record and target occurrence per source occurrence",
+          "source and target scalar and UTF-8 byte boundaries",
+          "relative position and clause alignment",
+          "complete sentence meaning and naturalness"
+        ],
+        "runtime_status": "Unobserved: matcher, atom materialization, restoration and alignment."
+      }
+    },
+    {
+      "id": "CB-L06",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後二時半に始まります。",
+      "zh_hant": "會議午後兩點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "CLOCK-C04 with 午後 glossary lock",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。",
+        "遵守明列的保護內容、一次出現、來源與目標位置及對齊；這些與完整句子品質分開判定。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same JP, period substring glossary option",
+      "contrast_limit": "partial period lock; no inferred whole-clock match",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": "clock_time_dev_v1.json#CLOCK-C04",
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": [
+            {
+              "canonical": "午後",
+              "surfaces": [
+                "午後"
+              ],
+              "targets": {
+                "zh-Hant": "午後"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "source_surface": "午後",
+        "target_text": "午後",
+        "source_span": {
+          "scalar": [
+            3,
+            5
+          ],
+          "utf8_bytes": [
+            9,
+            15
+          ],
+          "slice": "午後"
+        },
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              2,
+              4
+            ],
+            "utf8_bytes": [
+              6,
+              12
+            ],
+            "slice": "午後"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "Protected contribution remains in the relevant meeting/time phrase and before the event start.",
+        "independent_assertions": [
+          "exact target and source slices",
+          "one corresponding record and target occurrence per source occurrence",
+          "source and target scalar and UTF-8 byte boundaries",
+          "relative position and clause alignment",
+          "complete sentence meaning and naturalness"
+        ],
+        "runtime_status": "Unobserved: matcher, atom materialization, restoration and alignment."
+      }
+    },
+    {
+      "id": "CB-L07",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後二時半に始まります。",
+      "zh_hant": "會議下午兩點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "CLOCK-C04 with 会議は glossary lock directly adjacent to unlocked clock",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。",
+        "遵守明列的保護內容、一次出現、來源與目標位置及對齊；這些與完整句子品質分開判定。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same JP; different glossary option",
+      "contrast_limit": "adjacent non-clock lock, verify placement and intact clock separately",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": "clock_time_dev_v1.json#CLOCK-C04",
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": [
+            {
+              "canonical": "会議は",
+              "surfaces": [
+                "会議は"
+              ],
+              "targets": {
+                "zh-Hant": "會議"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "source_surface": "会議は",
+        "target_text": "會議",
+        "source_span": {
+          "scalar": [
+            0,
+            3
+          ],
+          "utf8_bytes": [
+            0,
+            9
+          ],
+          "slice": "会議は"
+        },
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              0,
+              2
+            ],
+            "utf8_bytes": [
+              0,
+              6
+            ],
+            "slice": "會議"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "Protected contribution remains in the relevant meeting/time phrase and before the event start.",
+        "independent_assertions": [
+          "exact target and source slices",
+          "one corresponding record and target occurrence per source occurrence",
+          "source and target scalar and UTF-8 byte boundaries",
+          "relative position and clause alignment",
+          "complete sentence meaning and naturalness"
+        ],
+        "runtime_status": "Unobserved: matcher, atom materialization, restoration and alignment."
+      }
+    },
+    {
+      "id": "CB-L08",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は`午後二時半`に始まります。",
+      "zh_hant": "會議在`午後二時半`開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "CLOCK-C04 with whole 午後二時半 enclosed in backticks",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。",
+        "遵守明列的保護內容、一次出現、來源與目標位置及對齊；這些與完整句子品質分開判定。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same original clause, add opaque markup around whole clock",
+      "contrast_limit": "backticks alter source and visibility; detect actual inline opaque and preserve exact bytes",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": "clock_time_dev_v1.json#CLOCK-C04",
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "inline_code_candidate",
+        "source_surface": "`午後二時半`",
+        "target_text": "`午後二時半`",
+        "source_span": {
+          "scalar": [
+            3,
+            10
+          ],
+          "utf8_bytes": [
+            9,
+            26
+          ],
+          "slice": "`午後二時半`"
+        },
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              3,
+              10
+            ],
+            "utf8_bytes": [
+              9,
+              26
+            ],
+            "slice": "`午後二時半`"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "Protected literal remains in its clock or adjacent topic position before the event start.",
+        "independent_assertions": [
+          "byte-identical literal with delimiters",
+          "one corresponding record and target occurrence per source occurrence",
+          "source and target scalar and UTF-8 byte boundaries",
+          "relative position and clause alignment",
+          "complete sentence meaning and naturalness"
+        ],
+        "runtime_status": "Unobserved: inline code detection, atom materialization, restoration and alignment."
+      }
+    },
+    {
+      "id": "CB-L09",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は午後`二`時半に始まります。",
+      "zh_hant": "會議下午`二`時半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "CLOCK-C04 with 二 enclosed in backticks",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。",
+        "遵守明列的保護內容、一次出現、來源與目標位置及對齊；這些與完整句子品質分開判定。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same clause, opaque markup around partial hour",
+      "contrast_limit": "markup alters source; detection and resulting token shape unknown",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": "clock_time_dev_v1.json#CLOCK-C04",
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "inline_code_candidate",
+        "source_surface": "`二`",
+        "target_text": "`二`",
+        "source_span": {
+          "scalar": [
+            5,
+            8
+          ],
+          "utf8_bytes": [
+            15,
+            20
+          ],
+          "slice": "`二`"
+        },
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              4,
+              7
+            ],
+            "utf8_bytes": [
+              12,
+              17
+            ],
+            "slice": "`二`"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "Protected literal remains in its clock or adjacent topic position before the event start.",
+        "independent_assertions": [
+          "byte-identical literal with delimiters",
+          "one corresponding record and target occurrence per source occurrence",
+          "source and target scalar and UTF-8 byte boundaries",
+          "relative position and clause alignment",
+          "complete sentence meaning and naturalness"
+        ],
+        "runtime_status": "Unobserved: inline code detection, atom materialization, restoration and alignment."
+      }
+    },
+    {
+      "id": "CB-L10",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "会議は`午後`二時半に始まります。",
+      "zh_hant": "會議`午後`兩點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "CLOCK-C04 with 午後 enclosed in backticks",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。",
+        "遵守明列的保護內容、一次出現、來源與目標位置及對齊；這些與完整句子品質分開判定。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same clause, opaque markup around period",
+      "contrast_limit": "markup alters source; language segmentation and supported path unknown",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": "clock_time_dev_v1.json#CLOCK-C04",
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "inline_code_candidate",
+        "source_surface": "`午後`",
+        "target_text": "`午後`",
+        "source_span": {
+          "scalar": [
+            3,
+            7
+          ],
+          "utf8_bytes": [
+            9,
+            17
+          ],
+          "slice": "`午後`"
+        },
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              2,
+              6
+            ],
+            "utf8_bytes": [
+              6,
+              14
+            ],
+            "slice": "`午後`"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "Protected literal remains in its clock or adjacent topic position before the event start.",
+        "independent_assertions": [
+          "byte-identical literal with delimiters",
+          "one corresponding record and target occurrence per source occurrence",
+          "source and target scalar and UTF-8 byte boundaries",
+          "relative position and clause alignment",
+          "complete sentence meaning and naturalness"
+        ],
+        "runtime_status": "Unobserved: inline code detection, atom materialization, restoration and alignment."
+      }
+    },
+    {
+      "id": "CB-L11",
+      "level_approx": "N5-oriented provisional diagnostic; time notation and protected-code controls may exceed N5; no official JLPT or certification claim",
+      "jp": "`会議は`午後二時半に始まります。",
+      "zh_hant": "`会議は`下午兩點半開始。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "CLOCK-C04 with 会議は enclosed in backticks immediately before unlocked clock",
+        "保留事件、時間或非時間詞義及明示參與角色；不得增添原文沒有的資訊。",
+        "遵守明列的保護內容、一次出現、來源與目標位置及對齊；這些與完整句子品質分開判定。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示的參與者或其他背景不可自行補充。"
+      ],
+      "contrast": "CLOCK-C04",
+      "stable_features": "Same event and all applicable unmentioned values; consult contrast limitations.",
+      "changed_features": "same clause plus markup around adjacent non-clock fragment",
+      "contrast_limit": "source adjacency includes delimiter; check target order and clock separately",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit; original AI-assisted sentence/reference or expressly derived adopted source; no external sentence or gloss copied",
+      "derived_from": "clock_time_dev_v1.json#CLOCK-C04",
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "inline_code_candidate",
+        "source_surface": "`会議は`",
+        "target_text": "`会議は`",
+        "source_span": {
+          "scalar": [
+            0,
+            5
+          ],
+          "utf8_bytes": [
+            0,
+            11
+          ],
+          "slice": "`会議は`"
+        },
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              0,
+              5
+            ],
+            "utf8_bytes": [
+              0,
+              11
+            ],
+            "slice": "`会議は`"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "Protected literal remains in its clock or adjacent topic position before the event start.",
+        "independent_assertions": [
+          "byte-identical literal with delimiters",
+          "one corresponding record and target occurrence per source occurrence",
+          "source and target scalar and UTF-8 byte boundaries",
+          "relative position and clause alignment",
+          "complete sentence meaning and naturalness"
+        ],
+        "runtime_status": "Unobserved: inline code detection, atom materialization, restoration and alignment."
+      }
+    }
+  ]
+}

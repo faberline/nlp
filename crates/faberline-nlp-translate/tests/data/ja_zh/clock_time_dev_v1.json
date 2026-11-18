@@ -1,0 +1,474 @@
+{
+  "schema": "faberline.nlp.ja_zh.clock_time_dev.v1",
+  "version": "1.0.0",
+  "title": "Clock time and near-negative development controls",
+  "status": "Proposed development-visible data. Independent review and adoption are pending. Do not execute this bank against the engine before adoption and merge.",
+  "membership": [
+    "CLOCK-C01",
+    "CLOCK-C02",
+    "CLOCK-C03",
+    "CLOCK-C04",
+    "CLOCK-C05",
+    "CLOCK-C06",
+    "CLOCK-C07",
+    "CLOCK-C08",
+    "CLOCK-C09",
+    "CLOCK-C10",
+    "CLOCK-C11",
+    "CLOCK-C12",
+    "CLOCK-C13"
+  ],
+  "provenance": {
+    "data_license": "first_party_mit",
+    "authorship": "first_party_mit; original AI-assisted sentences and provisional Taiwan references; no external text; approximate levels only, no official JLPT or human certification",
+    "references": "Provisional AI-assisted Taiwan Traditional Chinese, written before any new-row engine execution. Independent semantic review is pending.",
+    "external_sentence_or_gloss_source": "None.",
+    "level_note": "Approximate planning labels only; no official JLPT, human certification, or broad N5 sufficiency claim. Duration and fraction rows are negative diagnostics."
+  },
+  "base": {
+    "commit": "3fa828813a5955a12d076d74e2be23f0dc638338",
+    "tree": "29d28a8b0239cbf97241428a316af8ef86b80a58"
+  },
+  "sources": [
+    {
+      "file": "nlevels_dev_v1.json",
+      "sha256": "a24d91502b3d361eec1ff2bf97381d0accbf27d7516ba2188e77b3b4e96695c0",
+      "version": "1.0.0-dev.1",
+      "count": 20
+    },
+    {
+      "file": "honorific_san_dev_v1.json",
+      "sha256": "280da5014f9069994bce1f23e8cdc10c3cad3200450278c9b4e3618231134229",
+      "version": "1.0.0",
+      "count": 12
+    },
+    {
+      "file": "nlevels_expansion_dev_v1.json",
+      "sha256": "22d0753fd384ae5f07a118c6417c53b213cc66c1637a8369b8c0315e69ab4fcc",
+      "version": "faberline.nlp.ja_zh.nlevels_expansion_dev.v1",
+      "count": 50
+    },
+    {
+      "file": "issue86-standing-dev-export-059c10a.json",
+      "sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d",
+      "version": "059c10a260ec75d92ee0867c1649ddc0a0db10be",
+      "count": 130
+    }
+  ],
+  "dedup": {
+    "scope": "all 82 adopted bank rows plus 130 safe standing DEV rows, actual payloads",
+    "method": "NFKC and whitespace normalized exact Japanese equality; distinct source rows, no heldout",
+    "compared": 212,
+    "new_count": 13,
+    "exact_matches": [],
+    "limit": "Exact normalized matching cannot prove semantic uniqueness or detect paraphrases."
+  },
+  "reused_controls": [
+    {
+      "ids": [
+        "N5X-03",
+        "N5X-04"
+      ],
+      "bank": "nlevels_expansion_dev_v1.json",
+      "purpose": "existing same event and morning nine whole/half; reuse, no copied rows",
+      "limit": "single hour and same event"
+    },
+    {
+      "ids": [
+        "N5X-01",
+        "N5X-02"
+      ],
+      "bank": "nlevels_expansion_dev_v1.json",
+      "purpose": "non-temporal location に",
+      "limit": "existential event differs from clock"
+    },
+    {
+      "ids": [
+        "N5X-06",
+        "N5X-09",
+        "N5X-10"
+      ],
+      "bank": "nlevels_expansion_dev_v1.json",
+      "purpose": "distant numeral, counter and floor safeguards",
+      "limit": "different referents and constructions"
+    },
+    {
+      "ids": [
+        "L3-01",
+        "L3-02"
+      ],
+      "bank": "nlevels_dev_v1.json",
+      "purpose": "event-defined temporal boundary safeguards",
+      "limit": "no numeric clock, complex confounded clauses"
+    },
+    {
+      "ids": [
+        "jz002",
+        "jz020",
+        "jz073",
+        "jz075",
+        "jz078",
+        "jz080"
+      ],
+      "bank": "issue86-standing-dev-export-059c10a.json",
+      "purpose": "recipient, duration, abstract time, counters and dated PM clock safeguards",
+      "limit": "not close clock-vs-duration or role pairs; jz080 includes date and から; standing references may be provisional"
+    }
+  ],
+  "matrix": [
+    {
+      "dimension": "hour",
+      "pairs": [
+        "N5X-03 / CLOCK-C01"
+      ],
+      "stable": "meeting, AM, whole, predicate",
+      "changed": "九 to 二",
+      "limit": "single other value; midnight, noon, irregular readings untested"
+    },
+    {
+      "dimension": "clock half and time of day",
+      "pairs": [
+        "CLOCK-C01 / CLOCK-C02",
+        "CLOCK-C03 / CLOCK-C04",
+        "CLOCK-C01 / CLOCK-C03",
+        "CLOCK-C02 / CLOCK-C04"
+      ],
+      "stable": "meeting, hour, predicate",
+      "changed": "one of 半 or 午前/午後",
+      "limit": "one hour in new bank; earlier N5X-03/04 cover nine"
+    },
+    {
+      "dimension": "numeric representation",
+      "pairs": [
+        "CLOCK-C04 / CLOCK-C05"
+      ],
+      "stable": "meeting, PM, time and event",
+      "changed": "二 to ２",
+      "limit": "fullwidth digit only; no claim for all forms"
+    },
+    {
+      "dimension": "event",
+      "pairs": [
+        "CLOCK-C04 / CLOCK-C06"
+      ],
+      "stable": "clock and start predicate",
+      "changed": "meeting to lesson",
+      "limit": "noun change alone; no distinct syntax claim"
+    },
+    {
+      "dimension": "clock half versus elapsed and fraction",
+      "pairs": [
+        "CLOCK-C04 / CLOCK-C07",
+        "CLOCK-C07 / CLOCK-C08",
+        "CLOCK-C07 / CLOCK-C09"
+      ],
+      "stable": "meeting and numeral two for first contrast; duration and predicate for second",
+      "changed": "first: 時/時間, PM and predicate; second: 半; third: noun and full construction",
+      "limit": "first and third are near semantic controls, not minimal pairs; duration/fraction are negative guards"
+    },
+    {
+      "dimension": "temporal versus recipient and destination",
+      "pairs": [
+        "CLOCK-C10 / CLOCK-C11",
+        "CLOCK-C12 / CLOCK-C13"
+      ],
+      "stable": "recipient plus letter-writing or destination plus movement",
+      "changed": "addition/removal of PM clock phrase and an occurrence of に",
+      "limit": "cannot isolate role with a single substitution; paired sentences have different number of particles; role preservation required in C10/C12"
+    }
+  ],
+  "locked_glossary_control": {
+    "status": "unresolved conditional blocker for future clock path",
+    "evidence": "No candidate clock implementation or concrete affected locked spans was supplied. Existing visible controls cannot prove locked-span safety.",
+    "requirement": "Before future implementation is accepted, independently identify real rule contact with locked/glossary spans and freeze relevant existing source/version/hash and portable control contents, or add independently authored portable controls in a separate approved data plan. If contact cannot be determined, mark unknown and do not claim coverage. No engine or lexicon edits authorized here."
+  },
+  "limits": [
+    "Rows and references need independent semantic and Taiwan usage review.",
+    "No claim of N5 sufficiency, human certification, model performance, or generalized clock safety.",
+    "No translation, engine execution, builds, tests, held-out or challenge reads in this planning phase.",
+    "No evaluator enrollment or new-bank rule measurement before independent adoption and merge.",
+    "Root must freeze plan hash before phase 2."
+  ],
+  "items": [
+    {
+      "id": "CLOCK-C01",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "会議は午前二時に始まります。",
+      "zh_hant": "會議凌晨兩點開始。",
+      "allowed_variants": [
+        "會議在凌晨兩點開始。"
+      ],
+      "semantic_checks": [
+        "會議開始於凌晨兩點整"
+      ],
+      "semantic_unknowns": [
+        "日期、會議地點與參與者未明示。"
+      ],
+      "pair": "N5X-03",
+      "pair_reason": "hour only, 9 to 2",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C02",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "会議は午前二時半に始まります。",
+      "zh_hant": "會議凌晨兩點半開始。",
+      "allowed_variants": [
+        "會議在凌晨兩點三十分開始。"
+      ],
+      "semantic_checks": [
+        "會議開始於凌晨兩點三十分"
+      ],
+      "semantic_unknowns": [
+        "日期、會議地點與參與者未明示。"
+      ],
+      "pair": "CLOCK-C01",
+      "pair_reason": "半 added, same hour and event",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C03",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "会議は午後二時に始まります。",
+      "zh_hant": "會議下午兩點開始。",
+      "allowed_variants": [
+        "會議在下午兩點開始。"
+      ],
+      "semantic_checks": [
+        "會議開始於下午兩點整"
+      ],
+      "semantic_unknowns": [
+        "日期、會議地點與參與者未明示。"
+      ],
+      "pair": "CLOCK-C01",
+      "pair_reason": "午前 to 午後 only",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C04",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "会議は午後二時半に始まります。",
+      "zh_hant": "會議下午兩點半開始。",
+      "allowed_variants": [
+        "會議在下午兩點三十分開始。"
+      ],
+      "semantic_checks": [
+        "會議開始於下午兩點三十分"
+      ],
+      "semantic_unknowns": [
+        "日期、會議地點與參與者未明示。"
+      ],
+      "pair": "CLOCK-C02",
+      "pair_reason": "午前 to 午後 only; C03 additionally contrasts 半",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C05",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "会議は午後２時半に始まります。",
+      "zh_hant": "會議下午兩點半開始。",
+      "allowed_variants": [
+        "會議在下午兩點三十分開始。"
+      ],
+      "semantic_checks": [
+        "全形數字２為兩點，午後及半均保留"
+      ],
+      "semantic_unknowns": [
+        "日期、會議地點與參與者未明示。"
+      ],
+      "pair": "CLOCK-C04",
+      "pair_reason": "kanji 二 to fullwidth ２ only",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C06",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "授業は午後二時半に始まります。",
+      "zh_hant": "課程下午兩點半開始。",
+      "allowed_variants": [
+        "課在下午兩點半開始。"
+      ],
+      "semantic_checks": [
+        "課程於下午兩點三十分開始"
+      ],
+      "semantic_unknowns": [
+        "日期、上課地點與參與者未明示。"
+      ],
+      "pair": "CLOCK-C04",
+      "pair_reason": "event noun changed, same predicate and clock; not independent context syntax",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C07",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "会議は二時間半続きます。",
+      "zh_hant": "會議持續兩個半小時。",
+      "allowed_variants": [
+        "會議持續兩小時三十分鐘。"
+      ],
+      "semantic_checks": [
+        "會議持續時間為兩個半小時，不是兩點半"
+      ],
+      "semantic_unknowns": [
+        "會議日期、開始時間、地點與參與者未明示。"
+      ],
+      "pair": "CLOCK-C04",
+      "pair_reason": "clock time versus elapsed time; 午後 removed, 時 becomes 時間, predicate changes necessarily",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C08",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "会議は二時間続きます。",
+      "zh_hant": "會議持續兩個小時。",
+      "allowed_variants": [
+        "會議持續兩小時。"
+      ],
+      "semantic_checks": [
+        "會議持續時間為兩個小時"
+      ],
+      "semantic_unknowns": [
+        "會議日期、開始時間、地點與參與者未明示。"
+      ],
+      "pair": "CLOCK-C07",
+      "pair_reason": "半 removed; elapsed-duration guard",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C09",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "ケーキの半分を食べました。",
+      "zh_hant": "吃了半個蛋糕。",
+      "allowed_variants": [
+        "吃了蛋糕的一半。"
+      ],
+      "semantic_checks": [
+        "吃掉蛋糕的一半；不表示鐘點或時長"
+      ],
+      "semantic_unknowns": [
+        "吃蛋糕的人、時間與地點未明示。"
+      ],
+      "pair": "CLOCK-C07",
+      "pair_reason": "ordinary fraction versus duration half; noun, construction and predicate differ; distant guard",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C10",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "午後二時に先生に手紙を書きます。",
+      "zh_hant": "下午兩點寫信給老師。",
+      "allowed_variants": [
+        "在下午兩點寫信給老師。"
+      ],
+      "semantic_checks": [
+        "下午兩點是寫信時間",
+        "老師是收信對象",
+        "信是所寫之物"
+      ],
+      "semantic_unknowns": [
+        "寫信的人、日期與地點未明示。"
+      ],
+      "pair": "CLOCK-C11",
+      "pair_reason": "adds clock phrase; both に retained with distinct roles",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C11",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "先生に手紙を書きます。",
+      "zh_hant": "寫信給老師。",
+      "allowed_variants": [
+        "給老師寫信。"
+      ],
+      "semantic_checks": [
+        "老師是收信對象",
+        "信是所寫之物",
+        "不憑空指定時間"
+      ],
+      "semantic_unknowns": [
+        "寫信的人、時間與地點未明示。"
+      ],
+      "pair": "CLOCK-C10",
+      "pair_reason": "removes clock phrase, preserves recipient and event; different number of に",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C12",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "午後二時に教室に行きます。",
+      "zh_hant": "下午兩點去教室。",
+      "allowed_variants": [
+        "在下午兩點前往教室。"
+      ],
+      "semantic_checks": [
+        "下午兩點是前往時間",
+        "教室是目的地"
+      ],
+      "semantic_unknowns": [
+        "前往的人與日期未明示。"
+      ],
+      "pair": "CLOCK-C13",
+      "pair_reason": "adds clock phrase; both に retained with distinct roles",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    },
+    {
+      "id": "CLOCK-C13",
+      "level_approx": "N5-oriented, provisional; ordinary-fraction and duration are negative diagnostics, not higher-level development or certification",
+      "jp": "教室に行きます。",
+      "zh_hant": "去教室。",
+      "allowed_variants": [
+        "前往教室。"
+      ],
+      "semantic_checks": [
+        "教室是目的地",
+        "不憑空指定時間"
+      ],
+      "semantic_unknowns": [
+        "前往的人與時間未明示。"
+      ],
+      "pair": "CLOCK-C12",
+      "pair_reason": "removes clock phrase, preserves destination and event; different number of に",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit",
+      "authorship": "New original AI-assisted Japanese and provisional Taiwan Traditional Chinese drafted independently before any engine execution; no external sentence or gloss source used."
+    }
+  ],
+  "adoption_record": "https://github.com/faberline/nlp/issues/131"
+}

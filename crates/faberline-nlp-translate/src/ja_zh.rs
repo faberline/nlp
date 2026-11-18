@@ -11,7 +11,7 @@ use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, Token, Upos};
 
 use crate::conditioning::zh_pronoun_for_hint;
-use crate::lock::SpanLockTable;
+use crate::lock::{LockOrigin, SpanLockTable};
 use crate::schema::{ClauseAlignment, SentenceConditioning, TargetVariant};
 use crate::variant::{convert_zh_text_to_target, convert_zh_text_to_target_with_spans};
 
@@ -121,6 +121,9 @@ pub(crate) fn translate_ja_sentence(
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let atoms = build_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     let atoms = normalize_keigo_atoms(&atoms);
+    let atoms = normalize_glossary_clocks(&atoms, chars, lock_table);
+    let atoms = normalize_clock_atoms(&atoms);
+    let atoms = preserve_clock_adjacent_locks(&atoms, doc, sentence_idx);
 
     if atoms.is_empty() {
         let masked = lock_table.mask_span(chars, sent_span);
@@ -732,6 +735,518 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
     } else {
         out
     }
+}
+
+// Marker used only for atoms synthesized by the clock recognizer.  Protected
+// placeholders retain their own identity and are never classified by this marker.
+const CLOCK_ATOM: &str = "__ja_clock_atom";
+// An opaque component in an explicitly period-qualified clock-shaped phrase.
+// Its value remains unknown and its placeholder remains untouched.
+const OPAQUE_PERIOD_CLOCK: &str = "__ja_opaque_period_clock";
+const OPAQUE_EVENT_OBLIQUE: &str = "__ja_opaque_event_oblique";
+
+fn is_clock_atom(atom: &Atom) -> bool {
+    matches!(
+        atom.lemma.as_deref(),
+        Some(CLOCK_ATOM | OPAQUE_PERIOD_CLOCK)
+    )
+}
+
+fn clock_number(text: &str) -> Option<u32> {
+    if text.is_empty() {
+        return None;
+    }
+    let normalized: String = text
+        .chars()
+        .map(|ch| match ch {
+            '０'..='９' => char::from_u32(ch as u32 - '０' as u32 + '0' as u32).unwrap_or(ch),
+            _ => ch,
+        })
+        .collect();
+    if normalized.chars().all(|ch| ch.is_ascii_digit()) {
+        return normalized.parse::<u32>().ok().filter(|&n| n <= 24);
+    }
+    fn digit(s: &str) -> Option<u32> {
+        match s {
+            "零" | "〇" => Some(0),
+            "一" => Some(1),
+            "二" => Some(2),
+            "三" => Some(3),
+            "四" => Some(4),
+            "五" => Some(5),
+            "六" => Some(6),
+            "七" => Some(7),
+            "八" => Some(8),
+            "九" => Some(9),
+            _ => None,
+        }
+    }
+    if let Some((tens, ones)) = normalized.split_once('十') {
+        if ones.contains('十') {
+            return None;
+        }
+        let tens = if tens.is_empty() { 1 } else { digit(tens)? };
+        let ones = if ones.is_empty() { 0 } else { digit(ones)? };
+        if tens == 0 || ones == 0 && !normalized.ends_with('十') {
+            return None;
+        }
+        return (tens * 10 + ones <= 24).then_some(tens * 10 + ones);
+    }
+    digit(&normalized)
+}
+
+fn clock_hour_text(hour: u32) -> String {
+    const HOURS: [&str; 25] = [
+        "零",
+        "一",
+        "兩",
+        "三",
+        "四",
+        "五",
+        "六",
+        "七",
+        "八",
+        "九",
+        "十",
+        "十一",
+        "十二",
+        "十三",
+        "十四",
+        "十五",
+        "十六",
+        "十七",
+        "十八",
+        "十九",
+        "二十",
+        "二十一",
+        "二十二",
+        "二十三",
+        "二十四",
+    ];
+    HOURS[hour as usize].to_owned()
+}
+
+// Accept a whole token sequence only. This rejects 時間, 時限, fractions,
+// counters and unsupported minutes instead of interpreting a prefix as a clock.
+fn render_clock_surface(text: &str) -> Option<(String, bool)> {
+    let (period, rest) = if let Some(s) = text.strip_prefix("午前") {
+        (Some("am"), s)
+    } else if let Some(s) = text.strip_prefix("午後") {
+        (Some("pm"), s)
+    } else {
+        (None, text)
+    };
+    let (number, suffix) = rest.split_once('時')?;
+    let (half, particle) = match suffix {
+        "" => (false, false),
+        "半" => (true, false),
+        "に" => (false, true),
+        "半に" => (true, true),
+        _ => return None,
+    };
+    // Bare 一時 can mean a short while. Keep its original meaning unresolved
+    // unless an explicit period or 半 supplies a clock-specific distinction.
+    if period.is_none() && number == "一" && !half {
+        return None;
+    }
+    let hour = clock_number(number)?;
+    if hour == 24 && (half || period.is_some()) {
+        return None;
+    }
+    if period.is_some() && hour > 12 {
+        return None;
+    }
+    if period == Some("am") && hour == 12 && half {
+        return Some(("十二點半（可能是中午，也可能是凌晨）".to_owned(), particle));
+    }
+    let (prefix, display_hour) = match (period, hour, half) {
+        (Some("am"), 0, _) => ("午夜", 0),
+        (Some("am"), 12, false) => ("中午", 12),
+        (Some("pm"), 0, _) => ("中午", 12),
+        (Some("pm"), 12, _) => ("午夜", 12),
+        (Some("am"), 1..=4, _) => ("凌晨", hour),
+        (Some("am"), _, _) => ("上午", hour),
+        (Some("pm"), _, _) => ("下午", hour),
+        _ => ("", hour),
+    };
+    Some((
+        format!(
+            "{prefix}{}點{}",
+            clock_hour_text(display_hour),
+            if half { "半" } else { "" }
+        ),
+        particle,
+    ))
+}
+
+// A glossary is transparent source text with a mandatory replacement. Inline
+// opaque contents are never inspected. Match only whole clock components.
+fn normalize_glossary_clocks(atoms: &[Atom], chars: &[char], locks: &SpanLockTable) -> Vec<Atom> {
+    let mut out = Vec::with_capacity(atoms.len());
+    let mut i = 0;
+    while i < atoms.len() {
+        let mut source = String::new();
+        let mut protected: Vec<(usize, usize, String)> = Vec::new();
+        let mut candidate = None;
+        for j in i..atoms.len().min(i + 6) {
+            let atom = &atoms[j];
+            if j > i && atoms[j - 1].span.end_char != atom.span.start_char {
+                break;
+            }
+            let start = source.chars().count();
+            if atom.is_locked {
+                let Some(lock) = locks.locks.iter().find(|l| l.placeholder == atom.surface) else {
+                    break;
+                };
+                if !matches!(&lock.origin, LockOrigin::Glossary { .. }) {
+                    break;
+                }
+                source.extend(chars[lock.source_span.start_char..lock.source_span.end_char].iter());
+                protected.push((start, source.chars().count(), atom.surface.clone()));
+            } else {
+                source.push_str(&atom.surface);
+            }
+            if !protected.is_empty()
+                && let Some((rendered, particle)) = render_clock_surface(&source)
+                && let Some(composed) =
+                    compose_glossary_clock(&source, &rendered, particle, &protected)
+            {
+                candidate = Some((j, composed, particle));
+            }
+            if source.chars().count() > 12 {
+                break;
+            }
+        }
+        if let Some((end, _, particle)) = &candidate
+            && !particle
+            && atoms.get(end + 1).is_some_and(|next| {
+                atoms[*end].span.end_char == next.span.start_char
+                    && !next.is_locked
+                    && clock_continuation(&next.surface)
+            })
+        {
+            candidate = None;
+        }
+        if let Some((end, rendered, particle)) = candidate {
+            let last = &atoms[end];
+            let clock_end = last.span.end_char - usize::from(particle);
+            out.push(Atom {
+                span: Span {
+                    start_char: atoms[i].span.start_char,
+                    end_char: clock_end,
+                },
+                surface: rendered,
+                lemma: Some(CLOCK_ATOM.to_owned()),
+                upos: Some(Upos::Noun),
+                doc_tok_idx: None,
+                head: None,
+                deprel: String::new(),
+                is_locked: true,
+            });
+            if particle {
+                out.push(Atom {
+                    span: Span {
+                        start_char: clock_end,
+                        end_char: last.span.end_char,
+                    },
+                    surface: "に".to_owned(),
+                    lemma: None,
+                    upos: Some(Upos::Adp),
+                    doc_tok_idx: last.doc_tok_idx,
+                    head: last.head,
+                    deprel: "case".to_owned(),
+                    is_locked: false,
+                });
+            }
+            i = end + 1;
+        } else {
+            out.push(atoms[i].clone());
+            i += 1;
+        }
+    }
+    out
+}
+
+fn compose_glossary_clock(
+    source: &str,
+    rendered: &str,
+    particle: bool,
+    protected: &[(usize, usize, String)],
+) -> Option<String> {
+    let source = if particle {
+        source.strip_suffix('に')?
+    } else {
+        source
+    };
+    let length = source.chars().count();
+    if protected.len() == 1 && protected[0].0 == 0 && protected[0].1 == length {
+        return Some(protected[0].2.clone());
+    }
+    if rendered.contains('（') {
+        return None;
+    }
+    let period_len = if source.starts_with("午前") || source.starts_with("午後") {
+        2
+    } else {
+        0
+    };
+    let unit_pos = source.chars().position(|c| c == '時')?;
+    let number: String = source
+        .chars()
+        .skip(period_len)
+        .take(unit_pos - period_len)
+        .collect();
+    let hour = clock_number(&number)?;
+    let output_hour = if source.starts_with("午後") && hour == 0 {
+        12
+    } else {
+        hour
+    };
+    let hour_text = clock_hour_text(output_hour);
+    let (front, tail) = rendered.split_once('點')?;
+    let period_text = front.strip_suffix(&hour_text)?;
+    let spans = [
+        (0, period_len, period_text.to_owned()),
+        (period_len, unit_pos, hour_text),
+        (unit_pos, unit_pos + 1, "點".to_owned()),
+        (unit_pos + 1, length, tail.to_owned()),
+    ];
+    let mut used = 0;
+    let mut output = String::new();
+    for (a, b, text) in spans {
+        if a == b {
+            continue;
+        }
+        if let Some((_, _, placeholder)) = protected
+            .iter()
+            .find(|(start, end, _)| *start == a && *end == b)
+        {
+            output.push_str(placeholder);
+            used += 1;
+        } else {
+            if protected
+                .iter()
+                .any(|(start, end, _)| *start < b && a < *end)
+            {
+                return None;
+            }
+            output.push_str(&text);
+        }
+    }
+    (used == protected.len()).then_some(output)
+}
+
+fn clock_continuation(text: &str) -> bool {
+    text.chars().next().is_some_and(|ch| {
+        matches!(ch,
+        '間' | '限' | '分' | '半' | '０'..='９' | '0'..='9' | '零' | '〇' |
+        '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十')
+    })
+}
+
+// Preserve an opaque prefix immediately adjoining a visible clock. An initial
+// opaque prefix, or one after a visible topic marker, stays before that clock.
+// For an entirely opaque oblique, only an intransitive event boundary plus the
+// frame's own ARGM head permits an oblique role; this is not a time assertion.
+fn preserve_clock_adjacent_locks(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> Vec<Atom> {
+    let mut out = Vec::with_capacity(atoms.len());
+    let mut i = 0;
+    while i < atoms.len() {
+        let a = &atoms[i];
+        // A visible period and an opaque hour form one ordered clock phrase.
+        // Preserve the period text: the protected hour might be a boundary.
+        if !a.is_locked
+            && matches!(a.surface.as_str(), "午前" | "午後")
+            && let Some(next) = atoms.get(i + 1)
+            && a.span.end_char == next.span.start_char
+            && is_clock_atom(next)
+            && next.surface.starts_with("[[PH")
+        {
+            let mut joined = next.clone();
+            joined.span.start_char = a.span.start_char;
+            joined.surface = format!("{}{}", a.surface, next.surface);
+            out.push(joined);
+            i += 2;
+            continue;
+        }
+        let opaque = a.is_locked && a.surface.starts_with("[[PH") && a.lemma.is_none();
+        if opaque
+            && (i == 0 || atoms[i - 1].surface == "は")
+            && let Some(next) = atoms.get(i + 1)
+            && a.span.end_char == next.span.start_char
+            && is_clock_atom(next)
+        {
+            let mut joined = next.clone();
+            joined.span.start_char = a.span.start_char;
+            joined.surface = format!("{}{}", a.surface, next.surface);
+            out.push(joined);
+            i += 2;
+            continue;
+        }
+        let mut item = a.clone();
+        if opaque
+            && i > 0
+            && atoms[i - 1].surface == "は"
+            && atoms
+                .get(i + 1)
+                .is_some_and(|n| n.surface == "に" && !n.is_locked)
+            && let Some(idx) = a.doc_tok_idx
+            && doc.frames.iter().any(|frame| {
+                frame.sentence == sentence_idx
+                    && frame
+                        .args
+                        .iter()
+                        .any(|arg| arg.head == idx && arg.role == FrameRole::Argm)
+                    && doc
+                        .tokens
+                        .get(frame.predicate)
+                        .and_then(|t| t.lemma.as_deref())
+                        .is_some_and(|lemma| matches!(lemma, "始まる" | "終わる"))
+            })
+        {
+            item.lemma = Some(OPAQUE_EVENT_OBLIQUE.to_owned());
+        }
+        out.push(item);
+        i += 1;
+    }
+    out
+}
+
+// The same source clock can be one atom, several numeric atoms, or a final
+// 時に atom. Preserve a separate に so existing case rendering remains local.
+fn normalize_clock_atoms(atoms: &[Atom]) -> Vec<Atom> {
+    let mut out = Vec::with_capacity(atoms.len());
+    let mut i = 0;
+    while i < atoms.len() {
+        // An explicit visible period and 時半 provide temporal context. The
+        // protected component remains unknown; do not infer a numeric value.
+        if i > 0
+            && !atoms[i - 1].is_locked
+            && matches!(atoms[i - 1].surface.as_str(), "午前" | "午後")
+            && atoms[i - 1].span.end_char == atoms[i].span.start_char
+            && atoms[i].is_locked
+            && atoms[i].surface.starts_with("[[PH")
+        {
+            let mut suffix = String::new();
+            let mut found = None;
+            for j in (i + 1)..atoms.len().min(i + 4) {
+                if atoms[j].is_locked || atoms[j - 1].span.end_char != atoms[j].span.start_char {
+                    break;
+                }
+                suffix.push_str(&atoms[j].surface);
+                if suffix == "時半" || suffix == "時半に" {
+                    found = Some((j, suffix.ends_with('に')));
+                }
+            }
+            if let Some((end, particle)) = found
+                && !particle
+                && atoms.get(end + 1).is_some_and(|next| {
+                    atoms[end].span.end_char == next.span.start_char
+                        && !next.is_locked
+                        && next.surface.starts_with('分')
+                })
+            {
+                found = None;
+            }
+            if let Some((end, particle)) = found {
+                let last = &atoms[end];
+                let clock_end = last.span.end_char - usize::from(particle);
+                out.push(Atom {
+                    span: Span {
+                        start_char: atoms[i].span.start_char,
+                        end_char: clock_end,
+                    },
+                    surface: format!("{}時半", atoms[i].surface),
+                    lemma: Some(OPAQUE_PERIOD_CLOCK.to_owned()),
+                    upos: Some(Upos::Noun),
+                    doc_tok_idx: None,
+                    head: None,
+                    deprel: String::new(),
+                    is_locked: true,
+                });
+                if particle {
+                    out.push(Atom {
+                        span: Span {
+                            start_char: clock_end,
+                            end_char: last.span.end_char,
+                        },
+                        surface: "に".to_owned(),
+                        lemma: None,
+                        upos: Some(Upos::Adp),
+                        doc_tok_idx: last.doc_tok_idx,
+                        head: last.head,
+                        deprel: "case".to_owned(),
+                        is_locked: false,
+                    });
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        let mut joined = String::new();
+        let mut best = None;
+        for j in i..atoms.len().min(i + 6) {
+            let atom = &atoms[j];
+            if atom.is_locked || (j > i && atoms[j - 1].span.end_char != atom.span.start_char) {
+                break;
+            }
+            joined.push_str(&atom.surface);
+            if let Some((rendered, particle)) = render_clock_surface(&joined) {
+                best = Some((j, rendered, particle));
+            }
+            if joined.chars().count() > 12 {
+                break;
+            }
+        }
+        if let Some((end, _, particle)) = &best
+            && !particle && atoms.get(end + 1).is_some_and(|next| {
+                atoms[*end].span.end_char == next.span.start_char
+                    && !next.is_locked
+                    && next.surface.chars().next().is_some_and(|ch| {
+                        matches!(ch, '間' | '限' | '分' | '半' | '０'..='９' | '0'..='9' | '零' | '〇' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十')
+                    })
+            })
+        {
+            best = None;
+        }
+        if let Some((end, rendered, particle)) = best {
+            let last = &atoms[end];
+            let clock_end = last.span.end_char - usize::from(particle);
+            out.push(Atom {
+                span: Span {
+                    start_char: atoms[i].span.start_char,
+                    end_char: clock_end,
+                },
+                surface: rendered,
+                lemma: Some(CLOCK_ATOM.to_owned()),
+                upos: Some(Upos::Noun),
+                doc_tok_idx: None,
+                head: None,
+                deprel: String::new(),
+                is_locked: true,
+            });
+            if particle {
+                out.push(Atom {
+                    span: Span {
+                        start_char: clock_end,
+                        end_char: last.span.end_char,
+                    },
+                    surface: "に".to_owned(),
+                    lemma: None,
+                    upos: Some(Upos::Adp),
+                    doc_tok_idx: last.doc_tok_idx,
+                    head: last.head,
+                    deprel: "case".to_owned(),
+                    is_locked: false,
+                });
+            }
+            i = end + 1;
+        } else {
+            out.push(atoms[i].clone());
+            i += 1;
+        }
+    }
+    out
 }
 
 fn build_sentence_atoms(
@@ -3930,6 +4445,8 @@ fn translate_clause_bunsetsus(
         text: String,
         case_particle: Option<String>,
         is_instrument_de: bool,
+        is_spatial_made: bool,
+        is_clock: bool,
         transfer_dative: bool,
     }
 
@@ -4056,6 +4573,8 @@ fn translate_clause_bunsetsus(
                         text: s,
                         case_particle: b.case_particle.clone(),
                         is_instrument_de: is_inst,
+                        is_spatial_made: is_spatial_made_bunsetsu(&b),
+                        is_clock: b.atoms.iter().any(is_clock_atom),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                     });
@@ -4092,6 +4611,8 @@ fn translate_clause_bunsetsus(
                         text: s,
                         case_particle: b.case_particle.clone(),
                         is_instrument_de: false,
+                        is_spatial_made: false,
+                        is_clock: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                     });
@@ -4443,6 +4964,8 @@ fn translate_clause_bunsetsus(
                     text: format!("跟{np}"),
                     case_particle: Some("と".to_owned()),
                     is_instrument_de: false,
+                    is_spatial_made: false,
+                    is_clock: false,
                     transfer_dative: false,
                 });
             }
@@ -4601,7 +5124,7 @@ fn translate_clause_bunsetsus(
 
         let mut kept_obls = Vec::new();
         for o in obliques.drain(..) {
-            if o.case_particle.as_deref() == Some("に") {
+            if o.case_particle.as_deref() == Some("に") && !o.is_clock {
                 let raw_np = o
                     .text
                     .strip_prefix('在')
@@ -4651,7 +5174,7 @@ fn translate_clause_bunsetsus(
     if is_goal_verb {
         let mut kept_obls = Vec::new();
         for o in obliques.drain(..) {
-            if o.case_particle.as_deref() == Some("に") {
+            if o.case_particle.as_deref() == Some("に") && !o.is_clock {
                 let raw_np = o
                     .text
                     .strip_prefix('在')
@@ -4884,6 +5407,38 @@ fn translate_clause_bunsetsus(
         parts.push("卻".to_owned());
     }
 
+    // This form can be an invitation or a negative question. Preserve both.
+    let polite_negative_question = sfp_suffix == Some("嗎")
+        && raw_clause
+            .trim_end_matches(['。', '？', '?'])
+            .ends_with("ませんか")
+        && predicates
+            .iter()
+            .flat_map(|b| &b.atoms)
+            .all(|a| !a.is_locked)
+        && inner_pre_mods.iter().any(|m| m == "不");
+    let negative_go = verb_core == "去"
+        && inner_pre_mods
+            .iter()
+            .any(|m| matches!(m.as_str(), "不" | "沒有"));
+    // Limit the added time ordering to the same endpoint rule as the motion.
+    let has_spatial_made = (!negative_go || polite_negative_question)
+        && !has_causative
+        && !passive_agent_needed
+        && objs.is_empty()
+        && predicates_is_made_motion_verb(&predicates)
+        && obliques.iter().any(|o| o.is_spatial_made);
+    if has_spatial_made {
+        let mut remaining = Vec::new();
+        for adv in adverbs.drain(..) {
+            if matches!(adv.as_str(), "每天早上" | "每天晚上" | "每晚") {
+                temporal_others.push(adv);
+            } else {
+                remaining.push(adv);
+            }
+        }
+        adverbs = remaining;
+    }
     let has_front_modal = !front_modals.is_empty();
     let mut manner_adverbs = Vec::new();
     if !has_front_modal {
@@ -4948,9 +5503,14 @@ fn translate_clause_bunsetsus(
     if has_front_modal {
         parts.extend(temporal_others);
     }
+    // A place marked by まで is the endpoint of a motion event. Keep this
+    // local to まで: the global goal flag also changes recipients and vehicles.
+    let mut made_endpoints = Vec::new();
     for o in obliques {
         let _ = o.is_instrument_de;
-        if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
+        if has_spatial_made && o.is_spatial_made {
+            made_endpoints.push(o.text);
+        } else if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
             let raw_np = o.text.strip_prefix('到').unwrap_or(&o.text);
             parts.push(format!("連{raw_np}都"));
         } else {
@@ -4967,11 +5527,26 @@ fn translate_clause_bunsetsus(
     parts.extend(manner_adverbs);
     parts.extend(pre_iobjs);
     parts.extend(others);
+    let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
     parts.extend(transfer_prefix);
+    // 到 already expresses the destination relation of bare 去. Other motion
+    // verbs retain their manner: 走到, 跑到.
+    let keep_go = has_spatial_made && preserve_go && verb_core == "去";
+    if has_spatial_made && verb_core == "去" && !preserve_go {
+        verb_core.clear();
+    }
     if !verb_core.is_empty() {
         parts.push(verb_core);
     }
+    if keep_go {
+        for endpoint in &mut made_endpoints {
+            if let Some(place) = endpoint.strip_prefix('到') {
+                *endpoint = place.to_owned();
+            }
+        }
+    }
+    parts.extend(made_endpoints);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
     let trailing_change_le =
@@ -6941,7 +7516,12 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
             "を" => BunsetsuRole::Obj,
             "に" => {
                 // Time/location vs indirect object: check if noun is time/place or animate/frame ARG1.
-                if is_time_or_place_bunsetsu(&atoms) || frame_role == Some(FrameRole::Argm) {
+                if is_time_or_place_bunsetsu(&atoms)
+                    || frame_role == Some(FrameRole::Argm)
+                    || atoms
+                        .iter()
+                        .any(|a| a.lemma.as_deref() == Some(OPAQUE_EVENT_OBLIQUE))
+                {
                     BunsetsuRole::Obl
                 } else {
                     BunsetsuRole::IObj
@@ -6960,6 +7540,8 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
             "と" | "とも" => BunsetsuRole::Other,
             _ => BunsetsuRole::Other,
         }
+    } else if atoms.iter().any(is_clock_atom) {
+        BunsetsuRole::Adv
     } else if is_det {
         BunsetsuRole::Other
     } else if frame_role == Some(FrameRole::Arg0) || deprel_hint == "nsubj" {
@@ -7068,7 +7650,8 @@ fn is_instrument_bunsetsu(atoms: &[Atom]) -> bool {
 }
 
 fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
-    is_place_location_bunsetsu(atoms)
+    atoms.iter().any(is_clock_atom)
+        || is_place_location_bunsetsu(atoms)
         || atoms.iter().any(|a| {
             matches!(
                 a.surface.as_str(),
@@ -7109,6 +7692,503 @@ fn predicates_has_passive(predicates: &[Bunsetsu]) -> bool {
                     || a.surface.ends_with("された"))
         })
     })
+}
+
+#[cfg(test)]
+mod clock_rule_tests {
+    use super::{
+        Atom, CLOCK_ATOM, OPAQUE_PERIOD_CLOCK, clock_number, is_clock_atom, normalize_clock_atoms,
+        render_clock_surface,
+    };
+    use crate::{
+        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+    };
+    use faberline_nlp::doc::model::Backend;
+    use faberline_nlp::{Span, doc::Upos};
+    use std::collections::BTreeMap;
+
+    fn atom(surface: &str, start: usize, locked: bool) -> Atom {
+        Atom {
+            span: Span {
+                start_char: start,
+                end_char: start + surface.chars().count(),
+            },
+            surface: surface.to_owned(),
+            lemma: None,
+            upos: Some(Upos::Noun),
+            doc_tok_idx: None,
+            head: None,
+            deprel: String::new(),
+            is_locked: locked,
+        }
+    }
+
+    #[test]
+    fn clock_numbers_and_half_are_bounded() {
+        assert_eq!(clock_number("二十三"), Some(23));
+        assert_eq!(clock_number("２４"), Some(24));
+        assert_eq!(clock_number("二十五"), None);
+        assert_eq!(
+            render_clock_surface("午後五時半に"),
+            Some(("下午五點半".to_owned(), true))
+        );
+        assert_eq!(
+            render_clock_surface("二十四時"),
+            Some(("二十四點".to_owned(), false))
+        );
+        assert_eq!(render_clock_surface("二十四時半"), None);
+        for non_clock in ["二時間半", "二時限", "半分", "先生に", "五時半分"] {
+            assert_eq!(render_clock_surface(non_clock), None, "{non_clock}");
+        }
+    }
+
+    #[test]
+    fn noon_midnight_and_uncertain_twelve_half_remain_distinct() {
+        assert_eq!(
+            render_clock_surface("午前十二時"),
+            Some(("中午十二點".to_owned(), false))
+        );
+        assert_eq!(
+            render_clock_surface("午後十二時"),
+            Some(("午夜十二點".to_owned(), false))
+        );
+        assert_eq!(
+            render_clock_surface("午前零時"),
+            Some(("午夜零點".to_owned(), false))
+        );
+        assert_eq!(
+            render_clock_surface("午後零時"),
+            Some(("中午十二點".to_owned(), false))
+        );
+        let ambiguous = render_clock_surface("午前十二時半").unwrap().0;
+        assert!(ambiguous.contains("中午") && ambiguous.contains("凌晨"));
+    }
+
+    #[test]
+    fn split_hour_and_particle_become_one_clock_without_swallowing_recipient() {
+        let input = vec![
+            atom("二", 0, false),
+            atom("十", 1, false),
+            atom("三時", 2, false),
+            atom("に", 4, false),
+            atom("先生", 5, false),
+        ];
+        let got = normalize_clock_atoms(&input);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0].surface, "二十三點");
+        assert_eq!(got[0].lemma.as_deref(), Some(CLOCK_ATOM));
+        assert_eq!(got[1].surface, "に");
+        assert_eq!(got[2].surface, "先生");
+        let near = vec![atom("二", 0, false), atom("時限", 1, false)];
+        assert_eq!(normalize_clock_atoms(&near).len(), 2);
+    }
+
+    #[test]
+    fn protected_hour_needs_visible_period_and_keeps_unknown_content() {
+        let mut protected = atom("[[PH0]]", 2, true);
+        protected.span.end_char = 3; // Span is in the source, not placeholder bytes.
+        let got = normalize_clock_atoms(&[
+            atom("午後", 0, false),
+            protected.clone(),
+            atom("時半", 3, false),
+            atom("に", 5, false),
+        ]);
+        assert_eq!(got[1].surface, "[[PH0]]時半");
+        assert_eq!(got[1].lemma.as_deref(), Some(OPAQUE_PERIOD_CLOCK));
+        assert_eq!(got[2].surface, "に");
+        let split = normalize_clock_atoms(&[
+            atom("午後", 0, false),
+            protected.clone(),
+            atom("時", 3, false),
+            atom("半", 4, false),
+        ]);
+        assert_eq!(split[1].surface, "[[PH0]]時半");
+        assert_eq!(split[1].lemma.as_deref(), Some(OPAQUE_PERIOD_CLOCK));
+        let untouched = normalize_clock_atoms(&[protected.clone(), atom("時半", 3, false)]);
+        assert_eq!(untouched[0].surface, "[[PH0]]");
+        assert_eq!(untouched[0].lemma, None);
+        assert!(untouched.iter().all(|a| !is_clock_atom(a)));
+        let split_unknown =
+            normalize_clock_atoms(&[protected, atom("時", 3, false), atom("半", 4, false)]);
+        assert!(split_unknown.iter().all(|a| !is_clock_atom(a)));
+    }
+
+    #[test]
+    fn bare_kanji_ichiji_keeps_ambiguity_but_clear_clocks_still_work() {
+        for ambiguous in ["一時", "一時に"] {
+            assert_eq!(render_clock_surface(ambiguous), None);
+        }
+        for atoms in [
+            vec![atom("一時", 0, false)],
+            vec![atom("一", 0, false), atom("時", 1, false)],
+        ] {
+            let output = normalize_clock_atoms(&atoms);
+            assert!(output.iter().all(|a| !is_clock_atom(a)));
+            assert_eq!(
+                output
+                    .iter()
+                    .map(|a| a.surface.as_str())
+                    .collect::<String>(),
+                "一時"
+            );
+        }
+        assert_eq!(
+            render_clock_surface("午後一時に"),
+            Some(("下午一點".to_owned(), true))
+        );
+        assert_eq!(
+            render_clock_surface("一時半"),
+            Some(("一點半".to_owned(), false))
+        );
+        assert_eq!(
+            render_clock_surface("二時"),
+            Some(("兩點".to_owned(), false))
+        );
+        let qualified = normalize_clock_atoms(&[
+            atom("午後", 0, false),
+            atom("一", 2, false),
+            atom("時", 3, false),
+        ]);
+        assert_eq!(qualified.len(), 1);
+        assert_eq!(qualified[0].surface, "下午一點");
+        assert!(is_clock_atom(&qualified[0]));
+    }
+
+    #[test]
+    fn api_keeps_ichiji_ambiguous_and_supports_explicit_clock() {
+        let glossary = TranslationGlossary::new();
+        let temporary = public_translate("一時停止します。", &glossary);
+        assert!(
+            !temporary.target_text.contains("一點"),
+            "{}",
+            temporary.target_text
+        );
+        let clock = public_translate("会議は午後一時に始まります。", &glossary);
+        assert!(
+            clock.target_text.contains("下午一點"),
+            "{}",
+            clock.target_text
+        );
+        let unknown = public_translate("会議は`予定`時半に始まります。", &glossary);
+        assert_eq!(unknown.opaque_spans.len(), 1);
+        assert!(
+            unknown.target_text.contains("`予定`"),
+            "{}",
+            unknown.target_text
+        );
+        assert!(
+            !unknown.target_text.contains("點"),
+            "{}",
+            unknown.target_text
+        );
+        let qualified_unknown = public_translate("会議は午後`予定`時半に始まります。", &glossary);
+        assert_eq!(qualified_unknown.opaque_spans.len(), 1);
+        assert!(
+            qualified_unknown.target_text.contains("午後`予定`時半"),
+            "{}",
+            qualified_unknown.target_text
+        );
+        assert!(
+            !qualified_unknown.target_text.contains("點"),
+            "{}",
+            qualified_unknown.target_text
+        );
+    }
+
+    #[test]
+    fn split_suffixes_do_not_turn_nonclocks_into_clock_prefixes() {
+        for suffix in ["間", "限", "半分", "３０分"] {
+            let input = vec![atom("二時", 0, false), atom(suffix, 2, false)];
+            let result = normalize_clock_atoms(&input);
+            assert!(
+                result
+                    .iter()
+                    .all(|a| a.lemma.as_deref() != Some(CLOCK_ATOM)),
+                "{suffix}"
+            );
+            assert_eq!(
+                result
+                    .iter()
+                    .map(|a| a.surface.as_str())
+                    .collect::<String>(),
+                format!("二時{suffix}")
+            );
+        }
+    }
+
+    fn public_translate(source: &str, glossary: &TranslationGlossary) -> crate::TranslatedDocument {
+        analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn clock_is_not_a_motion_destination() {
+        let output =
+            public_translate("午後二時に教室に行きます。", &TranslationGlossary::new()).target_text;
+        assert!(
+            output.contains("下午兩點") && output.contains("教室"),
+            "{output}"
+        );
+        assert!(!output.contains("到下午兩點"), "{output}");
+    }
+
+    #[test]
+    fn glossary_clock_components_keep_literal_and_order() {
+        let source = "会議は午後二時半に始まります。";
+        for (surface, target) in [
+            ("午後二時半", "下午兩點半"),
+            ("二", "二"),
+            ("時", "時"),
+            ("半", "半"),
+            ("午後", "午後"),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: surface.to_owned(),
+                surfaces: vec![surface.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, target.to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            let doc = public_translate(source, &glossary);
+            let text = &doc.target_text;
+            assert_eq!(doc.glossary_hits.len(), 1, "{surface}: {text}");
+            assert_eq!(text.matches(target).count(), 1, "{surface}: {text}");
+            assert!(text.find(target) < text.find("開始"), "{surface}: {text}");
+            assert!(!text.contains("給"), "{surface}: {text}");
+            if surface == "二" {
+                assert!(text.contains("二點半"), "{text}");
+            }
+            if surface == "時" {
+                assert!(text.contains("兩時半"), "{text}");
+            }
+            if surface == "半" {
+                assert!(text.contains("兩點半"), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn opaque_clock_position_and_opaque_recipient_are_distinct() {
+        let glossary = TranslationGlossary::new();
+        let full = public_translate("会議は`午後二時半`に始まります。", &glossary);
+        assert_eq!(full.opaque_spans.len(), 1);
+        assert!(full.target_text.contains("`午後二時半`"));
+        assert!(
+            !full.target_text.contains("給`午後二時半`"),
+            "{}",
+            full.target_text
+        );
+        let partial = public_translate("会議は午後`二`時半に始まります。", &glossary);
+        assert!(
+            partial.target_text.contains("午後`二`時半"),
+            "{}",
+            partial.target_text
+        );
+        assert!(
+            partial.target_text.find("午後`二`時半") < partial.target_text.find("開始"),
+            "{}",
+            partial.target_text
+        );
+        let period = public_translate("会議は`午後`二時半に始まります。", &glossary);
+        assert!(
+            period.target_text.contains("`午後`兩點半"),
+            "{}",
+            period.target_text
+        );
+        assert!(
+            period.target_text.find("`午後`兩點半") < period.target_text.find("開始"),
+            "{}",
+            period.target_text
+        );
+        let topic = public_translate("`会議は`午後二時半に始まります。", &glossary);
+        assert!(
+            topic.target_text.find("`会議は`") < topic.target_text.find("下午兩點半"),
+            "{}",
+            topic.target_text
+        );
+        let recipient = public_translate("`先生`に手紙を書きます。", &glossary);
+        assert!(
+            recipient.target_text.contains("給`先生`"),
+            "{}",
+            recipient.target_text
+        );
+    }
+}
+
+#[cfg(test)]
+mod motion_endpoint_tests {
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    fn translate(source: &str) -> String {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        analyze_and_translate(
+            source,
+            &options,
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .expect("CPU rules translate the control sentence")
+        .target_text
+    }
+
+    #[test]
+    fn wishes_and_negative_questions_keep_the_direction() {
+        assert_eq!(translate("駅まで行きたいです。"), "想去車站。");
+        assert_eq!(translate("公園まで行きたいです。"), "想去公園。");
+        assert_eq!(translate("公園まで走りたいです。"), "想跑到公園。");
+        assert_eq!(translate("駅まで行きませんか。"), "不去車站嗎。");
+        assert_eq!(translate("公園まで行きませんか。"), "不去公園嗎。");
+        assert_eq!(translate("公園まで走りませんか。"), "不跑到公園嗎。");
+    }
+
+    #[test]
+    fn negative_questions_keep_nonhuman_subjects() {
+        assert_eq!(
+            translate("このバスは駅まで行きませんか。"),
+            "這個的公車不去車站嗎。"
+        );
+        assert_eq!(
+            translate("この電車は駅まで行きませんか。"),
+            "這個的電車不去車站嗎。"
+        );
+    }
+
+    #[test]
+    fn near_negative_controls_keep_their_existing_meaning() {
+        assert_eq!(translate("駅まで行きませんでしたか。"), "到車站沒有去嗎。");
+        assert_eq!(translate("公園まで描きませんか。"), "連公園都不畫畫嗎。");
+        assert_eq!(translate("駅まで行かなかった。"), "到車站沒有去。");
+    }
+
+    #[test]
+    fn walking_and_running_keep_the_place_as_endpoint() {
+        for (source, phrase) in [
+            ("公園まで歩いた。", "走到公園"),
+            ("学校まで走った。", "跑到學校"),
+        ] {
+            let output = translate(source);
+            assert!(output.contains(phrase), "{source}: {output}");
+            assert!(!output.contains('連'), "{source}: {output}");
+        }
+    }
+
+    #[test]
+    fn transport_and_time_precede_the_motion_endpoint() {
+        assert_eq!(
+            translate("私は毎朝駅までバスで行きます。"),
+            "我每天早上坐公車到車站。"
+        );
+        let reversed_source_order = translate("バスで駅まで行った。");
+        assert!(reversed_source_order.contains("坐公車到車站"));
+    }
+
+    #[test]
+    fn time_ordering_remains_bounded_to_spatial_motion() {
+        assert_eq!(translate("毎朝新聞を読む。"), "每天早上讀報紙。");
+        assert_eq!(translate("毎晩本を読む。"), "每晚讀書。");
+    }
+
+    #[test]
+    fn people_and_non_motion_keep_additive_focus() {
+        let person = translate("先生まで歩いた。");
+        assert!(person.contains("連老師都"), "{person}");
+        assert!(!person.contains("到老師"), "{person}");
+        let non_motion = translate("公園まで描いた。");
+        assert!(non_motion.contains("連公園都"), "{non_motion}");
+    }
+
+    #[test]
+    fn origin_and_recipient_cases_keep_their_relations() {
+        let origin = translate("駅から歩いた。");
+        assert!(origin.contains("從車站"), "{origin}");
+        assert!(!origin.contains("到車站"), "{origin}");
+        let recipient = translate("友達に手紙を書いた。");
+        assert!(recipient.contains("給朋友"), "{recipient}");
+        assert!(!recipient.contains("到朋友"), "{recipient}");
+    }
+
+    #[test]
+    fn a_place_modifier_does_not_make_a_teacher_a_destination() {
+        let output = translate("学校の先生まで歩いた。");
+        assert!(output.contains('連'), "{output}");
+        assert!(output.contains("老師都"), "{output}");
+        assert!(!output.contains("到學校"), "{output}");
+    }
+
+    #[test]
+    fn negative_motion_and_a_following_clause_keep_their_scope() {
+        let negative = translate("駅まで歩かなかった。");
+        assert!(negative.contains("沒有走到車站"), "{negative}");
+        let sequence = translate("公園まで歩いて、友達に会った。");
+        assert!(sequence.contains("走到公園"), "{sequence}");
+        assert!(sequence.contains("朋友"), "{sequence}");
+        assert!(sequence.contains("見面"), "{sequence}");
+        assert!(!sequence.contains("連公園"), "{sequence}");
+    }
+}
+
+fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {
+    if b.case_particle.as_deref() != Some("まで") {
+        return false;
+    }
+    // Use the noun phrase head, not a place inside a modifier such as
+    // 学校の先生. Relational nouns such as 前/後 can also be temporal.
+    b.atoms
+        .iter()
+        .rev()
+        .find(|a| {
+            !matches!(a.upos, Some(Upos::Adp | Upos::Part | Upos::Punct))
+                && !is_case_or_sfp_to_strip(&a.surface)
+        })
+        .is_some_and(|a| {
+            !a.is_locked
+                && matches!(
+                    a.surface.as_str(),
+                    "部屋"
+                        | "学校"
+                        | "図書館"
+                        | "公園"
+                        | "駅"
+                        | "東京駅"
+                        | "東京"
+                        | "家"
+                        | "会社"
+                        | "病院"
+                        | "ここ"
+                        | "そこ"
+                        | "あそこ"
+                        | "ベッド"
+                        | "椅子"
+                        | "机"
+                        | "風呂"
+                )
+        })
+}
+
+fn predicates_is_made_motion_verb(predicates: &[Bunsetsu]) -> bool {
+    let mut verbs = predicates
+        .iter()
+        .flat_map(|b| &b.atoms)
+        .filter(|a| !a.is_locked && a.upos == Some(Upos::Verb));
+    let Some(verb) = verbs.next() else {
+        return false;
+    };
+    // Do not move an endpoint across another lexical predicate. Clauses with
+    // multiple verbs need an explicit attachment relation before reordering.
+    verbs.next().is_none()
+        && matches!(
+            verb.lemma.as_deref().unwrap_or(verb.surface.as_str()),
+            "行く" | "歩く" | "走る"
+        )
 }
 
 fn predicates_is_goal_verb(predicates: &[Bunsetsu]) -> bool {
@@ -7242,7 +8322,9 @@ fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant) -> String {
             }
         }
         Some("に") | Some("で") => {
-            if core.starts_with('在') {
+            if core.starts_with('在')
+                || (core.starts_with("[[PH") && b.atoms.iter().any(is_clock_atom))
+            {
                 core
             } else {
                 format!("在{core}")

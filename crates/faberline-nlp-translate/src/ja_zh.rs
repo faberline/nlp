@@ -9884,7 +9884,7 @@ fn deadline_weekday(surface: &str) -> Option<&'static str> {
 fn deadline_time_question(atom: &Atom) -> Option<&'static str> {
     if atom.is_locked
         || atom.upos != Some(Upos::Pron)
-        || atom.deprel != "obl"
+        || !matches!(atom.deprel.as_str(), "obl" | "iobj")
         || atom.head.is_none()
     {
         return None;
@@ -11598,6 +11598,11 @@ mod clock_rule_tests {
         let translate = |source: &str| public_translate(source, &glossary).target_text;
         for (source, expected) in [
             ("いつまでに手紙を書きますか。", "最晚在什麼時候寫信？"),
+            ("何時までに書きましょうか。", "最晚在幾點寫好呢？"),
+            (
+                "いつまでに先生に手紙を渡しますか。",
+                "最晚在什麼時候給老師遞給信？",
+            ),
             ("何時までに駅に着きますか。", "最晚在幾點抵達到車站？"),
             ("何時までに手紙を書けますか。", "可以在幾點前寫信？"),
             (

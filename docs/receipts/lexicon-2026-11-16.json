@@ -34,8 +34,8 @@
     {
       "path": "lexicon/data/en.tsv",
       "entries": 66000,
-      "bytes": 2921326,
-      "sha256": "224e1fb8ecc2fa59e9148a2348b409f0a9617528386435cf0f84c3c245b3412d"
+      "bytes": 2921300,
+      "sha256": "8e743a9838c29b34c212c2a1f490325360ee61089f87ee1c73cbe2b7f94e8b49"
     },
     {
       "path": "lexicon/data/ja.tsv",
@@ -147,7 +147,7 @@
     }
   ],
   "lexicon_bin_bytes": 15124412,
-  "lexicon_bin_sha256": "ad1fc12d61614e810711728b1eb5cb3141082d73d86f1b23c7effc5ba585da8d",
+  "lexicon_bin_sha256": "497aa4e520c014f157dfff43ece21ad09033dd4c43de878c9917f7667ee08d39",
   "upstream_inputs": {
     "wordnet_3_1": {
       "archive": "wn3.1.dict.tar.gz",
@@ -730,6 +730,63 @@
         ]
       },
       "method": "The reviewed VarCon pairs link different substances. Preserve each variant and remove these four links before propagation. No upstream text was imported."
+    },
+    {
+      "issue": 201,
+      "base_ref": "51c639573691d3ebe1ebc4dcfbca212344311663",
+      "base_en_sha256": "224e1fb8ecc2fa59e9148a2348b409f0a9617528386435cf0f84c3c245b3412d",
+      "candidate_en_sha256": "8e743a9838c29b34c212c2a1f490325360ee61089f87ee1c73cbe2b7f94e8b49",
+      "rows_compared": 66000,
+      "compiled_english_rows_compared": 66000,
+      "changes": [
+        {
+          "surface": "chaces",
+          "variant": "en-US",
+          "old_counterpart": "chacoes",
+          "new_counterpart": "-",
+          "decided_upos": "-",
+          "upos_mask": "-",
+          "lemma": "-"
+        },
+        {
+          "surface": "chacoes",
+          "variant": "en-GB",
+          "old_counterpart": "chaces",
+          "new_counterpart": "-",
+          "decided_upos": "-",
+          "upos_mask": "-",
+          "lemma": "-"
+        },
+        {
+          "surface": "cimicidae",
+          "variant": "en-GB",
+          "old_counterpart": "cimicide",
+          "new_counterpart": "-",
+          "decided_upos": "NOUN",
+          "upos_mask": "NOUN",
+          "lemma": "-"
+        },
+        {
+          "surface": "cimicide",
+          "variant": "en-US",
+          "old_counterpart": "cimicidae",
+          "new_counterpart": "-",
+          "decided_upos": "NOUN",
+          "upos_mask": "NOUN",
+          "lemma": "-"
+        }
+      ],
+      "source_evidence": {
+        "review": "https://github.com/faberline/nlp/issues/201",
+        "varcon_lines": [
+          4031,
+          4391
+        ],
+        "varcon_sha256": "75af63da46ec12d7eb14b9f1ba8d3898d484dd6872755b73c921b215875a3629",
+        "cimicide_noun": "https://truthbook.com/urantia-book-viewer-core/1924-Websters-Dictionary-Edition/LETTER-C.pdf#page=99",
+        "printed_page": 399
+      },
+      "method": "Remove the four reviewed links before counterpart propagation. Keep the existing cited noun tag for cimicide from its own attested headword. Preserve every other source column and packed entry field."
     }
   ]
 }

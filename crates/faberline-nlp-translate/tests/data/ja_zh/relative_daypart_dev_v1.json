@@ -79,7 +79,7 @@
         ],
         "stable": [
           "All five rows keep the exact event body 私は家で本を読みます。",
-          "All five rows keep the same subject, action, object, location and punctuation."
+          "All five rows keep the same subject, action, object, location and sentence-final punctuation."
         ],
         "changed": [
           "This row places the relative day 明日 before the daypart 午後."
@@ -186,7 +186,7 @@
           "DAYPART-N5-01"
         ],
         "stable": [
-          "The same subject, action, object, location and punctuation remain."
+          "The same subject, action, object, location and sentence-final punctuation remain."
         ],
         "changed": [
           "This row omits the temporal phrase."

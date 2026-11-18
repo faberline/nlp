@@ -276,7 +276,7 @@ VERB	274	顰める	ja	VERB	VERB	皺眉
 VERB	275	飛下りる	ja	VERB	VERB	跳下
 VERB	276	飛降りる	ja	VERB	VERB	跳下
 VERB	277	解る	ja	VERB	VERB	明白
-VERB	278	体する	ja	VERB	VERB	體會
+VERB	278	体する	ja	VERB	VERB	遵循
 VERB	279	賊する	ja	VERB	VERB	戕害
 VERB	280	幽する	ja	VERB	VERB	幽禁
 VERB	281	撤する	ja	VERB	VERB	撤除
@@ -1474,7 +1474,7 @@ VERB	1472	雪ぐ	ja	VERB	VERB	洗刷
 VERB	1473	詰め込める	ja	VERB	VERB	能塞進
 VERB	1474	温む	ja	VERB	VERB	變暖
 VERB	1475	果せる	ja	VERB	VERB	能實現
-VERB	1476	遂せる	ja	VERB	VERB	能實現
+VERB	1476	遂せる	ja	VERB	VERB	完成
 VERB	1477	臨める	ja	VERB	VERB	能面對
 VERB	1478	呉れる	ja	VERB	VERB	送給
 VERB	1479	書き残す	ja	VERB	VERB	寫下留存
@@ -1763,7 +1763,7 @@ MULTI	261	リラクゼイション	ja	-	NOUN|VERB	放鬆
 MULTI	262	リラクゼーション	ja	-	NOUN|VERB	放鬆
 MULTI	263	ソウサ	ja	-	NOUN|VERB	操作
 MULTI	264	シュゴ	ja	-	NOUN|VERB	守護
-MULTI	265	タンブン	ja	-	NOUN|VERB	佈施
+MULTI	265	タンブン	ja	-	NOUN|VERB	積功德
 MULTI	266	ランデブー	ja	-	NOUN|VERB	會合
 MULTI	267	センド	ja	-	ADV|NOUN	上次
 MULTI	268	アッパーカット	ja	-	NOUN|VERB	上鉤拳
@@ -1902,7 +1902,7 @@ MULTI	400	センカ	ja	-	NOUN|VERB	遷化
 MULTI	401	センノウ	ja	-	NOUN|VERB	洗腦
 MULTI	402	チカン	ja	-	NOUN|VERB	色狼
 MULTI	403	キンシ	ja	-	NOUN|VERB	禁止
-MULTI	404	コウジュ	ja	-	NOUN|VERB	口授
+MULTI	404	コウジュ	ja	-	NOUN|VERB	香薷
 MULTI	405	ショウマ	ja	-	NOUN|VERB	消磨
 MULTI	406	シンサツ	ja	-	NOUN|VERB	診察
 MULTI	407	ジュケイ	ja	-	NOUN|VERB	受刑

@@ -9,15 +9,15 @@ Strict A2 rules:
   1. Preserve ja.tsv UTF-8 byte row ordering `(c[0].encode("utf-8"), c[1].encode("utf-8"))`
      matching apply_a1_lexemes.py / build_ja.py so diffs only touch modified/inserted rows.
   2. Never modify `cost` or any column other than `counterpart` (col 6) and `meta` (col 7)
-     on existing rows; fill unglossed (`cols[6] == '-'`) rows. The sole
-     reviewed exception replaces the `午後` noun/adverb identity gloss using
-     its matching first-party noun gloss and adds first-party provenance.
-  3. Only insert missing rows (<= 35 total) for the explicit closed paradigms and two
+     on existing rows; fill unglossed (`cols[6] == '-'`) rows. Reviewed exceptions
+     replace the `午後` identity gloss and four A4 glosses with first-party
+     source glosses after matching the previously shipped rows.
+  3. Only insert missing rows (<= 35 total) for the explicit closed paradigms and
      approved everyday nouns:
      (a) Step 4 Keigo verbs (`拝見する`)
      (b) 4-kana reduplicated ABAB / mimetic adverbs (`ざあざあ`, `ざわざわ`, `くたくた`,
          `にゃあにゃあ`, `ちゅんちゅん`, `ねばねば`, `ぽっちゃり`, `さらっと`, `しーん`).
-     (c) The NOUN entries `かばん` and `みかん`.
+     (c) The NOUN entries `かばん`, `みかん`, and `店長`.
 """
 
 from __future__ import annotations
@@ -31,10 +31,19 @@ JA_TSV = REPO_ROOT / "crates" / "faberline-nlp" / "lexicon" / "data" / "ja.tsv"
 GLOSS_TSV = Path(__file__).resolve().parent / "data" / "first_party_mit_ja_zh.tsv"
 A4_GLOSS_TSV = Path(__file__).resolve().parent / "data" / "a4_first_party_mit_ja_zh.tsv"
 
+# Match every field of the previously shipped A4 rows before replacing their glosses.
+REVIEWED_A4_GLOSS_REPLACEMENTS = {
+    ("体する", "ja", "1180", "VERB", "VERB", "-", "體會", "infl=sahen;src=first_party_mit"),
+    ("遂せる", "ja", "1162", "VERB", "VERB", "-", "能實現", "infl=ichidan;src=first_party_mit"),
+    ("タンブン", "ja", "533", "-", "NOUN|VERB", "-", "佈施", "src=first_party_mit"),
+    ("コウジュ", "ja", "589", "-", "NOUN|VERB", "-", "口授", "src=first_party_mit"),
+}
+
 ALLOWED_INSERT_SURFACES = {
     # Approved first-party everyday noun entries.
     "かばん",
     "みかん",
+    "店長",
     # Step 4 Keigo verb missing from ja.tsv
     "拝見する",
     # Closed 4-kana reduplicated ABAB / mimetic adverbs missing from ja.tsv
@@ -151,7 +160,9 @@ def main() -> int:
                     raise ValueError(f"{A4_GLOSS_TSV}:{line_no}: expected 7 cols, got {len(cols)}: {raw!r}")
                 _grp, _rk, surf, var, dupos, mask, cp = (c.strip() for c in cols)
                 for r in by_exact_key.get((surf, var, dupos, mask), []):
-                    if r[6] == "-" and cp != "-":
+                    if cp in ("-", r[6]):
+                        continue
+                    if r[6] == "-" or tuple(r) in REVIEWED_A4_GLOSS_REPLACEMENTS:
                         r[6] = cp
                         r[7] = merge_meta(r[7], "-")
                         a4_updated += 1

@@ -2560,6 +2560,7 @@ fn translate_clause_atoms(
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
+    let grouped = compose_relative_daypart(grouped);
     let bunsetsus = merge_adnominal_bunsetsus(grouped, doc, sentence_idx, target);
 
     translate_clause_bunsetsus(
@@ -4857,21 +4858,24 @@ fn translate_clause_bunsetsus(
             BunsetsuRole::Adv => {
                 let s = render_bunsetsu_np(&b, target);
                 if !s.is_empty() {
-                    if matches!(
-                        s.as_str(),
-                        "每天"
-                            | "今天"
-                            | "明天"
-                            | "昨天"
-                            | "現在"
-                            | "早上"
-                            | "夜晚"
-                            | "今年"
-                            | "明年"
-                            | "去年"
-                            | "今後"
-                            | "久違地"
-                    ) {
+                    if (b.atoms.len() == 1
+                        && b.atoms[0].lemma.as_deref() == Some(RELATIVE_DAYPART_ATOM))
+                        || matches!(
+                            s.as_str(),
+                            "每天"
+                                | "今天"
+                                | "明天"
+                                | "昨天"
+                                | "現在"
+                                | "早上"
+                                | "夜晚"
+                                | "今年"
+                                | "明年"
+                                | "去年"
+                                | "今後"
+                                | "久違地"
+                        )
+                    {
                         temporal_others.push(s);
                     } else {
                         adverbs.push(s);
@@ -7133,6 +7137,83 @@ fn apply_phrase_matches(atoms: &[Atom]) -> Vec<Atom> {
         }
     }
     out
+}
+
+const RELATIVE_DAYPART_ATOM: &str = "__ja_relative_daypart_atom";
+
+// Combine only an independent calendar-day/daypart modifier.  This must run
+// before adnominal folding and before the two groups enter separate buckets.
+fn compose_relative_daypart(groups: Vec<Bunsetsu>) -> Vec<Bunsetsu> {
+    let mut result = Vec::with_capacity(groups.len());
+    let mut iter = groups.into_iter().peekable();
+    while let Some(day) = iter.next() {
+        let paired = iter.peek().is_some_and(|part| {
+            let [date, no] = day.atoms.as_slice() else {
+                return false;
+            };
+            let [period] = part.atoms.as_slice() else {
+                return false;
+            };
+            !date.is_locked
+                && !no.is_locked
+                && !period.is_locked
+                && matches!(date.surface.as_str(), "今日" | "明日" | "昨日")
+                && no.surface == "の"
+                && matches!(
+                    period.surface.as_str(),
+                    "朝" | "午前" | "午後" | "昼" | "夜"
+                )
+                && date.span.end_char == no.span.start_char
+                && no.span.end_char == period.span.start_char
+                && !is_clock_atom(period)
+                && matches!(day.case_particle.as_deref(), None | Some("の"))
+                && part.case_particle.is_none()
+                && day.sconj_tail.is_none()
+                && part.sconj_tail.is_none()
+                && day.sfp_tail.is_none()
+                && part.sfp_tail.is_none()
+                && matches!(day.role, BunsetsuRole::Other | BunsetsuRole::Adv)
+                && matches!(part.role, BunsetsuRole::Other | BunsetsuRole::Adv)
+        });
+        if paired {
+            let part = iter.next().expect("peeked daypart");
+            // A following unmarked nominal may make this a modifier of that
+            // noun. Leave that ambiguous structure on the existing path.
+            let attached_nominal = iter.peek().is_some_and(|next| {
+                matches!(next.role, BunsetsuRole::Other | BunsetsuRole::Obj)
+                    && next
+                        .atoms
+                        .first()
+                        .is_some_and(|a| matches!(a.upos, Some(Upos::Noun | Upos::Propn)))
+            });
+            if attached_nominal {
+                result.push(day);
+                result.push(part);
+                continue;
+            }
+            let date = &day.atoms[0];
+            let period = &part.atoms[0];
+            let mut combined = date.clone();
+            combined.span.end_char = period.span.end_char;
+            combined.surface = format!(
+                "{}{}",
+                translate_single_ja_term(&date.surface, date.lemma.as_deref(), date.upos),
+                translate_single_ja_term(&period.surface, period.lemma.as_deref(), period.upos)
+            );
+            combined.lemma = Some(RELATIVE_DAYPART_ATOM.to_owned());
+            combined.is_locked = true;
+            result.push(Bunsetsu {
+                atoms: vec![combined],
+                role: BunsetsuRole::Adv,
+                case_particle: None,
+                sconj_tail: None,
+                sfp_tail: None,
+            });
+        } else {
+            result.push(day);
+        }
+    }
+    result
 }
 
 fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> Vec<Bunsetsu> {
@@ -9722,6 +9803,117 @@ mod existence_rule_tests {
             deprel: String::new(),
             is_locked: false,
         }
+    }
+
+    #[test]
+    fn relative_daypart_is_bounded_by_source_and_nominal_context() {
+        fn group(atoms: Vec<Atom>, role: BunsetsuRole, case: Option<&str>) -> Bunsetsu {
+            Bunsetsu {
+                atoms,
+                role,
+                case_particle: case.map(str::to_owned),
+                sconj_tail: None,
+                sfp_tail: None,
+            }
+        }
+        let date = group(
+            vec![
+                atom("明日", None, Upos::Noun, 0),
+                atom("の", None, Upos::Adp, 2),
+            ],
+            BunsetsuRole::Other,
+            Some("の"),
+        );
+        let afternoon = group(
+            vec![atom("午後", None, Upos::Noun, 3)],
+            BunsetsuRole::Adv,
+            None,
+        );
+        let morning = group(
+            vec![atom("朝", None, Upos::Noun, 3)],
+            BunsetsuRole::Adv,
+            None,
+        );
+        let composed = compose_relative_daypart(vec![date.clone(), afternoon.clone()]);
+        assert_eq!(composed.len(), 1);
+        assert_eq!(
+            composed[0].atoms[0].lemma.as_deref(),
+            Some(RELATIVE_DAYPART_ATOM)
+        );
+        assert_eq!(
+            composed[0].atoms[0].surface,
+            format!(
+                "{}{}",
+                translate_single_ja_term("明日", None, Some(Upos::Noun)),
+                translate_single_ja_term("午後", None, Some(Upos::Noun))
+            )
+        );
+        assert_eq!(
+            compose_relative_daypart(vec![date.clone(), morning]).len(),
+            1
+        );
+        let noun = group(
+            vec![atom("会議", None, Upos::Noun, 5)],
+            BunsetsuRole::Other,
+            None,
+        );
+        assert_eq!(
+            compose_relative_daypart(vec![date.clone(), afternoon.clone(), noun]).len(),
+            3
+        );
+        let mut locked = afternoon.clone();
+        locked.atoms[0].is_locked = true;
+        assert_eq!(
+            compose_relative_daypart(vec![date.clone(), locked]).len(),
+            2
+        );
+        let clock = group(
+            vec![atom("午後二時", Some(CLOCK_ATOM), Upos::Noun, 3)],
+            BunsetsuRole::Adv,
+            None,
+        );
+        assert_eq!(compose_relative_daypart(vec![date.clone(), clock]).len(), 2);
+        let possessive = group(
+            vec![
+                atom("私", None, Upos::Pron, 0),
+                atom("の", None, Upos::Adp, 1),
+            ],
+            BunsetsuRole::Other,
+            Some("の"),
+        );
+        assert_eq!(
+            compose_relative_daypart(vec![possessive, afternoon.clone()]).len(),
+            2
+        );
+        assert_eq!(compose_relative_daypart(vec![afternoon]).len(), 1);
+    }
+
+    #[test]
+    fn relative_daypart_stays_ordered_in_adopted_event() {
+        for (source, expected) in [
+            ("明日の朝、私は家で本を読みます。", "明天早上"),
+            ("明日の午後、私は家で本を読みます。", "明天午後"),
+        ] {
+            let result = translate(source, &TranslationGlossary::new());
+            assert!(
+                result.target_text.contains(expected),
+                "{}",
+                result.target_text
+            );
+            assert!(
+                !result.target_text.contains("明天的"),
+                "{}",
+                result.target_text
+            );
+        }
+        let text = translate(
+            "明日の朝私は公園で本を読みます。",
+            &TranslationGlossary::new(),
+        )
+        .target_text;
+        let time = text.find("明天早上").expect("combined time");
+        let place = text.find("公園").expect("place");
+        assert!(time < place, "{text}");
     }
 
     fn predicate(atoms: Vec<Atom>) -> Bunsetsu {

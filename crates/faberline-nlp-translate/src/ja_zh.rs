@@ -7937,8 +7937,8 @@ fn purpose_stem_lemma(stem: &Atom) -> Option<String> {
 }
 
 // Some continuatives appear as a nominal base and kana fragments. Only join the
-// full span between an attached を and に when the inflection table recognizes
-// it and the source dependency graph leads from both arguments to 行く.
+// full span before に when the inflection table recognizes it and the source
+// boundary and dependency graph identify the same outer 行く.
 fn recover_split_purpose_stems(atoms: &mut Vec<Atom>) {
     let mut i = 0;
     while i < atoms.len() {
@@ -7957,12 +7957,9 @@ fn split_purpose_stem(before: &[Atom], ni: &Atom, after: &[Atom]) -> Option<(usi
     if ni.is_locked || ni.upos != Some(Upos::Adp) || ni.deprel != "case" {
         return None;
     }
-    let wo_at = before
-        .iter()
-        .rposition(|a| !a.is_locked && a.surface == "を")?;
-    let obj = before.get(wo_at.checked_sub(1)?)?;
-    let wo = &before[wo_at];
-    let pieces = &before[wo_at + 1..];
+    let is_kana = |p: &Atom| !p.is_locked && p.surface.chars().all(|c| ('ぁ'..='ゖ').contains(&c));
+    let start = before.iter().rposition(|a| !is_kana(a))?;
+    let (left, pieces) = before.split_at(start);
     let [first, tail @ ..] = pieces else {
         return None;
     };
@@ -7974,21 +7971,10 @@ fn split_purpose_stem(before: &[Atom], ni: &Atom, after: &[Atom]) -> Option<(usi
         || first.is_locked
         || first.upos != Some(Upos::Noun)
         || anchor.deprel != "obl"
-        || obj.doc_tok_idx.is_none()
-        || obj.deprel != "obj"
-        || obj.head != anchor.head
-        || wo.upos != Some(Upos::Adp)
-        || wo.deprel != "case"
-        || wo.head != obj.doc_tok_idx
-        || obj.span.end_char != wo.span.start_char
-        || wo.span.end_char != first.span.start_char
         || last.span.end_char != ni.span.start_char
         || pieces
             .windows(2)
             .any(|p| p[0].span.end_char != p[1].span.start_char)
-        || tail
-            .iter()
-            .any(|p| !p.surface.chars().all(|c| ('ぁ'..='ゖ').contains(&c)))
         || pieces.iter().any(|p| {
             p.is_locked
                 || p.doc_tok_idx.is_none()
@@ -8010,7 +7996,48 @@ fn split_purpose_stem(before: &[Atom], ni: &Atom, after: &[Atom]) -> Option<(usi
     stem.surface = pieces.iter().map(|p| p.surface.as_str()).collect();
     stem.span.end_char = last.span.end_char;
     stem.lemma = Some(purpose_stem_lemma(&stem)?);
-    Some((wo_at + 1, stem))
+    let explicit_object = matches!(left, [.., obj, wo]
+        if obj.deprel == "obj" && obj.head == anchor.head && obj.doc_tok_idx.is_some()
+        && !wo.is_locked && wo.surface == "を" && wo.upos == Some(Upos::Adp)
+        && wo.deprel == "case" && wo.head == obj.doc_tok_idx
+        && obj.span.end_char == wo.span.start_char && wo.span.end_char == first.span.start_char);
+    if !explicit_object {
+        // Without an accusative, require an independent left boundary and no
+        // competing nominal entry for the entire reconstructed surface.
+        let independent = match left {
+            [] => true,
+            [.., modifier]
+                if !modifier.is_locked
+                    && modifier.deprel == "advmod"
+                    && modifier.head == anchor.head =>
+            {
+                true
+            }
+            [.., noun, case] => {
+                !case.is_locked
+                    && case.deprel == "case"
+                    && matches!(
+                        case.surface.as_str(),
+                        "は" | "が" | "も" | "で" | "に" | "へ"
+                    )
+                    && noun.doc_tok_idx.is_some()
+                    && case.head == noun.doc_tok_idx
+                    && noun.head == anchor.head
+            }
+            _ => false,
+        };
+        if !independent
+            || faberline_nlp::lexicon::lookup_ja(&stem.surface).is_some_and(|e| {
+                e.upos_candidates
+                    .iter()
+                    .any(|pos| matches!(pos, Upos::Noun | Upos::Propn))
+            })
+        {
+            return None;
+        }
+        stem.upos = Some(Upos::Verb);
+    }
+    Some((start, stem))
 }
 
 // These dictionary glosses encode a transfer. Mandarin places the item after
@@ -9445,6 +9472,8 @@ mod motion_endpoint_tests {
             ("本を買いに行きます。", "去買書。"),
             ("私はパンを食べに行きます。", "我去吃麵包。"),
             ("魚を食べに行きます。", "去吃魚。"),
+            ("私は食べに行きます。", "我去吃。"),
+            ("食べに行きませんか。", "要不要去吃？"),
             ("材料を混ぜに行きます。", "去攪拌材料。"),
             ("窓を閉めに行きます。", "去關上窗戶。"),
             ("父を迎えに行きます。", "去迎接父親。"),

@@ -13129,7 +13129,7 @@ mod existence_rule_tests {
     fn relative_daypart_stays_ordered_in_adopted_event() {
         for (source, expected) in [
             ("明日の朝、私は家で本を読みます。", "明天早上"),
-            ("明日の午後、私は家で本を読みます。", "明天午後"),
+            ("明日の午後、私は家で本を読みます。", "明天下午"),
         ] {
             let result = translate(source, &TranslationGlossary::new());
             assert!(

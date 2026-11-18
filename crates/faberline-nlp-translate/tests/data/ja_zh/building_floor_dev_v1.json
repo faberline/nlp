@@ -1,0 +1,88 @@
+{
+  "schema": "faberline.nlp.ja_zh.building_floor_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "reused_existing_controls": [
+    {
+      "file": "nlevels_expansion_dev_v1.json",
+      "sha256": "22d0753fd384ae5f07a118c6417c53b213cc66c1637a8369b8c0315e69ab4fcc",
+      "ids": [
+        "N5X-09",
+        "N5X-10"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "FLOOR-N5-01",
+      "level_approx": "N5",
+      "jp": "私は学校の二階に行きます。",
+      "zh_hant": "我去學校的二樓。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "學校提供明確的建築物背景。",
+        "二階表示學校建築的樓層。",
+        "二階是行きます移動的目標，不是房間所在位置的述語補語。",
+        "參考譯文保留二樓這個數字和移動目標。"
+      ],
+      "semantic_unknowns": [
+        "句子沒有說移動何時發生。",
+        "句子沒有說移動是否已完成或只是安排。"
+      ],
+      "control": {
+        "kind": "noncopular_floor_goal",
+        "contrast_ids": [
+          "N5X-09",
+          "N5X-10"
+        ],
+        "stable": [
+          "都描述建築物中的明確數字樓層。",
+          "新句和既有對照都保留樓層數字。"
+        ],
+        "changed": [
+          "本句用行きます表示移動到樓層。N5X-09/10 用です述說房間的位置。",
+          "本句加入學校作為樓層所屬建築物。"
+        ],
+        "limits": [
+          "本句只增加一個移動目標構式，不能代表所有樓層數字或建築物。",
+          "本資料不測試階段、樓梯或其他階的意思。",
+          "本例尚未經獨立校對、資料採納或規則驗證。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

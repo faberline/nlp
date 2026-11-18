@@ -8382,46 +8382,24 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
     }
     let has_object = body.iter().any(|a| a.deprel == "obj" && governs(a));
     for group in groups {
-        // The first か belongs to the pronoun (誰かと). The final か belongs
-        // to the verb. A bare question word with a case marker remains a wh question.
-        let [word, indef, rest @ ..] = group.atoms.as_slice() else {
+        let Some(word) = group.atoms.first().filter(|word| governs(word)) else {
             continue;
         };
-        if word.is_locked
-            || indef.is_locked
-            || word.upos != Some(Upos::Pron)
-            || !governs(word)
-            || word.doc_tok_idx.is_none()
-            || indef.upos != Some(Upos::Part)
-            || indef.surface != "か"
-            || indef.deprel != "discourse"
-            || indef.head != word.doc_tok_idx
-            || word.span.end_char != indef.span.start_char
-        {
+        let Some((mut noun, case)) = word
+            .head
+            .and_then(|predicate| indefinite_argument(&group.atoms, predicate))
+        else {
             continue;
-        }
-        let case = match rest {
-            [] => None,
-            [case]
-                if !case.is_locked
-                    && case.upos == Some(Upos::Adp)
-                    && case.deprel == "case"
-                    && case.head == word.doc_tok_idx
-                    && case.span.start_char == indef.span.end_char =>
-            {
-                Some(case.surface.as_str())
-            }
-            _ => continue,
         };
-        let (localized, role) = match (word.surface.as_str(), word.deprel.as_str(), case) {
-            ("誰", "obl", Some("と")) => ("某個人", BunsetsuRole::JointCompanion),
-            ("何", "obj", Some("を")) if can_offer => ("點什麼", BunsetsuRole::Obj),
-            // These actions take content as a direct object. Colloquial 何か
-            // may omit を immediately before the verb, unlike a locative or subject.
+        let marker = case.as_ref().map(|case| case.surface.as_str());
+        let role = match (word.surface.as_str(), word.deprel.as_str(), marker) {
+            ("誰", "obl", Some("と")) => BunsetsuRole::JointCompanion,
+            ("何", "obj", Some("を")) if can_offer => BunsetsuRole::Obj,
+            // Colloquial content objects can omit を just before a transitive verb.
             ("何", "obl", None)
                 if can_offer
                     && !has_object
-                    && indef.span.end_char == action.span.start_char
+                    && noun.span.end_char == action.span.start_char
                     && matches!(
                         lemma,
                         "読む"
@@ -8435,17 +8413,17 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
                             | "選ぶ"
                     ) =>
             {
-                ("點什麼", BunsetsuRole::Obj)
+                BunsetsuRole::Obj
             }
-            ("どこ", "obl", Some("へ" | "に" | "で")) => ("某個地方", group.role),
+            ("どこ", "obl", Some("へ" | "に" | "で")) => group.role,
             _ => continue,
         };
-        let mut noun = word.clone();
-        noun.surface = localized.to_owned();
-        noun.lemma = None;
-        noun.span.end_char = indef.span.end_char;
-        noun.is_locked = true;
-        group.atoms.splice(0..2, [noun]);
+        if role == BunsetsuRole::Obj {
+            noun.surface = "點什麼".to_owned();
+        }
+        group.atoms.clear();
+        group.atoms.push(noun);
+        group.atoms.extend(case);
         group.role = role;
     }
 }

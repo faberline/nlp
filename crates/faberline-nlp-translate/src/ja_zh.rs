@@ -1683,7 +1683,6 @@ struct TeHelpPerson<'a> {
 enum TeHelpPersonRole {
     Recipient,
     Performer,
-    Mentioned,
 }
 
 fn te_help_person<'a>(
@@ -1719,19 +1718,44 @@ fn te_help_person<'a>(
         return None;
     }
 
-    let has_object = arguments
+    let mut objects = arguments
         .iter()
-        .any(|atom| atom.deprel == "obj" && atom.head == Some(action_idx));
+        .filter(|atom| atom.deprel == "obj" && atom.head == Some(action_idx));
+    let object = objects.next();
+    let has_object = object.is_some();
     let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    let has_sending_recipient = lemma == "送る"
+        && noun.deprel == "iobj"
+        && object.is_some_and(|item| {
+            !item.is_locked
+                && matches!(
+                    item.surface.as_str(),
+                    "手紙"
+                        | "メール"
+                        | "電子メール"
+                        | "葉書"
+                        | "はがき"
+                        | "小包"
+                        | "荷物"
+                        | "書類"
+                        | "資料"
+                        | "写真"
+                        | "ファイル"
+                        | "メッセージ"
+                )
+        })
+        && objects.next().is_none();
     let role = if noun.head == Some(helper_idx) {
         TeHelpPersonRole::Performer
-    } else if has_object && matches!(lemma, "返す" | "渡す" | "手渡す") {
+    } else if has_sending_recipient || (has_object && matches!(lemma, "返す" | "渡す" | "手渡す"))
+    {
         TeHelpPersonRole::Recipient
     } else if has_object && lemma == "描く" {
         // Ordinary drawing takes the drawing as its object, not a recipient.
         TeHelpPersonRole::Performer
     } else {
-        TeHelpPersonRole::Mentioned
+        // The ordinary clause renderer keeps the original case argument.
+        return None;
     };
     Some(TeHelpPerson {
         phrase: &arguments[start..particle_index],
@@ -3561,11 +3585,10 @@ fn translate_clause_atoms(
         return (String::new(), false);
     }
 
-    if let Some(request) = te_help_request(core_non_punct(atoms)) {
-        return (
-            render_te_help_request(request, doc, sentence_idx, ctx, target),
-            false,
-        );
+    if let Some(request) = te_help_request(core_non_punct(atoms))
+        && let Some(rendered) = render_te_help_request(request, doc, sentence_idx, ctx, target)
+    {
+        return (rendered, false);
     }
 
     // Fast path: bare `正直` clause opener -> `老實說`.
@@ -3880,7 +3903,7 @@ fn render_te_help_request(
     sentence_idx: usize,
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
-) -> String {
+) -> Option<String> {
     let mut repeat = false;
     let mut action: Vec<_> = request
         .action
@@ -3974,31 +3997,23 @@ fn render_te_help_request(
             "可以請"
         };
         if person.role == TeHelpPersonRole::Performer {
-            return format!("{polite}{name}幫我{}嗎", with_repeat(&body));
+            return Some(format!("{polite}{name}幫我{}嗎", with_repeat(&body)));
         }
-        if person.role == TeHelpPersonRole::Recipient
-            && let Some(verb) = request.action.last()
-        {
-            // Reuse the rendered action and its object. The lexical transfer
-            // already supplies 給, so add the linked recipient once.
-            let transfer =
-                translate_single_ja_term(&verb.surface, verb.lemma.as_deref(), verb.upos);
-            if transfer.ends_with('給')
-                && let Some((modifiers, object)) = body.split_once(&transfer)
-                && !object.is_empty()
-            {
-                let listener = if request.humble || request.negative_form {
-                    "您"
-                } else {
-                    "你"
-                };
-                let action_body = format!("{modifiers}把{object}{transfer}{name}");
-                return format!("{polite}{listener}{}嗎", with_repeat(&action_body));
-            }
-        }
-        // Keep the person in an ambiguous request without assigning an actor
-        // or beneficiary unsupported by the source.
-        return format!("關於{name}，可以麻煩{}嗎", with_repeat(&body));
+        // Use the bare transfer verb so the linked recipient follows one 給.
+        // If rendering did not keep the verb and object, keep the original clause.
+        let verb = request.action.last()?;
+        let transfer = translate_single_ja_term(&verb.surface, verb.lemma.as_deref(), verb.upos);
+        let verb = purpose_transfer_action(&transfer)?;
+        let (modifiers, object) = body
+            .split_once(&transfer)
+            .filter(|(_, object)| !object.is_empty())?;
+        let listener = if request.humble || request.negative_form {
+            "您"
+        } else {
+            "你"
+        };
+        let action_body = format!("{modifiers}把{object}{verb}給{name}");
+        return Some(format!("{polite}{listener}{}嗎", with_repeat(&action_body)));
     }
     let opening = match (request.humble, request.negative_form) {
         (true, false) => "可以請您幫我",
@@ -4006,7 +4021,7 @@ fn render_te_help_request(
         (false, false) => "可以幫我",
         (false, true) => "可以麻煩你幫我",
     };
-    format!("{opening}{}嗎", with_repeat(&body))
+    Some(format!("{opening}{}嗎", with_repeat(&body)))
 }
 
 fn try_translate_tsumori_clause(
@@ -14103,16 +14118,65 @@ mod existence_rule_tests {
         let ambiguous = translate("先生に本を読んでいただけますか。", &glossary).target_text;
         assert!(
             ambiguous.contains("老師")
-                && ambiguous.contains("麻煩")
                 && ambiguous.contains("讀")
                 && ambiguous.ends_with("嗎？")
-                && !ambiguous.contains("幫我"),
+                && !ambiguous.contains("關於"),
             "{ambiguous}"
         );
         let statement = translate("私は先生に写真を撮ってもらいました。", &glossary).target_text;
         assert!(
             statement.starts_with("老師幫我") && !statement.contains('嗎'),
             "{statement}"
+        );
+    }
+
+    #[test]
+    fn te_help_request_keeps_the_linked_recipient_of_a_delivery() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "友達に手紙を送ってもらえますか。",
+                "可以請你把信寄給朋友嗎？",
+            ),
+            (
+                "手紙を友達に送ってもらえますか。",
+                "可以請你把信寄給朋友嗎？",
+            ),
+            (
+                "先生にメールを送っていただけますか。",
+                "可以請您把電子郵件寄給老師嗎？",
+            ),
+            (
+                "友達にこの本を渡していただけますか。",
+                "可以請您把這本書遞給朋友嗎？",
+            ),
+            ("友達に手紙を書いてもらえますか。", "給朋友寫信，もらえ嗎？"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+
+        for source in [
+            "先生に子供を送っていただけますか。",
+            "先生に幼児を送っていただけますか。",
+        ] {
+            let escort = translate(source, &glossary).target_text;
+            assert!(
+                escort.contains("老師") && !escort.contains("寄給") && !escort.contains("關於"),
+                "{source}: {escort}"
+            );
+        }
+        let source = "手紙を送ってもらえますか。";
+        let implicit = translate(source, &glossary).target_text;
+        assert!(
+            implicit.contains("幫我")
+                && implicit.contains('寄')
+                && implicit.contains('信')
+                && !implicit.contains("寄給"),
+            "{source}: {implicit}"
         );
     }
 

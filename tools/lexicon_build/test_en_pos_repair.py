@@ -10,6 +10,46 @@ spec.loader.exec_module(builder)
 
 
 class PosRepairTests(unittest.TestCase):
+    def test_reviewed_sample_evidence_preserves_supported_ambiguity(self):
+        for word, expected in {
+            "initialer": {"NOUN"},
+            "scepters": {"NOUN", "VERB"},
+            "recolouring": {"NOUN", "VERB"},
+            "moulder": {"NOUN", "VERB"},
+            "morselling": {"NOUN", "VERB"},
+        }.items():
+            self.assertEqual(
+                builder.apply_reviewed_pos_evidence(word, set(), builder.REVIEWED_POS_EVIDENCE),
+                expected,
+            )
+        self.assertEqual(builder.REVIEWED_LEMMA_EVIDENCE["reedifying"], "reedify")
+        self.assertEqual(builder.REVIEWED_LEMMA_EVIDENCE["initialer"], "-")
+        for counterpart in ("initialler", "sceptres", "recoloring", "molder", "morseling", "reaedifying"):
+            self.assertNotIn(counterpart, builder.REVIEWED_POS_EVIDENCE)
+            self.assertNotIn(counterpart, builder.REVIEWED_LEMMA_EVIDENCE)
+
+    def test_reviewed_counterpart_removal_is_exact_and_keeps_variant(self):
+        pairs = {
+            "ceratin": ("en-US", "creatin"),
+            "creatin": ("en-GB", "ceratin"),
+            "ceratins": ("en-US", "creatins"),
+            "creatins": ("en-GB", "ceratins"),
+            "color": ("en-US", "colour"),
+            "colour": ("en-GB", "color"),
+            "unpaired": ("en-US", "-"),
+        }
+        repaired = builder.remove_reviewed_bad_counterparts(pairs)
+        for word in ("ceratin", "creatin", "ceratins", "creatins"):
+            self.assertEqual(repaired[word], (pairs[word][0], "-"))
+        for word in ("color", "colour", "unpaired"):
+            self.assertEqual(repaired[word], pairs[word])
+        self.assertEqual(pairs["ceratin"], ("en-US", "creatin"))
+        self.assertEqual(builder.remove_reviewed_bad_counterparts({}), {})
+        self.assertEqual(
+            builder.remove_reviewed_bad_counterparts({"ceratin": ("en-US", "other")}),
+            {"ceratin": ("en-US", "other")},
+        )
+
     def test_reviewed_evidence_is_exact_spelling_and_preserves_ambiguity(self):
         reviewed = {"samplewise": frozenset({"ADJ", "ADV"}), "samplewize": frozenset()}
         self.assertEqual(builder.apply_reviewed_pos_evidence("samplewise", set(), reviewed),

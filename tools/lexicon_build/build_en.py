@@ -79,7 +79,38 @@ TARGET_GOAL = 66_000
 REVIEWED_POS_EVIDENCE: dict[str, frozenset[str]] = {
     "weftwise": frozenset({"ADJ", "ADV"}),
     "weftwize": frozenset(),
+    "initialer": frozenset({"NOUN"}),
+    "scepters": frozenset({"NOUN", "VERB"}),
+    "recolouring": frozenset({"NOUN", "VERB"}),
+    "moulder": frozenset({"NOUN", "VERB"}),
+    "morselling": frozenset({"NOUN", "VERB"}),
 }
+
+# Exact source-attested inflected form and its base; do not propagate to a
+# counterpart whose spelling or meaning has not independently been reviewed.
+REVIEWED_LEMMA_EVIDENCE: dict[str, str] = {
+    "initialer": "-",  # Preserve the noun headword; the comparative is unverified.
+    "reedifying": "reedify",
+}
+
+# These VarCon pairs connect different substances, not spelling variants.
+# Retain the source's variant tags while withholding the incorrect links.
+REVIEWED_BAD_COUNTERPARTS: frozenset[tuple[str, str]] = frozenset({
+    ("ceratin", "creatin"),
+    ("creatin", "ceratin"),
+    ("ceratins", "creatins"),
+    ("creatins", "ceratins"),
+})
+
+
+def remove_reviewed_bad_counterparts(
+    variants: dict[str, tuple[str, str]],
+) -> dict[str, tuple[str, str]]:
+    """Withhold only reviewed incorrect links, preserving their variant tags."""
+    return {
+        word: (variant, "-" if (word, counterpart) in REVIEWED_BAD_COUNTERPARTS else counterpart)
+        for word, (variant, counterpart) in variants.items()
+    }
 
 
 def apply_reviewed_pos_evidence(
@@ -674,6 +705,7 @@ def main() -> int:
         wn_dict_dir, offset_to_lex, instance_offsets
     )
     variant_map, shared_words = load_varcon(varcon_path)
+    variant_map = remove_reviewed_bad_counterparts(variant_map)
 
     # Build candidate vocabulary (Product Vocabulary Policy)
     must_keep: set[str] = set()
@@ -834,6 +866,8 @@ def main() -> int:
             reviewed_pos = apply_reviewed_pos_evidence(w, direct_pos, REVIEWED_POS_EVIDENCE)
         if reviewed_pos is not None:
             pos_set = reviewed_pos
+        if w in REVIEWED_LEMMA_EVIDENCE:
+            lemma = REVIEWED_LEMMA_EVIDENCE[w]
 
         # Determine decided_upos (emit "-", "-" when no reliable POS evidence exists)
         if reviewed_pos is not None:

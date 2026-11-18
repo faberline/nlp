@@ -2,7 +2,7 @@
   "schema": "nlp.lexicon.receipt.v1",
   "date": "2026-11-16",
   "binary_format": "FNLPLX01",
-  "binary_bytes": 15124422,
+  "binary_bytes": 15124412,
   "total_entries": 350906,
   "total_rules": 1389,
   "variants": {
@@ -34,8 +34,8 @@
     {
       "path": "lexicon/data/en.tsv",
       "entries": 66000,
-      "bytes": 2921349,
-      "sha256": "a63f63f39d3dd978456dbc63b0cc1b23fa51b9a248d7a4bee41ad5550399d150"
+      "bytes": 2921326,
+      "sha256": "224e1fb8ecc2fa59e9148a2348b409f0a9617528386435cf0f84c3c245b3412d"
     },
     {
       "path": "lexicon/data/ja.tsv",
@@ -146,8 +146,8 @@
       "core_lex_zip_sha256": "e9ac06222f0ce401a0fef9b129e61e93d59e3ff395a1b037f498962ee5b8ad8b"
     }
   ],
-  "lexicon_bin_bytes": 15124422,
-  "lexicon_bin_sha256": "5948ee8f3435275958381847c1ab0e75b09a2d52ed9341ec6822d61d284d0fe0",
+  "lexicon_bin_bytes": 15124412,
+  "lexicon_bin_sha256": "ad1fc12d61614e810711728b1eb5cb3141082d73d86f1b23c7effc5ba585da8d",
   "upstream_inputs": {
     "wordnet_3_1": {
       "archive": "wn3.1.dict.tar.gz",
@@ -572,6 +572,164 @@
           "method": "No independent exact-spelling POS evidence identified; VarCon preserves the spelling pair but does not establish POS."
         }
       ]
+    },
+    {
+      "kind": "independent_sample_return",
+      "issue": 143,
+      "reviewed_head": "73c619847aaa1e9fc834d90f83ebcf08432d460c",
+      "review": "https://github.com/faberline/nlp/pull/197#issuecomment-6986350014",
+      "baseline_en_sha256": "e218ebd5ced802f0846bfcb68ea2d19a8205721c408818dafcd11e6280d19513",
+      "candidate_en_sha256": "224e1fb8ecc2fa59e9148a2348b409f0a9617528386435cf0f84c3c245b3412d",
+      "builder_path": "tools/lexicon_build/build_en.py",
+      "builder_sha256": "d035eef5626392b4e498aaa20c1557d7480f8c3d4340fd3fed02ad3154f5c0fa",
+      "rows_compared": 66000,
+      "packed_english_rows_compared": 66000,
+      "changed_rows": 6,
+      "upos_lemma_field_order": [
+        "decided_upos",
+        "upos_mask",
+        "lemma"
+      ],
+      "changes": [
+        {
+          "surface": "initialer",
+          "variant": "en-US",
+          "old": [
+            "ADJ",
+            "ADJ",
+            "initial"
+          ],
+          "new": [
+            "NOUN",
+            "NOUN",
+            "-"
+          ]
+        },
+        {
+          "surface": "morselling",
+          "variant": "en-GB",
+          "old": [
+            "NOUN",
+            "NOUN",
+            "morsel"
+          ],
+          "new": [
+            "-",
+            "NOUN|VERB",
+            "morsel"
+          ]
+        },
+        {
+          "surface": "moulder",
+          "variant": "en-GB",
+          "old": [
+            "VERB",
+            "VERB",
+            "-"
+          ],
+          "new": [
+            "-",
+            "NOUN|VERB",
+            "-"
+          ]
+        },
+        {
+          "surface": "recolouring",
+          "variant": "en-GB",
+          "old": [
+            "NOUN",
+            "NOUN",
+            "-"
+          ],
+          "new": [
+            "-",
+            "NOUN|VERB",
+            "-"
+          ]
+        },
+        {
+          "surface": "reedifying",
+          "variant": "en-US",
+          "old": [
+            "-",
+            "ADJ|VERB",
+            "reedifyy"
+          ],
+          "new": [
+            "-",
+            "ADJ|VERB",
+            "reedify"
+          ]
+        },
+        {
+          "surface": "scepters",
+          "variant": "en-US",
+          "old": [
+            "NOUN",
+            "NOUN",
+            "scepter"
+          ],
+          "new": [
+            "-",
+            "NOUN|VERB",
+            "scepter"
+          ]
+        }
+      ],
+      "surface_variant_cost_counterpart_meta_unchanged": true,
+      "scope": "Correct only the six returned entries. The four counterpart removals above remain in the new output.",
+      "limits": "The attested use of initialer is an agent noun. The noun is a bare headword, with no inflected lemma recorded. Evidence in the review supports verification. We did not import dictionary definitions, extra entries or distribution files. New independent acceptance is pending.",
+      "followup_review": {
+        "review": "https://github.com/faberline/nlp/pull/197#issuecomment-6986813463",
+        "reviewed_head": "795f69fc055f7b5fb7ca2857f3a77ce3d7511301",
+        "superseded_en_sha256": "304ef513538842fe3780c8da233f40b7c2f3d24ad667d3490ee19a3128089154"
+      }
+    }
+  ],
+  "counterpart_repair_batches": [
+    {
+      "issue": 143,
+      "base_en_sha256": "a63f63f39d3dd978456dbc63b0cc1b23fa51b9a248d7a4bee41ad5550399d150",
+      "candidate_en_sha256": "e218ebd5ced802f0846bfcb68ea2d19a8205721c408818dafcd11e6280d19513",
+      "rows_compared": 66000,
+      "changes": [
+        {
+          "surface": "ceratin",
+          "variant": "en-US",
+          "old_counterpart": "creatin",
+          "new_counterpart": "-"
+        },
+        {
+          "surface": "ceratins",
+          "variant": "en-US",
+          "old_counterpart": "creatins",
+          "new_counterpart": "-"
+        },
+        {
+          "surface": "creatin",
+          "variant": "en-GB",
+          "old_counterpart": "ceratin",
+          "new_counterpart": "-"
+        },
+        {
+          "surface": "creatins",
+          "variant": "en-GB",
+          "old_counterpart": "ceratins",
+          "new_counterpart": "-"
+        }
+      ],
+      "evidence": {
+        "wordnet_3_1_noun_synset_offsets": {
+          "ceratin": "14756651",
+          "creatin": "14849413"
+        },
+        "varcon_sha256": "75af63da46ec12d7eb14b9f1ba8d3898d484dd6872755b73c921b215875a3629",
+        "varcon_lines": [
+          3968,
+          3969
+        ]
+      },
+      "method": "The reviewed VarCon pairs link different substances. Preserve each variant and remove these four links before propagation. No upstream text was imported."
     }
   ]
 }

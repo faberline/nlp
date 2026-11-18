@@ -9019,8 +9019,8 @@ ceramicist	en	1700	NOUN	NOUN	-	-	sem=person
 ceramist	en	1700	NOUN	NOUN	-	-	sem=person
 cerat	en-US	1650	-	-	-	creat	-
 cerate	en	1700	NOUN	NOUN	-	-	sem=artifact
-ceratin	en-US	1650	NOUN	NOUN	-	creatin	-
-ceratins	en-US	1650	NOUN	NOUN	ceratin	creatins	-
+ceratin	en-US	1650	NOUN	NOUN	-	-	-
+ceratins	en-US	1650	NOUN	NOUN	ceratin	-	-
 cerberus	en	1700	NOUN	NOUN	-	-	sem=person
 cercaria	en	1700	NOUN	NOUN	-	-	infl=irr
 cercariae	en	1700	NOUN	NOUN	cercaria	-	infl=irr
@@ -13041,9 +13041,9 @@ creat	en-GB	1650	-	-	-	cerat	-
 create	en	846	VERB	VERB	-	-	-
 created	en	1339	VERB	VERB	create	-	-
 creates	en	1453	VERB	VERB	create	-	-
-creatin	en-GB	1650	NOUN	NOUN	-	ceratin	-
+creatin	en-GB	1650	NOUN	NOUN	-	-	-
 creating	en	1453	VERB	VERB	create	-	-
-creatins	en-GB	1650	NOUN	NOUN	creatin	ceratins	-
+creatins	en-GB	1650	NOUN	NOUN	creatin	-	-
 creation	en	1144	NOUN	NOUN	-	-	-
 creative	en	1109	ADJ	ADJ	-	-	-
 creatively	en	1453	ADV	ADV	-	-	-
@@ -30477,7 +30477,7 @@ inhumanize	en-US	1650	VERB	VERB	-	inhumanise	-
 inhumanizes	en-US	1650	VERB	VERB	inhumanize	inhumanises	-
 initial	en	1087	-	ADJ|NOUN|VERB	-	-	infl=irr
 initialed	en-US	1650	-	ADJ|VERB	initial	initialled	-
-initialer	en-US	1650	ADJ	ADJ	initial	initialler	-
+initialer	en-US	1650	NOUN	NOUN	-	initialler	-
 initialers	en-US	1650	NOUN	NOUN	initialer	initiallers	-
 initialing	en-US	1650	-	ADJ|NOUN|VERB	initial	initialling	-
 initialisable	en-GB	1650	ADJ	ADJ	-	initializable	-
@@ -38059,7 +38059,7 @@ morselizations	en-US	1650	NOUN	NOUN	morselization	morselisations	-
 morselize	en-US	1650	VERB	VERB	-	morselise	-
 morselizes	en-US	1650	VERB	VERB	morselize	morselises	-
 morselled	en-GB	1650	-	-	-	morseled	-
-morselling	en-GB	1650	NOUN	NOUN	morsel	morseling	-
+morselling	en-GB	1650	-	NOUN|VERB	morsel	morseling	-
 morses	en	1700	NOUN	NOUN	morse	-	infl=irr
 mortal	en	1135	-	ADJ|NOUN	-	-	-
 mortalise	en-GB	1650	VERB	VERB	-	mortalize	-
@@ -38175,7 +38175,7 @@ mouf	en	1507	-	-	-	-	-
 mought	en	1507	-	-	-	-	-
 mould	en-GB	1237	-	NOUN|VERB	-	mold	-
 moulded	en-GB	1507	-	ADJ|VERB	mould	molded	-
-moulder	en-GB	1650	VERB	VERB	-	molder	-
+moulder	en-GB	1650	-	NOUN|VERB	-	molder	-
 mouldered	en-GB	1650	VERB	VERB	moulder	moldered	-
 mouldering	en-GB	1650	VERB	VERB	moulder	moldering	-
 moulders	en-GB	1650	VERB	VERB	moulder	molders	-
@@ -48581,7 +48581,7 @@ recolour	en-GB	1650	-	ADJ|NOUN|VERB	-	recolor	-
 recolouration	en-GB	1650	NOUN	NOUN	-	recoloration	-
 recolourations	en-GB	1650	NOUN	NOUN	recolouration	recolorations	-
 recoloured	en-GB	1650	ADJ	ADJ	-	recolored	-
-recolouring	en-GB	1650	NOUN	NOUN	-	recoloring	-
+recolouring	en-GB	1650	-	NOUN|VERB	-	recoloring	-
 recolours	en-GB	1650	NOUN	NOUN	-	recolors	-
 recombines	en	1507	VERB	VERB	recombine	-	-
 recommencement	en	1507	NOUN	NOUN	-	-	-
@@ -48757,7 +48757,7 @@ reediest	en	1700	ADJ	ADJ	reedy	-	infl=irr
 reedified	en-US	1650	-	ADJ|VERB	reedify	reaedified	-
 reedifies	en-US	1650	VERB	VERB	reedify	reaedifies	-
 reedify	en-US	1650	VERB	VERB	-	reaedify	-
-reedifying	en-US	1650	-	ADJ|VERB	reedifyy	reaedifying	-
+reedifying	en-US	1650	-	ADJ|VERB	reedify	reaedifying	-
 reedy	en	1700	ADJ	ADJ	-	-	infl=irr
 reef	en	1414	-	NOUN|VERB	-	-	-
 reefs	en	1507	-	NOUN|VERB	reef	-	-
@@ -51558,7 +51558,7 @@ sceptered	en-US	1650	ADJ	ADJ	-	sceptred	-
 sceptering	en-US	1650	NOUN	NOUN	scepter	sceptring	-
 scepterless	en-US	1650	ADJ	ADJ	-	sceptreless	-
 scepterlesses	en-US	1650	-	-	-	sceptrelesses	-
-scepters	en-US	1650	NOUN	NOUN	scepter	sceptres	-
+scepters	en-US	1650	-	NOUN|VERB	scepter	sceptres	-
 sceptic	en-GB	1339	NOUN	NOUN	-	skeptic	sem=person
 sceptical	en-GB	1267	ADJ	ADJ	-	skeptical	-
 scepticaler	en-GB	1650	ADJ	ADJ	sceptical	skepticaler	-

@@ -153,7 +153,7 @@ pub(crate) fn translate_ja_sentence(
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     if target == TargetVariant::ZhHant {
-        normalize_drawer_extraction(&mut atoms);
+        normalize_drawer_extraction(&mut atoms, doc);
     }
 
     if atoms.is_empty() {
@@ -1510,7 +1510,7 @@ fn normalized_sentence_atoms(
 
 // The inflection analyzer can read 引き出し as the stem of 引き出す. A linked
 // から source on an extraction predicate instead identifies the drawer noun.
-fn normalize_drawer_extraction(atoms: &mut [Atom]) {
+fn normalize_drawer_extraction(atoms: &mut [Atom], doc: &Document) {
     for index in 0..atoms.len().saturating_sub(1) {
         let drawer = &atoms[index];
         let source = &atoms[index + 1];
@@ -1528,20 +1528,26 @@ fn normalize_drawer_extraction(atoms: &mut [Atom]) {
             continue;
         }
         let predicate = drawer.head;
-        let mut after = atoms[index + 2..]
+        let drawer_id = drawer.doc_tok_idx;
+        let after_start = index + 2;
+        let clause_end = atoms[after_start..]
             .iter()
-            .take_while(|atom| !is_punct_atom(atom) && !atom.is_locked);
-        if !after.clone().any(|atom| {
+            .position(|atom| is_punct_atom(atom) || atom.is_locked)
+            .map_or(atoms.len(), |boundary| after_start + boundary);
+        let after = &atoms[after_start..clause_end];
+        if !after.iter().any(|atom| {
             atom.doc_tok_idx == predicate
                 && atom.upos == Some(Upos::Verb)
                 && atom.lemma.as_deref() == Some("出す")
         }) {
             continue;
         }
-        if !after
-            .clone()
+        let recovered_object = if after
+            .iter()
             .any(|atom| atom.head == predicate && atom.deprel == "obj")
         {
+            None
+        } else {
             // In object-first order, the analyzer may attach Nを to the
             // apparent 引き出す stem. Recover it only next to the drawer
             // and its established source relation.
@@ -1553,16 +1559,35 @@ fn normalize_drawer_extraction(atoms: &mut [Atom]) {
             if object.is_locked
                 || !matches!(object.upos, Some(Upos::Noun | Upos::Propn))
                 || object.deprel != "obj"
-                || (object.head != predicate && object.head != drawer.doc_tok_idx)
+                || (object.head != predicate && object.head != drawer_id)
                 || wo.surface != "を"
                 || !dasu_case_link(object, wo)
                 || wo.span.end_char != drawer.span.start_char
                 || after
+                    .iter()
                     .find(|atom| atom.upos == Some(Upos::Verb))
                     .is_none_or(|atom| atom.doc_tok_idx != predicate)
             {
                 continue;
             }
+            Some(object_idx)
+        };
+        // Preserve an already grounded floor location when its apparent
+        // verbal governor becomes the drawer noun.
+        let clause_start = atoms[..index]
+            .iter()
+            .rposition(|atom| atom.is_locked || is_punct_atom(atom))
+            .map_or(0, |boundary| boundary + 1);
+        for floor in clause_start..index.saturating_sub(1) {
+            if atoms[floor].head == drawer_id
+                && atoms[floor + 1].surface == "で"
+                && building_floor_start(&atoms[clause_start..clause_end], floor - clause_start, doc)
+                    .is_some()
+            {
+                atoms[floor].head = predicate;
+            }
+        }
+        if let Some(object_idx) = recovered_object {
             atoms[object_idx].head = predicate;
         }
         let drawer = &mut atoms[index];

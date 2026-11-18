@@ -281,7 +281,10 @@ pub(crate) fn translate_ja_sentence(
                             sentence_idx,
                             None,
                             false,
-                            &ClauseDiscourseCtx::default(),
+                            &ClauseDiscourseCtx {
+                                inside_quote: true,
+                                ..Default::default()
+                            },
                             target,
                         )
                         .0;
@@ -333,7 +336,10 @@ pub(crate) fn translate_ja_sentence(
                             sentence_idx,
                             None,
                             false,
-                            &ClauseDiscourseCtx::default(),
+                            &ClauseDiscourseCtx {
+                                inside_quote: true,
+                                ..Default::default()
+                            },
                             target,
                         )
                         .0;
@@ -625,6 +631,7 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
+                    inside_quote: false,
                     in_nagara_follow: prev_was_nagara,
                     in_concessive_follow: prev_concessive_dou,
                     in_kuseni_follow,
@@ -2607,6 +2614,7 @@ pub(crate) fn direct_quote_end(
 
 #[derive(Clone, Default)]
 struct ClauseDiscourseCtx {
+    inside_quote: bool,
     in_nagara_follow: bool,
     in_concessive_follow: bool,
     in_kuseni_follow: bool,
@@ -3074,11 +3082,16 @@ fn translate_clause_atoms(
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
     let merged_atoms = apply_phrase_matches(body);
     let mut norm_atoms = normalize_ja_atoms(&merged_atoms);
-    recover_split_purpose_stems(&mut norm_atoms);
+    let motion_go = motion_purpose_governor(&norm_atoms, ctx.inside_quote);
+    if let Some(go) = motion_go {
+        recover_split_purpose_stems(&mut norm_atoms, go);
+    }
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
-    mark_motion_purpose(&mut grouped, &norm_atoms);
+    if let Some(go) = motion_go {
+        mark_motion_purpose(&mut grouped, &norm_atoms, go);
+    }
     let grouped = compose_relative_daypart(grouped);
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, doc, sentence_idx, target);
     if let Some(tail) = condition_tail
@@ -7939,12 +7952,13 @@ fn purpose_stem_lemma(stem: &Atom) -> Option<String> {
 // Some continuatives appear as a nominal base and kana fragments. Only join the
 // full span before に when the inflection table recognizes it and the source
 // boundary and dependency graph identify the same outer 行く.
-fn recover_split_purpose_stems(atoms: &mut Vec<Atom>) {
+fn recover_split_purpose_stems(atoms: &mut Vec<Atom>, go: usize) {
     let mut i = 0;
     while i < atoms.len() {
         if !atoms[i].is_locked
             && atoms[i].surface == "に"
-            && let Some((start, stem)) = split_purpose_stem(&atoms[..i], &atoms[i], &atoms[i + 1..])
+            && let Some((start, stem)) =
+                split_purpose_stem(&atoms[..i], &atoms[i], &atoms[i + 1..], go)
         {
             atoms.splice(start..i, [stem]);
             i = start + 1;
@@ -7953,7 +7967,12 @@ fn recover_split_purpose_stems(atoms: &mut Vec<Atom>) {
     }
 }
 
-fn split_purpose_stem(before: &[Atom], ni: &Atom, after: &[Atom]) -> Option<(usize, Atom)> {
+fn split_purpose_stem(
+    before: &[Atom],
+    ni: &Atom,
+    after: &[Atom],
+    go: usize,
+) -> Option<(usize, Atom)> {
     if ni.is_locked || ni.upos != Some(Upos::Adp) || ni.deprel != "case" {
         return None;
     }
@@ -7983,10 +8002,7 @@ fn split_purpose_stem(before: &[Atom], ni: &Atom, after: &[Atom]) -> Option<(usi
     {
         return None;
     }
-    let go = after
-        .iter()
-        .find(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == anchor.head)?;
-    if go.is_locked || go.deprel != "root" || go.lemma.as_deref() != Some("行く") {
+    if anchor.head != Some(go) || !after.iter().any(|a| a.doc_tok_idx == Some(go)) {
         return None;
     }
     let mut stem = first.clone();
@@ -8052,7 +8068,30 @@ fn purpose_transfer_action(gloss: &str) -> Option<&str> {
     }
 }
 
-fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom]) {
+// A report can be the root of the full sentence even though 行く is the
+// finite predicate within the quoted clause. Its governor must be outside
+// that clause, and no independent predicate can follow it inside the quote.
+fn motion_purpose_governor(source: &[Atom], inside_quote: bool) -> Option<usize> {
+    let mut roots = source.iter().enumerate().filter(|(i, go)| {
+        !go.is_locked
+            && go.upos == Some(Upos::Verb)
+            && go.doc_tok_idx.is_some()
+            && go.lemma.as_deref().unwrap_or(&go.surface) == "行く"
+            && (go.deprel == "root"
+                || (inside_quote
+                    && matches!(go.deprel.as_str(), "advcl" | "ccomp")
+                    && go.head.is_some()
+                    && source.iter().all(|a| a.doc_tok_idx != go.head)
+                    && source[i + 1..].iter().all(|a| {
+                        !a.is_locked && matches!(a.upos, Some(Upos::Aux | Upos::Part | Upos::Punct))
+                    })))
+    });
+    let (_, go) = roots.next()?;
+    let id = go.doc_tok_idx?;
+    roots.next().is_none().then_some(id)
+}
+
+fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom], motion_go: usize) {
     use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
     let mut found = None;
     for (index, group) in groups.iter().enumerate() {
@@ -8078,7 +8117,7 @@ fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom]) {
             || stem.span.end_char != ni.span.start_char
             || go.upos != Some(Upos::Verb)
             || go.lemma.as_deref().unwrap_or(&go.surface) != "行く"
-            || go.deprel != "root"
+            || go.doc_tok_idx != Some(motion_go)
             || ni.span.end_char > go.span.start_char
         {
             continue;
@@ -9473,6 +9512,22 @@ mod motion_endpoint_tests {
             ("私はパンを食べに行きます。", "我去吃麵包。"),
             ("魚を食べに行きます。", "去吃魚。"),
             ("私は食べに行きます。", "我去吃。"),
+            (
+                "「本を借りに行きます」と先生が言いました。",
+                "「去借書」老師說了。",
+            ),
+            (
+                "先生は「本を借りに行きます」と言いました。",
+                "老師說「去借書」。",
+            ),
+            (
+                "「パンを食べに行きます」と先生が言いました。",
+                "「去吃麵包」老師說了。",
+            ),
+            (
+                "「本を買いに行きません」と先生が言いました。",
+                "「不去買書」老師說了。",
+            ),
             ("食べに行きませんか。", "要不要去吃？"),
             ("材料を混ぜに行きます。", "去攪拌材料。"),
             ("窓を閉めに行きます。", "去關上窗戶。"),

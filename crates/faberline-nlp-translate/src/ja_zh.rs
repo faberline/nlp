@@ -3914,7 +3914,7 @@ fn try_translate_homework_transfer(
                     || faberline_nlp::lexicon::lookup_ja(&noun.surface)
                         .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Location)) =>
             {
-                adjuncts.push(render_bunsetsu_obl(bunsetsu, target));
+                adjuncts.push(render_bunsetsu_obl(bunsetsu, target, false));
             }
             ("obj", "を")
                 if noun.upos == Some(Upos::Noun)
@@ -14288,6 +14288,14 @@ mod payment_instrument_tests {
             ("電子マネーで困っています。", "在電子マネー正在傷腦筋。"),
             ("現金の窓口で支払います。", "在現金的窓口結帳。"),
             ("二人で支払います。", "在二人結帳。"),
+            (
+                "生徒は教室で教師に宿題を出しました。",
+                "學生在教室把作業交給老師了。",
+            ),
+            (
+                "先生は二階で学生に宿題を出します。",
+                "老師在二樓出作業給學生。",
+            ),
             (
                 "私は店で支払い、友達はカードで遊びます。",
                 "我在商店結帳，朋友在卡片遊びます。",

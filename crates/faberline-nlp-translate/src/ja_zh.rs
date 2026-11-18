@@ -89,6 +89,11 @@ enum BunsetsuRole {
     Connector,
     Subj,
     Obl,
+    MotionPurpose,
+    PurposeModifier,
+    PurposeCompanion,
+    PurposePartner(&'static str),
+    PurposeRecipient,
     Adv,
     IObj,
     Obj,
@@ -277,7 +282,10 @@ pub(crate) fn translate_ja_sentence(
                             sentence_idx,
                             None,
                             false,
-                            &ClauseDiscourseCtx::default(),
+                            &ClauseDiscourseCtx {
+                                inside_quote: true,
+                                ..Default::default()
+                            },
                             target,
                         )
                         .0;
@@ -329,7 +337,10 @@ pub(crate) fn translate_ja_sentence(
                             sentence_idx,
                             None,
                             false,
-                            &ClauseDiscourseCtx::default(),
+                            &ClauseDiscourseCtx {
+                                inside_quote: true,
+                                ..Default::default()
+                            },
                             target,
                         )
                         .0;
@@ -621,6 +632,12 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
+                    inside_quote: ends_continued_quote(
+                        segments.get(seg_idx + 1),
+                        doc,
+                        sentence_idx,
+                        chars,
+                    ),
                     in_nagara_follow: prev_was_nagara,
                     in_concessive_follow: prev_concessive_dou,
                     in_kuseni_follow,
@@ -716,6 +733,7 @@ pub(crate) fn translate_ja_sentence(
                     });
                 if let Some(p) = trailing_punct {
                     if !(suppress_cleft_comma
+                        || (rendered.ends_with('？') && matches!(p.as_str(), "。" | "？" | "?"))
                         || ((p == "、" || p == ",")
                             && (rendered.ends_with("，就立刻")
                                 || rendered.ends_with("，但是")
@@ -858,6 +876,8 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
 // Marker used only for atoms synthesized by the clock recognizer.  Protected
 // placeholders retain their own identity and are never classified by this marker.
 const CLOCK_ATOM: &str = "__ja_clock_atom";
+// A typed compound time created only while assembling a continuation endpoint.
+const TEMPORAL_MADE_COMPOUND_ATOM: &str = "__ja_temporal_made_compound";
 // An opaque component in an explicitly period-qualified clock-shaped phrase.
 // Its value remains unknown and its placeholder remains untouched.
 const OPAQUE_PERIOD_CLOCK: &str = "__ja_opaque_period_clock";
@@ -2505,6 +2525,45 @@ fn is_quote_mark(atom: &Atom) -> bool {
     !atom.is_locked && matches!(atom.surface.as_str(), "「" | "」" | "『" | "』")
 }
 
+// In a later sentence the final quoted clause and its closing mark are
+// separate segments. Require the corresponding open mark in this paragraph.
+fn ends_continued_quote(
+    next: Option<&Segment>,
+    doc: &Document,
+    sentence_idx: usize,
+    chars: &[char],
+) -> bool {
+    let Some(Segment::CloseQuote(close, span)) = next else {
+        return false;
+    };
+    let sent = &doc.segmentation.sentences[sentence_idx];
+    let start = doc.segmentation.paragraphs[sent.paragraph].span.start_char;
+    let mut closers = vec![*close];
+    for i in (start..span.start_char).rev() {
+        let ch = chars[i];
+        if !matches!(ch, '「' | '」' | '『' | '』')
+            || doc
+                .segmentation
+                .opaque
+                .iter()
+                .any(|opaque| opaque.span.start_char <= i && i < opaque.span.end_char)
+        {
+            continue;
+        }
+        if matches!(ch, '」' | '』') {
+            closers.push(ch);
+        } else {
+            if !matches!((ch, closers.pop()), ('「', Some('」')) | ('『', Some('』'))) {
+                return false;
+            }
+            if closers.is_empty() {
+                return i < sent.span.start_char;
+            }
+        }
+    }
+    false
+}
+
 fn is_quote_terminal(ch: char) -> bool {
     matches!(ch, '。' | '？' | '！' | '?' | '!')
 }
@@ -2876,6 +2935,7 @@ pub(crate) fn direct_quote_end(
 
 #[derive(Clone, Default)]
 struct ClauseDiscourseCtx {
+    inside_quote: bool,
     in_nagara_follow: bool,
     in_concessive_follow: bool,
     in_kuseni_follow: bool,
@@ -3349,10 +3409,17 @@ fn translate_clause_atoms(
 
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
     let merged_atoms = apply_phrase_matches(body);
-    let norm_atoms = normalize_ja_atoms(&merged_atoms);
+    let mut norm_atoms = normalize_ja_atoms(&merged_atoms);
+    let motion_go = motion_purpose_governor(&norm_atoms, ctx.inside_quote);
+    if let Some(go) = motion_go {
+        recover_split_purpose_stems(&mut norm_atoms, go);
+    }
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
-    let grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
+    let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
+    if let Some(go) = motion_go {
+        mark_motion_purpose(&mut grouped, &norm_atoms, go);
+    }
     let grouped = compose_relative_daypart(grouped);
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, target);
     if let Some(tail) = condition_tail
@@ -5571,6 +5638,7 @@ fn translate_clause_bunsetsus(
         case_particle: Option<String>,
         is_instrument_de: bool,
         is_spatial_made: bool,
+        temporal_made_time: Option<String>,
         is_clock: bool,
         is_plain_clock_ni: bool,
         transfer_dative: bool,
@@ -5593,6 +5661,22 @@ fn translate_clause_bunsetsus(
     let mut adverbs: Vec<String> = Vec::new();
     let mut iobjs: Vec<PlacedArg> = Vec::new();
     let mut objs: Vec<String> = Vec::new();
+    let mut purpose = None;
+    let mut purpose_partners = Vec::new();
+    let mut purpose_recipients = Vec::new();
+    let wh_argument = bunsetsus.iter().find(|b| b.role == BunsetsuRole::MotionPurpose)
+        .is_some_and(|purpose| {
+            let stem = &purpose.atoms[0];
+            bunsetsus.iter().any(|b| matches!(b.atoms.as_slice(), [wh, case]
+                if !wh.is_locked && !case.is_locked && wh.doc_tok_idx.is_some() && wh.head.is_some()
+                && (wh.head == stem.doc_tok_idx || wh.head == stem.head)
+                && matches!(wh.surface.as_str(), "何" | "誰" | "どれ" | "どこ" | "いつ")
+                && matches!(wh.deprel.as_str(), "nsubj" | "obj" | "obl" | "iobj" | "advmod")
+                && case.upos == Some(Upos::Adp) && case.deprel == "case"
+                && matches!(case.surface.as_str(), "が" | "を" | "に" | "へ" | "で" | "と" | "から" | "まで")
+                && case.head == wh.doc_tok_idx && wh.span.end_char == case.span.start_char))
+        });
+    let mut go_together = Vec::new();
     let mut to_complements: Vec<(String, bool)> = Vec::new();
     let mut predicates: Vec<Bunsetsu> = Vec::new();
     let mut others: Vec<String> = Vec::new();
@@ -5806,6 +5890,20 @@ fn translate_clause_bunsetsus(
         }
 
         match b.role {
+            BunsetsuRole::MotionPurpose => purpose = b.atoms[0].lemma.clone(),
+            BunsetsuRole::PurposeModifier if b.atoms[0].surface == "一緒" => {
+                go_together.push(render_bunsetsu_np(&b, target));
+            }
+            BunsetsuRole::PurposeCompanion => {
+                go_together.push(format!("和{}", render_bunsetsu_np(&b, target)));
+            }
+            BunsetsuRole::PurposeModifier => temporal_others.push(render_bunsetsu_np(&b, target)),
+            BunsetsuRole::PurposePartner(marker) => {
+                purpose_partners.push(format!("{marker}{}", render_bunsetsu_np(&b, target)));
+            }
+            BunsetsuRole::PurposeRecipient => {
+                purpose_recipients.push(format!("給{}", render_bunsetsu_np(&b, target)));
+            }
             BunsetsuRole::Connector => {
                 let s = render_bunsetsu_np(&b, target);
                 if !s.is_empty() {
@@ -5860,6 +5958,7 @@ fn translate_clause_bunsetsus(
                         case_particle: b.case_particle.clone(),
                         is_instrument_de: is_inst,
                         is_spatial_made: is_spatial_made_bunsetsu(&b),
+                        temporal_made_time: temporal_made_time(&b),
                         is_clock: b.atoms.iter().any(is_clock_atom),
                         is_plain_clock_ni: is_plain_clock_ni(&b),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
@@ -5903,6 +6002,7 @@ fn translate_clause_bunsetsus(
                         case_particle: b.case_particle.clone(),
                         is_instrument_de: false,
                         is_spatial_made: false,
+                        temporal_made_time: None,
                         is_clock: false,
                         is_plain_clock_ni: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
@@ -6294,6 +6394,7 @@ fn translate_clause_bunsetsus(
                     case_particle: Some("と".to_owned()),
                     is_instrument_de: false,
                     is_spatial_made: false,
+                    temporal_made_time: None,
                     is_clock: false,
                     is_plain_clock_ni: false,
                     transfer_dative: false,
@@ -6753,6 +6854,7 @@ fn translate_clause_bunsetsus(
     }
 
     // Assemble SVO order:
+    let implicit_subject = subjects.is_empty();
     let mut parts: Vec<String> = Vec::new();
     if matches!(sconj_prefix, Some("一邊" | "一" | "明明")) {
         parts.extend(connectors);
@@ -6786,6 +6888,18 @@ fn translate_clause_bunsetsus(
         && inner_pre_mods
             .iter()
             .any(|m| matches!(m.as_str(), "不" | "沒有"));
+    if purpose.is_some() && sfp_suffix == Some("嗎") {
+        if wh_argument {
+            sfp_suffix = Some("？");
+        } else if implicit_subject && polite_negative_question && negative_go {
+            if let Some(negative) = inner_pre_mods.iter_mut().find(|m| *m == "不") {
+                *negative = "要不要".to_owned();
+            }
+            sfp_suffix = Some("？");
+        } else {
+            sfp_suffix = Some("嗎？");
+        }
+    }
     // Limit the added time ordering to the same endpoint rule as the motion.
     let has_spatial_made = (!negative_go || polite_negative_question)
         && !has_causative
@@ -6871,9 +6985,21 @@ fn translate_clause_bunsetsus(
     // A place marked by まで is the endpoint of a motion event. Keep this
     // local to まで: the global goal flag also changes recipients and vehicles.
     let mut made_endpoints = Vec::new();
+    let mut temporal_made_tails = Vec::new();
+    let predicate_is_negative = inner_pre_mods
+        .iter()
+        .any(|m| matches!(m.as_str(), "不" | "沒有"));
     for o in obliques {
         let _ = o.is_instrument_de;
-        if has_spatial_made && o.is_spatial_made {
+        if let Some(time) = o.temporal_made_time {
+            if predicate_is_negative {
+                // Put an "until" frame before the negated event and retain its negation.
+                parts.push(format!("到{time}為止"));
+            } else {
+                // The endpoint follows the full activity, including a direct object.
+                temporal_made_tails.push(format!("到{time}"));
+            }
+        } else if has_spatial_made && o.is_spatial_made {
             made_endpoints.push(o.text);
         } else if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
             let raw_np = o.text.strip_prefix('到').unwrap_or(&o.text);
@@ -6903,6 +7029,7 @@ fn translate_clause_bunsetsus(
     parts.extend(others);
     let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
+    parts.extend(go_together);
     parts.extend(transfer_prefix);
     if let Some(object) = affected_object {
         parts.push(format!("把{object}"));
@@ -6927,20 +7054,48 @@ fn translate_clause_bunsetsus(
     parts.extend(result_value);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
-    let trailing_change_le =
-        if is_change_of_state_you && post_verb_mods.last().is_some_and(|m| m == "了") {
-            post_verb_mods.pop()
-        } else {
-            None
-        };
+    let trailing_change_le = if (is_change_of_state_you || purpose.is_some())
+        && post_verb_mods.last().is_some_and(|m| m == "了")
+    {
+        post_verb_mods.pop()
+    } else {
+        None
+    };
+    // A temporal continuation endpoint already bounds the activity. Omit the
+    // ordinary perfective marker rather than break up the activity and endpoint.
+    if !temporal_made_tails.is_empty() {
+        post_verb_mods.retain(|modifier| modifier != "了");
+    }
     if !goal_tails.is_empty() {
         parts.extend(goal_tails);
         parts.append(&mut post_verb_mods);
     } else {
         parts.extend(post_verb_mods);
     }
+    parts.extend(purpose_partners);
+    if let Some(lemma) = purpose {
+        // Bare transitive purposes use the ordinary Mandarin verb before the object.
+        let action = match (lemma.as_str(), objs.is_empty()) {
+            ("借りる", false) => "借".to_owned(),
+            ("探す", false) => "找".to_owned(),
+            ("迎える", false) => "迎接".to_owned(),
+            _ => {
+                let action = translate_single_ja_term(&lemma, Some(&lemma), Some(Upos::Verb));
+                if objs.is_empty() {
+                    action
+                } else {
+                    purpose_transfer_action(&action)
+                        .unwrap_or(&action)
+                        .to_owned()
+                }
+            }
+        };
+        parts.push(action);
+    }
     parts.extend(transfer_recipient);
     parts.extend(objs);
+    parts.extend(purpose_recipients);
+    parts.extend(temporal_made_tails);
     if let Some(le) = trailing_change_le {
         parts.push(le);
     }
@@ -8343,6 +8498,317 @@ fn compose_relative_daypart(groups: Vec<Bunsetsu>) -> Vec<Bunsetsu> {
     result
 }
 
+// The polite stem is also the continuative used before a motion-purpose に.
+// Ask the first-party inflection table to analyze exactly that stem and ます.
+// A place name followed by the same suffix does not yield a lexical verb.
+fn purpose_stem_lemma(stem: &Atom) -> Option<String> {
+    let surface: Vec<_> = stem.surface.chars().chain("ます".chars()).collect();
+    let analyzed = faberline_nlp::lexicon::ja::segment_ja(&surface, 0);
+    let [verb, polite] = analyzed.as_slice() else {
+        return None;
+    };
+    let len = stem.span.end_char - stem.span.start_char;
+    if verb.decided_upos != Some(Upos::Verb)
+        || verb.span.start_char != 0
+        || verb.span.end_char != len
+        || polite.decided_upos != Some(Upos::Aux)
+        || polite.span.start_char != len
+        || polite.span.end_char != surface.len()
+    {
+        return None;
+    }
+    let lemma = verb.lemma.as_deref()?;
+    if lookup_curated_ja_word(lemma).is_none()
+        && lookup_ja_lexicon_gloss(lemma, None, Some(Upos::Verb)).is_none()
+    {
+        return None;
+    }
+    Some(lemma.to_owned())
+}
+
+// Some continuatives appear as a nominal base and kana fragments. Only join the
+// full span before に when the inflection table recognizes it and the source
+// boundary and dependency graph identify the same outer 行く.
+fn recover_split_purpose_stems(atoms: &mut Vec<Atom>, go: usize) {
+    let mut i = 0;
+    while i < atoms.len() {
+        if !atoms[i].is_locked
+            && atoms[i].surface == "に"
+            && let Some((start, stem)) =
+                split_purpose_stem(&atoms[..i], &atoms[i], &atoms[i + 1..], go)
+        {
+            atoms.splice(start..i, [stem]);
+            i = start + 1;
+        }
+        i += 1;
+    }
+}
+
+fn split_purpose_stem(
+    before: &[Atom],
+    ni: &Atom,
+    after: &[Atom],
+    go: usize,
+) -> Option<(usize, Atom)> {
+    if ni.is_locked || ni.upos != Some(Upos::Adp) || ni.deprel != "case" {
+        return None;
+    }
+    let is_kana = |p: &Atom| !p.is_locked && p.surface.chars().all(|c| ('ぁ'..='ゖ').contains(&c));
+    let start = before.iter().rposition(|a| !is_kana(a))?;
+    let (left, pieces) = before.split_at(start);
+    let [first, tail @ ..] = pieces else {
+        return None;
+    };
+    let last = pieces.last()?;
+    let anchor = pieces
+        .iter()
+        .find(|p| p.doc_tok_idx.is_some() && p.doc_tok_idx == ni.head)?;
+    if tail.is_empty()
+        || first.is_locked
+        || first.upos != Some(Upos::Noun)
+        || anchor.deprel != "obl"
+        || last.span.end_char != ni.span.start_char
+        || pieces
+            .windows(2)
+            .any(|p| p[0].span.end_char != p[1].span.start_char)
+        || pieces.iter().any(|p| {
+            p.is_locked
+                || p.doc_tok_idx.is_none()
+                || !(p.head == anchor.doc_tok_idx || (p.deprel == "obl" && p.head == anchor.head))
+        })
+    {
+        return None;
+    }
+    if anchor.head != Some(go) || !after.iter().any(|a| a.doc_tok_idx == Some(go)) {
+        return None;
+    }
+    let mut stem = first.clone();
+    stem.doc_tok_idx = ni.head;
+    stem.head = anchor.head;
+    stem.deprel = anchor.deprel.clone();
+    stem.surface = pieces.iter().map(|p| p.surface.as_str()).collect();
+    stem.span.end_char = last.span.end_char;
+    stem.lemma = Some(purpose_stem_lemma(&stem)?);
+    let explicit_object = matches!(left, [.., obj, wo]
+        if obj.deprel == "obj" && obj.head == anchor.head && obj.doc_tok_idx.is_some()
+        && !wo.is_locked && wo.surface == "を" && wo.upos == Some(Upos::Adp)
+        && wo.deprel == "case" && wo.head == obj.doc_tok_idx
+        && obj.span.end_char == wo.span.start_char && wo.span.end_char == first.span.start_char);
+    if !explicit_object {
+        // Without an accusative, require an independent left boundary and no
+        // competing nominal entry for the entire reconstructed surface.
+        let independent = match left {
+            [] => true,
+            [.., modifier]
+                if !modifier.is_locked
+                    && modifier.deprel == "advmod"
+                    && modifier.head == anchor.head =>
+            {
+                true
+            }
+            [.., noun, case] => {
+                !case.is_locked
+                    && case.deprel == "case"
+                    && matches!(
+                        case.surface.as_str(),
+                        "は" | "が" | "も" | "で" | "に" | "へ"
+                    )
+                    && noun.doc_tok_idx.is_some()
+                    && case.head == noun.doc_tok_idx
+                    && noun.head == anchor.head
+            }
+            _ => false,
+        };
+        if !independent
+            || faberline_nlp::lexicon::lookup_ja(&stem.surface).is_some_and(|e| {
+                e.upos_candidates
+                    .iter()
+                    .any(|pos| matches!(pos, Upos::Noun | Upos::Propn))
+            })
+        {
+            return None;
+        }
+        stem.upos = Some(Upos::Verb);
+    }
+    Some((start, stem))
+}
+
+// These dictionary glosses encode a transfer. Mandarin places the item after
+// the bare action and the recipient after 給.
+fn purpose_transfer_action(gloss: &str) -> Option<&str> {
+    match gloss {
+        "寄送" => Some("寄"),
+        "贈送" | "送達" => Some("送"),
+        "出借" => Some("借"),
+        "付錢" => Some("付"),
+        _ => gloss.strip_suffix('給').filter(|action| !action.is_empty()),
+    }
+}
+
+// A report can be the root of the full sentence even though 行く is the
+// finite predicate within the quoted clause. Its governor must be outside
+// that clause, and no independent predicate can follow it inside the quote.
+fn motion_purpose_governor(source: &[Atom], inside_quote: bool) -> Option<usize> {
+    let mut roots = source.iter().enumerate().filter(|(i, go)| {
+        !go.is_locked
+            && go.upos == Some(Upos::Verb)
+            && go.doc_tok_idx.is_some()
+            && go.lemma.as_deref().unwrap_or(&go.surface) == "行く"
+            && (go.deprel == "root"
+                || (inside_quote
+                    && matches!(go.deprel.as_str(), "advcl" | "ccomp")
+                    && go.head.is_some()
+                    && source.iter().all(|a| a.doc_tok_idx != go.head)
+                    && source[i + 1..].iter().all(|a| {
+                        !a.is_locked && matches!(a.upos, Some(Upos::Aux | Upos::Part | Upos::Punct))
+                    })))
+    });
+    let (_, go) = roots.next()?;
+    let id = go.doc_tok_idx?;
+    roots.next().is_none().then_some(id)
+}
+
+fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom], motion_go: usize) {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+    let mut found = None;
+    for (index, group) in groups.iter().enumerate() {
+        let [stem, ni] = group.atoms.as_slice() else {
+            continue;
+        };
+        let Some(id) = stem.doc_tok_idx else { continue };
+        let Some(go) = source
+            .iter()
+            .find(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == stem.head)
+        else {
+            continue;
+        };
+        if stem.is_locked
+            || ni.is_locked
+            || go.is_locked
+            || !matches!(stem.upos, Some(Upos::Verb | Upos::Noun))
+            || stem.deprel != "obl"
+            || ni.upos != Some(Upos::Adp)
+            || ni.surface != "に"
+            || ni.deprel != "case"
+            || ni.head != Some(id)
+            || stem.span.end_char != ni.span.start_char
+            || go.upos != Some(Upos::Verb)
+            || go.lemma.as_deref().unwrap_or(&go.surface) != "行く"
+            || go.doc_tok_idx != Some(motion_go)
+            || ni.span.end_char > go.span.start_char
+        {
+            continue;
+        }
+        if stem.upos == Some(Upos::Noun) {
+            // With a nominal analysis the CPU parser attaches the preceding
+            // accusative to 行く. Verify the adjacent, explicit を and its object.
+            let has_object = source.windows(2).any(|pair| {
+                let (obj, wo) = (&pair[0], &pair[1]);
+                obj.doc_tok_idx.is_some()
+                    && obj.head == go.doc_tok_idx
+                    && obj.deprel == "obj"
+                    && !wo.is_locked
+                    && wo.surface == "を"
+                    && wo.deprel == "case"
+                    && wo.head == obj.doc_tok_idx
+                    && obj.span.end_char == wo.span.start_char
+                    && wo.span.end_char == stem.span.start_char
+            });
+            if !has_object {
+                continue;
+            }
+        }
+        if let Some(lemma) = purpose_stem_lemma(stem) {
+            if found.is_some() {
+                return;
+            }
+            found = Some((index, id, go.doc_tok_idx, lemma));
+        }
+    }
+    let Some((index, id, go, lemma)) = found else {
+        return;
+    };
+    let partner_marker = match lemma.as_str() {
+        "会う" => Some("和"),
+        "借りる" => Some("向"),
+        _ => None,
+    };
+    let nominal_stem = groups[index].atoms[0].upos == Some(Upos::Noun);
+    let direct_object = source
+        .iter()
+        .any(|a| a.deprel == "obj" && (a.head == Some(id) || (nominal_stem && a.head == go)));
+    let transfer = direct_object
+        && purpose_transfer_action(&translate_single_ja_term(
+            &lemma,
+            Some(&lemma),
+            Some(Upos::Verb),
+        ))
+        .is_some();
+    groups[index].role = BunsetsuRole::MotionPurpose;
+    groups[index].atoms[0].lemma = Some(lemma);
+    for group in groups {
+        let [noun, ni] = group.atoms.as_slice() else {
+            continue;
+        };
+        if group.role == BunsetsuRole::MotionPurpose
+            || noun.is_locked
+            || ni.is_locked
+            || ni.upos != Some(Upos::Adp)
+            || ni.deprel != "case"
+            || noun.doc_tok_idx.is_none()
+            || ni.head != noun.doc_tok_idx
+            || noun.span.end_char != ni.span.start_char
+        {
+            continue;
+        }
+        // Nと immediately before 一緒に marks a companion, not the
+        // first noun of a coordinated subject. Both modify this action.
+        if ni.surface == "と"
+            && noun.deprel == "obl"
+            && (noun.head == Some(id) || noun.head == go)
+            && source.windows(2).any(|w| {
+                let (together, case) = (&w[0], &w[1]);
+                !together.is_locked
+                    && together.surface == "一緒"
+                    && together.head == noun.head
+                    && ni.span.end_char == together.span.start_char
+                    && together.doc_tok_idx.is_some()
+                    && !case.is_locked
+                    && case.surface == "に"
+                    && case.deprel == "case"
+                    && case.head == together.doc_tok_idx
+                    && together.span.end_char == case.span.start_char
+            })
+        {
+            group.role = BunsetsuRole::PurposeCompanion;
+            continue;
+        }
+        if ni.surface != "に" {
+            continue;
+        }
+        if noun.deprel == "obl"
+            && noun.head == Some(id)
+            && is_person_like_atom(noun)
+            && let Some(marker) = partner_marker
+        {
+            group.role = BunsetsuRole::PurposePartner(marker);
+        } else if transfer
+            && matches!(noun.deprel.as_str(), "obl" | "iobj")
+            && (noun.head == Some(id) || (nominal_stem && noun.head == go))
+            && is_person_like_atom(noun)
+        {
+            group.role = BunsetsuRole::PurposeRecipient;
+        } else if matches!(noun.deprel.as_str(), "obl" | "advmod")
+            && (noun.head == go || noun.head == Some(id))
+            && (matches!(noun.surface.as_str(), "週末" | "月末" | "年末" | "一緒")
+                || lookup_ja(&noun.surface)
+                    .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Time)))
+        {
+            group.role = BunsetsuRole::PurposeModifier;
+        }
+    }
+}
+
 fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> Vec<Bunsetsu> {
     let mut bunsetsus: Vec<Bunsetsu> = Vec::new();
     let mut cur: Vec<Atom> = Vec::new();
@@ -8398,7 +8864,8 @@ fn ends_in_coord_ya(b: &Bunsetsu) -> bool {
 }
 
 fn ends_in_coord_to(b: &Bunsetsu) -> bool {
-    is_noun_bunsetsu(b)
+    b.role != BunsetsuRole::PurposeCompanion
+        && is_noun_bunsetsu(b)
         && b.atoms
             .last()
             .is_some_and(|a| !a.is_locked && a.surface == "と")
@@ -8739,6 +9206,10 @@ fn merge_adnominal_bunsetsus(
                             inner.push('的');
                         }
                         prepend_locked_atom(&mut b, inner);
+                        continue;
+                    }
+
+                    if merge_temporal_made_anchor(&mut b, &mod_b.atoms) {
                         continue;
                     }
 
@@ -10438,6 +10909,102 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn motion_purpose_keeps_its_action_object_and_outer_polarity() {
+        for (source, expected) in [
+            ("私は本を借りに行きます。", "我去借書。"),
+            ("私は傘を借りに行きます。", "我去借傘。"),
+            ("私は友達を探しに行きます。", "我去找朋友。"),
+            ("私は鍵を探しに行きます。", "我去找鑰匙。"),
+            ("本を買いに行きます。", "去買書。"),
+            ("私はパンを食べに行きます。", "我去吃麵包。"),
+            ("魚を食べに行きます。", "去吃魚。"),
+            ("友達と一緒に本を借りに行きます。", "和朋友一起去借書。"),
+            (
+                "私は友達と一緒に本を借りに行きます。",
+                "我和朋友一起去借書。",
+            ),
+            ("友達と妹が本を借りに行きます。", "朋友和妹妹去借書。"),
+            ("誰が本を借りに行きますか。", "誰去借書？"),
+            ("誰と一緒に本を借りに行きますか。", "和誰一起去借書？"),
+            ("誰に本を返しに行きますか。", "去還書給誰？"),
+            ("友達が本を借りに行きますか。", "朋友去借書嗎？"),
+            ("私は食べに行きます。", "我去吃。"),
+            (
+                "「本を借りに行きます」と先生が言いました。",
+                "「去借書」老師說了。",
+            ),
+            (
+                "先生は「本を借りに行きます」と言いました。",
+                "老師說「去借書」。",
+            ),
+            (
+                "「パンを食べに行きます」と先生が言いました。",
+                "「去吃麵包」老師說了。",
+            ),
+            (
+                "「本を買いに行きません」と先生が言いました。",
+                "「不去買書」老師說了。",
+            ),
+            (
+                "先生は学生に「明日は家に帰ります。本を借りに行きます」と伝えた。",
+                "老師告訴學生：「明天回到家。去借書。」",
+            ),
+            (
+                "「明日は家に帰ります。本を借りに行きます」と先生が言いました。",
+                "「明天回到家。去借書」老師說了。",
+            ),
+            ("食べに行きませんか。", "要不要去吃？"),
+            ("材料を混ぜに行きます。", "去攪拌材料。"),
+            ("窓を閉めに行きます。", "去關上窗戶。"),
+            ("父を迎えに行きます。", "去迎接父親。"),
+            ("私は先生に本を返しに行きます。", "我去還書給老師。"),
+            ("私は先生に本を借りに行きます。", "我去向老師借書。"),
+            ("先生に何を返しに行きますか。", "去還什麼給老師？"),
+            ("先生に花を渡しに行きます。", "去遞花給老師。"),
+            ("図書館に本を返しに行きます。", "去到圖書館還書。"),
+            ("本を読みに行きません。", "不去讀書。"),
+            ("音楽を聞きに行った。", "去聽音樂了。"),
+            ("花を見に行きませんか。", "要不要去看花？"),
+            ("一緒に花を見に行きませんか。", "要不要一起去看花？"),
+            ("週末に映画を見に行きませんか。", "週末要不要去看電影？"),
+            ("友達に会いに行きます。", "去和朋友見面。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn nominal_places_and_other_source_relations_keep_their_roles() {
+        for (source, expected) in [
+            ("教室に行きます。", "去到教室。"),
+            ("午後二時に教室に行きます。", "在下午兩點去到教室。"),
+            ("私は買い物に行きます。", "我去購物。"),
+            ("私は映画を`見`に行きます。", "我去到`見`電影。"),
+            ("本を借りて行きます。", "借用書，去。"),
+            ("彼は帰りに駅に行きました。", "他去到車站到帰り了。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn stray_closing_quote_does_not_supply_a_motion_governor() {
+        let nested = translate("先生は「今日は『休み』です。本を借りに行きます」と言いました。");
+        assert!(nested.ends_with("去借書」說了。"), "{nested}");
+        let indefinite = translate("誰かが本を借りに行きますか。");
+        assert!(indefinite.ends_with("嗎？"), "{indefinite}");
+        for source in [
+            "本を借りに行きます」と先生が言いました。",
+            "「明日、帰ります。」本を借りに行きます」と先生が言いました。",
+            "挨拶は`「`です。本を借りに行きます」と先生が言いました。",
+            "先生は「今日は『休み」です。本を借りに行きます」と言いました。",
+        ] {
+            let output = translate(source);
+            assert!(!output.contains("去借書"), "{source}: {output}");
+        }
+    }
+
+    #[test]
     fn changing_a_schedule_keeps_the_event_time_and_result_value_distinct() {
         for (source, expected) in [
             (
@@ -10769,6 +11336,97 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn temporal_made_follows_the_activity_and_preserves_the_time_reading() {
+        assert_eq!(
+            translate("私は六時まで日本語を勉強します。"),
+            "我學習日本語到六點。"
+        );
+        assert_eq!(
+            translate("私は午後六時まで日本語を勉強します。"),
+            "我學習日本語到下午六點。"
+        );
+        assert_eq!(
+            translate("私は日曜日まで日本語を勉強します。"),
+            "我學習日本語到星期日。"
+        );
+        assert_eq!(
+            translate("図書館で夕方まで本を読みます。"),
+            "在圖書館讀書到傍晚。"
+        );
+    }
+
+    #[test]
+    fn temporal_made_places_the_past_activity_and_location_before_the_endpoint() {
+        for (source, expected) in [
+            ("私は六時まで働きます。", "我工作到六點。"),
+            ("私は六時まで働きました。", "我工作到六點。"),
+            ("私は日曜日まで家で働きました。", "我在家工作到星期日。"),
+            ("子供は夕方まで公園で遊びました。", "孩子在公園玩到傍晚。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        // Author controls derived from TMD-N5-01 and the work example above.
+        assert_eq!(
+            translate("私は六時まで日本語を勉強しました。"),
+            "我學習日本語到六點。"
+        );
+        assert_eq!(
+            translate("私は六時まで働きませんでした。"),
+            "我到六點為止沒有工作。"
+        );
+    }
+
+    #[test]
+    fn compound_temporal_made_keeps_both_time_parts_after_the_activity() {
+        for (source, expected) in [
+            (
+                "私は明日の朝まで日本語を勉強します。",
+                "我學習日本語到明天早上。",
+            ),
+            (
+                "私は来週の月曜日まで日本語を勉強します。",
+                "我學習日本語到下週一。",
+            ),
+            (
+                "私は明日の午前六時まで日本語を勉強します。",
+                "我學習日本語到明天上午六點。",
+            ),
+            ("私は来週の金曜日まで働きます。", "我工作到下週五。"),
+            ("私は明日の朝まで働きません。", "我到明天早上為止不工作。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn compound_temporal_made_leaves_other_genitive_roles_unchanged() {
+        for (source, expected) in [
+            ("明日の朝までに手紙を書きます。", "在明天的早上寫信。"),
+            ("私は明日の朝に手紙を書きます。", "我在明天的早上寫信。"),
+            ("朝の電車まで走りました。", "連早上的電車都跑了。"),
+            ("私は学校の先生まで歩いた。", "我連學校的老師都走了。"),
+            ("学校の図書館まで歩いた。", "走到學校的圖書館了。"),
+            (
+                "来週の会議まで日本語を勉強します。",
+                "連下週的會議都學習日本語。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn temporal_made_leaves_deadlines_and_other_endpoints_alone() {
+        assert_eq!(
+            translate("私は六時までに手紙を書きます。"),
+            "我在六點寫信。"
+        );
+        assert_eq!(translate("私は六時に手紙を書きます。"), "我在六點寫信。");
+        assert_eq!(translate("先生まで歩いた。"), "連老師都走了。");
+        assert_eq!(translate("駅まで歩いた。"), "走到車站了。");
+    }
+
+    #[test]
     fn negative_motion_and_a_following_clause_keep_their_scope() {
         let negative = translate("駅まで歩かなかった。");
         assert!(negative.contains("沒有走到車站"), "{negative}");
@@ -10844,6 +11502,113 @@ fn negative_go_place_head(b: &Bunsetsu) -> Option<usize> {
         }
     }
     noun.head
+}
+
+// Compose time-on-time の before the generic adnominal merge renders it as 的
+// and loses the source type. Keep non-time modifiers on their original path.
+fn merge_temporal_made_anchor(b: &mut Bunsetsu, modifier: &[Atom]) -> bool {
+    let [anchor, no] = modifier else {
+        return false;
+    };
+    if no.is_locked
+        || no.upos != Some(Upos::Adp)
+        || no.surface != "の"
+        || anchor.span.end_char != no.span.start_char
+        || b.atoms
+            .first()
+            .is_none_or(|head| no.span.end_char != head.span.start_char)
+    {
+        return false;
+    }
+    let Some(time) = temporal_made_time(b) else {
+        return false;
+    };
+    let Some(anchor_text) = render_temporal_made_atom(anchor) else {
+        return false;
+    };
+
+    // A weekday within a named week has the compact reading 下週一, 上週五, etc.
+    let tail = if matches!(anchor.surface.as_str(), "先週" | "今週" | "来週") {
+        time.strip_prefix("星期").unwrap_or(&time)
+    } else {
+        &time
+    };
+    let head = &mut b.atoms[0];
+    head.span.start_char = anchor.span.start_char;
+    head.surface = format!("{anchor_text}{tail}");
+    head.lemma = Some(TEMPORAL_MADE_COMPOUND_ATOM.to_owned());
+    head.is_locked = true;
+    true
+}
+
+// Only a typed time with adjacent, bare まで licenses the continuation
+// reading. Leave までに, opaque groups and other nouns alone.
+fn temporal_made_time(b: &Bunsetsu) -> Option<String> {
+    let [time, particle] = b.atoms.as_slice() else {
+        return None;
+    };
+    if b.case_particle.as_deref() != Some("まで")
+        || particle.is_locked
+        || particle.upos != Some(Upos::Adp)
+        || particle.surface != "まで"
+        || time.span.end_char != particle.span.start_char
+    {
+        return None;
+    }
+    render_temporal_made_atom(time)
+}
+
+fn render_temporal_made_atom(time: &Atom) -> Option<String> {
+    if matches!(
+        time.lemma.as_deref(),
+        Some(CLOCK_ATOM | TEMPORAL_MADE_COMPOUND_ATOM)
+    ) && !time.surface.contains("[[PH")
+    {
+        return Some(time.surface.clone());
+    }
+    if time.is_locked || !matches!(time.upos, Some(Upos::Noun | Upos::Adv)) {
+        return None;
+    }
+
+    // The existing weekday glosses are indexed by the abbreviated form.
+    let weekday = time.surface.strip_suffix('日').unwrap_or(&time.surface);
+    if matches!(
+        weekday,
+        "月曜" | "火曜" | "水曜" | "木曜" | "金曜" | "土曜" | "日曜"
+    ) {
+        return Some(translate_single_ja_term(weekday, None, time.upos));
+    }
+    // These date and daypart heads are unambiguous as standalone time words.
+    let is_time = matches!(
+        time.surface.as_str(),
+        "今" | "昨日"
+            | "今日"
+            | "明日"
+            | "明後日"
+            | "翌日"
+            | "先週"
+            | "今週"
+            | "来週"
+            | "週末"
+            | "先月"
+            | "今月"
+            | "来月"
+            | "月末"
+            | "去年"
+            | "今年"
+            | "来年"
+            | "年末"
+            | "朝"
+            | "午前"
+            | "正午"
+            | "昼"
+            | "午後"
+            | "夕方"
+            | "夜"
+            | "深夜"
+    ) || faberline_nlp::lexicon::lookup_ja(&time.surface)
+        .is_some_and(|entry| entry.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Time));
+    is_time.then(|| translate_single_ja_term(&time.surface, time.lemma.as_deref(), time.upos))
 }
 
 fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {

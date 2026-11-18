@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+mod counted_object;
+
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
 
@@ -3138,39 +3140,14 @@ fn nominal_receiving_amount(
     explicit_number.then_some(NominalReceivingAmount::Count { numeral, unit })
 }
 
-fn nominal_receiving_counter(unit: &str, noun: &Atom) -> Option<&'static str> {
-    let noun = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
-    Some(match unit {
-        "枚" => match noun.as_str() {
-            "紙" | "地圖" | "照片" | "票" | "海報" | "明信片" | "表格" => "張",
-            _ => "枚",
-        },
-        "冊" => "本",
-        "個" => "個",
-        "台" => match noun.as_str() {
-            "車" | "公車" | "汽車" | "卡車" | "機車" | "自行車" | "腳踏車" => "輛",
-            _ => "台",
-        },
-        "件" => "件",
-        "匹" => "隻",
-        "杯" => "杯",
-        // 本 is a shape counter. The target depends on the object itself.
-        "本" => match noun.as_str() {
-            "筆" | "鉛筆" | "鋼筆" | "原子筆" => "支",
-            "水" | "酒" | "啤酒" | "果汁" => "瓶",
-            _ => return None,
-        },
-        _ => return None,
-    })
-}
-
 fn render_nominal_receiving_count(
     object: &mut Bunsetsu,
     noun: &Atom,
     numeral: &str,
     unit: &str,
 ) -> Option<String> {
-    let counter = nominal_receiving_counter(unit, noun)?;
+    let zh = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
+    let counter = counted_object::classifier(unit, &zh)?;
     let mut quantity = String::new();
     if object.atoms.iter().any(|atom| atom.upos == Some(Upos::Det)) {
         // The explicit counter takes the place of the nominal renderer's
@@ -3181,12 +3158,7 @@ fn render_nominal_receiving_count(
         quantity.push(attached_demonstrative(det, head)?);
         object.atoms.remove(0);
     }
-    if numeral == "二" {
-        quantity.push('兩');
-    } else {
-        quantity.push_str(&translate_single_ja_term(numeral, None, Some(Upos::Num)));
-    }
-    quantity.push_str(counter);
+    counted_object::push_quantity(&mut quantity, numeral, counter);
     Some(quantity)
 }
 
@@ -3422,7 +3394,8 @@ fn translate_clause_atoms(
     };
 
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
-    let merged_atoms = apply_phrase_matches(body);
+    let counted = counted_object::bind(body);
+    let merged_atoms = apply_phrase_matches(counted.as_deref().unwrap_or(body));
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     recover_route_predicate(&mut norm_atoms, body);
     let motion_go = motion_purpose_governor(&norm_atoms, ctx.inside_quote);
@@ -5515,7 +5488,7 @@ fn is_building_floor(atom: &Atom) -> bool {
     !atom.is_locked && atom.lemma.as_deref() == Some(BUILDING_FLOOR)
 }
 
-fn is_floor_number(surface: &str) -> bool {
+fn is_japanese_numeral(surface: &str) -> bool {
     !surface.is_empty()
         && surface.chars().all(|ch| {
             matches!(
@@ -5638,7 +5611,7 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
         while let Some(number) = start.checked_sub(1).and_then(|i| atoms.get(i))
             && !number.is_locked
             && matches!(number.upos, Some(Upos::Num | Upos::Noun))
-            && is_floor_number(&number.surface)
+            && is_japanese_numeral(&number.surface)
             && number.span.end_char == atoms[start].span.start_char
         {
             start -= 1;
@@ -5646,7 +5619,7 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
         if start == end {
             return None;
         }
-    } else if !is_floor_number(prefix.strip_prefix("地下").unwrap_or(prefix)) {
+    } else if !is_japanese_numeral(prefix.strip_prefix("地下").unwrap_or(prefix)) {
         return None;
     }
     if !prefix.starts_with("地下") && start > 0 {
@@ -5733,7 +5706,7 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
                 || atoms[start..end].iter().any(|number| {
                     number.head == Some(floor_idx)
                         && number.deprel == "nummod"
-                        && is_floor_number(&number.surface)
+                        && is_japanese_numeral(&number.surface)
                 });
             spatial_case
                 && has_number_link
@@ -9200,11 +9173,15 @@ fn is_prenominal_pred(b: &Bunsetsu) -> bool {
 /// A separately analysed demonstrative points to its adjacent noun. A standalone
 /// pronoun, an interjection or a protected phrase has no such source attachment.
 fn attached_demonstrative(det: &Atom, noun: &Atom) -> Option<char> {
+    attached_demonstrative_at(det, noun, noun.span.start_char)
+}
+
+fn attached_demonstrative_at(det: &Atom, noun: &Atom, nominal_start: usize) -> Option<char> {
     if det.is_locked
         || noun.is_locked
         || det.upos != Some(Upos::Det)
         || noun.upos != Some(Upos::Noun)
-        || det.span.end_char != noun.span.start_char
+        || det.span.end_char != nominal_start
         || det.deprel != "det"
         || det.doc_tok_idx.is_none()
         || noun.doc_tok_idx.is_none()

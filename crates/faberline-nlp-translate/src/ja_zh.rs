@@ -3163,7 +3163,7 @@ fn translate_clause_atoms(
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
     if let Some(go) = motion_go {
-        mark_motion_purpose(&mut grouped, &norm_atoms, go);
+        mark_motion_purpose(&mut grouped, &norm_atoms, go, doc, sentence_idx);
     }
     let grouped = compose_relative_daypart(grouped);
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, target);
@@ -8554,12 +8554,13 @@ fn purpose_floor_goal(
     source: &[Atom],
     purpose_id: usize,
     purpose_sets_value: bool,
-) -> Option<Atom> {
+) -> Option<(usize, usize)> {
     let [label @ .., floor, case] = group.atoms.as_slice() else {
         return None;
     };
     let floor_idx = floor.doc_tok_idx?;
-    if floor.head != Some(purpose_id)
+    if is_building_floor(floor)
+        || floor.head != Some(purpose_id)
         || floor.deprel != "obl"
         || case.is_locked
         || case.upos != Some(Upos::Adp)
@@ -8574,10 +8575,28 @@ fn purpose_floor_goal(
         .iter()
         .position(|a| a.doc_tok_idx == Some(floor_idx))?;
     let start = building_floor_label_start(source, end)?;
-    // Require the whole floor label and case to form one argument. The source
-    // check also sees a preceding ordinal or lock outside this group.
-    if end - start != label.len() || !has_floor_number_link(label, floor, floor_idx) {
+    let group_start = end.checked_sub(label.len())?;
+    if !has_floor_number_link(label, floor, floor_idx) || group_start < start {
         return None;
+    }
+    // The only part of a floor label that can come from preceding groups
+    // here is a basement prefix. Every part must attach to this purpose
+    // or to the floor itself, as well as pass the label's span checks.
+    if group_start > start {
+        let basement_end = match &source[start..end] {
+            [atom, ..] if atom.surface == "地下" => start + 1,
+            [ground, below, ..] if ground.surface == "地" && below.surface == "下" => start + 2,
+            _ => return None,
+        };
+        if group_start > basement_end
+            || source[start..basement_end].iter().any(|atom| {
+                !(atom.head == Some(purpose_id) && matches!(atom.deprel.as_str(), "obl" | "advmod")
+                    || atom.head == Some(floor_idx)
+                        && matches!(atom.deprel.as_str(), "compound" | "nmod"))
+            })
+        {
+            return None;
+        }
     }
     // A change verb with mathematical context can take a new order in に.
     if case.surface == "に"
@@ -8586,10 +8605,16 @@ fn purpose_floor_goal(
     {
         return None;
     }
-    Some(building_floor_atom(&source[start..=end], floor))
+    Some((start, end))
 }
 
-fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom], motion_go: usize) {
+fn mark_motion_purpose(
+    groups: &mut Vec<Bunsetsu>,
+    source: &[Atom],
+    motion_go: usize,
+    doc: &Document,
+    sentence_idx: usize,
+) {
     use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
     let mut found = None;
     for (index, group) in groups.iter().enumerate() {
@@ -8646,7 +8671,7 @@ fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom], motion_go: usiz
             found = Some((index, id, go.doc_tok_idx, lemma));
         }
     }
-    let Some((index, id, go, lemma)) = found else {
+    let Some((mut index, id, go, lemma)) = found else {
         return;
     };
     let partner_marker = match lemma.as_str() {
@@ -8666,19 +8691,35 @@ fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom], motion_go: usiz
             Some(Upos::Verb),
         ))
         .is_some();
+
+    // Normalize proven floor spans before regrouping. A split 地 or 下
+    // can have its own group even when it belongs to the same floor.
+    let mut with_floors = None;
+    for group in groups.iter().rev() {
+        if let Some((start, end)) = purpose_floor_goal(group, source, id, purpose_sets_value) {
+            let atoms = with_floors.get_or_insert_with(|| source.to_vec());
+            let floor = building_floor_atom(&source[start..=end], &source[end]);
+            atoms.splice(start..=end, [floor]);
+        }
+    }
+    if let Some(atoms) = with_floors {
+        let regrouped = group_into_bunsetsus(&atoms, doc, sentence_idx);
+        if let Some(new_index) = regrouped.iter().position(
+            |group| matches!(group.atoms.as_slice(), [stem, _] if stem.doc_tok_idx == Some(id)),
+        ) {
+            *groups = regrouped;
+            index = new_index;
+        }
+    }
+
     groups[index].role = BunsetsuRole::MotionPurpose;
     groups[index].atoms[0].lemma = Some(lemma);
     for group in groups {
-        // A floor can attach to the purpose verb even though it is where
-        // the person is going. Keep its source link and case particle.
-        if let Some(floor) = purpose_floor_goal(group, source, id, purpose_sets_value) {
-            group.atoms.splice(..group.atoms.len() - 1, [floor]);
-            continue;
-        }
         let [noun, ni] = group.atoms.as_slice() else {
             continue;
         };
         if group.role == BunsetsuRole::MotionPurpose
+            || is_building_floor(noun)
             || noun.is_locked
             || ni.is_locked
             || ni.upos != Some(Upos::Adp)
@@ -10912,6 +10953,30 @@ mod motion_endpoint_tests {
             ("三階へ本を借りに行きますか。", "往三樓去借書嗎？"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn motion_purpose_keeps_the_entire_basement_floor_label() {
+        for (source, expected) in [
+            ("地下二階へ本を借りに行きますか。", "往地下二樓去借書嗎？"),
+            ("地下二階に本を返しに行きます。", "去地下二樓還書。"),
+            (
+                "学校の地下二階に本を借りに行きます。",
+                "去學校的地下二樓借書。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for (source, locked) in [
+            ("`地下二階`に本を返しに行きます。", "`地下二階`"),
+            ("`地下`二階に本を返しに行きます。", "`地下`"),
+        ] {
+            let output = translate(source);
+            assert!(
+                output.matches(locked).count() == 1 && !output.contains('樓'),
+                "{source}: {output}"
+            );
         }
     }
 

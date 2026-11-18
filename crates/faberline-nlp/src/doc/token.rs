@@ -950,7 +950,15 @@ pub(super) fn tokenize_with_matcher(
         if span.start_char < cursor {
             continue;
         }
-        text_pieces(c, cursor, span.start_char, ja_context, matcher, &mut out);
+        text_pieces(
+            c,
+            cursor,
+            span.start_char,
+            ja_context,
+            matcher,
+            false,
+            &mut out,
+        );
         if let Some(kind) = kind {
             out.push(Piece {
                 span,
@@ -960,7 +968,15 @@ pub(super) fn tokenize_with_matcher(
         }
         cursor = span.end_char;
     }
-    text_pieces(c, cursor, sentence.end_char, ja_context, matcher, &mut out);
+    text_pieces(
+        c,
+        cursor,
+        sentence.end_char,
+        ja_context,
+        matcher,
+        true,
+        &mut out,
+    );
     out
 }
 
@@ -970,6 +986,7 @@ fn text_pieces(
     end: usize,
     ja_context: bool,
     matcher: &TokenMatcher,
+    is_last_piece: bool,
     out: &mut Vec<Piece>,
 ) {
     if start >= end {
@@ -989,7 +1006,13 @@ fn text_pieces(
     let mut simple_ranges: Vec<(usize, usize)> = Vec::new();
     for (a, b, kind) in runs(&s, ja_context) {
         match kind {
-            RunKind::Ja => ja_tokens(&s, a, b, matcher, &mut ja_ranges),
+            RunKind::Ja => {
+                let sentence_tail = is_last_piece
+                    && s[b..].chars().all(|ch| {
+                        ch.is_whitespace() || matches!(ch, '。' | '！' | '？' | '!' | '?')
+                    });
+                ja_tokens(&s, a, b, matcher, sentence_tail, &mut ja_ranges)
+            }
             RunKind::Zh => {
                 simple_ranges.clear();
                 han_tokens(&s, a, b, matcher, &mut simple_ranges);
@@ -1054,19 +1077,20 @@ fn ja_tokens(
     a: usize,
     b: usize,
     matcher: &TokenMatcher,
+    sentence_tail: bool,
     out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
 ) {
     let run = &s[a..b];
     if let Some(ac) = &matcher.ja_ko_extra {
         let mut at = 0;
         for m in ac.find_iter(run) {
-            ja_words(&run[at..m.start()], a + at, &matcher.ja_lexicon, out);
+            ja_words(&run[at..m.start()], a + at, &matcher.ja_lexicon, false, out);
             out.push((a + m.start(), a + m.end(), None));
             at = m.end();
         }
-        ja_words(&run[at..], a + at, &matcher.ja_lexicon, out);
+        ja_words(&run[at..], a + at, &matcher.ja_lexicon, sentence_tail, out);
     } else {
-        ja_words(run, a, &matcher.ja_lexicon, out);
+        ja_words(run, a, &matcher.ja_lexicon, sentence_tail, out);
     }
 }
 
@@ -1074,6 +1098,7 @@ fn ja_words(
     stretch: &str,
     base: usize,
     extra_lexicon: &[String],
+    sentence_tail: bool,
     out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
 ) {
     if stretch.is_empty() {
@@ -1086,7 +1111,8 @@ fn ja_words(
     }
     byte_offs.push(stretch.len());
 
-    for seg in crate::lexicon::ja::segment_ja_with_lexicon(&chars, 0, extra_lexicon) {
+    for seg in crate::lexicon::ja::segment_ja_with_context(&chars, 0, extra_lexicon, sentence_tail)
+    {
         let start_b = base + byte_offs[seg.span.start_char];
         let end_b = base + byte_offs[seg.span.end_char];
         out.push((start_b, end_b, Some(seg)));
@@ -1582,4 +1608,75 @@ fn split_clitic(s: &str, a: usize, b: usize, out: &mut Vec<(usize, usize)>) {
         }
     }
     out.push((a, b));
+}
+
+#[cfg(test)]
+mod finite_polite_boundary_tests {
+    use super::*;
+    use crate::doc::Upos;
+
+    #[test]
+    fn actual_sentence_tail_preserves_morpheme_spans() {
+        let chars: Vec<_> = "先生は授業を始めますか。".chars().collect();
+        let pieces = tokenize_with_matcher(
+            &chars,
+            Span {
+                start_char: 0,
+                end_char: chars.len(),
+            },
+            true,
+            &[],
+            &[],
+            &TokenMatcher::default_matcher(),
+        );
+        let stem = pieces.iter().find(|p| p.span.start_char == 6).unwrap();
+        let aux = pieces.iter().find(|p| p.span.start_char == 8).unwrap();
+        assert_eq!(stem.span.end_char, 8);
+        assert_eq!(stem.ja_lex.as_ref().unwrap().decided_upos, Some(Upos::Verb));
+        assert_eq!(aux.span.end_char, 10);
+        assert_eq!(aux.ja_lex.as_ref().unwrap().decided_upos, Some(Upos::Aux));
+    }
+
+    #[test]
+    fn opaque_ascii_and_custom_cuts_do_not_make_a_sentence_tail() {
+        let chars: Vec<_> = "始めますX。".chars().collect();
+        let sentence = Span {
+            start_char: 0,
+            end_char: chars.len(),
+        };
+        let matcher = TokenMatcher::default_matcher();
+        for inline in [
+            vec![],
+            vec![(
+                Span {
+                    start_char: 4,
+                    end_char: 5,
+                },
+                OpaqueKind::Code,
+            )],
+        ] {
+            let pieces = tokenize_with_matcher(&chars, sentence, true, &inline, &[], &matcher);
+            let stem = pieces.iter().find(|p| p.span.start_char == 0).unwrap();
+            assert_ne!(stem.ja_lex.as_ref().unwrap().decided_upos, Some(Upos::Verb));
+        }
+        let chars: Vec<_> = "始めます名前。".chars().collect();
+        let options = Options {
+            names: vec!["名前".to_owned()],
+            ..Options::default()
+        };
+        let matcher = TokenMatcher::from_options(&options);
+        let pieces = tokenize_with_matcher(
+            &chars,
+            Span {
+                start_char: 0,
+                end_char: chars.len(),
+            },
+            true,
+            &[],
+            &[],
+            &matcher,
+        );
+        let stem = pieces.iter().find(|p| p.span.start_char == 0).unwrap();
+        assert_ne!(stem.ja_lex.as_ref().unwrap().decided_upos, Some(Upos::Verb));
+    }
 }

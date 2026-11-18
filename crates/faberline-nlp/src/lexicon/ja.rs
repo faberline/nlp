@@ -178,6 +178,15 @@ pub fn segment_ja_with_lexicon(
     base_char: usize,
     extra_lexicon: &[String],
 ) -> Vec<JaSegment> {
+    segment_ja_with_context(chars, base_char, extra_lexicon, false)
+}
+
+pub(crate) fn segment_ja_with_context(
+    chars: &[char],
+    base_char: usize,
+    extra_lexicon: &[String],
+    verified_sentence_tail: bool,
+) -> Vec<JaSegment> {
     let n = chars.len();
     if n == 0 {
         return Vec::new();
@@ -393,6 +402,95 @@ pub fn segment_ja_with_lexicon(
         pos = start;
     }
     path.reverse();
+
+    // Only resolve the selected ambiguous lexical-stem + polite auxiliary
+    // path when an existing dictionary-backed finite inflection describes
+    // the same two source spans. Do not alter lattice costs.
+    let mut index = 0;
+    while index + 1 < path.len() {
+        let (start, middle, first) = &path[index];
+        let (aux_start, end, second) = &path[index + 1];
+        let (start, middle, aux_start, end) = (*start, *middle, *aux_start, *end);
+        let terminal = match chars.get(end) {
+            None => verified_sentence_tail,
+            Some('。' | '？' | '?' | '！' | '!') => true,
+            Some('か') => match chars.get(end + 1) {
+                None => verified_sentence_tail,
+                Some('。' | '？' | '?') => true,
+                _ => false,
+            },
+            _ => false,
+        };
+        if middle != aux_start
+            || !terminal
+            || !matches!(first.kind, EdgeKind::Lexicon)
+            || !matches!(second.kind, EdgeKind::Lexicon)
+            || &text[byte_offs[middle]..byte_offs[end]] != "ます"
+        {
+            index += 1;
+            continue;
+        }
+        let protected = custom_terms.iter().any(|(term, len)| {
+            (start.saturating_sub(len.saturating_sub(1))..end)
+                .any(|at| at + len <= n && text[byte_offs[at]..].starts_with(term))
+        });
+        if protected {
+            index += 1;
+            continue;
+        }
+        let stem = &text[byte_offs[start]..byte_offs[middle]];
+        let Some(stem_hit) = lookup_ja(stem) else {
+            index += 1;
+            continue;
+        };
+        if !stem_hit.upos_candidates.contains(&Upos::Noun)
+            || !stem_hit.upos_candidates.contains(&Upos::Adv)
+            || stem_hit.upos_candidates.contains(&Upos::Verb)
+            || !lookup_ja("ます").is_some_and(|hit| hit.decided_upos == Some(Upos::Aux))
+        {
+            index += 1;
+            continue;
+        }
+        let replacement = infl_idx.by_first_char.get(&'ま').and_then(|rules| {
+            let mut found = None;
+            for inf in rules {
+                if inf.rule.conjugated_tail != "ます"
+                    || inf.rule.split_morphemes != "*/<LEMMA>/VERB+ます/ます/AUX"
+                    || inf.tail_chars != end - middle
+                    || inf.paradigm != "ichidan"
+                    || inf.rule.stem_drop_chars != 1
+                    || code_to_upos(inf.rule.head_upos) != Some(Upos::Verb)
+                {
+                    continue;
+                }
+                let dict_form = format!("{stem}{}", inf.dict_ending);
+                let Some(entry) = lookup_ja(&dict_form) else {
+                    continue;
+                };
+                if entry.infl != Some(inf.paradigm) || !entry.upos_candidates.contains(&Upos::Verb)
+                {
+                    continue;
+                }
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(BackEdge {
+                    len_chars: end - start,
+                    kind: EdgeKind::Inflected {
+                        dict_lemma: entry.lemma.unwrap_or(dict_form),
+                        sem_class: entry.sem_class,
+                        split_morphemes: inf.rule.split_morphemes,
+                        stem_chars: middle - start,
+                    },
+                });
+            }
+            found
+        });
+        if let Some(edge) = replacement {
+            path.splice(index..index + 2, [(start, end, edge)]);
+        }
+        index += 1;
+    }
 
     let mut out = Vec::with_capacity(path.len());
     for (start, end, edge) in path {
@@ -845,4 +943,52 @@ pub fn map_ja_shinjitai_char(c: char) -> char {
 /// [`map_ja_shinjitai_char`].
 pub fn map_ja_shinjitai(s: &str) -> String {
     s.chars().map(map_ja_shinjitai_char).collect()
+}
+
+#[cfg(test)]
+mod finite_polite_segmentation_tests {
+    use super::*;
+
+    #[test]
+    fn existing_finite_inflection_wins_only_at_clause_end() {
+        for source in ["先生は授業を始めます。", "先生は授業を始めますか。"]
+        {
+            let chars: Vec<_> = source.chars().collect();
+            let segments = segment_ja(&chars, 0);
+            let stem = segments.iter().find(|s| s.span.start_char == 6).unwrap();
+            assert_eq!(stem.span.end_char, 8);
+            assert_eq!(stem.decided_upos, Some(Upos::Verb));
+            assert_eq!(stem.lemma.as_deref(), Some("始める"));
+            let aux = segments.iter().find(|s| s.span.start_char == 8).unwrap();
+            assert_eq!(aux.span.end_char, 10);
+            assert_eq!(aux.decided_upos, Some(Upos::Aux));
+        }
+    }
+
+    #[test]
+    fn nominal_and_custom_boundaries_are_not_reclassified() {
+        for source in ["本の始めは大切です。", "私は初めに名前を書きます。"]
+        {
+            let chars: Vec<_> = source.chars().collect();
+            let segments = segment_ja(&chars, 0);
+            let nominal = segments.iter().find(|s| s.span.start_char == 2).unwrap();
+            assert_ne!(nominal.decided_upos, Some(Upos::Verb));
+        }
+        let chars: Vec<_> = "始めます。".chars().collect();
+        let segments = segment_ja_with_lexicon(&chars, 0, &["始めます".to_owned()]);
+        assert!(segments.iter().any(|s| s.span
+            == Span {
+                start_char: 0,
+                end_char: 4
+            }));
+        let segments = segment_ja_with_lexicon(&chars, 0, &["始め".to_owned()]);
+        let stem = segments.iter().find(|s| s.span.start_char == 0).unwrap();
+        assert_ne!(stem.decided_upos, Some(Upos::Verb));
+        let connective: Vec<_> = "始めますから".chars().collect();
+        let segments = segment_ja(&connective, 0);
+        assert_ne!(segments[0].decided_upos, Some(Upos::Verb));
+        let two_sentences: Vec<_> = "始めます。続けます。".chars().collect();
+        let segments = segment_ja(&two_sentences, 0);
+        assert_eq!(segments[0].decided_upos, Some(Upos::Verb));
+    }
 }

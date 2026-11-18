@@ -89,6 +89,11 @@ enum BunsetsuRole {
     Connector,
     Subj,
     Obl,
+    MotionPurpose,
+    PurposeModifier,
+    PurposeCompanion,
+    PurposePartner(&'static str),
+    PurposeRecipient,
     Adv,
     IObj,
     Obj,
@@ -277,7 +282,10 @@ pub(crate) fn translate_ja_sentence(
                             sentence_idx,
                             None,
                             false,
-                            &ClauseDiscourseCtx::default(),
+                            &ClauseDiscourseCtx {
+                                inside_quote: true,
+                                ..Default::default()
+                            },
                             target,
                         )
                         .0;
@@ -329,7 +337,10 @@ pub(crate) fn translate_ja_sentence(
                             sentence_idx,
                             None,
                             false,
-                            &ClauseDiscourseCtx::default(),
+                            &ClauseDiscourseCtx {
+                                inside_quote: true,
+                                ..Default::default()
+                            },
                             target,
                         )
                         .0;
@@ -621,6 +632,12 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
+                    inside_quote: ends_continued_quote(
+                        segments.get(seg_idx + 1),
+                        doc,
+                        sentence_idx,
+                        chars,
+                    ),
                     in_nagara_follow: prev_was_nagara,
                     in_concessive_follow: prev_concessive_dou,
                     in_kuseni_follow,
@@ -716,6 +733,7 @@ pub(crate) fn translate_ja_sentence(
                     });
                 if let Some(p) = trailing_punct {
                     if !(suppress_cleft_comma
+                        || (rendered.ends_with('？') && matches!(p.as_str(), "。" | "？" | "?"))
                         || ((p == "、" || p == ",")
                             && (rendered.ends_with("，就立刻")
                                 || rendered.ends_with("，但是")
@@ -2257,6 +2275,45 @@ fn is_quote_mark(atom: &Atom) -> bool {
     !atom.is_locked && matches!(atom.surface.as_str(), "「" | "」" | "『" | "』")
 }
 
+// In a later sentence the final quoted clause and its closing mark are
+// separate segments. Require the corresponding open mark in this paragraph.
+fn ends_continued_quote(
+    next: Option<&Segment>,
+    doc: &Document,
+    sentence_idx: usize,
+    chars: &[char],
+) -> bool {
+    let Some(Segment::CloseQuote(close, span)) = next else {
+        return false;
+    };
+    let sent = &doc.segmentation.sentences[sentence_idx];
+    let start = doc.segmentation.paragraphs[sent.paragraph].span.start_char;
+    let mut closers = vec![*close];
+    for i in (start..span.start_char).rev() {
+        let ch = chars[i];
+        if !matches!(ch, '「' | '」' | '『' | '』')
+            || doc
+                .segmentation
+                .opaque
+                .iter()
+                .any(|opaque| opaque.span.start_char <= i && i < opaque.span.end_char)
+        {
+            continue;
+        }
+        if matches!(ch, '」' | '』') {
+            closers.push(ch);
+        } else {
+            if !matches!((ch, closers.pop()), ('「', Some('」')) | ('『', Some('』'))) {
+                return false;
+            }
+            if closers.is_empty() {
+                return i < sent.span.start_char;
+            }
+        }
+    }
+    false
+}
+
 fn is_quote_terminal(ch: char) -> bool {
     matches!(ch, '。' | '？' | '！' | '?' | '!')
 }
@@ -2628,6 +2685,7 @@ pub(crate) fn direct_quote_end(
 
 #[derive(Clone, Default)]
 struct ClauseDiscourseCtx {
+    inside_quote: bool,
     in_nagara_follow: bool,
     in_concessive_follow: bool,
     in_kuseni_follow: bool,
@@ -3094,10 +3152,17 @@ fn translate_clause_atoms(
 
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
     let merged_atoms = apply_phrase_matches(body);
-    let norm_atoms = normalize_ja_atoms(&merged_atoms);
+    let mut norm_atoms = normalize_ja_atoms(&merged_atoms);
+    let motion_go = motion_purpose_governor(&norm_atoms, ctx.inside_quote);
+    if let Some(go) = motion_go {
+        recover_split_purpose_stems(&mut norm_atoms, go);
+    }
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
-    let grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
+    let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
+    if let Some(go) = motion_go {
+        mark_motion_purpose(&mut grouped, &norm_atoms, go);
+    }
     let grouped = compose_relative_daypart(grouped);
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, target);
     if let Some(tail) = condition_tail
@@ -5203,6 +5268,22 @@ fn translate_clause_bunsetsus(
     let mut adverbs: Vec<String> = Vec::new();
     let mut iobjs: Vec<PlacedArg> = Vec::new();
     let mut objs: Vec<String> = Vec::new();
+    let mut purpose = None;
+    let mut purpose_partners = Vec::new();
+    let mut purpose_recipients = Vec::new();
+    let wh_argument = bunsetsus.iter().find(|b| b.role == BunsetsuRole::MotionPurpose)
+        .is_some_and(|purpose| {
+            let stem = &purpose.atoms[0];
+            bunsetsus.iter().any(|b| matches!(b.atoms.as_slice(), [wh, case]
+                if !wh.is_locked && !case.is_locked && wh.doc_tok_idx.is_some() && wh.head.is_some()
+                && (wh.head == stem.doc_tok_idx || wh.head == stem.head)
+                && matches!(wh.surface.as_str(), "何" | "誰" | "どれ" | "どこ" | "いつ")
+                && matches!(wh.deprel.as_str(), "nsubj" | "obj" | "obl" | "iobj" | "advmod")
+                && case.upos == Some(Upos::Adp) && case.deprel == "case"
+                && matches!(case.surface.as_str(), "が" | "を" | "に" | "へ" | "で" | "と" | "から" | "まで")
+                && case.head == wh.doc_tok_idx && wh.span.end_char == case.span.start_char))
+        });
+    let mut go_together = Vec::new();
     let mut to_complements: Vec<(String, bool)> = Vec::new();
     let mut predicates: Vec<Bunsetsu> = Vec::new();
     let mut others: Vec<String> = Vec::new();
@@ -5416,6 +5497,20 @@ fn translate_clause_bunsetsus(
         }
 
         match b.role {
+            BunsetsuRole::MotionPurpose => purpose = b.atoms[0].lemma.clone(),
+            BunsetsuRole::PurposeModifier if b.atoms[0].surface == "一緒" => {
+                go_together.push(render_bunsetsu_np(&b, target));
+            }
+            BunsetsuRole::PurposeCompanion => {
+                go_together.push(format!("和{}", render_bunsetsu_np(&b, target)));
+            }
+            BunsetsuRole::PurposeModifier => temporal_others.push(render_bunsetsu_np(&b, target)),
+            BunsetsuRole::PurposePartner(marker) => {
+                purpose_partners.push(format!("{marker}{}", render_bunsetsu_np(&b, target)));
+            }
+            BunsetsuRole::PurposeRecipient => {
+                purpose_recipients.push(format!("給{}", render_bunsetsu_np(&b, target)));
+            }
             BunsetsuRole::Connector => {
                 let s = render_bunsetsu_np(&b, target);
                 if !s.is_empty() {
@@ -6363,6 +6458,7 @@ fn translate_clause_bunsetsus(
     }
 
     // Assemble SVO order:
+    let implicit_subject = subjects.is_empty();
     let mut parts: Vec<String> = Vec::new();
     if matches!(sconj_prefix, Some("一邊" | "一" | "明明")) {
         parts.extend(connectors);
@@ -6396,6 +6492,18 @@ fn translate_clause_bunsetsus(
         && inner_pre_mods
             .iter()
             .any(|m| matches!(m.as_str(), "不" | "沒有"));
+    if purpose.is_some() && sfp_suffix == Some("嗎") {
+        if wh_argument {
+            sfp_suffix = Some("？");
+        } else if implicit_subject && polite_negative_question && negative_go {
+            if let Some(negative) = inner_pre_mods.iter_mut().find(|m| *m == "不") {
+                *negative = "要不要".to_owned();
+            }
+            sfp_suffix = Some("？");
+        } else {
+            sfp_suffix = Some("嗎？");
+        }
+    }
     // Limit the added time ordering to the same endpoint rule as the motion.
     let has_spatial_made = (!negative_go || polite_negative_question)
         && !has_causative
@@ -6513,6 +6621,7 @@ fn translate_clause_bunsetsus(
     parts.extend(others);
     let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
+    parts.extend(go_together);
     parts.extend(transfer_prefix);
     if let Some(object) = affected_object {
         parts.push(format!("把{object}"));
@@ -6537,20 +6646,42 @@ fn translate_clause_bunsetsus(
     parts.extend(result_value);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
-    let trailing_change_le =
-        if is_change_of_state_you && post_verb_mods.last().is_some_and(|m| m == "了") {
-            post_verb_mods.pop()
-        } else {
-            None
-        };
+    let trailing_change_le = if (is_change_of_state_you || purpose.is_some())
+        && post_verb_mods.last().is_some_and(|m| m == "了")
+    {
+        post_verb_mods.pop()
+    } else {
+        None
+    };
     if !goal_tails.is_empty() {
         parts.extend(goal_tails);
         parts.append(&mut post_verb_mods);
     } else {
         parts.extend(post_verb_mods);
     }
+    parts.extend(purpose_partners);
+    if let Some(lemma) = purpose {
+        // Bare transitive purposes use the ordinary Mandarin verb before the object.
+        let action = match (lemma.as_str(), objs.is_empty()) {
+            ("借りる", false) => "借".to_owned(),
+            ("探す", false) => "找".to_owned(),
+            ("迎える", false) => "迎接".to_owned(),
+            _ => {
+                let action = translate_single_ja_term(&lemma, Some(&lemma), Some(Upos::Verb));
+                if objs.is_empty() {
+                    action
+                } else {
+                    purpose_transfer_action(&action)
+                        .unwrap_or(&action)
+                        .to_owned()
+                }
+            }
+        };
+        parts.push(action);
+    }
     parts.extend(transfer_recipient);
     parts.extend(objs);
+    parts.extend(purpose_recipients);
     if let Some(le) = trailing_change_le {
         parts.push(le);
     }
@@ -7953,6 +8084,317 @@ fn compose_relative_daypart(groups: Vec<Bunsetsu>) -> Vec<Bunsetsu> {
     result
 }
 
+// The polite stem is also the continuative used before a motion-purpose に.
+// Ask the first-party inflection table to analyze exactly that stem and ます.
+// A place name followed by the same suffix does not yield a lexical verb.
+fn purpose_stem_lemma(stem: &Atom) -> Option<String> {
+    let surface: Vec<_> = stem.surface.chars().chain("ます".chars()).collect();
+    let analyzed = faberline_nlp::lexicon::ja::segment_ja(&surface, 0);
+    let [verb, polite] = analyzed.as_slice() else {
+        return None;
+    };
+    let len = stem.span.end_char - stem.span.start_char;
+    if verb.decided_upos != Some(Upos::Verb)
+        || verb.span.start_char != 0
+        || verb.span.end_char != len
+        || polite.decided_upos != Some(Upos::Aux)
+        || polite.span.start_char != len
+        || polite.span.end_char != surface.len()
+    {
+        return None;
+    }
+    let lemma = verb.lemma.as_deref()?;
+    if lookup_curated_ja_word(lemma).is_none()
+        && lookup_ja_lexicon_gloss(lemma, None, Some(Upos::Verb)).is_none()
+    {
+        return None;
+    }
+    Some(lemma.to_owned())
+}
+
+// Some continuatives appear as a nominal base and kana fragments. Only join the
+// full span before に when the inflection table recognizes it and the source
+// boundary and dependency graph identify the same outer 行く.
+fn recover_split_purpose_stems(atoms: &mut Vec<Atom>, go: usize) {
+    let mut i = 0;
+    while i < atoms.len() {
+        if !atoms[i].is_locked
+            && atoms[i].surface == "に"
+            && let Some((start, stem)) =
+                split_purpose_stem(&atoms[..i], &atoms[i], &atoms[i + 1..], go)
+        {
+            atoms.splice(start..i, [stem]);
+            i = start + 1;
+        }
+        i += 1;
+    }
+}
+
+fn split_purpose_stem(
+    before: &[Atom],
+    ni: &Atom,
+    after: &[Atom],
+    go: usize,
+) -> Option<(usize, Atom)> {
+    if ni.is_locked || ni.upos != Some(Upos::Adp) || ni.deprel != "case" {
+        return None;
+    }
+    let is_kana = |p: &Atom| !p.is_locked && p.surface.chars().all(|c| ('ぁ'..='ゖ').contains(&c));
+    let start = before.iter().rposition(|a| !is_kana(a))?;
+    let (left, pieces) = before.split_at(start);
+    let [first, tail @ ..] = pieces else {
+        return None;
+    };
+    let last = pieces.last()?;
+    let anchor = pieces
+        .iter()
+        .find(|p| p.doc_tok_idx.is_some() && p.doc_tok_idx == ni.head)?;
+    if tail.is_empty()
+        || first.is_locked
+        || first.upos != Some(Upos::Noun)
+        || anchor.deprel != "obl"
+        || last.span.end_char != ni.span.start_char
+        || pieces
+            .windows(2)
+            .any(|p| p[0].span.end_char != p[1].span.start_char)
+        || pieces.iter().any(|p| {
+            p.is_locked
+                || p.doc_tok_idx.is_none()
+                || !(p.head == anchor.doc_tok_idx || (p.deprel == "obl" && p.head == anchor.head))
+        })
+    {
+        return None;
+    }
+    if anchor.head != Some(go) || !after.iter().any(|a| a.doc_tok_idx == Some(go)) {
+        return None;
+    }
+    let mut stem = first.clone();
+    stem.doc_tok_idx = ni.head;
+    stem.head = anchor.head;
+    stem.deprel = anchor.deprel.clone();
+    stem.surface = pieces.iter().map(|p| p.surface.as_str()).collect();
+    stem.span.end_char = last.span.end_char;
+    stem.lemma = Some(purpose_stem_lemma(&stem)?);
+    let explicit_object = matches!(left, [.., obj, wo]
+        if obj.deprel == "obj" && obj.head == anchor.head && obj.doc_tok_idx.is_some()
+        && !wo.is_locked && wo.surface == "を" && wo.upos == Some(Upos::Adp)
+        && wo.deprel == "case" && wo.head == obj.doc_tok_idx
+        && obj.span.end_char == wo.span.start_char && wo.span.end_char == first.span.start_char);
+    if !explicit_object {
+        // Without an accusative, require an independent left boundary and no
+        // competing nominal entry for the entire reconstructed surface.
+        let independent = match left {
+            [] => true,
+            [.., modifier]
+                if !modifier.is_locked
+                    && modifier.deprel == "advmod"
+                    && modifier.head == anchor.head =>
+            {
+                true
+            }
+            [.., noun, case] => {
+                !case.is_locked
+                    && case.deprel == "case"
+                    && matches!(
+                        case.surface.as_str(),
+                        "は" | "が" | "も" | "で" | "に" | "へ"
+                    )
+                    && noun.doc_tok_idx.is_some()
+                    && case.head == noun.doc_tok_idx
+                    && noun.head == anchor.head
+            }
+            _ => false,
+        };
+        if !independent
+            || faberline_nlp::lexicon::lookup_ja(&stem.surface).is_some_and(|e| {
+                e.upos_candidates
+                    .iter()
+                    .any(|pos| matches!(pos, Upos::Noun | Upos::Propn))
+            })
+        {
+            return None;
+        }
+        stem.upos = Some(Upos::Verb);
+    }
+    Some((start, stem))
+}
+
+// These dictionary glosses encode a transfer. Mandarin places the item after
+// the bare action and the recipient after 給.
+fn purpose_transfer_action(gloss: &str) -> Option<&str> {
+    match gloss {
+        "寄送" => Some("寄"),
+        "贈送" | "送達" => Some("送"),
+        "出借" => Some("借"),
+        "付錢" => Some("付"),
+        _ => gloss.strip_suffix('給').filter(|action| !action.is_empty()),
+    }
+}
+
+// A report can be the root of the full sentence even though 行く is the
+// finite predicate within the quoted clause. Its governor must be outside
+// that clause, and no independent predicate can follow it inside the quote.
+fn motion_purpose_governor(source: &[Atom], inside_quote: bool) -> Option<usize> {
+    let mut roots = source.iter().enumerate().filter(|(i, go)| {
+        !go.is_locked
+            && go.upos == Some(Upos::Verb)
+            && go.doc_tok_idx.is_some()
+            && go.lemma.as_deref().unwrap_or(&go.surface) == "行く"
+            && (go.deprel == "root"
+                || (inside_quote
+                    && matches!(go.deprel.as_str(), "advcl" | "ccomp")
+                    && go.head.is_some()
+                    && source.iter().all(|a| a.doc_tok_idx != go.head)
+                    && source[i + 1..].iter().all(|a| {
+                        !a.is_locked && matches!(a.upos, Some(Upos::Aux | Upos::Part | Upos::Punct))
+                    })))
+    });
+    let (_, go) = roots.next()?;
+    let id = go.doc_tok_idx?;
+    roots.next().is_none().then_some(id)
+}
+
+fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom], motion_go: usize) {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+    let mut found = None;
+    for (index, group) in groups.iter().enumerate() {
+        let [stem, ni] = group.atoms.as_slice() else {
+            continue;
+        };
+        let Some(id) = stem.doc_tok_idx else { continue };
+        let Some(go) = source
+            .iter()
+            .find(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == stem.head)
+        else {
+            continue;
+        };
+        if stem.is_locked
+            || ni.is_locked
+            || go.is_locked
+            || !matches!(stem.upos, Some(Upos::Verb | Upos::Noun))
+            || stem.deprel != "obl"
+            || ni.upos != Some(Upos::Adp)
+            || ni.surface != "に"
+            || ni.deprel != "case"
+            || ni.head != Some(id)
+            || stem.span.end_char != ni.span.start_char
+            || go.upos != Some(Upos::Verb)
+            || go.lemma.as_deref().unwrap_or(&go.surface) != "行く"
+            || go.doc_tok_idx != Some(motion_go)
+            || ni.span.end_char > go.span.start_char
+        {
+            continue;
+        }
+        if stem.upos == Some(Upos::Noun) {
+            // With a nominal analysis the CPU parser attaches the preceding
+            // accusative to 行く. Verify the adjacent, explicit を and its object.
+            let has_object = source.windows(2).any(|pair| {
+                let (obj, wo) = (&pair[0], &pair[1]);
+                obj.doc_tok_idx.is_some()
+                    && obj.head == go.doc_tok_idx
+                    && obj.deprel == "obj"
+                    && !wo.is_locked
+                    && wo.surface == "を"
+                    && wo.deprel == "case"
+                    && wo.head == obj.doc_tok_idx
+                    && obj.span.end_char == wo.span.start_char
+                    && wo.span.end_char == stem.span.start_char
+            });
+            if !has_object {
+                continue;
+            }
+        }
+        if let Some(lemma) = purpose_stem_lemma(stem) {
+            if found.is_some() {
+                return;
+            }
+            found = Some((index, id, go.doc_tok_idx, lemma));
+        }
+    }
+    let Some((index, id, go, lemma)) = found else {
+        return;
+    };
+    let partner_marker = match lemma.as_str() {
+        "会う" => Some("和"),
+        "借りる" => Some("向"),
+        _ => None,
+    };
+    let nominal_stem = groups[index].atoms[0].upos == Some(Upos::Noun);
+    let direct_object = source
+        .iter()
+        .any(|a| a.deprel == "obj" && (a.head == Some(id) || (nominal_stem && a.head == go)));
+    let transfer = direct_object
+        && purpose_transfer_action(&translate_single_ja_term(
+            &lemma,
+            Some(&lemma),
+            Some(Upos::Verb),
+        ))
+        .is_some();
+    groups[index].role = BunsetsuRole::MotionPurpose;
+    groups[index].atoms[0].lemma = Some(lemma);
+    for group in groups {
+        let [noun, ni] = group.atoms.as_slice() else {
+            continue;
+        };
+        if group.role == BunsetsuRole::MotionPurpose
+            || noun.is_locked
+            || ni.is_locked
+            || ni.upos != Some(Upos::Adp)
+            || ni.deprel != "case"
+            || noun.doc_tok_idx.is_none()
+            || ni.head != noun.doc_tok_idx
+            || noun.span.end_char != ni.span.start_char
+        {
+            continue;
+        }
+        // Nと immediately before 一緒に marks a companion, not the
+        // first noun of a coordinated subject. Both modify this action.
+        if ni.surface == "と"
+            && noun.deprel == "obl"
+            && (noun.head == Some(id) || noun.head == go)
+            && source.windows(2).any(|w| {
+                let (together, case) = (&w[0], &w[1]);
+                !together.is_locked
+                    && together.surface == "一緒"
+                    && together.head == noun.head
+                    && ni.span.end_char == together.span.start_char
+                    && together.doc_tok_idx.is_some()
+                    && !case.is_locked
+                    && case.surface == "に"
+                    && case.deprel == "case"
+                    && case.head == together.doc_tok_idx
+                    && together.span.end_char == case.span.start_char
+            })
+        {
+            group.role = BunsetsuRole::PurposeCompanion;
+            continue;
+        }
+        if ni.surface != "に" {
+            continue;
+        }
+        if noun.deprel == "obl"
+            && noun.head == Some(id)
+            && is_person_like_atom(noun)
+            && let Some(marker) = partner_marker
+        {
+            group.role = BunsetsuRole::PurposePartner(marker);
+        } else if transfer
+            && matches!(noun.deprel.as_str(), "obl" | "iobj")
+            && (noun.head == Some(id) || (nominal_stem && noun.head == go))
+            && is_person_like_atom(noun)
+        {
+            group.role = BunsetsuRole::PurposeRecipient;
+        } else if matches!(noun.deprel.as_str(), "obl" | "advmod")
+            && (noun.head == go || noun.head == Some(id))
+            && (matches!(noun.surface.as_str(), "週末" | "月末" | "年末" | "一緒")
+                || lookup_ja(&noun.surface)
+                    .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Time)))
+        {
+            group.role = BunsetsuRole::PurposeModifier;
+        }
+    }
+}
+
 fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> Vec<Bunsetsu> {
     let mut bunsetsus: Vec<Bunsetsu> = Vec::new();
     let mut cur: Vec<Atom> = Vec::new();
@@ -8008,7 +8450,8 @@ fn ends_in_coord_ya(b: &Bunsetsu) -> bool {
 }
 
 fn ends_in_coord_to(b: &Bunsetsu) -> bool {
-    is_noun_bunsetsu(b)
+    b.role != BunsetsuRole::PurposeCompanion
+        && is_noun_bunsetsu(b)
         && b.atoms
             .last()
             .is_some_and(|a| !a.is_locked && a.surface == "と")
@@ -10045,6 +10488,102 @@ mod motion_endpoint_tests {
         assert_eq!(translate("駅まで行きませんか。"), "不去車站嗎？");
         assert_eq!(translate("公園まで行きませんか。"), "不去公園嗎？");
         assert_eq!(translate("公園まで走りませんか。"), "不跑到公園嗎？");
+    }
+
+    #[test]
+    fn motion_purpose_keeps_its_action_object_and_outer_polarity() {
+        for (source, expected) in [
+            ("私は本を借りに行きます。", "我去借書。"),
+            ("私は傘を借りに行きます。", "我去借傘。"),
+            ("私は友達を探しに行きます。", "我去找朋友。"),
+            ("私は鍵を探しに行きます。", "我去找鑰匙。"),
+            ("本を買いに行きます。", "去買書。"),
+            ("私はパンを食べに行きます。", "我去吃麵包。"),
+            ("魚を食べに行きます。", "去吃魚。"),
+            ("友達と一緒に本を借りに行きます。", "和朋友一起去借書。"),
+            (
+                "私は友達と一緒に本を借りに行きます。",
+                "我和朋友一起去借書。",
+            ),
+            ("友達と妹が本を借りに行きます。", "朋友和妹妹去借書。"),
+            ("誰が本を借りに行きますか。", "誰去借書？"),
+            ("誰と一緒に本を借りに行きますか。", "和誰一起去借書？"),
+            ("誰に本を返しに行きますか。", "去還書給誰？"),
+            ("友達が本を借りに行きますか。", "朋友去借書嗎？"),
+            ("私は食べに行きます。", "我去吃。"),
+            (
+                "「本を借りに行きます」と先生が言いました。",
+                "「去借書」老師說了。",
+            ),
+            (
+                "先生は「本を借りに行きます」と言いました。",
+                "老師說「去借書」。",
+            ),
+            (
+                "「パンを食べに行きます」と先生が言いました。",
+                "「去吃麵包」老師說了。",
+            ),
+            (
+                "「本を買いに行きません」と先生が言いました。",
+                "「不去買書」老師說了。",
+            ),
+            (
+                "先生は学生に「明日は家に帰ります。本を借りに行きます」と伝えた。",
+                "老師告訴學生：「明天回到家。去借書。」",
+            ),
+            (
+                "「明日は家に帰ります。本を借りに行きます」と先生が言いました。",
+                "「明天回到家。去借書」老師說了。",
+            ),
+            ("食べに行きませんか。", "要不要去吃？"),
+            ("材料を混ぜに行きます。", "去攪拌材料。"),
+            ("窓を閉めに行きます。", "去關上窗戶。"),
+            ("父を迎えに行きます。", "去迎接父親。"),
+            ("私は先生に本を返しに行きます。", "我去還書給老師。"),
+            ("私は先生に本を借りに行きます。", "我去向老師借書。"),
+            ("先生に何を返しに行きますか。", "去還什麼給老師？"),
+            ("先生に花を渡しに行きます。", "去遞花給老師。"),
+            ("図書館に本を返しに行きます。", "去到圖書館還書。"),
+            ("本を読みに行きません。", "不去讀書。"),
+            ("音楽を聞きに行った。", "去聽音樂了。"),
+            ("花を見に行きませんか。", "要不要去看花？"),
+            ("一緒に花を見に行きませんか。", "要不要一起去看花？"),
+            ("週末に映画を見に行きませんか。", "週末要不要去看電影？"),
+            ("友達に会いに行きます。", "去和朋友見面。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn nominal_places_and_other_source_relations_keep_their_roles() {
+        for (source, expected) in [
+            ("教室に行きます。", "去到教室。"),
+            ("午後二時に教室に行きます。", "在下午兩點去到教室。"),
+            ("私は買い物に行きます。", "我去購物。"),
+            ("私は映画を`見`に行きます。", "我去到`見`電影。"),
+            ("本を借りて行きます。", "借用書，去。"),
+            ("彼は帰りに駅に行きました。", "他去到車站到帰り了。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn stray_closing_quote_does_not_supply_a_motion_governor() {
+        let nested = translate("先生は「今日は『休み』です。本を借りに行きます」と言いました。");
+        assert!(nested.ends_with("去借書」說了。"), "{nested}");
+        let indefinite = translate("誰かが本を借りに行きますか。");
+        assert!(indefinite.ends_with("嗎？"), "{indefinite}");
+        for source in [
+            "本を借りに行きます」と先生が言いました。",
+            "「明日、帰ります。」本を借りに行きます」と先生が言いました。",
+            "挨拶は`「`です。本を借りに行きます」と先生が言いました。",
+            "先生は「今日は『休み」です。本を借りに行きます」と言いました。",
+        ] {
+            let output = translate(source);
+            assert!(!output.contains("去借書"), "{source}: {output}");
+        }
     }
 
     #[test]

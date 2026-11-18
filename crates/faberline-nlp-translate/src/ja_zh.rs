@@ -91,6 +91,7 @@ enum BunsetsuRole {
     Obl,
     MotionPurpose,
     PurposeModifier,
+    PurposeCompanion,
     PurposePartner(&'static str),
     PurposeRecipient,
     Adv,
@@ -2261,19 +2262,30 @@ fn ends_continued_quote(
     };
     let sent = &doc.segmentation.sentences[sentence_idx];
     let start = doc.segmentation.paragraphs[sent.paragraph].span.start_char;
-    (start..span.start_char)
-        .rev()
-        .find(|&i| {
-            matches!(chars[i], '「' | '」' | '『' | '』')
-                && !doc
-                    .segmentation
-                    .opaque
-                    .iter()
-                    .any(|opaque| opaque.span.start_char <= i && i < opaque.span.end_char)
-        })
-        .is_some_and(|i| {
-            i < sent.span.start_char && matches!((chars[i], close), ('「', '」') | ('『', '』'))
-        })
+    let mut closers = vec![*close];
+    for i in (start..span.start_char).rev() {
+        let ch = chars[i];
+        if !matches!(ch, '「' | '」' | '『' | '』')
+            || doc
+                .segmentation
+                .opaque
+                .iter()
+                .any(|opaque| opaque.span.start_char <= i && i < opaque.span.end_char)
+        {
+            continue;
+        }
+        if matches!(ch, '」' | '』') {
+            closers.push(ch);
+        } else {
+            if !matches!((ch, closers.pop()), ('「', Some('」')) | ('『', Some('』'))) {
+                return false;
+            }
+            if closers.is_empty() {
+                return i < sent.span.start_char;
+            }
+        }
+    }
+    false
 }
 
 fn is_quote_terminal(ch: char) -> bool {
@@ -5231,13 +5243,19 @@ fn translate_clause_bunsetsus(
     let mut purpose = None;
     let mut purpose_partners = Vec::new();
     let mut purpose_recipients = Vec::new();
-    let wh_object = bunsetsus.iter().any(|b| {
-        b.role == BunsetsuRole::Obj
-            && matches!(b.atoms.as_slice(), [wh, wo]
-            if !wh.is_locked && !wo.is_locked && matches!(wh.surface.as_str(), "何" | "誰" | "どれ")
-            && wo.surface == "を" && wo.deprel == "case" && wo.head == wh.doc_tok_idx)
-    });
-    let mut go_together = None;
+    let wh_argument = bunsetsus.iter().find(|b| b.role == BunsetsuRole::MotionPurpose)
+        .is_some_and(|purpose| {
+            let stem = &purpose.atoms[0];
+            bunsetsus.iter().any(|b| matches!(b.atoms.as_slice(), [wh, case]
+                if !wh.is_locked && !case.is_locked && wh.doc_tok_idx.is_some() && wh.head.is_some()
+                && (wh.head == stem.doc_tok_idx || wh.head == stem.head)
+                && matches!(wh.surface.as_str(), "何" | "誰" | "どれ" | "どこ" | "いつ")
+                && matches!(wh.deprel.as_str(), "nsubj" | "obj" | "obl" | "iobj" | "advmod")
+                && case.upos == Some(Upos::Adp) && case.deprel == "case"
+                && matches!(case.surface.as_str(), "が" | "を" | "に" | "へ" | "で" | "と" | "から" | "まで")
+                && case.head == wh.doc_tok_idx && wh.span.end_char == case.span.start_char))
+        });
+    let mut go_together = Vec::new();
     let mut to_complements: Vec<(String, bool)> = Vec::new();
     let mut predicates: Vec<Bunsetsu> = Vec::new();
     let mut others: Vec<String> = Vec::new();
@@ -5428,7 +5446,10 @@ fn translate_clause_bunsetsus(
         match b.role {
             BunsetsuRole::MotionPurpose => purpose = b.atoms[0].lemma.clone(),
             BunsetsuRole::PurposeModifier if b.atoms[0].surface == "一緒" => {
-                go_together = Some(render_bunsetsu_np(&b, target));
+                go_together.push(render_bunsetsu_np(&b, target));
+            }
+            BunsetsuRole::PurposeCompanion => {
+                go_together.push(format!("和{}", render_bunsetsu_np(&b, target)));
             }
             BunsetsuRole::PurposeModifier => temporal_others.push(render_bunsetsu_np(&b, target)),
             BunsetsuRole::PurposePartner(marker) => {
@@ -6427,7 +6448,7 @@ fn translate_clause_bunsetsus(
             .iter()
             .any(|m| matches!(m.as_str(), "不" | "沒有"));
     if purpose.is_some() && sfp_suffix == Some("嗎") {
-        if wh_object {
+        if wh_argument {
             sfp_suffix = Some("？");
         } else if implicit_subject && polite_negative_question && negative_go {
             if let Some(negative) = inner_pre_mods.iter_mut().find(|m| *m == "不") {
@@ -8210,12 +8231,36 @@ fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom], motion_go: usiz
             || noun.is_locked
             || ni.is_locked
             || ni.upos != Some(Upos::Adp)
-            || ni.surface != "に"
             || ni.deprel != "case"
             || noun.doc_tok_idx.is_none()
             || ni.head != noun.doc_tok_idx
             || noun.span.end_char != ni.span.start_char
         {
+            continue;
+        }
+        // Nと immediately before 一緒に marks a companion, not the
+        // first noun of a coordinated subject. Both modify this action.
+        if ni.surface == "と"
+            && noun.deprel == "obl"
+            && (noun.head == Some(id) || noun.head == go)
+            && source.windows(2).any(|w| {
+                let (together, case) = (&w[0], &w[1]);
+                !together.is_locked
+                    && together.surface == "一緒"
+                    && together.head == noun.head
+                    && ni.span.end_char == together.span.start_char
+                    && together.doc_tok_idx.is_some()
+                    && !case.is_locked
+                    && case.surface == "に"
+                    && case.deprel == "case"
+                    && case.head == together.doc_tok_idx
+                    && together.span.end_char == case.span.start_char
+            })
+        {
+            group.role = BunsetsuRole::PurposeCompanion;
+            continue;
+        }
+        if ni.surface != "に" {
             continue;
         }
         if noun.deprel == "obl"
@@ -8296,7 +8341,8 @@ fn ends_in_coord_ya(b: &Bunsetsu) -> bool {
 }
 
 fn ends_in_coord_to(b: &Bunsetsu) -> bool {
-    is_noun_bunsetsu(b)
+    b.role != BunsetsuRole::PurposeCompanion
+        && is_noun_bunsetsu(b)
         && b.atoms
             .last()
             .is_some_and(|a| !a.is_locked && a.surface == "と")
@@ -9544,6 +9590,16 @@ mod motion_endpoint_tests {
             ("本を買いに行きます。", "去買書。"),
             ("私はパンを食べに行きます。", "我去吃麵包。"),
             ("魚を食べに行きます。", "去吃魚。"),
+            ("友達と一緒に本を借りに行きます。", "和朋友一起去借書。"),
+            (
+                "私は友達と一緒に本を借りに行きます。",
+                "我和朋友一起去借書。",
+            ),
+            ("友達と妹が本を借りに行きます。", "朋友和妹妹去借書。"),
+            ("誰が本を借りに行きますか。", "誰去借書？"),
+            ("誰と一緒に本を借りに行きますか。", "和誰一起去借書？"),
+            ("誰に本を返しに行きますか。", "去還書給誰？"),
+            ("友達が本を借りに行きますか。", "朋友去借書嗎？"),
             ("私は食べに行きます。", "我去吃。"),
             (
                 "「本を借りに行きます」と先生が言いました。",
@@ -9605,10 +9661,15 @@ mod motion_endpoint_tests {
 
     #[test]
     fn stray_closing_quote_does_not_supply_a_motion_governor() {
+        let nested = translate("先生は「今日は『休み』です。本を借りに行きます」と言いました。");
+        assert!(nested.ends_with("去借書」說了。"), "{nested}");
+        let indefinite = translate("誰かが本を借りに行きますか。");
+        assert!(indefinite.ends_with("嗎？"), "{indefinite}");
         for source in [
             "本を借りに行きます」と先生が言いました。",
             "「明日、帰ります。」本を借りに行きます」と先生が言いました。",
             "挨拶は`「`です。本を借りに行きます」と先生が言いました。",
+            "先生は「今日は『休み」です。本を借りに行きます」と言いました。",
         ] {
             let output = translate(source);
             assert!(!output.contains("去借書"), "{source}: {output}");

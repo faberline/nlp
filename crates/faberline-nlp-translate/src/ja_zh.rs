@@ -8392,35 +8392,24 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
             continue;
         };
         let marker = case.as_ref().map(|case| case.surface.as_str());
-        let role = match (word.surface.as_str(), word.deprel.as_str(), marker) {
-            ("誰", "obl", Some("と")) => BunsetsuRole::JointCompanion,
-            ("何", "obj", Some("を")) if can_offer => BunsetsuRole::Obj,
-            // Colloquial content objects can omit を just before a transitive verb.
-            ("何", "obl", None)
-                if can_offer
-                    && !has_object
-                    && noun.span.end_char == action.span.start_char
-                    && matches!(
-                        lemma,
-                        "読む"
-                            | "飲む"
-                            | "食べる"
-                            | "書く"
-                            | "買う"
-                            | "作る"
-                            | "見る"
-                            | "聞く"
-                            | "選ぶ"
-                    ) =>
-            {
-                BunsetsuRole::Obj
-            }
-            ("どこ", "obl", Some("へ" | "に" | "で")) => group.role,
-            _ => continue,
-        };
-        if role == BunsetsuRole::Obj {
+        let role = if can_offer
+            && indefinite_content_object(
+                word,
+                case.as_ref(),
+                noun.span.end_char,
+                action,
+                has_object,
+            ) {
             noun.surface = "點什麼".to_owned();
-        }
+            BunsetsuRole::Obj
+        } else {
+            match (word.surface.as_str(), word.deprel.as_str(), marker) {
+                ("誰", "obl", Some("と")) => BunsetsuRole::JointCompanion,
+                ("誰" | "何", "nsubj", Some("が" | "は" | "も")) => BunsetsuRole::Subj,
+                ("どこ", "obl", Some("へ" | "に" | "で")) => group.role,
+                _ => continue,
+            }
+        };
         group.atoms.clear();
         group.atoms.push(noun);
         group.atoms.extend(case);
@@ -10902,6 +10891,7 @@ mod motion_endpoint_tests {
             translate("先生は誰かと一緒に歌いませんか。"),
             "老師不和某個人一起哼唱嗎？"
         );
+        assert_eq!(translate("一緒に誰かが来ませんか。"), "某個人不一起來嗎？");
         assert!(!translate("一緒に何か起きませんか。").contains("點什麼"));
         assert!(!translate("みんなで何か作業をしませんか。").contains("點什麼"));
         assert_eq!(translate("二人で何を読みませんか。"), "兩人不一起讀什麼？");
@@ -11818,7 +11808,15 @@ fn indefinite_content_object(
                 && end == action.span.start_char
                 && matches!(
                     action.lemma.as_deref().unwrap_or(&action.surface),
-                    "読む" | "飲む" | "食べる" | "書く" | "買う" | "作る" | "見る" | "聞く" | "選ぶ"
+                    "読む"
+                        | "飲む"
+                        | "食べる"
+                        | "書く"
+                        | "買う"
+                        | "作る"
+                        | "見る"
+                        | "聞く"
+                        | "選ぶ"
                 )
         }
         _ => false,

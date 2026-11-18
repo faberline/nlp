@@ -91,6 +91,7 @@ enum BunsetsuRole {
     Obl,
     MotionPurpose,
     PurposeModifier,
+    ProposalModifier,
     PurposeCompanion,
     PurposePartner(&'static str),
     PurposeRecipient,
@@ -3179,7 +3180,10 @@ fn translate_clause_atoms(
     if let Some(go) = motion_go {
         mark_motion_purpose(&mut grouped, &norm_atoms, go);
     }
-    let grouped = compose_relative_daypart(grouped);
+    let mut grouped = compose_relative_daypart(grouped);
+    if let Some((predicate, _)) = proposal {
+        localize_proposal_arguments(&mut grouped, predicate, body, target);
+    }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, target);
     if let Some(tail) = condition_tail
         && let Some(complement) = bunsetsus.last_mut()
@@ -3189,9 +3193,6 @@ fn translate_clause_atoms(
         complement.sconj_tail = Some("ば".to_owned());
     }
 
-    if let Some((predicate, _)) = proposal {
-        localize_proposal_arguments(&mut bunsetsus, predicate, body);
-    }
     let (mut text, subject_only) = translate_clause_bunsetsus(
         bunsetsus,
         atoms,
@@ -3206,11 +3207,11 @@ fn translate_clause_atoms(
             text.push('吧');
         } else if body.iter().enumerate().any(|(i, a)| {
             !a.is_locked
-                && a.head == Some(predicate)
+                && proposal_attachment(a, predicate, body)
                 && !body.get(i + 1).is_some_and(|next| next.surface == "か")
                 && matches!(
                     a.surface.as_str(),
-                    "何" | "誰" | "いつ" | "どこ" | "どれ" | "どう" | "どちら"
+                    "何" | "何時" | "誰" | "いつ" | "どこ" | "どれ" | "どう" | "どちら"
                 )
         }) {
             text.push_str("好呢");
@@ -3262,7 +3263,36 @@ fn polite_volitional(atoms: &[Atom]) -> Option<(usize, bool)> {
     Some((pred, question.is_some()))
 }
 
-fn localize_proposal_arguments(groups: &mut [Bunsetsu], predicate: usize, source: &[Atom]) {
+// The CPU parser can attach a manner phrase to an intervening adjectival
+// modifier, or a question word to the noun it precedes. Neither can carry
+// its own finite mood. Stop before crossing a second verbal predicate.
+fn proposal_attachment(atom: &Atom, predicate: usize, source: &[Atom]) -> bool {
+    atom.head == Some(predicate)
+        || atom.head.is_some_and(|head| {
+            source.iter().any(|parent| {
+                parent.doc_tok_idx == Some(head)
+                    && parent.head == Some(predicate)
+                    && !parent.is_locked
+                    && ((atom.deprel == "compound"
+                        && matches!(parent.upos, Some(Upos::Noun | Upos::Propn)))
+                        || (parent.deprel == "advcl" && parent.upos == Some(Upos::Adj)))
+            })
+        })
+}
+
+fn proposal_numeral(atom: &Atom) -> bool {
+    !atom.is_locked
+        && !atom.surface.is_empty()
+        && atom.surface.chars().all(|ch| matches!(ch,
+            '0'..='9' | '０'..='９' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '百' | '千' | '万' | '零' | '〇'))
+}
+
+fn localize_proposal_arguments(
+    groups: &mut Vec<Bunsetsu>,
+    predicate: usize,
+    source: &[Atom],
+    target: TargetVariant,
+) {
     let speaker_offers = source.iter().any(|a| {
         !a.is_locked
             && a.head == Some(predicate)
@@ -3272,29 +3302,86 @@ fn localize_proposal_arguments(groups: &mut [Bunsetsu], predicate: usize, source
                 "私" | "わたし" | "僕" | "ぼく" | "俺" | "おれ"
             )
     });
-    for group in groups {
-        if let [noun, case] = group.atoms.as_slice()
+    // Keep modifiers separate before the general noun/coordination fold.
+    let mut previous: Vec<Bunsetsu> = Vec::with_capacity(groups.len());
+    for mut group in std::mem::take(groups) {
+        if let [prefix @ .., noun, case] = group.atoms.as_slice()
             && !noun.is_locked
             && !case.is_locked
             && noun.deprel == "obl"
-            && noun.head == Some(predicate)
+            && proposal_attachment(noun, predicate, source)
             && noun.doc_tok_idx.is_some()
             && case.head == noun.doc_tok_idx
             && case.deprel == "case"
             && noun.span.end_char == case.span.start_char
         {
+            let mut first = group.atoms[0].span.start_char;
             let text = match (noun.surface.as_str(), case.surface.as_str()) {
-                ("みんな" | "皆", "で") => Some("大家一起"),
-                ("一緒", "に") => Some("一起"),
+                ("みんな" | "皆", "で") if prefix.is_empty() => Some("大家一起".to_owned()),
+                ("一緒", "に") if prefix.is_empty() => {
+                    if previous.last().is_some_and(|g| {
+                        matches!(g.atoms.as_slice(), [.., partner, to]
+                            if !to.is_locked && to.surface == "と" && to.deprel == "case"
+                                && to.head == partner.doc_tok_idx && to.head.is_some()
+                                && partner.head == Some(predicate)
+                                && to.span.end_char == first)
+                    }) {
+                        let partner = previous.pop().unwrap();
+                        first = partner.atoms[0].span.start_char;
+                        Some(format!("和{}一起", render_bunsetsu_np(&partner, target)))
+                    } else {
+                        Some("一起".to_owned())
+                    }
+                }
+                ("何時", "に") if prefix.is_empty() => Some("幾點".to_owned()),
+                ("日", "に")
+                    if matches!(prefix, [weekday]
+                        if !weekday.is_locked && weekday.surface == "曜" && weekday.head == noun.doc_tok_idx
+                            && weekday.span.end_char == noun.span.start_char)
+                        && previous.last().is_some_and(|g| {
+                            matches!(g.atoms.as_slice(), [wh]
+                            if !wh.is_locked && wh.surface == "何" && wh.deprel == "compound"
+                                && wh.head == noun.doc_tok_idx && wh.span.end_char == first)
+                        }) =>
+                {
+                    first = previous.pop().unwrap().atoms[0].span.start_char;
+                    Some("星期幾".to_owned())
+                }
+                ("人", "で")
+                    if !prefix.is_empty()
+                        && prefix.iter().all(proposal_numeral)
+                        && group
+                            .atoms
+                            .windows(2)
+                            .all(|pair| pair[0].span.end_char == pair[1].span.start_char) =>
+                {
+                    let mut count: String = prefix.iter().map(|a| a.surface.as_str()).collect();
+                    while previous.last().is_some_and(|g| {
+                        g.atoms.iter().all(proposal_numeral)
+                            && g.atoms.last().is_some_and(|a| a.span.end_char == first)
+                    }) {
+                        let prior = previous.pop().unwrap();
+                        first = prior.atoms[0].span.start_char;
+                        let digits: String =
+                            prior.atoms.iter().map(|a| a.surface.as_str()).collect();
+                        count.insert_str(0, &digits);
+                    }
+                    match count.as_str() {
+                        "一" | "1" | "１" => Some("一個人".to_owned()),
+                        "二" | "2" | "２" => Some("兩個人一起".to_owned()),
+                        _ => Some(format!("{count}個人一起")),
+                    }
+                }
                 _ => None,
             };
             if let Some(text) = text {
                 let mut adverb = noun.clone();
-                adverb.surface = text.to_owned();
+                adverb.surface = text;
+                adverb.span.start_char = first;
                 adverb.span.end_char = case.span.end_char;
                 adverb.is_locked = true;
                 group.atoms = vec![adverb];
-                group.role = BunsetsuRole::Adv;
+                group.role = BunsetsuRole::ProposalModifier;
                 group.case_particle = None;
             }
         }
@@ -3306,9 +3393,11 @@ fn localize_proposal_arguments(groups: &mut [Bunsetsu], predicate: usize, source
                     && a.lemma.as_deref() != Some("来る")
             })
         {
-            prepend_locked_atom(group, "來".to_owned());
+            prepend_locked_atom(&mut group, "來".to_owned());
         }
+        previous.push(group);
     }
+    *groups = previous;
 }
 
 // Only match at a clause boundary. In obligation and proportional patterns,
@@ -5632,7 +5721,9 @@ fn translate_clause_bunsetsus(
             BunsetsuRole::PurposeCompanion => {
                 go_together.push(format!("和{}", render_bunsetsu_np(&b, target)));
             }
-            BunsetsuRole::PurposeModifier => temporal_others.push(render_bunsetsu_np(&b, target)),
+            BunsetsuRole::PurposeModifier | BunsetsuRole::ProposalModifier => {
+                temporal_others.push(render_bunsetsu_np(&b, target));
+            }
             BunsetsuRole::PurposePartner(marker) => {
                 purpose_partners.push(format!("{marker}{}", render_bunsetsu_np(&b, target)));
             }
@@ -8645,6 +8736,7 @@ fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
             BunsetsuRole::Predicate
                 | BunsetsuRole::Punct
                 | BunsetsuRole::Connector
+                | BunsetsuRole::ProposalModifier
                 | BunsetsuRole::Adv
         )
     {
@@ -10653,6 +10745,38 @@ mod motion_endpoint_tests {
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
+    }
+
+    #[test]
+    fn proposal_questions_put_interrogative_time_before_the_activity() {
+        for (source, expected) in [
+            ("何時に駅へ行きましょうか。", "幾點往車站去好呢？"),
+            ("何時に出ましょうか。", "幾點出去好呢？"),
+            ("何曜日に本を読みましょうか。", "星期幾讀書好呢？"),
+            ("いつ駅に行きましょうか。", "什麼時候去到車站好呢？"),
+            ("先生に手紙を書きましょうか。", "給老師寫信，好嗎？"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn proposals_keep_the_number_and_location_of_the_participants() {
+        for (source, expected) in [
+            ("二人で本を読みましょう。", "兩個人一起讀書吧。"),
+            ("一人で図書館へ行きましょう。", "一個人往圖書館去吧。"),
+            ("十二人で本を読みましょう。", "十二個人一起讀書吧。"),
+            ("先生と一緒に駅へ行きましょう。", "和老師一起往車站去吧。"),
+            ("二階で本を読みましょう。", "在二階讀書吧。"),
+            ("二人に本を読みましょう。", "給二人讀書吧。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        let path = translate("一緒に川の近くを歩きましょう。");
+        assert!(
+            path.starts_with("一起走") && path.contains('川') && path.ends_with("吧。"),
+            "{path}"
+        );
     }
 
     #[test]

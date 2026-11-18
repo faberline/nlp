@@ -4707,7 +4707,8 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
     let is_spatial = match tail.surface.as_str() {
         "に" => motion || matches!(verb, "ある" | "いる"),
         "へ" => motion,
-        "から" => spatial_case && motion,
+        "から" => spatial_case && (motion || is_made_motion_verb(verb)),
+        "まで" => spatial_case && is_made_motion_verb(verb),
         "で" => {
             spatial_case
                 && (matches!(
@@ -4723,6 +4724,8 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
                         | "勉強する"
                         | "学習"
                         | "学習する"
+                        | "準備"
+                        | "準備する"
                 ) || atoms[..start].windows(2).any(|modifier| {
                     let place = &modifier[0];
                     let particle = &modifier[1];
@@ -8800,6 +8803,9 @@ fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {
                 && !is_case_or_sfp_to_strip(&a.surface)
         })
         .is_some_and(|a| {
+            if is_building_floor(a) {
+                return true;
+            }
             !a.is_locked
                 && matches!(
                     a.surface.as_str(),
@@ -8824,6 +8830,10 @@ fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {
         })
 }
 
+fn is_made_motion_verb(lemma: &str) -> bool {
+    matches!(lemma, "行く" | "歩く" | "走る")
+}
+
 fn predicates_is_made_motion_verb(predicates: &[Bunsetsu]) -> bool {
     let mut verbs = predicates
         .iter()
@@ -8834,11 +8844,7 @@ fn predicates_is_made_motion_verb(predicates: &[Bunsetsu]) -> bool {
     };
     // Do not move an endpoint across another lexical predicate. Clauses with
     // multiple verbs need an explicit attachment relation before reordering.
-    verbs.next().is_none()
-        && matches!(
-            verb.lemma.as_deref().unwrap_or(verb.surface.as_str()),
-            "行く" | "歩く" | "走る"
-        )
+    verbs.next().is_none() && is_made_motion_verb(verb.lemma.as_deref().unwrap_or(&verb.surface))
 }
 
 fn predicates_is_goal_verb(predicates: &[Bunsetsu]) -> bool {
@@ -10147,6 +10153,24 @@ mod existence_rule_tests {
             ("私は三階で本を読みます。", "我在三樓讀書。"),
             ("私は三階で勉強します。", "我在三樓學習。"),
             ("学校の三階で準備します。", "在學校的三樓準備。"),
+            ("私は三階で準備します。", "我在三樓準備。"),
+        ] {
+            assert_eq!(
+                translate(source, &TranslationGlossary::new()).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn building_floor_keeps_walking_and_running_endpoints_spatial() {
+        for (source, expected) in [
+            ("私は三階から二階まで歩きます。", "我從三樓走到二樓。"),
+            ("私は三階から歩きます。", "我從三樓走。"),
+            ("私は三階まで走ります。", "我跑到三樓。"),
+            ("私は三階まで歩きません。", "我不走到三樓。"),
+            ("私は夕方まで走ります。", "我連傍晚都跑。"),
         ] {
             assert_eq!(
                 translate(source, &TranslationGlossary::new()).target_text,

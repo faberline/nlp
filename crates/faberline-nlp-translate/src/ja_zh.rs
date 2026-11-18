@@ -5182,6 +5182,7 @@ fn translate_clause_bunsetsus(
     let mut objs: Vec<String> = Vec::new();
     let mut purpose = None;
     let mut purpose_partners = Vec::new();
+    let mut go_together = None;
     let mut to_complements: Vec<(String, bool)> = Vec::new();
     let mut predicates: Vec<Bunsetsu> = Vec::new();
     let mut others: Vec<String> = Vec::new();
@@ -5370,11 +5371,9 @@ fn translate_clause_bunsetsus(
         }
 
         match b.role {
-            BunsetsuRole::MotionPurpose => {
-                purpose = b.atoms[0]
-                    .lemma
-                    .as_deref()
-                    .map(|lemma| translate_single_ja_term(lemma, Some(lemma), Some(Upos::Verb)));
+            BunsetsuRole::MotionPurpose => purpose = b.atoms[0].lemma.clone(),
+            BunsetsuRole::PurposeModifier if b.atoms[0].surface == "一緒" => {
+                go_together = Some(render_bunsetsu_np(&b, target));
             }
             BunsetsuRole::PurposeModifier => temporal_others.push(render_bunsetsu_np(&b, target)),
             BunsetsuRole::PurposePartner => {
@@ -6496,6 +6495,7 @@ fn translate_clause_bunsetsus(
     parts.extend(others);
     let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
+    parts.extend(go_together);
     parts.extend(transfer_prefix);
     // 到 already expresses the destination relation of bare 去. Other motion
     // verbs retain their manner: 走到, 跑到.
@@ -6530,7 +6530,15 @@ fn translate_clause_bunsetsus(
         parts.extend(post_verb_mods);
     }
     parts.extend(purpose_partners);
-    parts.extend(purpose);
+    if let Some(lemma) = purpose {
+        // Bare transitive purposes use the ordinary Mandarin verb before the object.
+        let action = match (lemma.as_str(), objs.is_empty()) {
+            ("借りる", false) => "借".to_owned(),
+            ("探す", false) => "找".to_owned(),
+            _ => translate_single_ja_term(&lemma, Some(&lemma), Some(Upos::Verb)),
+        };
+        parts.push(action);
+    }
     parts.extend(transfer_recipient);
     parts.extend(objs);
     if let Some(le) = trailing_change_le {
@@ -9291,12 +9299,15 @@ mod motion_endpoint_tests {
     #[test]
     fn motion_purpose_keeps_its_action_object_and_outer_polarity() {
         for (source, expected) in [
-            ("私は本を借りに行きます。", "我去借用書。"),
-            ("私は友達を探しに行きます。", "我去尋找朋友。"),
+            ("私は本を借りに行きます。", "我去借書。"),
+            ("私は傘を借りに行きます。", "我去借傘。"),
+            ("私は友達を探しに行きます。", "我去找朋友。"),
+            ("私は鍵を探しに行きます。", "我去找鑰匙。"),
             ("本を買いに行きます。", "去買書。"),
             ("本を読みに行きません。", "不去讀書。"),
             ("音楽を聞きに行った。", "去聽音樂了。"),
             ("花を見に行きませんか。", "要不要去看花？"),
+            ("一緒に花を見に行きませんか。", "要不要一起去看花？"),
             ("週末に映画を見に行きませんか。", "週末要不要去看電影？"),
             ("友達に会いに行きます。", "去和朋友見面。"),
         ] {

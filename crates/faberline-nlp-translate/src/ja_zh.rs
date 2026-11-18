@@ -5318,7 +5318,17 @@ fn translate_clause_bunsetsus(
         }
     }
 
-    for b in bunsetsus.drain(..) {
+    // Resolve time and result roles while the other arguments of the predicate are available.
+    let daypart_groups: Vec<_> = bunsetsus
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus).then_some(idx))
+        .collect();
+    for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if daypart_groups.contains(&idx) {
+            temporal_others.push(render_bunsetsu_np(&b, target));
+            continue;
+        }
         if b.case_particle.as_deref() == Some("へ") && !is_time_or_place_bunsetsu(&b.atoms) {
             has_competing_transfer_recipient = true;
         }
@@ -5360,15 +5370,6 @@ fn translate_clause_bunsetsus(
                 "ぞ" | "ぜ" => Some("啊"),
                 _ => sfp_suffix,
             };
-        }
-
-        if let Some(daypart) = event_daypart_noun(&b, &candidates) {
-            temporal_others.push(translate_single_ja_term(
-                &daypart.surface,
-                daypart.lemma.as_deref(),
-                daypart.upos,
-            ));
-            continue;
         }
 
         match b.role {
@@ -8771,11 +8772,116 @@ fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
         })
 }
 
-// A daypart followed by に can be an event time or the value selected by
-// 夕方にする / 夕方になる. The case relation alone is identical in both.
-fn event_daypart_noun<'a>(group: &'a Bunsetsu, predicates: &[Bunsetsu]) -> Option<&'a Atom> {
+fn is_daypart_surface(surface: &str) -> bool {
+    matches!(
+        surface,
+        "早朝"
+            | "明け方"
+            | "朝"
+            | "午前"
+            | "正午"
+            | "昼"
+            | "昼間"
+            | "午後"
+            | "夕方"
+            | "夜"
+            | "夜中"
+            | "夜間"
+            | "深夜"
+    )
+}
+
+// These predicates can select the time itself. The analyzer uses the same obl
+// relation for the selected value and for an ordinary event-time modifier.
+fn selects_time_value(lemma: &str) -> bool {
+    let stem = lemma.strip_suffix("する").unwrap_or(lemma);
+    // Result and selection, e.g. 会議を夕方に決める.
+    const CHOOSES_VALUE: &[&str] = &[
+        "なる",
+        "成る",
+        "変わる",
+        "変える",
+        "決める",
+        "決まる",
+        "定める",
+        "定まる",
+        "選ぶ",
+        "選択",
+        "決定",
+        "設定",
+        "指定",
+        "変更",
+        "予定",
+        "予約",
+    ];
+    // Rescheduling a source time, including verbal nouns followed by する.
+    const RESCHEDULES: &[&str] = &[
+        "調整",
+        "合わせる",
+        "合う",
+        "ずらす",
+        "ずれる",
+        "移す",
+        "戻す",
+        "延期",
+        "延ばす",
+        "延びる",
+        "遅らせる",
+        "遅れる",
+        "早める",
+        "繰り上げる",
+        "繰り下げる",
+        "前倒し",
+        "先送り",
+    ];
+    // The time can be a reference or endpoint rather than when one acts.
+    const TAKES_REFERENCE: &[&str] = &[
+        "似る",
+        "比べる",
+        "備える",
+        "慣れる",
+        "間に合う",
+        "近づく",
+        "及ぶ",
+        "至る",
+    ];
+    CHOOSES_VALUE.contains(&stem) || RESCHEDULES.contains(&stem) || TAKES_REFERENCE.contains(&stem)
+}
+
+fn is_temporal_value_noun(a: &Atom) -> bool {
+    is_clock_atom(a)
+        || (!a.is_locked
+            && (is_daypart_surface(&a.surface)
+                || matches!(
+                    a.surface.as_str(),
+                    "時間"
+                        | "時刻"
+                        | "日程"
+                        | "日時"
+                        | "予定"
+                        | "日付"
+                        | "開始"
+                        | "終了"
+                        | "出発"
+                        | "到着"
+                        | "会議"
+                )))
+}
+
+fn has_verb_reading(surface: &str) -> bool {
+    faberline_nlp::lexicon::lookup_ja(surface)
+        .is_some_and(|hit| hit.upos_candidates.contains(&Upos::Verb))
+}
+
+// 夕方に働く, 夕方にする and 夕方に戻る can share the same case relation.
+// Keep the time only when its own governor and that governor's other
+// arguments support an event-time reading.
+fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu]) -> bool {
     let [time, ni] = group.atoms.as_slice() else {
-        return None;
+        return false;
+    };
+    let (Some(time_id), Some(head)) = (time.doc_tok_idx, time.head) else {
+        return false;
     };
     if group.case_particle.as_deref() != Some("に")
         || !matches!(group.role, BunsetsuRole::IObj | BunsetsuRole::Obl)
@@ -8783,67 +8889,102 @@ fn event_daypart_noun<'a>(group: &'a Bunsetsu, predicates: &[Bunsetsu]) -> Optio
         || group.sfp_tail.is_some()
         || time.is_locked
         || ni.is_locked
+        || !is_daypart_surface(&time.surface)
         || !matches!(time.upos, Some(Upos::Noun | Upos::Adv))
         || !matches!(time.deprel.as_str(), "obl" | "advmod")
         || ni.surface != "に"
         || ni.upos != Some(Upos::Adp)
         || ni.deprel != "case"
         || ni.doc_tok_idx.is_none()
-        || ni.head != Some(time.doc_tok_idx?)
+        || ni.head != Some(time_id)
         || time.span.end_char != ni.span.start_char
-        || !matches!(
-            time.surface.as_str(),
-            "早朝"
-                | "明け方"
-                | "朝"
-                | "午前"
-                | "正午"
-                | "昼"
-                | "昼間"
-                | "午後"
-                | "夕方"
-                | "夜"
-                | "夜中"
-                | "夜間"
-                | "深夜"
-        )
     {
-        return None;
+        return false;
     }
-    let head = time.head?;
-    let mut verbs = predicates.iter().flat_map(|group| &group.atoms);
-    let verb = verbs
-        .find(|a| a.doc_tok_idx == Some(head) && !a.is_locked && a.upos == Some(Upos::Verb))?;
-    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
-    let temporal_reading = if verb.deprel == "root" {
-        matches!(
-            lemma,
-            "帰る"
-                | "戻る"
-                | "行く"
-                | "来る"
-                | "歩く"
-                | "走る"
-                | "読む"
-                | "寝る"
-                | "起きる"
-                | "勉強する"
-        )
-    } else {
-        // The parser splits 勉強します into 勉強 and its light verb する.
-        verb.deprel == "advcl"
-            && lemma == "勉強"
-            && verbs.any(|light| {
-                !light.is_locked
-                    && light.upos == Some(Upos::Verb)
-                    && light.deprel == "root"
-                    && light.lemma.as_deref() == Some("する")
-                    && light.doc_tok_idx.is_some()
-                    && verb.head == light.doc_tok_idx
-                    && verb.span.end_char == light.span.start_char
-            })
+    let atoms = || clause.iter().flat_map(|b| &b.atoms);
+    let Some(verb) =
+        atoms().find(|a| a.doc_tok_idx == Some(head) && !a.is_locked && a.upos == Some(Upos::Verb))
+    else {
+        return false;
     };
-    temporal_reading.then_some(time)
+    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    if !has_verb_reading(lemma) || selects_time_value(lemma) {
+        return false;
+    }
+    if clause.iter().any(|b| {
+        b.case_particle.as_deref() == Some("から")
+            && b.atoms
+                .iter()
+                .any(|a| a.head == Some(head) && is_temporal_value_noun(a))
+    }) {
+        return false;
+    }
+    if atoms().any(|a| {
+        !a.is_locked
+            && a.head == Some(head)
+            && matches!(a.deprel.as_str(), "nsubj" | "obj")
+            && (matches!(
+                a.surface.as_str(),
+                "時間" | "時刻" | "日程" | "日時" | "日付" | "期限"
+            ) || (matches!(lemma, "戻る" | "移る" | "動く" | "帰る")
+                && is_temporal_value_noun(a)))
+    }) {
+        return false;
+    }
+
+    if verb.deprel == "root" {
+        if lemma != "する" {
+            return true;
+        }
+        // A separate する needs a following action noun: 夕方に買い物をする.
+        // In 買い物を夕方にする the time can instead be the selected value.
+        return clause.iter().any(|b| {
+            let [action, wo] = b.atoms.as_slice() else {
+                return false;
+            };
+            !action.is_locked
+                && !wo.is_locked
+                && action.deprel == "obj"
+                && action.head == Some(head)
+                && action.span.start_char >= ni.span.end_char
+                && action.span.end_char == wo.span.start_char
+                && wo.span.end_char == verb.span.start_char
+                && wo.surface == "を"
+                && wo.deprel == "case"
+                && action.doc_tok_idx.is_some()
+                && wo.head == action.doc_tok_idx
+                && has_verb_reading(&action.surface)
+                && !selects_time_value(&action.surface)
+        });
+    }
+    let Some(aux_head) = verb.head.filter(|_| verb.deprel == "advcl") else {
+        return false;
+    };
+    let Some(aux) = atoms().find(|a| {
+        a.doc_tok_idx == Some(aux_head)
+            && !a.is_locked
+            && a.upos == Some(Upos::Verb)
+            && a.deprel == "root"
+    }) else {
+        return false;
+    };
+    match aux.lemma.as_deref() {
+        // A bound verbal noun and its light verb form one lexical event.
+        Some("する") => verb.span.end_char == aux.span.start_char && lemma != "する",
+        // A linked て／で + いる expresses the aspect of the lexical event.
+        Some("いる") => {
+            lemma != "する"
+                && atoms().any(|a| {
+                    !a.is_locked
+                        && matches!(a.surface.as_str(), "て" | "で")
+                        && a.deprel == "mark"
+                        && a.head == Some(head)
+                        && verb.span.end_char == a.span.start_char
+                        && a.span.end_char == aux.span.start_char
+                })
+        }
+        _ => false,
+    }
 }
 
 fn predicates_has_passive(predicates: &[Bunsetsu]) -> bool {
@@ -9220,6 +9361,13 @@ mod motion_endpoint_tests {
             ("私は夕方に帰りません。", "我傍晚不回去。"),
             ("私は早朝に家に帰ります。", "我清晨回到家。"),
             ("私は夕方に本を読みます。", "我傍晚讀書。"),
+            ("私は夕方に働きます。", "我傍晚工作。"),
+            ("夕方にご飯を食べます。", "傍晚吃飯。"),
+            ("夕方に働きませんでした。", "傍晚沒有工作。"),
+            ("私は夕方に先生に電話します。", "我傍晚給老師打電話。"),
+            ("夕方に散歩します。", "傍晚散步。"),
+            ("会議が夕方に始まります。", "會議傍晚開始。"),
+            ("私は夕方に家に戻りました。", "我傍晚回來到家了。"),
             ("私は夕方を待ちます。", "我等待傍晚。"),
             ("夕方から図書館で勉強します。", "從傍晚在圖書館學習。"),
             ("私は先生に手紙を書きます。", "我給老師寫信。"),
@@ -9227,6 +9375,21 @@ mod motion_endpoint_tests {
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
+    }
+
+    #[test]
+    fn restoring_a_schedule_keeps_its_time_endpoint() {
+        let interval = translate("集合時間が夜から夕方に戻りました。");
+        let (before, after) = interval.split_once("從夜晚").unwrap();
+        assert!(
+            before.contains("集合時間") && after.contains("到傍晚"),
+            "{interval}"
+        );
+        let restored = translate("会議の時間が夕方に戻りました。");
+        assert!(
+            restored.contains("會議的時間") && restored.contains("到傍晚"),
+            "{restored}"
+        );
     }
 
     #[test]

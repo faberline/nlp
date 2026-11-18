@@ -1,4 +1,4 @@
-//! Report-only similarity for three adopted, development-visible banks.
+//! Report-only similarity by bank, level, and adopted development phenomenon.
 #[path = "support/ja_zh_chrf.rs"]
 mod ja_zh_chrf;
 
@@ -10,6 +10,7 @@ use faberline_nlp::doc::model::Backend;
 use faberline_nlp_translate::{
     TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate, sha256_hex,
 };
+use serde::Deserialize;
 use serde_json::Value;
 
 struct Spec<'a> {
@@ -55,6 +56,42 @@ const BANKS: [Spec<'static>; 3] = [
         row_provenance: true,
     },
 ];
+
+const PHENOMENON_MAP_FILE: &str = "phenomena/dev_groups_v1.json";
+const PHENOMENON_MAP_SHA256: &str =
+    "53e1f5361480f81b315ed94885a9bc61932e9b1e68b61f14046f72c3fd122499";
+const PHENOMENON_MAP_SOURCE: &str = "2c89250b31dba56ac8f02cd55629bf6037d3b179";
+const PHENOMENON_BANK_FILES: [&str; 2] = ["nlevels_dev_v1.json", "honorific_san_dev_v1.json"];
+const PHENOMENON_GROUP_COUNT: usize = 13;
+const PHENOMENON_MEMBER_COUNT: usize = 32;
+
+#[derive(Deserialize)]
+struct PhenomenonMap {
+    schema: String,
+    version: String,
+    source_revision: String,
+    banks: Vec<PhenomenonBank>,
+    groups: Vec<PhenomenonGroup>,
+}
+
+#[derive(Deserialize)]
+struct PhenomenonBank {
+    file: String,
+    sha256: String,
+    rows: usize,
+}
+
+#[derive(Deserialize)]
+struct PhenomenonGroup {
+    id: String,
+    members: Vec<PhenomenonMember>,
+}
+
+#[derive(Deserialize)]
+struct PhenomenonMember {
+    bank: String,
+    id: String,
+}
 
 fn original_membership() -> BTreeMap<String, String> {
     (1..=5)
@@ -207,6 +244,77 @@ fn load_banks<'a>(
     Ok(loaded)
 }
 
+fn validate_phenomenon_map(
+    text: &str,
+    expected_sha256: &str,
+) -> Result<HashMap<String, String>, &'static str> {
+    if sha256_hex(text) != expected_sha256 {
+        return Err("phenomenon map hash mismatch");
+    }
+    let map: PhenomenonMap =
+        serde_json::from_str(text).map_err(|_| "invalid phenomenon map JSON")?;
+    if map.schema != "faberline.nlp.ja_zh.dev_phenomenon_map.v1"
+        || map.version != "1.0.0"
+        || map.source_revision != PHENOMENON_MAP_SOURCE
+    {
+        return Err("phenomenon map identity mismatch");
+    }
+    if map.groups.len() != PHENOMENON_GROUP_COUNT {
+        return Err("phenomenon group count mismatch");
+    }
+
+    // The report validates the loaded banks against the same specs before measuring any row.
+    let mut expected_banks: HashMap<_, _> = BANKS
+        .iter()
+        .filter(|spec| PHENOMENON_BANK_FILES.contains(&spec.file))
+        .map(|spec| (spec.file, spec))
+        .collect();
+    let mut expected_members: HashMap<_, _> = expected_banks
+        .values()
+        .flat_map(|spec| (spec.expected)().into_keys().map(move |id| (id, spec.file)))
+        .collect();
+    if expected_banks.len() != PHENOMENON_BANK_FILES.len()
+        || expected_members.len() != PHENOMENON_MEMBER_COUNT
+    {
+        return Err("pinned phenomenon bank membership mismatch");
+    }
+    for bank in &map.banks {
+        let spec = expected_banks
+            .remove(bank.file.as_str())
+            .ok_or("unexpected or duplicate phenomenon bank")?;
+        if bank.sha256 != spec.sha256 || bank.rows != spec.count {
+            return Err("phenomenon bank hash or count mismatch");
+        }
+    }
+    if !expected_banks.is_empty() {
+        return Err("missing phenomenon bank");
+    }
+
+    let mut group_ids = HashSet::new();
+    let mut groups_by_member = HashMap::new();
+    for group in &map.groups {
+        if group.id.trim().is_empty() || !group_ids.insert(group.id.as_str()) {
+            return Err("empty or duplicate phenomenon group ID");
+        }
+        if group.members.is_empty() {
+            return Err("empty phenomenon group");
+        }
+        for member in &group.members {
+            let bank = expected_members
+                .remove(member.id.as_str())
+                .ok_or("unexpected or duplicate phenomenon member")?;
+            if member.bank != bank {
+                return Err("phenomenon member bank mismatch");
+            }
+            groups_by_member.insert(member.id.clone(), group.id.clone());
+        }
+    }
+    if !expected_members.is_empty() {
+        return Err("missing phenomenon members");
+    }
+    Ok(groups_by_member)
+}
+
 #[derive(Default)]
 struct Aggregate {
     count: usize,
@@ -237,6 +345,10 @@ fn adopted_banks_report_only() {
         std::fs::read_to_string(dir.join(file)).map_err(|_| "cannot read adopted bank")
     })
     .expect("load all adopted banks");
+    let map = std::fs::read_to_string(dir.join(PHENOMENON_MAP_FILE))
+        .expect("read adopted phenomenon map");
+    let group_by_member = validate_phenomenon_map(&map, PHENOMENON_MAP_SHA256)
+        .expect("validate adopted phenomenon map");
     let rev = Command::new("git")
         .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -256,6 +368,7 @@ fn adopted_banks_report_only() {
     let glossary = TranslationGlossary::new();
     let mut executed = HashSet::new();
     let mut overall: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut phenomena: BTreeMap<&str, Aggregate> = BTreeMap::new();
     for (spec, rows) in loaded {
         println!(
             "report-only/{}/metadata\tbank_sha256={}\treference=primary-only",
@@ -287,6 +400,12 @@ fn adopted_banks_report_only() {
             let exact = output == row.reference.trim();
             total.add(score, exact);
             levels.entry(row.level).or_default().add(score, exact);
+            if let Some(group) = group_by_member.get(&row.id) {
+                phenomena
+                    .entry(group.as_str())
+                    .or_default()
+                    .add(score, exact);
+            }
         }
         for (level, ids) in &mut members {
             ids.sort();
@@ -312,6 +431,19 @@ fn adopted_banks_report_only() {
         );
     }
     println!("report-only/all/count\tn={}", executed.len());
+    let mapped_count = phenomena
+        .values()
+        .map(|aggregate| aggregate.count)
+        .sum::<usize>();
+    assert_eq!(mapped_count, PHENOMENON_MEMBER_COUNT);
+    assert_eq!(phenomena.len(), PHENOMENON_GROUP_COUNT);
+    println!(
+        "report-only/phenomena/metadata\tmap_sha256={PHENOMENON_MAP_SHA256}\treference=primary-only\tgroups={}\tn={mapped_count}",
+        phenomena.len()
+    );
+    for (group, aggregate) in phenomena {
+        aggregate.print(&format!("phenomena/{group}"));
+    }
 }
 
 #[cfg(test)]
@@ -429,5 +561,94 @@ mod validation_tests {
             ..spec
         };
         assert!(validate_bank(&text, &spec).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_phenomenon_maps() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/ja_zh");
+        let text = std::fs::read_to_string(dir.join(PHENOMENON_MAP_FILE)).unwrap();
+        assert_eq!(
+            validate_phenomenon_map(&text, "wrong"),
+            Err("phenomenon map hash mismatch")
+        );
+        assert_eq!(
+            validate_phenomenon_map("{", &sha256_hex("{")),
+            Err("invalid phenomenon map JSON")
+        );
+        let base: Value = serde_json::from_str(&text).unwrap();
+        for (pointer, replacement, expected_error) in [
+            (
+                "/schema",
+                json!("other"),
+                "phenomenon map identity mismatch",
+            ),
+            (
+                "/version",
+                json!("2.0.0"),
+                "phenomenon map identity mismatch",
+            ),
+            (
+                "/source_revision",
+                json!("other"),
+                "phenomenon map identity mismatch",
+            ),
+            ("/banks", json!([]), "missing phenomenon bank"),
+            (
+                "/banks/0/sha256",
+                json!("wrong"),
+                "phenomenon bank hash or count mismatch",
+            ),
+            (
+                "/banks/0/rows",
+                json!(19),
+                "phenomenon bank hash or count mismatch",
+            ),
+            (
+                "/banks/0/file",
+                json!("nlevels_expansion_dev_v1.json"),
+                "unexpected or duplicate phenomenon bank",
+            ),
+            (
+                "/banks/1",
+                base["banks"][0].clone(),
+                "unexpected or duplicate phenomenon bank",
+            ),
+            ("/groups", json!([]), "phenomenon group count mismatch"),
+            (
+                "/groups/0/id",
+                base["groups"][1]["id"].clone(),
+                "empty or duplicate phenomenon group ID",
+            ),
+            ("/groups/0/members", json!([]), "empty phenomenon group"),
+            (
+                "/groups/0/members/0/id",
+                json!("N5X-01"),
+                "unexpected or duplicate phenomenon member",
+            ),
+            (
+                "/groups/0/members/0",
+                base["groups"][1]["members"][0].clone(),
+                "unexpected or duplicate phenomenon member",
+            ),
+            (
+                "/groups/0/members/0/bank",
+                json!("honorific_san_dev_v1.json"),
+                "phenomenon member bank mismatch",
+            ),
+            (
+                "/groups/0/members",
+                json!([base["groups"][0]["members"][0].clone()]),
+                "missing phenomenon members",
+            ),
+        ] {
+            let mut modified = base.clone();
+            *modified.pointer_mut(pointer).unwrap() = replacement;
+            let text = modified.to_string();
+            assert_eq!(
+                validate_phenomenon_map(&text, &sha256_hex(&text)),
+                Err(expected_error),
+                "{pointer}",
+            );
+        }
     }
 }

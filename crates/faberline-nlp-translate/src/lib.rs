@@ -48,7 +48,7 @@ pub use crate::schema::{
     TranslateOptions, TranslateUnknown, TranslateUnknownKind, TranslatedDocument,
     TranslatedParagraph, TranslatedSentence, TranslationGlossary, TranslationTrack, sha256_hex,
 };
-use crate::variant::{convert_fragment_variant, convert_sentence_variant};
+use crate::variant::{HintedJapaneseTerm, convert_fragment_variant, convert_sentence_variant};
 
 /// Reusable loaded Seq2Seq translation model + tokenizer bundle for multi-document / batch runs.
 pub struct LoadedTranslateModel {
@@ -329,6 +329,16 @@ pub fn translate_document(
                     })
                     .collect();
 
+                let hinted_term = if sent.lang == Lang::Zh && seq2seq.is_none() {
+                    HintedJapaneseTerm::lookup(
+                        &chars,
+                        sent.span,
+                        options.target,
+                        options.source_hint,
+                    )
+                } else {
+                    None
+                };
                 let outcome = translate_single_sentence(
                     si,
                     &chars,
@@ -336,6 +346,7 @@ pub fn translate_document(
                     narrative,
                     &tokens_by_sent[si],
                     &sent_inline_opaques,
+                    hinted_term,
                     options,
                     glossary,
                     &compiled_glossary,
@@ -370,7 +381,11 @@ pub fn translate_document(
                 out_sentences.push(TranslatedSentence {
                     sentence: si,
                     paragraph: sent.paragraph,
-                    source_lang: sent.lang,
+                    source_lang: if hinted_term.is_some() {
+                        Lang::Ja
+                    } else {
+                        sent.lang
+                    },
                     track: outcome.track,
                     source_span: sent.span,
                     target_span: Span {
@@ -422,7 +437,7 @@ pub fn translate_document(
     out_opaque_records.sort_by_key(|o| (o.source_span.start_char, o.source_span.end_char));
     out_unknown.sort_by_key(|u| (u.source_span.start_char, u.source_span.end_char, u.kind));
 
-    let doc_lang = dominant_doc_lang(doc);
+    let doc_lang = dominant_doc_lang(&out_sentences);
     let doc_track = summarize_doc_track(&out_sentences, options.target, doc_lang);
     let target_sha256 = sha256_hex(&target_text);
 
@@ -467,6 +482,7 @@ fn translate_single_sentence(
     #[cfg(not(feature = "narrative"))] narrative: Option<&()>,
     sent_tokens: &[&Token],
     sent_inline_opaques: &[&Opaque],
+    hinted_term: Option<HintedJapaneseTerm>,
     options: &TranslateOptions,
     glossary: &TranslationGlossary,
     compiled_glossary: &CompiledGlossary,
@@ -594,8 +610,8 @@ fn translate_single_sentence(
             sent_span,
             sent_tokens,
             &lock_table,
-            options.target,
-            options.source_hint,
+            options,
+            hinted_term,
         );
         let report = lock_table.restore(&converted);
         let clause_alignments = build_same_family_clause_alignments(
@@ -605,6 +621,7 @@ fn translate_single_sentence(
             sent_tokens,
             &lock_table,
             options,
+            hinted_term,
         );
         let mut outcome = finalize_sentence_outcome(
             sentence_idx,
@@ -769,14 +786,7 @@ fn translate_single_sentence(
     // emit `TranslateUnknownKind::NoModel`.
     let fallback_masked =
         if sent.lang == Lang::Mixed && (options.target.is_zh() || options.target.is_en()) {
-            convert_sentence_with_locks(
-                chars,
-                sent_span,
-                sent_tokens,
-                &lock_table,
-                options.target,
-                options.source_hint,
-            )
+            convert_sentence_with_locks(chars, sent_span, sent_tokens, &lock_table, options, None)
         } else {
             lock_table.mask_span(chars, sent_span)
         };
@@ -945,11 +955,18 @@ fn convert_sentence_with_locks(
     sent_span: Span,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
-    target: TargetVariant,
-    source_hint: Option<TargetVariant>,
+    options: &TranslateOptions,
+    hinted_term: Option<HintedJapaneseTerm>,
 ) -> String {
+    let convert = |span, tokens: &[&Token]| {
+        hinted_term
+            .and_then(|term| term.render(chars, span))
+            .unwrap_or_else(|| {
+                convert_sentence_variant(chars, span, tokens, options.target, options.source_hint)
+            })
+    };
     if lock_table.is_empty() {
-        return convert_sentence_variant(chars, sent_span, sent_tokens, target, source_hint);
+        return convert(sent_span, sent_tokens);
     }
 
     let mut out = String::new();
@@ -972,13 +989,7 @@ fn convert_sentence_with_locks(
                 .copied()
                 .filter(|t| t.span.start_char >= cursor && t.span.end_char <= s)
                 .collect();
-            out.push_str(&convert_sentence_variant(
-                chars,
-                sub_span,
-                &sub_tokens,
-                target,
-                source_hint,
-            ));
+            out.push_str(&convert(sub_span, &sub_tokens));
         }
         out.push_str(&lock.placeholder);
         cursor = e;
@@ -993,13 +1004,7 @@ fn convert_sentence_with_locks(
             .copied()
             .filter(|t| t.span.start_char >= cursor && t.span.end_char <= sent_span.end_char)
             .collect();
-        out.push_str(&convert_sentence_variant(
-            chars,
-            sub_span,
-            &sub_tokens,
-            target,
-            source_hint,
-        ));
+        out.push_str(&convert(sub_span, &sub_tokens));
     }
     out
 }
@@ -1011,6 +1016,7 @@ fn build_same_family_clause_alignments(
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
     options: &TranslateOptions,
+    hinted_term: Option<HintedJapaneseTerm>,
 ) -> Vec<ClauseAlignment> {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let clauses: Vec<(usize, &faberline_nlp::doc::Clause)> = doc
@@ -1045,8 +1051,8 @@ fn build_same_family_clause_alignments(
             clause.span,
             &c_tokens,
             lock_table,
-            options.target,
-            options.source_hint,
+            options,
+            hinted_term,
         );
         let restored_c = restore_existing_only(lock_table, &masked_c);
         let mut final_c = restored_c;
@@ -1210,6 +1216,14 @@ fn translate_inline_fragment(
     let ascii_only = body.is_ascii();
     let mut unks = Vec::new();
 
+    if seq2seq.is_none()
+        && lock_table.is_empty()
+        && let Some(term) =
+            HintedJapaneseTerm::lookup(chars, body_span, options.target, options.source_hint)
+        && let Some(rendered) = term.render(chars, body_span)
+    {
+        return (rendered, Vec::new(), Vec::new());
+    }
     let converted =
         if seq2seq.is_none() && options.target.is_zh() && ja_zh::has_kana_no_hangul(body) {
             ja_zh::translate_ja_fragment(&masked, options.target)
@@ -1311,10 +1325,10 @@ fn localize_window_sep(sep: &str, target: TargetVariant) -> String {
     }
 }
 
-fn dominant_doc_lang(doc: &Document) -> Lang {
+fn dominant_doc_lang(sentences: &[TranslatedSentence]) -> Lang {
     let mut counts = [0usize; 6];
-    for s in &doc.segmentation.sentences {
-        match s.lang {
+    for s in sentences {
+        match s.source_lang {
             Lang::Zh => counts[0] += 1,
             Lang::En => counts[1] += 1,
             Lang::Ja => counts[2] += 1,

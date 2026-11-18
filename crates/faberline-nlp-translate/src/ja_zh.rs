@@ -2610,6 +2610,17 @@ fn nominal_conditional_tail(atoms: &[Atom]) -> Option<(&[Atom], [Atom; 2])> {
         return None;
     }
 
+    // ADP で is ambiguous. Only a recognized person or membership noun
+    // licenses the qualification reading. Leave other ADP complements to
+    // the existing oblique path, even when the instrument is unknown.
+    if de.upos == Some(Upos::Adp)
+        && !(nominal.upos == Some(Upos::Noun)
+            && (matches!(nominal.surface.as_str(), "委員" | "会員")
+                || is_demonstrative_person_noun(nominal)))
+    {
+        return None;
+    }
+
     let copula = match (inflection.surface.as_str(), inflection.upos) {
         ("あれ", Some(Upos::Verb | Upos::Aux)) => "だ",
         ("なけれ", Some(Upos::Adj | Upos::Aux)) => "ではない",
@@ -10298,6 +10309,10 @@ mod existence_rule_tests {
         }
         let qualified = translate("彼がこの学校の先生であれば、説明します。", &glossary);
         assert_eq!(qualified.target_text, "如果他是這學校的老師，說明。");
+        let omitted = translate("医師であれば、説明します。", &glossary);
+        assert_eq!(omitted.target_text, "如果是醫師，說明。");
+        let owner = translate("車の所有者が会員であれば、登録します。", &glossary);
+        assert_eq!(owner.target_text, "如果車的所有者是會員，註冊。");
     }
 
     #[test]
@@ -10316,6 +10331,28 @@ mod existence_rule_tests {
         let obligation = translate("学生でなければならない。", &glossary);
         assert!(obligation.target_text.contains("必須"));
         assert!(!obligation.target_text.contains("如果"));
+    }
+
+    #[test]
+    fn nominal_conditions_preserve_ambiguous_instrumental_de() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("私は車であれば通勤できます。", "如果我用車那個，通勤能夠。"),
+            (
+                "私は車でなければ通勤できません。",
+                "如果我用車，通勤不能夠。",
+            ),
+            (
+                "私が自転車であれば、通勤できます。",
+                "如果我在自轉車那個，通勤能夠。",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
     }
 
     #[test]

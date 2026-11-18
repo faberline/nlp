@@ -5284,7 +5284,7 @@ fn translate_clause_bunsetsus(
     let mut temporal_others: Vec<String> = Vec::new();
     let mut joint_manner = None;
     let mut joint_participants = None;
-    let mut joint_companion = None;
+    let mut joint_companions = Vec::new();
     let mut adverbs: Vec<String> = Vec::new();
     let mut iobjs: Vec<PlacedArg> = Vec::new();
     let mut objs: Vec<String> = Vec::new();
@@ -5538,7 +5538,7 @@ fn translate_clause_bunsetsus(
                 joint_manner = Some((invitation, wh_question));
             }
             BunsetsuRole::JointCompanion => {
-                joint_companion = Some(format!("和{}", render_bunsetsu_np(&b, target)));
+                joint_companions.push(format!("和{}", render_bunsetsu_np(&b, target)));
             }
             BunsetsuRole::MotionPurpose => purpose = b.atoms[0].lemma.clone(),
             BunsetsuRole::PurposeModifier if b.atoms[0].surface == "一緒" => {
@@ -6590,7 +6590,12 @@ fn translate_clause_bunsetsus(
             if added_mo_adv && adverbs.first().is_some_and(|a| a == "也") {
                 parts.push(adverbs.remove(0));
             }
-            parts.extend(joint_companion.take());
+            // 大家 names the subject. A number counts the whole group,
+            // including the person in 誰かと二人で.
+            if joint_participants.as_deref() == Some("大家") {
+                parts.extend(joint_participants.take());
+            }
+            parts.append(&mut joint_companions);
             parts.extend(joint_participants.take());
             parts.push("一起".to_owned());
             joint_manner.take();
@@ -6718,7 +6723,7 @@ fn translate_clause_bunsetsus(
             }
         }
     }
-    parts.extend(joint_companion);
+    parts.extend(joint_companions);
     if joint_manner.is_some() {
         parts.push("一起".to_owned());
     }
@@ -8374,6 +8379,74 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
         && to.span.end_char == groups[i].atoms[0].span.start_char
     {
         groups[before].role = BunsetsuRole::JointCompanion;
+    }
+    let has_object = body.iter().any(|a| a.deprel == "obj" && governs(a));
+    for group in groups {
+        // The first か belongs to the pronoun (誰かと). The final か belongs
+        // to the verb. A bare question word with a case marker remains a wh question.
+        let [word, indef, rest @ ..] = group.atoms.as_slice() else {
+            continue;
+        };
+        if word.is_locked
+            || indef.is_locked
+            || word.upos != Some(Upos::Pron)
+            || !governs(word)
+            || word.doc_tok_idx.is_none()
+            || indef.upos != Some(Upos::Part)
+            || indef.surface != "か"
+            || indef.deprel != "discourse"
+            || indef.head != word.doc_tok_idx
+            || word.span.end_char != indef.span.start_char
+        {
+            continue;
+        }
+        let case = match rest {
+            [] => None,
+            [case]
+                if !case.is_locked
+                    && case.upos == Some(Upos::Adp)
+                    && case.deprel == "case"
+                    && case.head == word.doc_tok_idx
+                    && case.span.start_char == indef.span.end_char =>
+            {
+                Some(case.surface.as_str())
+            }
+            _ => continue,
+        };
+        let (localized, role) = match (word.surface.as_str(), word.deprel.as_str(), case) {
+            ("誰", "obl", Some("と")) => ("某個人", BunsetsuRole::JointCompanion),
+            ("何", "obj", Some("を")) if can_offer => ("點什麼", BunsetsuRole::Obj),
+            // These actions take content as a direct object. Colloquial 何か
+            // may omit を immediately before the verb, unlike a locative or subject.
+            ("何", "obl", None)
+                if can_offer
+                    && !has_object
+                    && indef.span.end_char == action.span.start_char
+                    && matches!(
+                        lemma,
+                        "読む"
+                            | "飲む"
+                            | "食べる"
+                            | "書く"
+                            | "買う"
+                            | "作る"
+                            | "見る"
+                            | "聞く"
+                            | "選ぶ"
+                    ) =>
+            {
+                ("點什麼", BunsetsuRole::Obj)
+            }
+            ("どこ", "obl", Some("へ" | "に" | "で")) => ("某個地方", group.role),
+            _ => continue,
+        };
+        let mut noun = word.clone();
+        noun.surface = localized.to_owned();
+        noun.lemma = None;
+        noun.span.end_char = indef.span.end_char;
+        noun.is_locked = true;
+        group.atoms.splice(0..2, [noun]);
+        group.role = role;
     }
 }
 
@@ -10807,6 +10880,18 @@ mod motion_endpoint_tests {
                 "要不要一起在圖書館讀書？",
             ),
             ("友達と一緒に映画を見ませんか。", "要不要和朋友一起看電影？"),
+            ("誰かと一緒に歌いませんか。", "要不要和某個人一起唱歌？"),
+            ("一緒に誰かと歩きませんか。", "要不要和某個人一起走？"),
+            (
+                "誰かと何かを一緒に読みませんか。",
+                "要不要和某個人一起讀點什麼？",
+            ),
+            ("みんなで何か読みませんか。", "要不要大家一起讀點什麼？"),
+            (
+                "一緒にどこかで何か食べませんか。",
+                "要不要一起在某個地方吃點什麼？",
+            ),
+            ("誰かと二人で歌いませんか。", "要不要和某個人兩人一起唱歌？"),
             ("私たちと一緒に歩きませんか。", "要不要和我們一起走？"),
             ("あなたも一緒に歌いませんか。", "你要不要也一起唱歌？"),
             ("みんなで歌いませんか。", "要不要大家一起唱歌？"),
@@ -10831,6 +10916,16 @@ mod motion_endpoint_tests {
             "大家不一起讀什麼？"
         );
         assert_eq!(translate("みんなで遊べませんか。"), "大家不能一起玩嗎？");
+        assert_eq!(
+            translate("誰かと一緒に何を読みませんか。"),
+            "不和某個人一起讀什麼？"
+        );
+        assert_eq!(
+            translate("先生は誰かと一緒に歌いませんか。"),
+            "老師不和某個人一起哼唱嗎？"
+        );
+        assert!(!translate("一緒に何か起きませんか。").contains("點什麼"));
+        assert!(!translate("みんなで何か作業をしませんか。").contains("點什麼"));
         assert_eq!(translate("二人で何を読みませんか。"), "兩人不一起讀什麼？");
         assert_eq!(translate("一緒に飲めませんか。"), "不能一起喝嗎？");
         assert_eq!(

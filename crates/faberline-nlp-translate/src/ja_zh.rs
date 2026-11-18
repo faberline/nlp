@@ -7,6 +7,8 @@
 
 use std::collections::HashMap;
 
+mod counted_object;
+
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
 
@@ -105,6 +107,8 @@ enum BunsetsuRole {
     Obl,
     MotionPurpose,
     PurposeModifier,
+    ProposalModifier,
+    ProposalCompanion,
     PurposeCompanion,
     PurposePartner(&'static str),
     PurposeRecipient,
@@ -3150,39 +3154,14 @@ fn nominal_receiving_amount(
     explicit_number.then_some(NominalReceivingAmount::Count { numeral, unit })
 }
 
-fn nominal_receiving_counter(unit: &str, noun: &Atom) -> Option<&'static str> {
-    let noun = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
-    Some(match unit {
-        "枚" => match noun.as_str() {
-            "紙" | "地圖" | "照片" | "票" | "海報" | "明信片" | "表格" => "張",
-            _ => "枚",
-        },
-        "冊" => "本",
-        "個" => "個",
-        "台" => match noun.as_str() {
-            "車" | "公車" | "汽車" | "卡車" | "機車" | "自行車" | "腳踏車" => "輛",
-            _ => "台",
-        },
-        "件" => "件",
-        "匹" => "隻",
-        "杯" => "杯",
-        // 本 is a shape counter. The target depends on the object itself.
-        "本" => match noun.as_str() {
-            "筆" | "鉛筆" | "鋼筆" | "原子筆" => "支",
-            "水" | "酒" | "啤酒" | "果汁" => "瓶",
-            _ => return None,
-        },
-        _ => return None,
-    })
-}
-
 fn render_nominal_receiving_count(
     object: &mut Bunsetsu,
     noun: &Atom,
     numeral: &str,
     unit: &str,
 ) -> Option<String> {
-    let counter = nominal_receiving_counter(unit, noun)?;
+    let zh = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
+    let counter = counted_object::classifier(unit, &zh)?;
     let mut quantity = String::new();
     if object.atoms.iter().any(|atom| atom.upos == Some(Upos::Det)) {
         // The explicit counter takes the place of the nominal renderer's
@@ -3193,12 +3172,7 @@ fn render_nominal_receiving_count(
         quantity.push(attached_demonstrative(det, head)?);
         object.atoms.remove(0);
     }
-    if numeral == "二" {
-        quantity.push('兩');
-    } else {
-        quantity.push_str(&translate_single_ja_term(numeral, None, Some(Upos::Num)));
-    }
-    quantity.push_str(counter);
+    counted_object::push_quantity(&mut quantity, numeral, counter);
     Some(quantity)
 }
 
@@ -3426,16 +3400,25 @@ fn translate_clause_atoms(
         return res;
     }
 
-    // Group the nominal complement before attaching the conditional copula so
-    // its modifiers are folded in the same way as other noun phrases.
-    let (body, condition_tail) = match nominal_conditional_tail(atoms) {
+    let proposal = polite_volitional(atoms);
+    // In a proposal question, か asks whether the suggestion is welcome.
+    // Leave the original verb and arguments on the ordinary assembly path.
+    let body = if proposal.is_some_and(|(_, question)| question) {
+        &atoms[..atoms.len() - 1]
+    } else {
+        atoms
+    };
+    // Group the complement and its modifiers before attaching the conditional copula.
+    let (body, condition_tail) = match nominal_conditional_tail(body) {
         Some((body, tail)) => (body, Some(tail)),
-        None => (atoms, None),
+        None => (body, None),
     };
 
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
-    let merged_atoms = apply_phrase_matches(body);
+    let counted = counted_object::bind(body);
+    let merged_atoms = apply_phrase_matches(counted.as_deref().unwrap_or(body));
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
+    recover_route_predicate(&mut norm_atoms, body);
     let motion_go = motion_purpose_governor(&norm_atoms, ctx.inside_quote);
     if let Some(go) = motion_go {
         recover_split_purpose_stems(&mut norm_atoms, go);
@@ -3447,7 +3430,10 @@ fn translate_clause_atoms(
         mark_motion_purpose(&mut grouped, &norm_atoms, go);
     }
     mark_joint_question(&mut grouped, &norm_atoms, body);
-    let grouped = compose_relative_daypart(grouped);
+    let mut grouped = compose_relative_daypart(grouped);
+    if let Some((predicate, _)) = proposal {
+        localize_proposal_arguments(&mut grouped, predicate, body, target);
+    }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, target);
     if let Some(tail) = condition_tail
         && let Some(complement) = bunsetsus.last_mut()
@@ -3457,7 +3443,7 @@ fn translate_clause_atoms(
         complement.sconj_tail = Some("ば".to_owned());
     }
 
-    translate_clause_bunsetsus(
+    let (mut text, subject_only) = translate_clause_bunsetsus(
         bunsetsus,
         atoms,
         &raw_clause,
@@ -3465,7 +3451,216 @@ fn translate_clause_atoms(
         allow_pro_drop_inject,
         ctx,
         target,
-    )
+    );
+    if let Some((predicate, question)) = proposal {
+        if !question {
+            text.push('吧');
+        } else if body.iter().enumerate().any(|(i, a)| {
+            !a.is_locked
+                && proposal_attachment(a, predicate, body)
+                && matches!(
+                    a.surface.as_str(),
+                    "何" | "何時" | "誰" | "いつ" | "どこ" | "どれ" | "どう" | "どちら"
+                )
+                && !body
+                    .get(i..i + 2)
+                    .is_some_and(|pair| indefinite_argument(pair, predicate).is_some())
+        }) {
+            text.push_str("好呢");
+        } else if matches!(body, [verb, _, _] if verb.lemma.as_deref() == Some("手伝う")) {
+            text = format!("需要{text}嗎");
+        } else {
+            text.push_str("，好嗎");
+        }
+    }
+    (text, subject_only)
+}
+
+fn polite_volitional(atoms: &[Atom]) -> Option<(usize, bool)> {
+    let (body, question) = match atoms {
+        [body @ .., ka]
+            if !ka.is_locked
+                && ka.surface == "か"
+                && ka.upos == Some(Upos::Part)
+                && ka.deprel == "discourse" =>
+        {
+            (body, Some(ka))
+        }
+        _ => (atoms, None),
+    };
+    let [.., verb, polite, volition] = body else {
+        return None;
+    };
+    let pred = verb.doc_tok_idx?;
+    if verb.is_locked
+        || verb.upos != Some(Upos::Verb)
+        || polite.is_locked
+        || polite.upos != Some(Upos::Aux)
+        || polite.surface != "ましょ"
+        || polite.lemma.as_deref() != Some("ます")
+        || polite.deprel != "aux"
+        || volition.is_locked
+        || volition.upos != Some(Upos::Aux)
+        || volition.surface != "う"
+        || volition.deprel != "aux"
+        || polite.head != Some(pred)
+        || volition.head != Some(pred)
+        || verb.span.end_char != polite.span.start_char
+        || polite.span.end_char != volition.span.start_char
+        || question
+            .is_some_and(|ka| ka.head != Some(pred) || volition.span.end_char != ka.span.start_char)
+    {
+        return None;
+    }
+    Some((pred, question.is_some()))
+}
+
+// The CPU parser can attach a manner phrase to an intervening adjectival
+// modifier, or a question word to the noun it precedes. Neither can carry
+// its own finite mood. Stop before crossing a second verbal predicate.
+fn proposal_attachment(atom: &Atom, predicate: usize, source: &[Atom]) -> bool {
+    atom.head == Some(predicate)
+        || atom.head.is_some_and(|head| {
+            source.iter().any(|parent| {
+                parent.doc_tok_idx == Some(head)
+                    && parent.head == Some(predicate)
+                    && !parent.is_locked
+                    && ((atom.deprel == "compound"
+                        && matches!(parent.upos, Some(Upos::Noun | Upos::Propn)))
+                        || (parent.deprel == "advcl" && parent.upos == Some(Upos::Adj)))
+            })
+        })
+}
+
+fn proposal_numeral(atom: &Atom) -> bool {
+    !atom.is_locked
+        && !atom.surface.is_empty()
+        && atom.surface.chars().all(|ch| matches!(ch,
+            '0'..='9' | '０'..='９' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '百' | '千' | '万' | '零' | '〇'))
+}
+
+fn localize_proposal_arguments(
+    groups: &mut Vec<Bunsetsu>,
+    predicate: usize,
+    source: &[Atom],
+    target: TargetVariant,
+) {
+    let Some(action) = source.iter().find(|a| a.doc_tok_idx == Some(predicate)) else {
+        return;
+    };
+    localize_indefinite_arguments(groups, action, source);
+    let companion = place_companion(source, predicate);
+    let speaker_offers = source.iter().any(|a| {
+        !a.is_locked
+            && a.head == Some(predicate)
+            && a.deprel == "nsubj"
+            && matches!(
+                a.surface.as_str(),
+                "私" | "わたし" | "僕" | "ぼく" | "俺" | "おれ"
+            )
+    });
+    // Keep modifiers separate before the general noun/coordination fold.
+    let mut previous: Vec<Bunsetsu> = Vec::with_capacity(groups.len());
+    for mut group in std::mem::take(groups) {
+        if companion.is_some()
+            && matches!(group.atoms.as_slice(), [.., noun, case] if noun.doc_tok_idx == companion
+                && !case.is_locked && case.surface == "と" && case.head == companion)
+        {
+            group.role = BunsetsuRole::ProposalCompanion;
+        }
+        if let [prefix @ .., noun, case] = group.atoms.as_slice()
+            && !noun.is_locked
+            && !case.is_locked
+            && noun.deprel == "obl"
+            && proposal_attachment(noun, predicate, source)
+            && noun.doc_tok_idx.is_some()
+            && case.head == noun.doc_tok_idx
+            && case.deprel == "case"
+            && noun.span.end_char == case.span.start_char
+        {
+            let mut first = group.atoms[0].span.start_char;
+            let text = match (noun.surface.as_str(), case.surface.as_str()) {
+                ("みんな" | "皆", "で") if prefix.is_empty() => Some("大家一起".to_owned()),
+                ("一緒", "に") if prefix.is_empty() => {
+                    if previous.last().is_some_and(|g| {
+                        matches!(g.atoms.as_slice(), [.., partner, to]
+                            if !to.is_locked && to.surface == "と" && to.deprel == "case"
+                                && to.head == partner.doc_tok_idx && to.head.is_some()
+                                && partner.head == Some(predicate)
+                                && to.span.end_char == first)
+                    }) {
+                        let partner = previous.pop().unwrap();
+                        first = partner.atoms[0].span.start_char;
+                        Some(format!("和{}一起", render_bunsetsu_np(&partner, target)))
+                    } else {
+                        Some("一起".to_owned())
+                    }
+                }
+                ("何時", "に") if prefix.is_empty() => Some("幾點".to_owned()),
+                ("日", "に")
+                    if matches!(prefix, [weekday]
+                        if !weekday.is_locked && weekday.surface == "曜" && weekday.head == noun.doc_tok_idx
+                            && weekday.span.end_char == noun.span.start_char)
+                        && previous.last().is_some_and(|g| {
+                            matches!(g.atoms.as_slice(), [wh]
+                            if !wh.is_locked && wh.surface == "何" && wh.deprel == "compound"
+                                && wh.head == noun.doc_tok_idx && wh.span.end_char == first)
+                        }) =>
+                {
+                    first = previous.pop().unwrap().atoms[0].span.start_char;
+                    Some("星期幾".to_owned())
+                }
+                ("人", "で")
+                    if !prefix.is_empty()
+                        && prefix.iter().all(proposal_numeral)
+                        && group
+                            .atoms
+                            .windows(2)
+                            .all(|pair| pair[0].span.end_char == pair[1].span.start_char) =>
+                {
+                    let mut count: String = prefix.iter().map(|a| a.surface.as_str()).collect();
+                    while previous.last().is_some_and(|g| {
+                        g.atoms.iter().all(proposal_numeral)
+                            && g.atoms.last().is_some_and(|a| a.span.end_char == first)
+                    }) {
+                        let prior = previous.pop().unwrap();
+                        first = prior.atoms[0].span.start_char;
+                        let digits: String =
+                            prior.atoms.iter().map(|a| a.surface.as_str()).collect();
+                        count.insert_str(0, &digits);
+                    }
+                    match count.as_str() {
+                        "一" | "1" | "１" => Some("一個人".to_owned()),
+                        "二" | "2" | "２" => Some("兩個人一起".to_owned()),
+                        _ => Some(format!("{count}個人一起")),
+                    }
+                }
+                _ => None,
+            };
+            if let Some(text) = text {
+                let mut adverb = noun.clone();
+                adverb.surface = text;
+                adverb.span.start_char = first;
+                adverb.span.end_char = case.span.end_char;
+                adverb.is_locked = true;
+                group.atoms = vec![adverb];
+                group.role = BunsetsuRole::ProposalModifier;
+                group.case_particle = None;
+            }
+        }
+        if speaker_offers
+            && group.role == BunsetsuRole::Predicate
+            && group.atoms.iter().any(|a| {
+                !a.is_locked
+                    && a.doc_tok_idx == Some(predicate)
+                    && a.lemma.as_deref() != Some("来る")
+            })
+        {
+            prepend_locked_atom(&mut group, "來".to_owned());
+        }
+        previous.push(group);
+    }
+    *groups = previous;
 }
 
 // Only match at a clause boundary. In obligation and proportional patterns,
@@ -5520,7 +5715,7 @@ fn is_building_floor(atom: &Atom) -> bool {
     !atom.is_locked && atom.lemma.as_deref() == Some(BUILDING_FLOOR)
 }
 
-fn is_floor_number(surface: &str) -> bool {
+fn is_japanese_numeral(surface: &str) -> bool {
     !surface.is_empty()
         && surface.chars().all(|ch| {
             matches!(
@@ -5643,7 +5838,7 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
         while let Some(number) = start.checked_sub(1).and_then(|i| atoms.get(i))
             && !number.is_locked
             && matches!(number.upos, Some(Upos::Num | Upos::Noun))
-            && is_floor_number(&number.surface)
+            && is_japanese_numeral(&number.surface)
             && number.span.end_char == atoms[start].span.start_char
         {
             start -= 1;
@@ -5651,7 +5846,7 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
         if start == end {
             return None;
         }
-    } else if !is_floor_number(prefix.strip_prefix("地下").unwrap_or(prefix)) {
+    } else if !is_japanese_numeral(prefix.strip_prefix("地下").unwrap_or(prefix)) {
         return None;
     }
     if !prefix.starts_with("地下") && start > 0 {
@@ -5738,7 +5933,7 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
                 || atoms[start..end].iter().any(|number| {
                     number.head == Some(floor_idx)
                         && number.deprel == "nummod"
-                        && is_floor_number(&number.surface)
+                        && is_japanese_numeral(&number.surface)
                 });
             spatial_case
                 && has_number_link
@@ -5813,6 +6008,7 @@ fn translate_clause_bunsetsus(
     let mut adverbs: Vec<String> = Vec::new();
     let mut iobjs: Vec<PlacedArg> = Vec::new();
     let mut objs: Vec<String> = Vec::new();
+    let mut route = None;
     let mut purpose = None;
     let mut purpose_partners = Vec::new();
     let mut purpose_recipients = Vec::new();
@@ -5844,6 +6040,9 @@ fn translate_clause_bunsetsus(
         .filter(|b| b.role == BunsetsuRole::Predicate)
         .cloned()
         .collect();
+    let motion = governed_route_motion(&candidates, source);
+    let motion_head = motion.map(|m| m.head);
+    let mut traversal_object = false;
     // Interpret a source-linked terminal が on a clone first. Do not mutate
     // clause metadata until every standalone existential guard has passed.
     let mut candidate_contrast = false;
@@ -6064,7 +6263,7 @@ fn translate_clause_bunsetsus(
                         Some(format!("{count}人"))
                     }
                 };
-                joint_manner = Some((invitation, wh_question));
+                joint_manner = Some((manner, invitation, wh_question));
             }
             BunsetsuRole::JointCompanion => {
                 joint_companions.push(format!("和{}", render_bunsetsu_np(&b, target)));
@@ -6076,7 +6275,12 @@ fn translate_clause_bunsetsus(
             BunsetsuRole::PurposeCompanion => {
                 go_together.push(format!("和{}", render_bunsetsu_np(&b, target)));
             }
-            BunsetsuRole::PurposeModifier => temporal_others.push(render_bunsetsu_np(&b, target)),
+            BunsetsuRole::PurposeModifier | BunsetsuRole::ProposalModifier => {
+                temporal_others.push(render_bunsetsu_np(&b, target));
+            }
+            BunsetsuRole::ProposalCompanion => {
+                temporal_others.push(format!("和{}", render_bunsetsu_np(&b, target)));
+            }
             BunsetsuRole::PurposePartner(marker) => {
                 purpose_partners.push(format!("{marker}{}", render_bunsetsu_np(&b, target)));
             }
@@ -6143,7 +6347,7 @@ fn translate_clause_bunsetsus(
                         is_plain_clock_ni: is_plain_clock_ni(&b),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
-                        physical_goal_head: negative_go_place_head(&b),
+                        physical_goal_head: physical_goal_head(&b),
                     });
                 }
             }
@@ -6188,14 +6392,22 @@ fn translate_clause_bunsetsus(
                         is_plain_clock_ni: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
-                        physical_goal_head: negative_go_place_head(&b),
+                        physical_goal_head: physical_goal_head(&b),
                     });
                 }
             }
             BunsetsuRole::Obj => {
-                let s = render_bunsetsu_np(&b, target);
-                if !s.is_empty() {
-                    objs.push(s);
+                let text = render_bunsetsu_np(&b, target);
+                if let Some(marker) = motion
+                    .filter(|m| !m.expressed_by_verb)
+                    .and_then(|m| route_marker(&b, source, m.head))
+                {
+                    route = Some(format!("{marker}{text}"));
+                } else if !text.is_empty() {
+                    traversal_object |= motion.is_some_and(|m| {
+                        m.expressed_by_verb && governs_traversed_space(source, m.head)
+                    });
+                    objs.push(text);
                 }
             }
             BunsetsuRole::Predicate => {
@@ -7072,7 +7284,7 @@ fn translate_clause_bunsetsus(
             .any(|m| matches!(m.as_str(), "不" | "沒有"));
     let offer = polite_negative_question
         && front_modals.is_empty()
-        && joint_manner.is_some_and(|(invitation, _)| invitation);
+        && joint_manner.is_some_and(|(_, invitation, _)| invitation);
     if offer {
         inner_pre_mods.retain(|m| m != "不");
         sfp_suffix = Some("？");
@@ -7081,7 +7293,9 @@ fn translate_clause_bunsetsus(
         } else if verb_core == "哼唱" {
             verb_core = if objs.is_empty() { "唱歌" } else { "唱" }.to_owned();
         }
-    } else if polite_negative_question && joint_manner.is_some_and(|(_, wh_question)| wh_question) {
+    } else if polite_negative_question
+        && joint_manner.is_some_and(|(_, _, wh_question)| wh_question)
+    {
         sfp_suffix = Some("？");
     } else if purpose.is_some() && sfp_suffix == Some("嗎") {
         if wh_argument {
@@ -7094,6 +7308,14 @@ fn translate_clause_bunsetsus(
         } else {
             sfp_suffix = Some("嗎？");
         }
+    }
+    // In 私は先生と二人で, the count includes both the subject and the
+    // companion. Keep them together before any time, negation or ability.
+    let counted_companion =
+        matches!(joint_manner, Some((JointManner::Counted, ..))) && !joint_companions.is_empty();
+    if counted_companion && !offer && !implicit_subject {
+        parts.append(&mut joint_companions);
+        parts.extend(joint_participants.take());
     }
     // Limit the added time ordering to the same endpoint rule as the motion.
     let has_spatial_made = (!negative_go || polite_negative_question)
@@ -7124,7 +7346,7 @@ fn translate_clause_bunsetsus(
             }
             // 大家 names the subject. A number counts the whole group,
             // including the person in 誰かと二人で.
-            if joint_participants.as_deref() == Some("大家") {
+            if matches!(joint_manner, Some((JointManner::Everyone, ..))) {
                 parts.extend(joint_participants.take());
             }
             parts.append(&mut joint_companions);
@@ -7195,6 +7417,8 @@ fn translate_clause_bunsetsus(
     // A place marked by まで is the endpoint of a motion event. Keep this
     // local to まで: the global goal flag also changes recipients and vehicles.
     let mut made_endpoints = Vec::new();
+    let mut route_endpoints = Vec::new();
+    let mut route_directions = Vec::new();
     let mut temporal_made_tails = Vec::new();
     let predicate_is_negative = inner_pre_mods
         .iter()
@@ -7209,8 +7433,20 @@ fn translate_clause_bunsetsus(
                 // The endpoint follows the full activity, including a direct object.
                 temporal_made_tails.push(format!("到{time}"));
             }
+        } else if route.is_some()
+            && o.case_particle.as_deref() == Some("へ")
+            && o.physical_goal_head.is_some()
+            && o.physical_goal_head == motion_head
+        {
+            route_directions.push(o.text);
         } else if has_spatial_made && o.is_spatial_made {
             made_endpoints.push(o.text);
+        } else if (route.is_some() || traversal_object)
+            && o.case_particle.as_deref() == Some("まで")
+            && o.physical_goal_head.is_some()
+            && o.physical_goal_head == motion_head
+        {
+            route_endpoints.push(o.text);
         } else if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
             let raw_np = o.text.strip_prefix('到').unwrap_or(&o.text);
             parts.push(format!("連{raw_np}都"));
@@ -7240,7 +7476,9 @@ fn translate_clause_bunsetsus(
     let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     // A head count or みんな is the participant group. Negation scopes
     // over its activity, so keep the group before the negative or modal.
-    parts.extend(joint_participants);
+    if !counted_companion {
+        parts.extend(joint_participants.take());
+    }
     parts.extend(inner_pre_mods);
     // 遊べる and 飲める already carry ability in their Chinese lexical gloss.
     // Keep 不能 together, then put the shared activity before the action.
@@ -7256,10 +7494,19 @@ fn translate_clause_bunsetsus(
         }
     }
     parts.extend(joint_companions);
+    parts.extend(joint_participants);
     if joint_manner.is_some() {
         parts.push("一起".to_owned());
     }
     parts.extend(go_together);
+    if route.is_some()
+        && (verb_core == "進展"
+            || (verb_core == "去" && goal_tails.is_empty() && made_endpoints.is_empty()))
+    {
+        verb_core = "前進".to_owned();
+    }
+    parts.extend(route);
+    parts.extend(route_directions);
     parts.extend(transfer_prefix);
     if let Some(object) = affected_object {
         parts.push(format!("把{object}"));
@@ -7284,13 +7531,14 @@ fn translate_clause_bunsetsus(
     parts.extend(result_value);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
-    let trailing_change_le = if (is_change_of_state_you || purpose.is_some())
-        && post_verb_mods.last().is_some_and(|m| m == "了")
-    {
-        post_verb_mods.pop()
-    } else {
-        None
-    };
+    let trailing_change_le =
+        if (is_change_of_state_you || purpose.is_some() || !route_endpoints.is_empty())
+            && post_verb_mods.last().is_some_and(|m| m == "了")
+        {
+            post_verb_mods.pop()
+        } else {
+            None
+        };
     // A temporal continuation endpoint already bounds the activity. Omit the
     // ordinary perfective marker rather than break up the activity and endpoint.
     if !temporal_made_tails.is_empty() {
@@ -7325,6 +7573,7 @@ fn translate_clause_bunsetsus(
     parts.extend(transfer_recipient);
     parts.extend(objs);
     parts.extend(purpose_recipients);
+    parts.extend(route_endpoints);
     parts.extend(temporal_made_tails);
     if let Some(le) = trailing_change_le {
         parts.push(le);
@@ -9405,6 +9654,8 @@ fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
             BunsetsuRole::Predicate
                 | BunsetsuRole::Punct
                 | BunsetsuRole::Connector
+                | BunsetsuRole::ProposalModifier
+                | BunsetsuRole::ProposalCompanion
                 | BunsetsuRole::Adv
         )
     {
@@ -9453,11 +9704,15 @@ fn is_prenominal_pred(b: &Bunsetsu) -> bool {
 /// A separately analysed demonstrative points to its adjacent noun. A standalone
 /// pronoun, an interjection or a protected phrase has no such source attachment.
 fn attached_demonstrative(det: &Atom, noun: &Atom) -> Option<char> {
+    attached_demonstrative_at(det, noun, noun.span.start_char)
+}
+
+fn attached_demonstrative_at(det: &Atom, noun: &Atom, nominal_start: usize) -> Option<char> {
     if det.is_locked
         || noun.is_locked
         || det.upos != Some(Upos::Det)
         || noun.upos != Some(Upos::Noun)
-        || det.span.end_char != noun.span.start_char
+        || det.span.end_char != nominal_start
         || det.deprel != "det"
         || det.doc_tok_idx.is_none()
         || noun.doc_tok_idx.is_none()
@@ -11219,7 +11474,7 @@ mod clock_rule_tests {
 mod motion_endpoint_tests {
     use super::{
         Atom, Bunsetsu, BunsetsuRole, CLOCK_ATOM, OPAQUE_PERIOD_CLOCK, is_plain_clock_ni,
-        negative_go_place_head,
+        physical_goal_head,
     };
     use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
     use faberline_nlp::doc::model::Backend;
@@ -11397,6 +11652,119 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn polite_volition_changes_the_suggestion_but_keeps_the_arguments() {
+        for (source, expected) in [
+            ("電車で行きましょう。", "坐電車去吧。"),
+            ("今日図書館に行きましょう。", "今天去到圖書館吧。"),
+            ("みんなで行きましょう！", "大家一起去吧！"),
+            ("一緒に駅まで歩きましょう。", "一起走到車站吧。"),
+            ("ハルコを待ちましょう。", "等待ハルコ吧。"),
+            ("先生を呼びましょうか。", "叫老師，好嗎？"),
+            ("どこで会いましょうか。", "在哪裡見面好呢？"),
+            ("何を読みましょうか。", "讀什麼好呢？"),
+            ("お手伝いしましょうか。", "需要協助嗎？"),
+            ("私が手伝いましょうか。", "我來協助，好嗎？"),
+            ("僕が本を読みましょうか。", "我來讀書，好嗎？"),
+            ("私がここに来ましょうか。", "我來到這裡，好嗎？"),
+            ("「行きましょうか。」と聞きました。", "「去，好嗎？」聽了。"),
+            ("「行きましょうか」と聞きました。", "「去，好嗎」聽了。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn proposal_questions_put_interrogative_time_before_the_activity() {
+        for (source, expected) in [
+            ("何時に駅へ行きましょうか。", "幾點往車站去好呢？"),
+            ("何時に出ましょうか。", "幾點出去好呢？"),
+            ("何曜日に本を読みましょうか。", "星期幾讀書好呢？"),
+            ("いつ駅に行きましょうか。", "什麼時候去到車站好呢？"),
+            ("先生に手紙を書きましょうか。", "給老師寫信，好嗎？"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn proposals_distinguish_indefinite_arguments_from_open_questions() {
+        for (source, expected) in [
+            ("誰かと一緒に歌いましょう。", "和某個人一起哼唱吧。"),
+            ("誰かと一緒に歩きましょうか。", "和某個人一起走，好嗎？"),
+            ("誰と一緒に歌いましょうか。", "和誰一起哼唱好呢？"),
+            ("誰かと何時に会いましょうか。", "幾點跟某個人見面好呢？"),
+            ("何か読みましょうか。", "讀點什麼，好嗎？"),
+            ("何かを食べましょう。", "吃點什麼吧。"),
+            ("何か作業をしましょうか。", "做一些作業，好嗎？"),
+            ("どこかで会いましょうか。", "在某個地方見面，好嗎？"),
+            ("どこで会いましょうか。", "在哪裡見面好呢？"),
+            ("誰かが手伝いましょう。", "某個人協助吧。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn proposals_distinguish_companions_from_coordinated_destinations() {
+        for (source, expected) in [
+            ("誰かと図書館へ行きましょう。", "和某個人往圖書館去吧。"),
+            ("誰と図書館へ行きましょうか。", "和誰往圖書館去好呢？"),
+            (
+                "先生と図書館の二階に行きましょう。",
+                "和老師去圖書館的二樓吧。",
+            ),
+            ("友達と駅まで歩きましょう。", "和朋友走到車站吧。"),
+            ("図書館へ先生と行きましょう。", "和老師往圖書館去吧。"),
+            ("図書館と公園へ行きましょう。", "往圖書館和公園去吧。"),
+            ("東京と大阪に行きましょう。", "去到東京和大阪吧。"),
+            ("先生と友達に手紙を書きましょう。", "給老師和朋友寫信吧。"),
+            ("私と先生が図書館に行きましょう。", "我和老師去到圖書館吧。"),
+            ("友達と先生を駅で待ちましょう。", "在車站等待朋友和老師吧。"),
+            (
+                "先生と二人で図書館へ行きましょう。",
+                "和老師兩個人一起往圖書館去吧。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn proposals_keep_the_number_and_location_of_the_participants() {
+        for (source, expected) in [
+            ("二人で本を読みましょう。", "兩個人一起讀書吧。"),
+            ("一人で図書館へ行きましょう。", "一個人往圖書館去吧。"),
+            ("十二人で本を読みましょう。", "十二個人一起讀書吧。"),
+            ("先生と一緒に駅へ行きましょう。", "和老師一起往車站去吧。"),
+            ("二階で本を読みましょう。", "在二樓讀書吧。"),
+            ("二人に本を読みましょう。", "給二人讀書吧。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        let path = translate("一緒に川の近くを歩きましょう。");
+        assert!(
+            path.starts_with("一起走") && path.contains('川') && path.ends_with("吧。"),
+            "{path}"
+        );
+    }
+
+    #[test]
+    fn ordinary_and_negative_polite_forms_do_not_make_volitional_suggestions() {
+        let statement = translate("電車で行きます。");
+        assert_eq!(statement, "坐電車去。");
+        for (source, expected) in [
+            ("私が荷物を持ちますか。", "我拿著荷物嗎"),
+            ("駅まで歩きませんか。", "不走到車站嗎"),
+        ] {
+            assert_eq!(
+                translate(source).trim_end_matches(['。', '？']),
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn wishes_and_negative_questions_keep_the_direction() {
         assert_eq!(translate("駅まで行きたいです。"), "想去車站。");
         assert_eq!(translate("公園まで行きたいです。"), "想去公園。");
@@ -11453,6 +11821,30 @@ mod motion_endpoint_tests {
             ("みんなで歌いませんか。", "要不要大家一起唱歌？"),
             ("二人で歌いませんか。", "要不要兩人一起唱歌？"),
             ("三人で歌いませんか。", "要不要三人一起唱歌？"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn participant_counts_include_the_subject_and_companion() {
+        for (source, expected) in [
+            (
+                "私は先生と二人で公園まで歩きませんか。",
+                "我和老師兩人不一起走到公園嗎？",
+            ),
+            (
+                "先生は友達と三人で駅まで歩きませんか。",
+                "老師和朋友三人不一起走到車站嗎？",
+            ),
+            (
+                "先生と二人で公園まで歩きませんか。",
+                "要不要和老師兩人一起走到公園？",
+            ),
+            (
+                "私と先生が二人で公園まで歩きませんか。",
+                "我和老師兩人不一起走到公園嗎？",
+            ),
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
@@ -11707,6 +12099,50 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn motion_routes_keep_their_manner_and_polarity() {
+        for (source, expected) in [
+            ("犬は道を走ります。", "狗沿著道路跑。"),
+            ("道を走っています。", "正在沿著道路跑。"),
+            ("犬が道を走っていません。", "狗沒有沿著道路跑。"),
+            ("列車はトンネルを通ります。", "列車經過隧道。"),
+            ("列車は駅までトンネルを通ります。", "列車經過隧道到車站。"),
+            ("駅まで橋を渡りました。", "渡過橋到車站了。"),
+            ("公園を通って家に帰ります。", "經過公園，回到家。"),
+            ("公園を通っています。", "正在經過公園。"),
+            ("私は公園の中を歩きました。", "我在公園裡面走了。"),
+            ("国道を走ります。", "沿著國道跑。"),
+            ("道を学校へ走ります。", "沿著道路往學校跑。"),
+            ("道路を進みます。", "沿著道路前進。"),
+            ("予想通りです。", "是按照予想。"),
+            ("犬は道を走りません。", "狗不沿著道路跑。"),
+            ("私は道路を歩きます。", "我沿著道路走。"),
+            ("子供は橋を走りました。", "孩子沿著橋跑了。"),
+            ("犬は道を歩きませんでした。", "狗沒有沿著道路走。"),
+            ("道を駅まで走ります。", "沿著道路跑到車站。"),
+            ("私は二階まで道を走ります。", "我沿著道路跑到二樓。"),
+            ("公園を散歩します。", "在公園散步。"),
+            ("犬は公園まで走ります。", "狗跑到公園。"),
+            ("私は道を選びます。", "我選擇道路。"),
+            ("私は橋を渡ります。", "我渡過橋。"),
+            ("私は橋を運びます。", "我搬運橋。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for source in [
+            "道を走らせます。",
+            "車を走らせます。",
+            "一時間を走ります。",
+            "私は駅を出ます。",
+        ] {
+            assert!(!translate(source).contains("沿著"), "{source}");
+        }
+        let commute = translate("学校に通っています。");
+        assert!(commute.contains("學校") && commute.contains("上學") && !commute.contains("經過"));
+        let corridor = translate("私は三階から廊下を二階まで歩きます。");
+        assert!(corridor.starts_with("我從三樓沿著") && corridor.ends_with("走到二樓。"));
+    }
+
+    #[test]
     fn negative_questions_keep_nonhuman_subjects() {
         assert_eq!(
             translate("このバスは駅まで行きませんか。"),
@@ -11869,22 +12305,22 @@ mod motion_endpoint_tests {
             sconj_tail: None,
             sfp_tail: None,
         };
-        assert_eq!(negative_go_place_head(&b), Some(8));
+        assert_eq!(physical_goal_head(&b), Some(8));
         b.atoms[0].is_locked = true;
-        assert_eq!(negative_go_place_head(&b), None);
+        assert_eq!(physical_goal_head(&b), None);
         b.atoms[0].is_locked = false;
         b.atoms[0].head = None;
-        assert_eq!(negative_go_place_head(&b), None);
+        assert_eq!(physical_goal_head(&b), None);
         b.atoms[0].surface = "夕方".to_owned();
         b.atoms[0].head = Some(8);
-        assert_eq!(negative_go_place_head(&b), None);
+        assert_eq!(physical_goal_head(&b), None);
         b.atoms[0].surface = "空港".to_owned();
-        assert_eq!(negative_go_place_head(&b), Some(8));
+        assert_eq!(physical_goal_head(&b), Some(8));
         b.atoms[0].surface = "大阪".to_owned();
         b.atoms[0].upos = Some(Upos::Propn);
-        assert_eq!(negative_go_place_head(&b), Some(8));
+        assert_eq!(physical_goal_head(&b), Some(8));
         b.atoms[0].upos = Some(Upos::Noun);
-        assert_eq!(negative_go_place_head(&b), None);
+        assert_eq!(physical_goal_head(&b), None);
         b.atoms[0].surface = "空港".to_owned();
         b.atoms[0].head = Some(8);
         b.atoms[0].doc_tok_idx = Some(4);
@@ -11901,12 +12337,12 @@ mod motion_endpoint_tests {
         modifier.head = Some(4);
         modifier.deprel = "compound".to_owned();
         b.atoms.insert(0, modifier);
-        assert_eq!(negative_go_place_head(&b), Some(8));
+        assert_eq!(physical_goal_head(&b), Some(8));
         b.atoms[0].head = Some(7);
-        assert_eq!(negative_go_place_head(&b), None);
+        assert_eq!(physical_goal_head(&b), None);
         b.atoms[0].head = Some(4);
         b.atoms[0].is_locked = true;
-        assert_eq!(negative_go_place_head(&b), None);
+        assert_eq!(physical_goal_head(&b), None);
     }
 
     #[test]
@@ -12092,9 +12528,9 @@ fn is_plain_clock_ni(b: &Bunsetsu) -> bool {
         && clock.span.end_char == particle.span.start_char
 }
 
-fn negative_go_place_head(b: &Bunsetsu) -> Option<usize> {
+fn physical_goal_head(b: &Bunsetsu) -> Option<usize> {
     let (particle, content) = b.atoms.split_last()?;
-    if !matches!(b.case_particle.as_deref(), Some("に" | "へ"))
+    if !matches!(b.case_particle.as_deref(), Some("に" | "へ" | "まで"))
         || Some(particle.surface.as_str()) != b.case_particle.as_deref()
         || particle.upos != Some(Upos::Adp)
         || particle.is_locked
@@ -12152,6 +12588,11 @@ fn negative_go_place_head(b: &Bunsetsu) -> Option<usize> {
                 return None;
             }
         }
+    }
+    if particle.surface == "まで"
+        && (noun.deprel != "obl" || particle.deprel != "case" || particle.head != noun.doc_tok_idx)
+    {
+        return None;
     }
     noun.head
 }
@@ -12301,6 +12742,236 @@ fn is_existing_spatial_head(a: &Atom) -> bool {
                 | "机"
                 | "風呂"
         )
+}
+
+// Intransitive manner verbs can take a traversed space with を. Verbs such
+// as 渡る and 通る already express that relation in their Chinese gloss.
+#[derive(Clone, Copy)]
+struct RouteMotion {
+    head: usize,
+    expressed_by_verb: bool,
+}
+
+fn governed_route_motion(predicates: &[Bunsetsu], source: &[Atom]) -> Option<RouteMotion> {
+    let mut verbs = predicates
+        .iter()
+        .flat_map(|p| &p.atoms)
+        .filter(|a| !a.is_locked && a.upos == Some(Upos::Verb));
+    let first = verbs.next()?;
+    let second = verbs.next();
+    if verbs.next().is_some() {
+        return None;
+    }
+    // The grouped predicate may contain just the aspect verb or both verbs.
+    let verb = if let Some(aspect) =
+        second.or_else(|| (first.lemma.as_deref() == Some("いる")).then_some(first))
+    {
+        let [motion, _, _] = source.windows(3).find(|w| {
+            let (motion, te, iru) = (&w[0], &w[1], &w[2]);
+            iru.lemma.as_deref() == Some("いる")
+                && iru.doc_tok_idx == aspect.doc_tok_idx
+                && iru.doc_tok_idx.is_some()
+                && motion.head == iru.doc_tok_idx
+                && motion.deprel == "advcl"
+                && te.head == motion.doc_tok_idx
+                && te.deprel == "mark"
+                && is_te_form_link(motion, te, iru)
+                && (first.doc_tok_idx == motion.doc_tok_idx || first.doc_tok_idx == iru.doc_tok_idx)
+        })?
+        else {
+            return None;
+        };
+        motion
+    } else {
+        first
+    };
+    let head = verb.doc_tok_idx?;
+    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    let expressed_by_verb = matches!(lemma, "通る" | "渡る" | "くぐる" | "横切る");
+    if !(expressed_by_verb
+        || matches!(
+            lemma,
+            "走る"
+                | "歩く"
+                | "駆ける"
+                | "歩き回る"
+                | "散歩する"
+                | "泳ぐ"
+                | "飛ぶ"
+                | "進む"
+                | "行く"
+        ))
+        || source.iter().any(|a| {
+            a.head == Some(head)
+                && a.upos == Some(Upos::Aux)
+                && matches!(
+                    a.lemma.as_deref().unwrap_or(&a.surface),
+                    "せる" | "させる" | "れる" | "られる"
+                )
+        })
+        || source
+            .iter()
+            .filter(|a| a.head == Some(head) && a.deprel == "obj")
+            .count()
+            != 1
+    {
+        return None;
+    }
+    Some(RouteMotion {
+        head,
+        expressed_by_verb,
+    })
+}
+
+fn route_marker(group: &Bunsetsu, source: &[Atom], motion: usize) -> Option<&'static str> {
+    let case = group.atoms.last()?;
+    if case.is_locked
+        || case.upos != Some(Upos::Adp)
+        || case.surface != "を"
+        || case.deprel != "case"
+    {
+        return None;
+    }
+    let head = case.head?;
+    let place = source.iter().find(|a| a.doc_tok_idx == Some(head))?;
+    if place.is_locked
+        || place.upos != Some(Upos::Noun)
+        || place.deprel != "obj"
+        || place.head != Some(motion)
+        || place.span.end_char != case.span.start_char
+    {
+        return None;
+    }
+    if let Some(marker) = spatial_route_marker(place) {
+        return Some(marker);
+    }
+    // 中 can also describe time. Verify the place in 公園の中 before moving
+    // the complete phrase in front of its governing verb.
+    if !matches!(
+        place.surface.as_str(),
+        "中" | "外" | "上" | "下" | "奥" | "前" | "後ろ"
+    ) {
+        return None;
+    }
+    source
+        .windows(2)
+        .any(|pair| {
+            let (owner, no) = (&pair[0], &pair[1]);
+            !owner.is_locked
+                && !no.is_locked
+                && owner.head == Some(head)
+                && owner.deprel == "nmod"
+                && owner.doc_tok_idx.is_some()
+                && no.head == owner.doc_tok_idx
+                && no.surface == "の"
+                && no.deprel == "case"
+                && no.upos == Some(Upos::Adp)
+                && owner.span.end_char == no.span.start_char
+                && no.span.end_char == place.span.start_char
+                && (spatial_route_marker(owner).is_some()
+                    || is_existing_spatial_head(owner)
+                    || matches!(owner.surface.as_str(), "庭" | "教室" | "建物" | "店"))
+        })
+        .then_some("在")
+}
+
+fn spatial_route_marker(place: &Atom) -> Option<&'static str> {
+    match place.surface.as_str() {
+        "道" | "道路" | "歩道" | "山道" | "坂道" | "車道" | "遊歩道" | "街道" | "小道" | "通路"
+        | "廊下" | "路地" | "橋" | "海岸" | "河岸" | "川岸" | "国道" | "県道" | "林道" | "農道" => {
+            Some("沿著")
+        }
+        "公園" | "広場" | "校庭" | "空" | "海" | "川" | "河" | "トンネル" => {
+            Some("在")
+        }
+        _ => None,
+    }
+}
+
+fn governs_traversed_space(source: &[Atom], head: usize) -> bool {
+    source.windows(2).any(|pair| {
+        let (place, wo) = (&pair[0], &pair[1]);
+        !place.is_locked
+            && place.upos == Some(Upos::Noun)
+            && place.deprel == "obj"
+            && place.head == Some(head)
+            && place.doc_tok_idx.is_some()
+            && (spatial_route_marker(place).is_some() || is_existing_spatial_head(place))
+            && !wo.is_locked
+            && wo.upos == Some(Upos::Adp)
+            && wo.surface == "を"
+            && wo.deprel == "case"
+            && wo.head == place.doc_tok_idx
+            && place.span.end_char == wo.span.start_char
+    })
+}
+
+fn recover_route_predicate(groups: &mut [Atom], source: &[Atom]) {
+    // 通って can be either 通る or 通う. A traversed space is marked を.
+    // In 学校に通っている, the commuter's destination is marked に instead.
+    for stem in groups.iter_mut().filter(|a| {
+        !a.is_locked
+            && a.surface == "通っ"
+            && a.upos == Some(Upos::Verb)
+            && a.lemma.as_deref() == Some("通う")
+    }) {
+        if let Some(head) = stem.doc_tok_idx
+            && governs_traversed_space(source, head)
+            && source.iter().any(|a| {
+                !a.is_locked
+                    && a.surface == "て"
+                    && a.upos == Some(Upos::Sconj)
+                    && a.deprel == "mark"
+                    && a.head == Some(head)
+                    && a.span.start_char == stem.span.end_char
+            })
+        {
+            stem.lemma = Some("通る".to_owned());
+        }
+    }
+    // 通り can be tagged as a noun before ます. The other polite inflection
+    // supplies an independently recognized verb from the same stem.
+    let Some(stem) = groups
+        .iter_mut()
+        .find(|a| !a.is_locked && a.upos == Some(Upos::Noun) && a.deprel == "root")
+    else {
+        return;
+    };
+    let Some(head) = stem.doc_tok_idx else { return };
+    let polite = source.iter().any(|a| {
+        !a.is_locked
+            && a.surface == "ます"
+            && a.upos == Some(Upos::Aux)
+            && a.head == Some(head)
+            && a.deprel == "aux"
+            && stem.span.end_char == a.span.start_char
+    });
+    if !polite || !governs_traversed_space(source, head) {
+        return;
+    }
+    let surface: Vec<_> = stem.surface.chars().chain("ません".chars()).collect();
+    let segments = faberline_nlp::lexicon::ja::segment_ja(&surface, 0);
+    let [verb, polite, negative] = segments.as_slice() else {
+        return;
+    };
+    let len = stem.span.end_char - stem.span.start_char;
+    if verb.span.start_char == 0
+        && verb.span.end_char == len
+        && verb.decided_upos == Some(Upos::Verb)
+        && polite.span.start_char == len
+        && polite.span.end_char == len + 2
+        && polite.decided_upos == Some(Upos::Aux)
+        && negative.span.start_char == len + 2
+        && negative.span.end_char == surface.len()
+        && negative.decided_upos == Some(Upos::Aux)
+        && matches!(
+            verb.lemma.as_deref(),
+            Some("通る" | "渡る" | "くぐる" | "横切る")
+        )
+    {
+        stem.upos = Some(Upos::Verb);
+        stem.lemma = verb.lemma.clone();
+    }
 }
 
 fn is_made_motion_verb(lemma: &str) -> bool {
@@ -12490,6 +13161,44 @@ fn indefinite_object_modifier(
     Some(modifier)
 }
 
+// Consume only a か attached to its own pronoun. Keep the original case for
+// clause assembly so an unknown actor does not introduce a sentence question.
+fn localize_indefinite_arguments(groups: &mut Vec<Bunsetsu>, action: &Atom, source: &[Atom]) {
+    let Some(predicate) = action.doc_tok_idx else {
+        return;
+    };
+    let has_object = source
+        .iter()
+        .any(|a| a.head == Some(predicate) && a.deprel == "obj");
+    let mut previous = Vec::with_capacity(groups.len());
+    for mut group in std::mem::take(groups) {
+        if let Some(modifier) = previous
+            .last()
+            .and_then(|prior| indefinite_object_modifier(prior, &group, predicate))
+        {
+            previous.pop();
+            group.atoms.insert(0, modifier);
+        }
+        if let Some((mut noun, case)) = indefinite_argument(&group.atoms, predicate) {
+            if indefinite_content_object(
+                &group.atoms[0],
+                case.as_ref(),
+                noun.span.end_char,
+                action,
+                has_object,
+            ) {
+                noun.surface = "點什麼".to_owned();
+                group.role = BunsetsuRole::Obj;
+            }
+            group.sfp_tail = None;
+            group.atoms = vec![noun];
+            group.atoms.extend(case);
+        }
+        previous.push(group);
+    }
+    *groups = previous;
+}
+
 // In 先生と図書館に the person and the place have separate case particles.
 // Two places share their direction instead (東京と大阪に).
 fn place_companion(source: &[Atom], predicate: usize) -> Option<usize> {
@@ -12534,7 +13243,20 @@ fn place_companion(source: &[Atom], predicate: usize) -> Option<usize> {
         };
         // 私と先生が and 先生と学生を can share the second noun's case.
         // A later location does not establish a separate companion there.
-        if after_companion && human {
+        // In 先生と二人で the count describes how the two people participate.
+        let counted_manner = marker.surface == "で"
+            && noun.surface == "人"
+            && prefix.iter().any(|n| {
+                !n.is_locked
+                    && n.head == noun.doc_tok_idx
+                    && n.span.end_char == noun.span.start_char
+                    && (n.upos == Some(Upos::Num) && n.deprel == "nummod"
+                        || n.deprel == "compound"
+                            && n.surface
+                                .chars()
+                                .all(|c| matches!(c, '０'..='９' | '0'..='9')))
+            });
+        if after_companion && human && !counted_manner {
             return None;
         }
         after_companion = false;

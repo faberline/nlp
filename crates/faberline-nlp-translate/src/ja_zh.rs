@@ -5437,11 +5437,11 @@ fn translate_clause_bunsetsus(
                     JointManner::Together => "一起".to_owned(),
                     JointManner::Everyone => "大家一起".to_owned(),
                     JointManner::Counted => {
-                        let count = &b.atoms[0].surface;
-                        let count = if matches!(count.as_str(), "二" | "2" | "２") {
+                        let count = normalize_decimal_digits(&b.atoms[0].surface);
+                        let count = if matches!(count.as_str(), "二" | "2") {
                             "兩"
                         } else {
-                            count
+                            &count
                         };
                         format!("{count}人一起")
                     }
@@ -10305,6 +10305,8 @@ mod motion_endpoint_tests {
             ("一緒に歌いませんか。", "要不要一起唱歌？"),
             ("一緒に勉強しませんか。", "要不要一起學習？"),
             ("２人で歌いませんか。", "要不要兩人一起唱歌？"),
+            ("３人で歌いませんか。", "要不要3人一起唱歌？"),
+            ("一緒に見学しませんか。", "要不要一起參觀？"),
             ("本を一緒に読みませんか。", "要不要一起讀書？"),
             ("一緒に駅まで歩きませんか。", "要不要一起走到車站？"),
             (
@@ -10324,23 +10326,25 @@ mod motion_endpoint_tests {
 
     #[test]
     fn reported_subjects_and_other_speech_acts_keep_their_scope() {
-        assert_eq!(translate("この犬は泳ぎませんか。"), "這狗不游泳嗎。");
+        assert_eq!(translate("この犬は泳ぎませんか。"), "這狗不游泳嗎？");
         assert_eq!(
             translate("このバスは空港へ行きませんか。"),
-            "這輛公車不去機場嗎。"
+            "這輛公車不去機場嗎？"
         );
-        assert_eq!(translate("行きませんか。"), "不去嗎。");
-        assert_eq!(translate("一緒に遊べませんか。"), "不能一起玩嗎。");
-        assert_eq!(translate("一緒に飲めませんか。"), "不能一起喝嗎。");
+        assert_eq!(translate("行きませんか。"), "不去嗎？");
+        assert_eq!(translate("一緒に遊べませんか。"), "不能一起玩嗎？");
+        assert_eq!(translate("一緒に飲めませんか。"), "不能一起喝嗎？");
         assert_eq!(
             translate("先生は一緒に歌いませんか。"),
-            "老師不一起哼唱嗎。"
+            "老師不一起哼唱嗎？"
         );
         for source in [
             "この犬は一緒に走りませんか。",
             "一緒に眠れませんか。",
             "一緒に飲めませんか。",
             "一人で歌いませんか。",
+            "１人で歌いませんか。",
+            "一緒に勉強してくれませんか。",
             "何を一緒に読みませんか。",
             "一緒に歌いましょうか。",
             "一緒に公園へ行きません。",

@@ -7278,33 +7278,35 @@ fn ends_in_coord_to(b: &Bunsetsu) -> bool {
 }
 
 fn is_person_like_bunsetsu(b: &Bunsetsu) -> bool {
-    b.atoms.iter().any(|a| {
-        matches!(a.upos, Some(Upos::Pron | Upos::Propn))
-            || matches!(
-                a.surface.as_str(),
-                "友達"
-                    | "先生"
-                    | "先輩"
-                    | "人"
-                    | "彼"
-                    | "彼女"
-                    | "私"
-                    | "父"
-                    | "母"
-                    | "兄"
-                    | "姉"
-                    | "弟"
-                    | "妹"
-                    | "子供"
-                    | "学生"
-                    | "お父さん"
-                    | "お母さん"
-                    | "お兄さん"
-                    | "お姉さん"
-                    | "おじさん"
-                    | "おばさん"
-            )
-    })
+    b.atoms.iter().any(is_person_like_atom)
+}
+
+fn is_person_like_atom(a: &Atom) -> bool {
+    matches!(a.upos, Some(Upos::Pron | Upos::Propn))
+        || matches!(
+            a.surface.as_str(),
+            "友達"
+                | "先生"
+                | "先輩"
+                | "人"
+                | "彼"
+                | "彼女"
+                | "私"
+                | "父"
+                | "母"
+                | "兄"
+                | "姉"
+                | "弟"
+                | "妹"
+                | "子供"
+                | "学生"
+                | "お父さん"
+                | "お母さん"
+                | "お兄さん"
+                | "お姉さん"
+                | "おじさん"
+                | "おばさん"
+        )
 }
 
 fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
@@ -7329,7 +7331,13 @@ fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
 }
 
 fn is_prenominal_pred(b: &Bunsetsu) -> bool {
-    if b.sconj_tail.is_some() || b.sfp_tail.is_some() {
+    if b.sconj_tail.is_some()
+        || b.sfp_tail.is_some()
+        || b.atoms
+            .windows(2)
+            .any(|p| attached_demonstrative(&p[0], &p[1]).is_some())
+    {
+        // A noun carrying its own demonstrative is not a modifier of the next noun.
         return false;
     }
     let has_pred_or_det = b.role == BunsetsuRole::Predicate
@@ -7351,6 +7359,55 @@ fn is_prenominal_pred(b: &Bunsetsu) -> bool {
         .last()
         .is_some_and(|a| !a.is_locked && matches!(a.surface.as_str(), "て" | "で"));
     !has_polite_or_copula_or_te
+}
+
+/// A separately analysed demonstrative points to its adjacent noun. A standalone
+/// pronoun, an interjection or a protected phrase has no such source attachment.
+fn attached_demonstrative(det: &Atom, noun: &Atom) -> Option<char> {
+    if det.is_locked
+        || noun.is_locked
+        || det.upos != Some(Upos::Det)
+        || noun.upos != Some(Upos::Noun)
+        || det.span.end_char != noun.span.start_char
+        || det.deprel != "det"
+        || det.doc_tok_idx.is_none()
+        || noun.doc_tok_idx.is_none()
+        || det.head != noun.doc_tok_idx
+    {
+        return None;
+    }
+    match det.surface.as_str() {
+        "この" => Some('這'),
+        "その" | "あの" => Some('那'),
+        _ => None,
+    }
+}
+
+/// A demonstrative already has an attached noun here. Use complete person nouns,
+/// including occupations whose dictionary entries have no semantic tag.
+fn is_demonstrative_person_noun(noun: &Atom) -> bool {
+    is_person_like_atom(noun)
+        || matches!(
+            noun.surface.as_str(),
+            "医師"
+                | "医者"
+                | "教師"
+                | "教員"
+                | "教授"
+                | "店員"
+                | "職員"
+                | "社員"
+                | "社長"
+                | "部長"
+                | "課長"
+                | "作家"
+                | "友人"
+                | "生徒"
+        )
+        || faberline_nlp::lexicon::lookup_ja(&noun.surface).is_some_and(|hit| {
+            hit.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Person)
+                && hit.upos_candidates.as_slice() == [Upos::Noun]
+        })
 }
 
 fn is_embedded_acl_arg(b: &Bunsetsu) -> bool {
@@ -7427,6 +7484,15 @@ fn merge_adnominal_bunsetsus(
     let mut res: Vec<Bunsetsu> = Vec::with_capacity(bunsetsus.len());
 
     for mut b in bunsetsus {
+        if (is_noun_bunsetsu(&b) || ends_in_genitive_no(&b))
+            && let Some(noun) = b.atoms.first()
+            && let Some(modifier) = res.pop_if(|prev| {
+                matches!(prev.atoms.as_slice(), [det] if attached_demonstrative(det, noun).is_some())
+            })
+        {
+            // Keep the original atoms, syntactic role, and any following の or case particle.
+            b.atoms.splice(0..0, modifier.atoms);
+        }
         if is_noun_bunsetsu(&b) {
             let is_sue_ni = b.case_particle.as_deref() == Some("に")
                 && b.atoms
@@ -8442,11 +8508,11 @@ mod motion_endpoint_tests {
     fn negative_questions_keep_nonhuman_subjects() {
         assert_eq!(
             translate("このバスは駅まで行きませんか。"),
-            "這個的公車不去車站嗎。"
+            "這輛公車不去車站嗎。"
         );
         assert_eq!(
             translate("この電車は駅まで行きませんか。"),
-            "這個的電車不去車站嗎。"
+            "這輛電車不去車站嗎。"
         );
     }
 
@@ -8646,6 +8712,39 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut i = 0usize;
     while i < b.atoms.len() {
         let a = &b.atoms[i];
+        if let Some(noun) = b.atoms.get(i + 1)
+            && let Some(demonstrative) = attached_demonstrative(a, noun)
+        {
+            out.push(demonstrative);
+            // A component of a multi-token compound does not establish a classifier
+            // for the whole phrase. Render its noun atoms normally in that case.
+            if b.atoms.get(i + 2).is_some_and(|next| {
+                noun.span.end_char == next.span.start_char
+                    && (next.is_locked || matches!(next.upos, Some(Upos::Noun | Upos::Propn)))
+            }) {
+                i += 1;
+                continue;
+            }
+            let word = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
+            let classifier = match word.as_str() {
+                "書" | "小說" | "雜誌" | "字典" => "本",
+                "車" | "公車" | "電車" | "汽車" | "卡車" | "腳踏車" | "自行車" => {
+                    "輛"
+                }
+                "資料" | "文件" | "報告" | "報紙" => "份",
+                "商店" | "餐廳" | "公司" => "家",
+                "寺" | "寺廟" | "橋" => "座",
+                "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
+                _ if is_demonstrative_person_noun(noun) => "個",
+                // With no established unit or count reading, keep the deictic
+                // without guessing an amount, e.g. 這水 rather than a cup of water.
+                _ => "",
+            };
+            out.push_str(classifier);
+            out.push_str(if word == "箱" { "箱子" } else { &word });
+            i += 2;
+            continue;
+        }
         if !a.is_locked
             && (is_case_or_sfp_to_strip(&a.surface)
                 || (b.sconj_tail.as_deref() == Some(a.surface.as_str())))
@@ -9803,6 +9902,123 @@ mod existence_rule_tests {
             deprel: String::new(),
             is_locked: false,
         }
+    }
+
+    #[test]
+    fn demonstrative_nouns_keep_attachment_case_and_protected_text() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("私はこの雑誌を読みます。", "我讀這本雜誌。"),
+            ("私はその本を読みません。", "我不讀那本書。"),
+            ("私はあの本を読みます。", "我讀那本書。"),
+            ("私はこの本の名前を読みます。", "我讀這本書的名字。"),
+            ("私は新しい本を読みます。", "我讀新書。"),
+            ("私は甘いケーキを食べます。", "我吃甜的蛋糕。"),
+        ] {
+            let doc = translate(source, &glossary);
+            assert_eq!(doc.target_text, expected, "{source}");
+        }
+        let source = "私はその本を読む、彼は`この車`を見る。";
+        let doc = translate(source, &glossary);
+        assert!(doc.target_text.contains("那本書"));
+        let [lock] = doc.opaque_spans.as_slice() else {
+            panic!("{doc:?}")
+        };
+        let slice = |s: &str, span: Span| {
+            s.chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect::<String>()
+        };
+        assert_eq!(slice(source, lock.source_span), "`この車`");
+        assert_eq!(
+            slice(&doc.target_text, lock.target_span.unwrap()),
+            "`この車`"
+        );
+        assert_eq!(doc.target_text.matches("`この車`").count(), 1);
+
+        let glossary = TranslationGlossary {
+            objects: vec![GlossaryEntry {
+                canonical: "その本".into(),
+                surfaces: vec!["その本".into()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "藏書甲".into())]),
+                ..GlossaryEntry::default()
+            }],
+            ..TranslationGlossary::new()
+        };
+        let source = "私はその本を読みます。";
+        let doc = translate(source, &glossary);
+        let [hit] = doc.glossary_hits.as_slice() else {
+            panic!("{doc:?}")
+        };
+        assert_eq!(slice(source, hit.source_span), "その本");
+        assert_eq!(slice(&doc.target_text, hit.target_span), "藏書甲");
+        assert_eq!(doc.target_text.matches("藏書甲").count(), 1);
+    }
+
+    #[test]
+    fn demonstrative_classifiers_preserve_people_and_mass_nouns() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("その先生は来ます。", "那個老師來。"),
+            ("その先生が来ます。", "那個老師來。"),
+            ("あの先生は忙しいです。", "那個老師忙碌。"),
+            ("私はこの先生を見ます。", "我看這個老師。"),
+            ("その医師は来ます。", "那個醫師來。"),
+            ("私はその友人を見ます。", "我看那個朋友。"),
+            ("私はその後輩を見ます。", "我看那個後輩。"),
+            ("私はこの水を飲みます。", "我喝這水。"),
+            ("私はその砂糖を買います。", "我買那砂糖。"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn pointing_at_medicine_does_not_supply_a_kind_or_dosage() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("その薬は床に落ちました。", "那個藥掉落到地板了。"),
+            ("その薬を拾います。", "拾起那個藥。"),
+            ("私はこの薬を飲みます。", "我喝這個藥。"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let explicit = translate("その薬の種類を調べます。", &glossary);
+        assert!(
+            explicit.target_text.contains("那個藥的種類"),
+            "{explicit:?}"
+        );
+    }
+
+    #[test]
+    fn demonstrative_requires_a_real_adjacent_noun_dependency() {
+        let mut det = atom("その", None, Upos::Det, 0);
+        let mut noun = atom("本", None, Upos::Noun, 2);
+        det.doc_tok_idx = Some(0);
+        noun.doc_tok_idx = Some(1);
+        det.deprel = "det".into();
+        det.head = Some(1);
+        assert_eq!(attached_demonstrative(&det, &noun), Some('那'));
+        let mut locked = noun.clone();
+        locked.is_locked = true;
+        assert_eq!(attached_demonstrative(&det, &locked), None);
+        let mut detached = noun.clone();
+        detached.span.start_char += 1;
+        assert_eq!(attached_demonstrative(&det, &detached), None);
+        let mut pronoun = det.clone();
+        pronoun.upos = Some(Upos::Pron);
+        assert_eq!(attached_demonstrative(&pronoun, &noun), None);
+        det.head = Some(2);
+        assert_eq!(attached_demonstrative(&det, &noun), None);
     }
 
     #[test]

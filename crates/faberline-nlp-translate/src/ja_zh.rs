@@ -4698,29 +4698,28 @@ fn is_floor_service_space(atom: &Atom, atoms: &[Atom], doc: &Document) -> bool {
             .is_some_and(|head| has_place_genitive(atoms, head, doc))
 }
 
-fn has_floor_writing_object(atoms: &[Atom], governor: usize, doc: &Document) -> bool {
-    atoms.windows(2).any(|argument| {
-        let object = &argument[0];
-        let particle = &argument[1];
-        !object.is_locked
-            && object.upos == Some(Upos::Noun)
-            && object.head == Some(governor)
-            && object.deprel == "obj"
-            && !particle.is_locked
-            && particle.upos == Some(Upos::Adp)
-            && particle.surface == "を"
-            && particle.head.is_some()
-            && particle.head == object.doc_tok_idx
-            && object.span.end_char == particle.span.start_char
-            // With general writing verbs, an explicit physical or media
-            // object supports a venue reading. Formulae and ranks do not.
-            && (object
-                .doc_tok_idx
-                .and_then(|index| doc.tokens.get(index))
-                .is_some_and(|token| token.sem_class == Some(SemanticClass::Artifact))
-                || ["手紙", "写真", "絵", "原稿", "葉書"]
-                    .into_iter()
-                    .any(|suffix| object.surface.ends_with(suffix)))
+fn has_floor_order_context(atoms: &[Atom], floor: usize, predicate: usize) -> bool {
+    atoms.iter().any(|atom| {
+        if atom.is_locked
+            || !(atom.doc_tok_idx == Some(predicate)
+                || (atom.head == Some(predicate)
+                    && matches!(atom.deprel.as_str(), "nsubj" | "obj" | "compound"))
+                || (atom.head == Some(floor)
+                    && matches!(atom.deprel.as_str(), "nmod" | "compound")))
+        {
+            return false;
+        }
+
+        // Mathematical operators and expressions can use 階 for order. Read
+        // the attached stem or noun, not an unrelated word in the clause.
+        let source = atom.lemma.as_deref().unwrap_or(&atom.surface);
+        let term = source.strip_suffix("する").unwrap_or(source);
+        matches!(
+            term,
+            "数学" | "式" | "数式" | "公式" | "次数" | "階数" | "行列" | "演算" | "計算" | "近似"
+        ) || ["微分", "積分", "関数", "函数", "方程式", "多項式", "級数"]
+            .into_iter()
+            .any(|suffix| term.ends_with(suffix))
     })
 }
 
@@ -4827,32 +4826,18 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
         "から" => spatial_case && (motion || is_made_motion_verb(verb)),
         "まで" => spatial_case && is_made_motion_verb(verb),
         "で" => {
+            // A numbered floor linked to an event by で normally gives its
+            // venue. An explicit building modifier resolves math contexts.
+            let has_number_link = !prefix.is_empty()
+                || atoms[start..end].iter().any(|number| {
+                    number.head == Some(floor_idx)
+                        && number.deprel == "nummod"
+                        && is_floor_number(&number.surface)
+                });
             spatial_case
-                && (matches!(
-                    verb,
-                    "待つ"
-                        | "働く"
-                        | "食べる"
-                        | "寝る"
-                        | "読む"
-                        | "会う"
-                        | "学ぶ"
-                        | "勉強"
-                        | "勉強する"
-                        | "学習"
-                        | "学習する"
-                        | "準備"
-                        | "準備する"
-                        | "撮る"
-                        | "撮影"
-                        | "撮影する"
-                        | "録画"
-                        | "録画する"
-                        | "録音"
-                        | "録音する"
-                ) || (matches!(verb, "書く" | "描く")
-                    && has_floor_writing_object(atoms, governor, doc))
-                    || has_place_genitive(&atoms[..start], floor_idx, doc))
+                && has_number_link
+                && (has_place_genitive(&atoms[..start], floor_idx, doc)
+                    || !has_floor_order_context(atoms, floor_idx, governor))
         }
         _ => false,
     };
@@ -10653,6 +10638,37 @@ mod existence_rule_tests {
         let source = "病院の窓口は三階です。";
         let output = translate(source, &TranslationGlossary::new()).target_text;
         assert!(output.contains("在三樓"), "{source}: {output}");
+    }
+
+    #[test]
+    fn building_floor_uses_source_relations_for_ordinary_venues() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("三階で休みます。", "在三樓休息。"),
+            ("病院の二階で式を書きます。", "在醫院的二樓寫式。"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+
+        let form = translate("四階で申込書に名前を書きました。", &glossary);
+        assert!(form.target_text.contains("在四樓"), "{}", form.target_text);
+        let meeting = translate("三階で二階堂さんに会います。", &glossary);
+        assert!(
+            meeting.target_text.contains("在三樓") && meeting.target_text.contains("二階堂"),
+            "{}",
+            meeting.target_text
+        );
+        for source in ["第三段階で休みます。", "第三階で休みます。"] {
+            let text = translate(source, &glossary).target_text;
+            assert!(
+                text.contains('階') && !text.contains('樓'),
+                "{source}: {text}"
+            );
+        }
     }
 
     #[test]

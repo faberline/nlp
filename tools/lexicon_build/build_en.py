@@ -79,6 +79,18 @@ TARGET_GOAL = 66_000
 REVIEWED_POS_EVIDENCE: dict[str, frozenset[str]] = {
     "weftwise": frozenset({"ADJ", "ADV"}),
     "weftwize": frozenset(),
+    "initialer": frozenset({"ADJ", "NOUN"}),
+    "scepters": frozenset({"NOUN", "VERB"}),
+    "recolouring": frozenset({"NOUN", "VERB"}),
+    "moulder": frozenset({"NOUN", "VERB"}),
+    "morselling": frozenset({"NOUN", "VERB"}),
+}
+
+# Exact source-attested inflected form and its base; do not propagate to a
+# counterpart whose spelling or meaning has not independently been reviewed.
+REVIEWED_LEMMA_EVIDENCE: dict[str, str] = {
+    "initialer": "-",  # One stored lemma cannot represent both POS readings safely.
+    "reedifying": "reedify",
 }
 
 # These VarCon pairs connect different substances, not spelling variants.
@@ -854,6 +866,8 @@ def main() -> int:
             reviewed_pos = apply_reviewed_pos_evidence(w, direct_pos, REVIEWED_POS_EVIDENCE)
         if reviewed_pos is not None:
             pos_set = reviewed_pos
+        if w in REVIEWED_LEMMA_EVIDENCE:
+            lemma = REVIEWED_LEMMA_EVIDENCE[w]
 
         # Determine decided_upos (emit "-", "-" when no reliable POS evidence exists)
         if reviewed_pos is not None:

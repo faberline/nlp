@@ -12199,6 +12199,44 @@ fn indefinite_object_modifier(
     Some(modifier)
 }
 
+// Consume only a か attached to its own pronoun. Keep the original case for
+// clause assembly so an unknown actor does not introduce a sentence question.
+fn localize_indefinite_arguments(groups: &mut Vec<Bunsetsu>, action: &Atom, source: &[Atom]) {
+    let Some(predicate) = action.doc_tok_idx else {
+        return;
+    };
+    let has_object = source
+        .iter()
+        .any(|a| a.head == Some(predicate) && a.deprel == "obj");
+    let mut previous = Vec::with_capacity(groups.len());
+    for mut group in std::mem::take(groups) {
+        if let Some(modifier) = previous
+            .last()
+            .and_then(|prior| indefinite_object_modifier(prior, &group, predicate))
+        {
+            previous.pop();
+            group.atoms.insert(0, modifier);
+        }
+        if let Some((mut noun, case)) = indefinite_argument(&group.atoms, predicate) {
+            if indefinite_content_object(
+                &group.atoms[0],
+                case.as_ref(),
+                noun.span.end_char,
+                action,
+                has_object,
+            ) {
+                noun.surface = "點什麼".to_owned();
+                group.role = BunsetsuRole::Obj;
+            }
+            group.sfp_tail = None;
+            group.atoms = vec![noun];
+            group.atoms.extend(case);
+        }
+        previous.push(group);
+    }
+    *groups = previous;
+}
+
 fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;

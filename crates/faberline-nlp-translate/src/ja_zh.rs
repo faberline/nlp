@@ -1870,6 +1870,13 @@ fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span)
 
     let flush_clause = |buf: &mut Vec<Atom>, punct: Option<String>, out: &mut Vec<Segment>| {
         if !buf.is_empty() {
+            let punct = if punct.as_deref() == Some("。")
+                && polite_volitional(buf).is_some_and(|(_, question)| question)
+            {
+                Some("？".to_owned())
+            } else {
+                punct
+            };
             let s = buf
                 .first()
                 .map(|a| a.span.start_char)
@@ -3145,11 +3152,18 @@ fn translate_clause_atoms(
         return res;
     }
 
-    // Group the nominal complement before attaching the conditional copula so
-    // its modifiers are folded in the same way as other noun phrases.
-    let (body, condition_tail) = match nominal_conditional_tail(atoms) {
+    let proposal = polite_volitional(atoms);
+    // In a proposal question, か asks whether the suggestion is welcome.
+    // Leave the original verb and arguments on the ordinary assembly path.
+    let body = if proposal.is_some_and(|(_, question)| question) {
+        &atoms[..atoms.len() - 1]
+    } else {
+        atoms
+    };
+    // Group the complement and its modifiers before attaching the conditional copula.
+    let (body, condition_tail) = match nominal_conditional_tail(body) {
         Some((body, tail)) => (body, Some(tail)),
-        None => (atoms, None),
+        None => (body, None),
     };
 
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
@@ -3175,7 +3189,10 @@ fn translate_clause_atoms(
         complement.sconj_tail = Some("ば".to_owned());
     }
 
-    translate_clause_bunsetsus(
+    if let Some((predicate, _)) = proposal {
+        localize_proposal_arguments(&mut bunsetsus, predicate, body);
+    }
+    let (mut text, subject_only) = translate_clause_bunsetsus(
         bunsetsus,
         atoms,
         &raw_clause,
@@ -3183,7 +3200,115 @@ fn translate_clause_atoms(
         allow_pro_drop_inject,
         ctx,
         target,
-    )
+    );
+    if let Some((predicate, question)) = proposal {
+        if !question {
+            text.push('吧');
+        } else if body.iter().enumerate().any(|(i, a)| {
+            !a.is_locked
+                && a.head == Some(predicate)
+                && !body.get(i + 1).is_some_and(|next| next.surface == "か")
+                && matches!(
+                    a.surface.as_str(),
+                    "何" | "誰" | "いつ" | "どこ" | "どれ" | "どう" | "どちら"
+                )
+        }) {
+            text.push_str("好呢");
+        } else if matches!(body, [verb, _, _] if verb.lemma.as_deref() == Some("手伝う")) {
+            text = format!("需要{text}嗎");
+        } else {
+            text.push_str("，好嗎");
+        }
+    }
+    (text, subject_only)
+}
+
+fn polite_volitional(atoms: &[Atom]) -> Option<(usize, bool)> {
+    let (body, question) = match atoms {
+        [body @ .., ka]
+            if !ka.is_locked
+                && ka.surface == "か"
+                && ka.upos == Some(Upos::Part)
+                && ka.deprel == "discourse" =>
+        {
+            (body, Some(ka))
+        }
+        _ => (atoms, None),
+    };
+    let [.., verb, polite, volition] = body else {
+        return None;
+    };
+    let pred = verb.doc_tok_idx?;
+    if verb.is_locked
+        || verb.upos != Some(Upos::Verb)
+        || polite.is_locked
+        || polite.upos != Some(Upos::Aux)
+        || polite.surface != "ましょ"
+        || polite.lemma.as_deref() != Some("ます")
+        || polite.deprel != "aux"
+        || volition.is_locked
+        || volition.upos != Some(Upos::Aux)
+        || volition.surface != "う"
+        || volition.deprel != "aux"
+        || polite.head != Some(pred)
+        || volition.head != Some(pred)
+        || verb.span.end_char != polite.span.start_char
+        || polite.span.end_char != volition.span.start_char
+        || question
+            .is_some_and(|ka| ka.head != Some(pred) || volition.span.end_char != ka.span.start_char)
+    {
+        return None;
+    }
+    Some((pred, question.is_some()))
+}
+
+fn localize_proposal_arguments(groups: &mut [Bunsetsu], predicate: usize, source: &[Atom]) {
+    let speaker_offers = source.iter().any(|a| {
+        !a.is_locked
+            && a.head == Some(predicate)
+            && a.deprel == "nsubj"
+            && matches!(
+                a.surface.as_str(),
+                "私" | "わたし" | "僕" | "ぼく" | "俺" | "おれ"
+            )
+    });
+    for group in groups {
+        if let [noun, case] = group.atoms.as_slice()
+            && !noun.is_locked
+            && !case.is_locked
+            && noun.deprel == "obl"
+            && noun.head == Some(predicate)
+            && noun.doc_tok_idx.is_some()
+            && case.head == noun.doc_tok_idx
+            && case.deprel == "case"
+            && noun.span.end_char == case.span.start_char
+        {
+            let text = match (noun.surface.as_str(), case.surface.as_str()) {
+                ("みんな" | "皆", "で") => Some("大家一起"),
+                ("一緒", "に") => Some("一起"),
+                _ => None,
+            };
+            if let Some(text) = text {
+                let mut adverb = noun.clone();
+                adverb.surface = text.to_owned();
+                adverb.span.end_char = case.span.end_char;
+                adverb.is_locked = true;
+                group.atoms = vec![adverb];
+                group.role = BunsetsuRole::Adv;
+                group.case_particle = None;
+            }
+        }
+        if speaker_offers
+            && group.role == BunsetsuRole::Predicate
+            && group.atoms.iter().any(|a| {
+                !a.is_locked
+                    && a.doc_tok_idx == Some(predicate)
+                    && a.lemma.as_deref() != Some("来る")
+            })
+        {
+            prepend_locked_atom(group, "來".to_owned());
+        }
+    }
 }
 
 // Only match at a clause boundary. In obligation and proportional patterns,
@@ -10506,6 +10631,44 @@ mod motion_endpoint_tests {
             !physical.contains("改回") && physical.contains("書"),
             "{physical}"
         );
+    }
+
+    #[test]
+    fn polite_volition_changes_the_suggestion_but_keeps_the_arguments() {
+        for (source, expected) in [
+            ("電車で行きましょう。", "坐電車去吧。"),
+            ("今日図書館に行きましょう。", "今天去到圖書館吧。"),
+            ("みんなで行きましょう！", "大家一起去吧！"),
+            ("一緒に駅まで歩きましょう。", "一起走到車站吧。"),
+            ("ハルコを待ちましょう。", "等待ハルコ吧。"),
+            ("先生を呼びましょうか。", "叫老師，好嗎？"),
+            ("どこで会いましょうか。", "在哪裡見面好呢？"),
+            ("何を読みましょうか。", "讀什麼好呢？"),
+            ("お手伝いしましょうか。", "需要協助嗎？"),
+            ("私が手伝いましょうか。", "我來協助，好嗎？"),
+            ("僕が本を読みましょうか。", "我來讀書，好嗎？"),
+            ("私がここに来ましょうか。", "我來到這裡，好嗎？"),
+            ("「行きましょうか。」と聞きました。", "「去，好嗎？」聽了。"),
+            ("「行きましょうか」と聞きました。", "「去，好嗎」聽了。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn ordinary_and_negative_polite_forms_do_not_make_volitional_suggestions() {
+        let statement = translate("電車で行きます。");
+        assert_eq!(statement, "坐電車去。");
+        for (source, expected) in [
+            ("私が荷物を持ちますか。", "我拿著荷物嗎"),
+            ("駅まで歩きませんか。", "不走到車站嗎"),
+        ] {
+            assert_eq!(
+                translate(source).trim_end_matches(['。', '？']),
+                expected,
+                "{source}"
+            );
+        }
     }
 
     #[test]

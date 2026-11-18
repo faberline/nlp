@@ -747,7 +747,7 @@ pub(crate) fn translate_ja_sentence(
                     });
                 if let Some(p) = trailing_punct {
                     if !(suppress_cleft_comma
-                        || (rendered.ends_with('？') && matches!(p.as_str(), "。" | "？" | "?"))
+                        || (rendered.ends_with('？') && matches!(p, "。" | "？" | "?"))
                         || ((p == "、" || p == ",")
                             && (rendered.ends_with("，就立刻")
                                 || rendered.ends_with("，但是")

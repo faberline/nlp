@@ -6671,6 +6671,11 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
+    // A temporal continuation endpoint already bounds the activity. Omit the
+    // ordinary perfective marker rather than break up the activity and endpoint.
+    if !temporal_made_tails.is_empty() {
+        post_verb_mods.retain(|modifier| modifier != "了");
+    }
     if !goal_tails.is_empty() {
         parts.extend(goal_tails);
         parts.append(&mut post_verb_mods);
@@ -10961,6 +10966,27 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn temporal_made_places_the_past_activity_and_location_before_the_endpoint() {
+        for (source, expected) in [
+            ("私は六時まで働きます。", "我工作到六點。"),
+            ("私は六時まで働きました。", "我工作到六點。"),
+            ("私は日曜日まで家で働きました。", "我在家工作到星期日。"),
+            ("子供は夕方まで公園で遊びました。", "孩子在公園玩到傍晚。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        // Author controls derived from TMD-N5-01 and the work example above.
+        assert_eq!(
+            translate("私は六時まで日本語を勉強しました。"),
+            "我學習日本語到六點。"
+        );
+        assert_eq!(
+            translate("私は六時まで働きませんでした。"),
+            "我到六點為止沒有工作。"
+        );
+    }
+
+    #[test]
     fn compound_temporal_made_keeps_both_time_parts_after_the_activity() {
         for (source, expected) in [
             (
@@ -11000,11 +11026,7 @@ mod motion_endpoint_tests {
     }
 
     #[test]
-    fn temporal_made_keeps_negation_and_leaves_deadlines_and_other_endpoints_alone() {
-        assert_eq!(
-            translate("私は六時まで働きませんでした。"),
-            "我到六點為止沒有工作。"
-        );
+    fn temporal_made_leaves_deadlines_and_other_endpoints_alone() {
         assert_eq!(
             translate("私は六時までに手紙を書きます。"),
             "我在六點寫信。"

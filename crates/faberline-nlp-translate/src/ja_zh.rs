@@ -5687,6 +5687,7 @@ fn translate_clause_bunsetsus(
         }
     }
 
+    let deadline_action = deadline_ability_action(&bunsetsus);
     // Resolve time and result roles while the other arguments of the predicate are available.
     let timed_result = timed_result_frame(&bunsetsus, source);
     let mut affected_object = None;
@@ -6723,6 +6724,20 @@ fn translate_clause_bunsetsus(
         }
     }
 
+    // Ability takes the timed action as its complement. In particular,
+    // failing to meet a deadline does not imply inability throughout the interval.
+    let deadline_modal = deadline_action.and_then(|action| {
+        let modal = match inner_pre_mods.as_slice() {
+            [neg] if neg == "不" => "沒辦法",
+            [neg] if neg == "沒有" => "沒能",
+            [] if post_verb_mods.is_empty() => "可以",
+            _ => return None,
+        };
+        inner_pre_mods.clear();
+        verb_core = action;
+        Some(modal)
+    });
+
     // Assemble SVO order:
     let implicit_subject = subjects.is_empty();
     let mut parts: Vec<String> = Vec::new();
@@ -6872,7 +6887,11 @@ fn translate_clause_bunsetsus(
         } else if o.case_particle.as_deref() == Some("までに") {
             // Earliest completion is unrestricted. The stated time itself is
             // allowed. Keep tense, mood and polarity on the original predicate.
-            if inner_pre_mods
+            if let Some(modal) = deadline_modal {
+                // 明天截止前 includes the deadline day; 明天前 can mean today.
+                let cutoff = if o.is_clock { "前" } else { "截止前" };
+                parts.push(format!("{modal}在{}{cutoff}", o.text));
+            } else if inner_pre_mods
                 .iter()
                 .any(|m| matches!(m.as_str(), "沒有" | "不"))
             {
@@ -9352,6 +9371,63 @@ fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
                 )))
 }
 
+fn deadline_ability_action(groups: &[Bunsetsu]) -> Option<String> {
+    // Only move a modal when the deadline and finite predicate have one reading.
+    if groups
+        .iter()
+        .filter(|b| b.case_particle.as_deref() == Some("までに"))
+        .count()
+        != 1
+    {
+        return None;
+    }
+    let mut predicates = groups.iter().filter(|b| b.role == BunsetsuRole::Predicate);
+    let finite = finite_predicate_atoms(predicates.next()?);
+    let (verb, tail) = finite.split_first()?;
+    if predicates.next().is_some()
+        || verb.upos != Some(Upos::Verb)
+        || verb.is_locked
+        || tail
+            .iter()
+            .any(|a| a.is_locked || a.upos != Some(Upos::Aux))
+        || finite
+            .windows(2)
+            .any(|p| p[0].span.end_char != p[1].span.start_char)
+    {
+        return None;
+    }
+    if verb.lemma.as_deref() == Some("できる") {
+        // In 提出できる the action noun already occupies its own phrase.
+        // Standalone できる can also mean that something comes into existence.
+        return groups
+            .iter()
+            .flat_map(|b| &b.atoms)
+            .any(|noun| {
+                !noun.is_locked
+                    && noun.upos == Some(Upos::Noun)
+                    && noun.deprel == "compound"
+                    && noun.head.is_some()
+                    && noun.head == verb.doc_tok_idx
+                    && noun.span.end_char == verb.span.start_char
+            })
+            .then(String::new);
+    }
+    let action = translate_single_ja_term(&verb.surface, verb.lemma.as_deref(), verb.upos);
+    // The parser also expresses a plain negative potential (e.g. 書けない)
+    // as the base verb plus a negative auxiliary carrying the lemma れる.
+    if tail
+        .first()
+        .is_some_and(|a| a.surface == "ない" && a.lemma.as_deref() == Some("れる"))
+    {
+        return Some(action);
+    }
+    action
+        .strip_prefix("能夠")
+        .or_else(|| action.strip_prefix('能'))
+        .filter(|rest| !rest.is_empty())
+        .map(str::to_owned)
+}
+
 fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> Bunsetsu {
     let mut case_particle = None;
     let mut sconj_tail = None;
@@ -10629,6 +10705,28 @@ mod clock_rule_tests {
         ] {
             let result = translate(source);
             assert!(!result.contains("最晚"), "{source}: {result}");
+        }
+    }
+
+    #[test]
+    fn ability_scopes_over_meeting_the_deadline() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        for (source, expected) in [
+            ("私は六時までに手紙を書けません。", "我沒辦法在六點前寫信。"),
+            (
+                "私は金曜日までに手紙を書けない。",
+                "我沒辦法在星期五截止前寫信。",
+            ),
+            ("六時までに手紙を書けませんでした。", "沒能在六點前寫信。"),
+            (
+                "私は明日までに書類を提出できません。",
+                "我沒辦法在明天截止前提出書類。",
+            ),
+            ("六時までに手紙を書けます。", "可以在六點前寫信。"),
+            ("六時に手紙を書けません。", "在六點不能寫信。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
         }
     }
 

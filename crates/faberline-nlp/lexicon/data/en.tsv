@@ -30477,7 +30477,7 @@ inhumanize	en-US	1650	VERB	VERB	-	inhumanise	-
 inhumanizes	en-US	1650	VERB	VERB	inhumanize	inhumanises	-
 initial	en	1087	-	ADJ|NOUN|VERB	-	-	infl=irr
 initialed	en-US	1650	-	ADJ|VERB	initial	initialled	-
-initialer	en-US	1650	-	ADJ|NOUN	-	initialler	-
+initialer	en-US	1650	NOUN	NOUN	-	initialler	-
 initialers	en-US	1650	NOUN	NOUN	initialer	initiallers	-
 initialing	en-US	1650	-	ADJ|NOUN|VERB	initial	initialling	-
 initialisable	en-GB	1650	ADJ	ADJ	-	initializable	-

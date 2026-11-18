@@ -12,7 +12,7 @@ spec.loader.exec_module(builder)
 class PosRepairTests(unittest.TestCase):
     def test_reviewed_sample_evidence_preserves_supported_ambiguity(self):
         for word, expected in {
-            "initialer": {"ADJ", "NOUN"},
+            "initialer": {"NOUN"},
             "scepters": {"NOUN", "VERB"},
             "recolouring": {"NOUN", "VERB"},
             "moulder": {"NOUN", "VERB"},

@@ -34,8 +34,8 @@
     {
       "path": "lexicon/data/en.tsv",
       "entries": 66000,
-      "bytes": 2921327,
-      "sha256": "304ef513538842fe3780c8da233f40b7c2f3d24ad667d3490ee19a3128089154"
+      "bytes": 2921326,
+      "sha256": "224e1fb8ecc2fa59e9148a2348b409f0a9617528386435cf0f84c3c245b3412d"
     },
     {
       "path": "lexicon/data/ja.tsv",
@@ -147,7 +147,7 @@
     }
   ],
   "lexicon_bin_bytes": 15124412,
-  "lexicon_bin_sha256": "11761a0afed76309a075226785fd7fd1497f6ba89a18ffb4c6c69450e1939c69",
+  "lexicon_bin_sha256": "ad1fc12d61614e810711728b1eb5cb3141082d73d86f1b23c7effc5ba585da8d",
   "upstream_inputs": {
     "wordnet_3_1": {
       "archive": "wn3.1.dict.tar.gz",
@@ -579,9 +579,9 @@
       "reviewed_head": "73c619847aaa1e9fc834d90f83ebcf08432d460c",
       "review": "https://github.com/faberline/nlp/pull/197#issuecomment-6986350014",
       "baseline_en_sha256": "e218ebd5ced802f0846bfcb68ea2d19a8205721c408818dafcd11e6280d19513",
-      "candidate_en_sha256": "304ef513538842fe3780c8da233f40b7c2f3d24ad667d3490ee19a3128089154",
+      "candidate_en_sha256": "224e1fb8ecc2fa59e9148a2348b409f0a9617528386435cf0f84c3c245b3412d",
       "builder_path": "tools/lexicon_build/build_en.py",
-      "builder_sha256": "de6b06cb185f10b5aef231b4d07f9da74af2dd8174a6ad9bcd341f409c8336e5",
+      "builder_sha256": "d035eef5626392b4e498aaa20c1557d7480f8c3d4340fd3fed02ad3154f5c0fa",
       "rows_compared": 66000,
       "packed_english_rows_compared": 66000,
       "changed_rows": 6,
@@ -600,8 +600,8 @@
             "initial"
           ],
           "new": [
-            "-",
-            "ADJ|NOUN",
+            "NOUN",
+            "NOUN",
             "-"
           ]
         },
@@ -678,7 +678,12 @@
       ],
       "surface_variant_cost_counterpart_meta_unchanged": true,
       "scope": "Correct only the six returned entries. The four counterpart removals above remain in the new output.",
-      "limits": "Each entry has one lemma slot. The two readings of initialer do not share an established lemma, so the slot is unset. Evidence in the review supports verification. We did not import dictionary definitions, extra entries or distribution files. New independent acceptance is pending."
+      "limits": "The attested use of initialer is an agent noun. The noun is a bare headword, with no inflected lemma recorded. Evidence in the review supports verification. We did not import dictionary definitions, extra entries or distribution files. New independent acceptance is pending.",
+      "followup_review": {
+        "review": "https://github.com/faberline/nlp/pull/197#issuecomment-6986813463",
+        "reviewed_head": "795f69fc055f7b5fb7ca2857f3a77ce3d7511301",
+        "superseded_en_sha256": "304ef513538842fe3780c8da233f40b7c2f3d24ad667d3490ee19a3128089154"
+      }
     }
   ],
   "counterpart_repair_batches": [

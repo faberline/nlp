@@ -79,7 +79,7 @@ TARGET_GOAL = 66_000
 REVIEWED_POS_EVIDENCE: dict[str, frozenset[str]] = {
     "weftwise": frozenset({"ADJ", "ADV"}),
     "weftwize": frozenset(),
-    "initialer": frozenset({"ADJ", "NOUN"}),
+    "initialer": frozenset({"NOUN"}),
     "scepters": frozenset({"NOUN", "VERB"}),
     "recolouring": frozenset({"NOUN", "VERB"}),
     "moulder": frozenset({"NOUN", "VERB"}),
@@ -89,7 +89,7 @@ REVIEWED_POS_EVIDENCE: dict[str, frozenset[str]] = {
 # Exact source-attested inflected form and its base; do not propagate to a
 # counterpart whose spelling or meaning has not independently been reviewed.
 REVIEWED_LEMMA_EVIDENCE: dict[str, str] = {
-    "initialer": "-",  # One stored lemma cannot represent both POS readings safely.
+    "initialer": "-",  # Preserve the noun headword; the comparative is unverified.
     "reedifying": "reedify",
 }
 

@@ -5268,6 +5268,7 @@ fn translate_clause_bunsetsus(
     let mut adverbs: Vec<String> = Vec::new();
     let mut iobjs: Vec<PlacedArg> = Vec::new();
     let mut objs: Vec<String> = Vec::new();
+    let mut route = None;
     let mut purpose = None;
     let mut purpose_partners = Vec::new();
     let mut purpose_recipients = Vec::new();
@@ -5299,6 +5300,7 @@ fn translate_clause_bunsetsus(
         .filter(|b| b.role == BunsetsuRole::Predicate)
         .cloned()
         .collect();
+    let motion_head = manner_motion_head(&candidates, source);
     // Interpret a source-linked terminal が on a clone first. Do not mutate
     // clause metadata until every standalone existential guard has passed.
     let mut candidate_contrast = false;
@@ -5617,9 +5619,11 @@ fn translate_clause_bunsetsus(
                 }
             }
             BunsetsuRole::Obj => {
-                let s = render_bunsetsu_np(&b, target);
-                if !s.is_empty() {
-                    objs.push(s);
+                let text = render_bunsetsu_np(&b, target);
+                if let Some(marker) = motion_head.and_then(|head| route_marker(&b, source, head)) {
+                    route = Some(format!("{marker}{text}"));
+                } else if !text.is_empty() {
+                    objs.push(text);
                 }
             }
             BunsetsuRole::Predicate => {
@@ -6622,6 +6626,7 @@ fn translate_clause_bunsetsus(
     let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
     parts.extend(go_together);
+    parts.extend(route);
     parts.extend(transfer_prefix);
     if let Some(object) = affected_object {
         parts.push(format!("把{object}"));
@@ -10664,6 +10669,33 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn motion_routes_keep_their_manner_and_polarity() {
+        for (source, expected) in [
+            ("犬は道を走ります。", "狗沿著道路跑。"),
+            ("犬は道を走りません。", "狗不沿著道路跑。"),
+            ("私は道路を歩きます。", "我沿著道路走。"),
+            ("子供は橋を走りました。", "孩子沿著橋跑了。"),
+            ("犬は道を歩きませんでした。", "狗沒有沿著道路走。"),
+            ("道を駅まで走ります。", "沿著道路跑到車站。"),
+            ("公園を散歩します。", "在公園散步。"),
+            ("犬は公園まで走ります。", "狗跑到公園。"),
+            ("私は道を選びます。", "我選擇道路。"),
+            ("私は橋を渡ります。", "我渡過橋。"),
+            ("私は橋を運びます。", "我搬運橋。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for source in [
+            "道を走らせます。",
+            "車を走らせます。",
+            "一時間を走ります。",
+            "私は駅を出ます。",
+        ] {
+            assert!(!translate(source).contains("沿著"), "{source}");
+        }
+    }
+
+    #[test]
     fn negative_questions_keep_nonhuman_subjects() {
         assert_eq!(
             translate("このバスは駅まで行きませんか。"),
@@ -11033,6 +11065,69 @@ fn is_existing_spatial_head(a: &Atom) -> bool {
                 | "机"
                 | "風呂"
         )
+}
+
+// Intransitive manner verbs can take a traversed space with を. Verbs such
+// as 渡る and 通る already express that relation in their Chinese gloss.
+fn manner_motion_head(predicates: &[Bunsetsu], source: &[Atom]) -> Option<usize> {
+    let [predicate] = predicates else { return None };
+    let mut verbs = predicate
+        .atoms
+        .iter()
+        .filter(|a| !a.is_locked && a.upos == Some(Upos::Verb));
+    let verb = verbs.next()?;
+    let head = verb.doc_tok_idx?;
+    if verbs.next().is_some()
+        || !matches!(
+            verb.lemma.as_deref().unwrap_or(&verb.surface),
+            "走る" | "歩く" | "駆ける" | "歩き回る" | "散歩する" | "泳ぐ" | "飛ぶ"
+        )
+        || source.iter().any(|a| {
+            a.head == Some(head)
+                && a.upos == Some(Upos::Aux)
+                && matches!(
+                    a.lemma.as_deref().unwrap_or(&a.surface),
+                    "せる" | "させる" | "れる" | "られる"
+                )
+        })
+        || source
+            .iter()
+            .filter(|a| a.head == Some(head) && a.deprel == "obj")
+            .count()
+            != 1
+    {
+        return None;
+    }
+    Some(head)
+}
+
+fn route_marker(group: &Bunsetsu, source: &[Atom], motion: usize) -> Option<&'static str> {
+    let case = group.atoms.last()?;
+    if case.is_locked
+        || case.upos != Some(Upos::Adp)
+        || case.surface != "を"
+        || case.deprel != "case"
+    {
+        return None;
+    }
+    let head = case.head?;
+    let place = source.iter().find(|a| a.doc_tok_idx == Some(head))?;
+    if place.is_locked
+        || place.upos != Some(Upos::Noun)
+        || place.deprel != "obj"
+        || place.head != Some(motion)
+        || place.span.end_char != case.span.start_char
+    {
+        return None;
+    }
+    // A linear route licenses 沿著. A larger area only licenses activity
+    // within that space. An event or duration licenses neither.
+    match place.surface.as_str() {
+        "道" | "道路" | "歩道" | "山道" | "坂道" | "車道" | "遊歩道" | "街道" | "小道" | "通路"
+        | "廊下" | "路地" | "橋" | "海岸" | "河岸" | "川岸" => Some("沿著"),
+        "公園" | "広場" | "校庭" | "空" | "海" | "川" | "河" => Some("在"),
+        _ => None,
+    }
 }
 
 fn predicates_is_made_motion_verb(predicates: &[Bunsetsu]) -> bool {

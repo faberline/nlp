@@ -12089,6 +12089,114 @@ fn predicates_is_cause_verb(predicates: &[Bunsetsu]) -> bool {
     })
 }
 
+// In 誰かと, the first か belongs to the pronoun, not to the finite verb.
+// Preserve the original case particle so callers can place this argument.
+fn indefinite_argument(atoms: &[Atom], predicate: usize) -> Option<(Atom, Option<Atom>)> {
+    let [word, ka, rest @ ..] = atoms else {
+        return None;
+    };
+    let noun_idx = word.doc_tok_idx?;
+    if word.is_locked
+        || ka.is_locked
+        || word.upos != Some(Upos::Pron)
+        || word.head != Some(predicate)
+        || ka.upos != Some(Upos::Part)
+        || ka.surface != "か"
+        || ka.deprel != "discourse"
+        || ka.head != Some(noun_idx)
+        || word.span.end_char != ka.span.start_char
+    {
+        return None;
+    }
+    let case = match rest {
+        [] => None,
+        [case]
+            if !case.is_locked
+                && case.upos == Some(Upos::Adp)
+                && case.deprel == "case"
+                && case.head == Some(noun_idx)
+                && ka.span.end_char == case.span.start_char =>
+        {
+            Some(case.clone())
+        }
+        _ => return None,
+    };
+    let text = match word.surface.as_str() {
+        "誰" => "某個人",
+        "何" => "某樣東西",
+        "どこ" => "某個地方",
+        _ => return None,
+    };
+    let mut noun = word.clone();
+    noun.surface = text.to_owned();
+    noun.lemma = None;
+    noun.span.end_char = ka.span.end_char;
+    noun.is_locked = true;
+    Some((noun, case))
+}
+
+// A content object may omit を immediately before a transitive activity.
+// A separate object or a non-transitive predicate leaves that reading open.
+fn indefinite_content_object(
+    word: &Atom,
+    case: Option<&Atom>,
+    end: usize,
+    action: &Atom,
+    has_object: bool,
+) -> bool {
+    if word.surface != "何" {
+        return false;
+    }
+    match (word.deprel.as_str(), case) {
+        ("obj", Some(case)) => case.surface == "を",
+        ("obl", None) => {
+            !has_object
+                && end == action.span.start_char
+                && matches!(
+                    action.lemma.as_deref().unwrap_or(&action.surface),
+                    "読む"
+                        | "飲む"
+                        | "食べる"
+                        | "書く"
+                        | "買う"
+                        | "作る"
+                        | "見る"
+                        | "聞く"
+                        | "選ぶ"
+                )
+        }
+        _ => false,
+    }
+}
+
+// In 何か作業を the pronoun modifies the following object noun. The
+// noun supplies the object, and the two-token modifier contributes 一些.
+fn indefinite_object_modifier(
+    prior: &Bunsetsu,
+    argument: &Bunsetsu,
+    predicate: usize,
+) -> Option<Atom> {
+    let object = argument.atoms.first()?;
+    let word = prior.atoms.first()?;
+    if argument.role != BunsetsuRole::Obj
+        || object.is_locked
+        || object.deprel != "obj"
+        || object.head != Some(predicate)
+        || word.surface != "何"
+        || word.deprel != "nmod"
+    {
+        return None;
+    }
+    let (mut modifier, None) = indefinite_argument(&prior.atoms, object.doc_tok_idx?)? else {
+        return None;
+    };
+    if modifier.span.end_char != object.span.start_char {
+        return None;
+    }
+    modifier.surface = "一些".to_owned();
+    Some(modifier)
+}
+
 fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;

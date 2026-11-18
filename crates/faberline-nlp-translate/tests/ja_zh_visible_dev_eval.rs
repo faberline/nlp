@@ -64,6 +64,13 @@ const PHENOMENON_MAP_SOURCE: &str = "2c89250b31dba56ac8f02cd55629bf6037d3b179";
 const PHENOMENON_BANK_FILES: [&str; 2] = ["nlevels_dev_v1.json", "honorific_san_dev_v1.json"];
 const PHENOMENON_GROUP_COUNT: usize = 13;
 const PHENOMENON_MEMBER_COUNT: usize = 32;
+const PHENOMENON_BASELINE_FILE: &str = "phenomena/baseline.tsv";
+const PHENOMENON_BASELINE_SCHEMA: &str = "faberline.nlp.ja_zh.dev_phenomenon_baseline.v1";
+const PHENOMENON_BASELINE_HEADER: &str = "\ngroup_id\tn\tchrf\texact\n";
+const PHENOMENON_BASELINE_ENGINE_REV: &str = "90c97a5db6d41aaa41d04a5546c7d51b04dd769f";
+const PHENOMENON_BASELINE_REPORT_SHA256: &str =
+    "9e1402fefb1f8b8ec32e8de813d351de6be29de73f0fdd55f5f4d00678e1b257";
+const PHENOMENON_REFERENCE: &str = "primary-only";
 
 #[derive(Deserialize)]
 struct PhenomenonMap {
@@ -315,6 +322,168 @@ fn validate_phenomenon_map(
     Ok(groups_by_member)
 }
 
+fn phenomenon_report_metadata() -> String {
+    format!(
+        "report-only/phenomena/metadata\tmap_sha256={PHENOMENON_MAP_SHA256}\treference={PHENOMENON_REFERENCE}\tgroups={PHENOMENON_GROUP_COUNT}\tn={PHENOMENON_MEMBER_COUNT}"
+    )
+}
+
+fn report_score_line(key: &str, count: usize, chrf: f64, exact: usize) -> String {
+    format!("report-only/{key}\tn={count}\tchrf={chrf:.2}\texact={exact}")
+}
+
+fn validate_baseline_metadata<'a>(
+    text: &'a str,
+    group_by_member: &HashMap<String, String>,
+) -> Result<&'a str, String> {
+    let mut fields = HashMap::new();
+    let mut banks = HashMap::new();
+    for line in text.lines() {
+        let comment = line
+            .strip_prefix("# ")
+            .ok_or("invalid phenomenon baseline metadata line")?;
+        let Some((key, value)) = comment.split_once('\t') else {
+            continue;
+        };
+        if key == "bank" {
+            let (file, binding) = value
+                .split_once('\t')
+                .ok_or("invalid phenomenon baseline bank record")?;
+            if banks.insert(file, binding).is_some() {
+                return Err(format!("duplicate phenomenon baseline bank {file}"));
+            }
+        } else if fields.insert(key, value).is_some() {
+            return Err(format!("duplicate phenomenon baseline field {key}"));
+        }
+    }
+    // #97 adopted this historical source. The check also works with a shallow checkout.
+    let source = fields
+        .remove("engine_rev")
+        .ok_or("missing phenomenon baseline engine_rev")?;
+    if source != PHENOMENON_BASELINE_ENGINE_REV {
+        return Err("phenomenon baseline historical revision mismatch".to_owned());
+    }
+    let report_sha256 = fields
+        .remove("report_sha256")
+        .ok_or("missing phenomenon baseline report_sha256")?;
+    let report_count = BANKS.iter().map(|spec| spec.count).sum::<usize>();
+    for (key, expected) in [
+        ("schema", PHENOMENON_BASELINE_SCHEMA.to_owned()),
+        ("map_sha256", PHENOMENON_MAP_SHA256.to_owned()),
+        ("reference", PHENOMENON_REFERENCE.to_owned()),
+        ("report_count", report_count.to_string()),
+        ("mapped_count", PHENOMENON_MEMBER_COUNT.to_string()),
+        ("group_count", PHENOMENON_GROUP_COUNT.to_string()),
+    ] {
+        let actual = fields
+            .remove(key)
+            .ok_or_else(|| format!("missing phenomenon baseline field {key}"))?;
+        if actual != expected {
+            return Err(format!("phenomenon baseline {key} mismatch"));
+        }
+    }
+    if !fields.is_empty() {
+        return Err("unknown phenomenon baseline metadata field".to_owned());
+    }
+    for spec in &BANKS {
+        let mapped_count = (spec.expected)()
+            .into_keys()
+            .filter(|id| group_by_member.contains_key(id))
+            .count();
+        let expected = format!("{}\t{}\t{mapped_count}", spec.sha256, spec.count);
+        let actual = banks
+            .remove(spec.file)
+            .ok_or_else(|| format!("missing phenomenon baseline bank {}", spec.file))?;
+        if actual != expected {
+            return Err(format!(
+                "phenomenon baseline bank mismatch for {}",
+                spec.file
+            ));
+        }
+    }
+    if !banks.is_empty() {
+        return Err("unknown phenomenon baseline bank".to_owned());
+    }
+    Ok(report_sha256)
+}
+
+fn validate_phenomenon_baseline(
+    text: &str,
+    group_by_member: &HashMap<String, String>,
+) -> Result<(), String> {
+    let (metadata, rows) = text
+        .split_once(PHENOMENON_BASELINE_HEADER)
+        .ok_or("missing or invalid phenomenon baseline header")?;
+    let expected_report_sha256 = validate_baseline_metadata(metadata, group_by_member)?;
+    let mut expected_groups = BTreeMap::new();
+    for group in group_by_member.values() {
+        *expected_groups.entry(group.as_str()).or_insert(0) += 1;
+    }
+    let mut historical_scores = BTreeMap::new();
+    for row in rows.lines() {
+        let columns: Vec<&str> = row.split('\t').collect();
+        let [group, count, chrf, exact] = columns.as_slice() else {
+            return Err("invalid phenomenon baseline score row".to_owned());
+        };
+        let expected_count = expected_groups
+            .remove(*group)
+            .ok_or_else(|| format!("unexpected or duplicate phenomenon baseline group {group}"))?;
+        if count.parse::<usize>().ok() != Some(expected_count) {
+            return Err(format!("phenomenon baseline count mismatch for {group}"));
+        }
+        let score = chrf
+            .parse::<f64>()
+            .map_err(|_| format!("invalid phenomenon baseline chrF for {group}"))?;
+        if !(0.0..=100.0).contains(&score) || format!("{score:.2}") != *chrf {
+            return Err(format!("invalid phenomenon baseline chrF for {group}"));
+        }
+        let exact = exact
+            .parse::<usize>()
+            .map_err(|_| format!("invalid phenomenon baseline exact count for {group}"))?;
+        if exact > expected_count {
+            return Err(format!(
+                "invalid phenomenon baseline exact count for {group}"
+            ));
+        }
+        historical_scores.insert(
+            *group,
+            report_score_line(&format!("phenomena/{group}"), expected_count, score, exact),
+        );
+    }
+    if !expected_groups.is_empty() {
+        let missing: Vec<_> = expected_groups.into_keys().collect();
+        return Err(format!(
+            "missing phenomenon baseline groups: {}",
+            missing.join(", ")
+        ));
+    }
+
+    // Rebuild the historical report from stored scores. Live scores may improve independently.
+    let historical_report = std::iter::once(phenomenon_report_metadata())
+        .chain(historical_scores.into_values())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let historical_sha256 = sha256_hex(&historical_report);
+    if historical_sha256 != expected_report_sha256 {
+        return Err("phenomenon baseline historical report hash mismatch".to_owned());
+    }
+    if historical_sha256 != PHENOMENON_BASELINE_REPORT_SHA256 {
+        return Err(
+            "phenomenon baseline report differs from the adopted historical report".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn require_phenomenon_baseline(
+    path: &Path,
+    group_by_member: &HashMap<String, String>,
+) -> Result<(), String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("cannot read required phenomenon baseline: {error}"))?;
+    validate_phenomenon_baseline(&text, group_by_member)
+}
+
 #[derive(Default)]
 struct Aggregate {
     count: usize,
@@ -331,10 +500,7 @@ impl Aggregate {
     fn print(&self, key: &str) {
         let mean = self.sum / self.count as f64;
         assert!(mean.is_finite(), "nonfinite aggregate");
-        println!(
-            "report-only/{key}\tn={}\tchrf={mean:.2}\texact={}",
-            self.count, self.exact
-        );
+        println!("{}", report_score_line(key, self.count, mean, self.exact));
     }
 }
 
@@ -349,6 +515,8 @@ fn adopted_banks_report_only() {
         .expect("read adopted phenomenon map");
     let group_by_member = validate_phenomenon_map(&map, PHENOMENON_MAP_SHA256)
         .expect("validate adopted phenomenon map");
+    require_phenomenon_baseline(&dir.join(PHENOMENON_BASELINE_FILE), &group_by_member)
+        .expect("validate required phenomenon baseline");
     let rev = Command::new("git")
         .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -437,10 +605,7 @@ fn adopted_banks_report_only() {
         .sum::<usize>();
     assert_eq!(mapped_count, PHENOMENON_MEMBER_COUNT);
     assert_eq!(phenomena.len(), PHENOMENON_GROUP_COUNT);
-    println!(
-        "report-only/phenomena/metadata\tmap_sha256={PHENOMENON_MAP_SHA256}\treference=primary-only\tgroups={}\tn={mapped_count}",
-        phenomena.len()
-    );
+    println!("{}", phenomenon_report_metadata());
     for (group, aggregate) in phenomena {
         aggregate.print(&format!("phenomena/{group}"));
     }
@@ -650,5 +815,196 @@ mod validation_tests {
                 "{pointer}",
             );
         }
+    }
+
+    fn pinned_baseline_fixture() -> (String, HashMap<String, String>) {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/ja_zh");
+        let map = std::fs::read_to_string(dir.join(PHENOMENON_MAP_FILE)).unwrap();
+        let groups = validate_phenomenon_map(&map, PHENOMENON_MAP_SHA256).unwrap();
+        let baseline = std::fs::read_to_string(dir.join(PHENOMENON_BASELINE_FILE)).unwrap();
+        (baseline, groups)
+    }
+
+    #[test]
+    fn required_phenomenon_baseline_accepts_valid_file_and_rejects_bad_files() {
+        let (baseline, groups) = pinned_baseline_fixture();
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("baseline.tsv");
+        let missing = require_phenomenon_baseline(&path, &groups).unwrap_err();
+        assert!(missing.starts_with("cannot read required phenomenon baseline"));
+
+        std::fs::write(&path, &baseline).unwrap();
+        require_phenomenon_baseline(&path, &groups).unwrap();
+
+        let missing_group = baseline
+            .lines()
+            .filter(|line| !line.starts_with("weather_cause_and_intention\t"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let missing_reference = baseline.replacen("# reference\tprimary-only\n", "", 1);
+        for (contents, expected) in [
+            (
+                "corrupt baseline",
+                "missing or invalid phenomenon baseline header",
+            ),
+            (
+                &missing_group,
+                "missing phenomenon baseline groups: weather_cause_and_intention",
+            ),
+            (
+                &missing_reference,
+                "missing phenomenon baseline field reference",
+            ),
+        ] {
+            std::fs::write(&path, contents).unwrap();
+            assert_eq!(
+                require_phenomenon_baseline(&path, &groups),
+                Err(expected.to_owned())
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_phenomenon_baseline_binding_and_score_errors() {
+        let (baseline, groups) = pinned_baseline_fixture();
+        let source_line = baseline
+            .lines()
+            .find(|line| line.starts_with("# engine_rev\t"))
+            .unwrap();
+        let group = "weather_cause_and_intention";
+        let row = baseline
+            .lines()
+            .find(|line| line.starts_with(group))
+            .unwrap();
+        let columns: Vec<_> = row.split('\t').collect();
+        let [_, count, score, exact] = columns.as_slice() else {
+            panic!("invalid baseline fixture row");
+        };
+        let score_row = |score: &str| format!("{group}\t{count}\t{score}\t{exact}");
+        let changed_score = if *score == "100.00" {
+            "99.99"
+        } else {
+            "100.00"
+        };
+        for (from, to, expected) in [
+            (
+                PHENOMENON_BASELINE_SCHEMA,
+                "other".to_owned(),
+                "phenomenon baseline schema mismatch",
+            ),
+            (
+                PHENOMENON_MAP_SHA256,
+                "wrong".to_owned(),
+                "phenomenon baseline map_sha256 mismatch",
+            ),
+            (
+                source_line,
+                "# engine_rev\twrong".to_owned(),
+                "phenomenon baseline historical revision mismatch",
+            ),
+            (
+                source_line,
+                "# engine_rev\t314181e27ec0fb85413d271ff446aae3607cef80".to_owned(),
+                "phenomenon baseline historical revision mismatch",
+            ),
+            (
+                "# reference\tprimary-only",
+                "# reference\tbest-variant".to_owned(),
+                "phenomenon baseline reference mismatch",
+            ),
+            (
+                "# report_count\t82",
+                "# report_count\t81".to_owned(),
+                "phenomenon baseline report_count mismatch",
+            ),
+            (
+                "# mapped_count\t32",
+                "# mapped_count\t31".to_owned(),
+                "phenomenon baseline mapped_count mismatch",
+            ),
+            (
+                "# group_count\t13",
+                "# group_count\t12".to_owned(),
+                "phenomenon baseline group_count mismatch",
+            ),
+            (
+                BANKS[0].sha256,
+                "wrong".to_owned(),
+                "phenomenon baseline bank mismatch for nlevels_dev_v1.json",
+            ),
+            (
+                "\t50\t0\n",
+                "\t50\t1\n".to_owned(),
+                "phenomenon baseline bank mismatch for nlevels_expansion_dev_v1.json",
+            ),
+            (
+                row,
+                format!("{group}\t0\t{score}\t{exact}"),
+                "phenomenon baseline count mismatch for weather_cause_and_intention",
+            ),
+            (
+                row,
+                score_row("NaN"),
+                "invalid phenomenon baseline chrF for weather_cause_and_intention",
+            ),
+            (
+                row,
+                score_row("100.01"),
+                "invalid phenomenon baseline chrF for weather_cause_and_intention",
+            ),
+            (
+                row,
+                score_row("50.000"),
+                "invalid phenomenon baseline chrF for weather_cause_and_intention",
+            ),
+            (
+                row,
+                format!("{group}\t{count}\t{score}\t999"),
+                "invalid phenomenon baseline exact count for weather_cause_and_intention",
+            ),
+            (
+                row,
+                score_row(changed_score),
+                "phenomenon baseline historical report hash mismatch",
+            ),
+            (
+                row,
+                row.replacen(group, "unknown_group", 1),
+                "unexpected or duplicate phenomenon baseline group unknown_group",
+            ),
+            (
+                row,
+                row.replacen(group, "cause_concession_and_outcome", 1),
+                "unexpected or duplicate phenomenon baseline group cause_concession_and_outcome",
+            ),
+        ] {
+            assert!(baseline.contains(from), "fixture is missing {from:?}");
+            let changed = baseline.replacen(from, &to, 1);
+            assert_eq!(
+                validate_phenomenon_baseline(&changed, &groups),
+                Err(expected.to_owned()),
+                "{from:?} -> {to:?}",
+            );
+        }
+
+        let changed = baseline.replacen(row, &score_row(changed_score), 1);
+        let (_, rows) = changed.split_once(PHENOMENON_BASELINE_HEADER).unwrap();
+        let mut report = vec![phenomenon_report_metadata()];
+        for line in rows.lines() {
+            let columns: Vec<_> = line.split('\t').collect();
+            let [group, count, score, exact] = columns.as_slice() else {
+                panic!("invalid baseline fixture row");
+            };
+            report.push(format!(
+                "report-only/phenomena/{group}\tn={count}\tchrf={score}\texact={exact}"
+            ));
+        }
+        let changed_sha256 = sha256_hex(&report.join("\n"));
+        assert_ne!(changed_sha256, PHENOMENON_BASELINE_REPORT_SHA256);
+        let rehashed = changed.replacen(PHENOMENON_BASELINE_REPORT_SHA256, &changed_sha256, 1);
+        assert_eq!(
+            validate_phenomenon_baseline(&rehashed, &groups),
+            Err("phenomenon baseline report differs from the adopted historical report".to_owned())
+        );
     }
 }

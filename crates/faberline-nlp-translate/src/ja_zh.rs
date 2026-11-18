@@ -9820,10 +9820,10 @@ fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> 
 
         // 明日 and 先生と can modify the same activity independently.
         // A time attached to the companion itself stays inside its noun phrase.
-        let time_before_companion = atom.deprel == "advmod"
+        let activity_adverb = atom.deprel == "advmod"
             && !atom.is_locked
             && atom.head.is_some()
-            && source_time_head(atom)
+            && atom.upos == Some(Upos::Adv)
             && matches!((next, atoms.get(idx + 2)), (Some(noun), Some(to))
                 if !noun.is_locked && !to.is_locked && noun.head == atom.head
                     && noun.deprel == "obl" && noun.doc_tok_idx.is_some()
@@ -9833,7 +9833,7 @@ fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> 
         if !next_is_func
             && !next_is_aux
             && !keep_te_subsidiary
-            && (is_func || time_before_companion || !is_compound_noun_pair(atom, next))
+            && (is_func || activity_adverb || !is_compound_noun_pair(atom, next))
         {
             bunsetsus.push(classify_bunsetsu(
                 std::mem::take(&mut cur),

@@ -5190,16 +5190,42 @@ fn has_place_genitive(atoms: &[Atom], head: usize, doc: &Document) -> bool {
 }
 
 fn is_floor_service_space(atom: &Atom, atoms: &[Atom], doc: &Document) -> bool {
-    !atom.is_locked
-        && atom.upos == Some(Upos::Noun)
-        // A service counter or section can also be an abstract contact point.
-        // Require a source modifier that links it to a real place.
-        && ["窓口", "案内所", "コーナー", "カウンター"]
-            .into_iter()
-            .any(|suffix| atom.surface.ends_with(suffix))
-        && atom
-            .doc_tok_idx
-            .is_some_and(|head| has_place_genitive(atoms, head, doc))
+    const SERVICE_SPACES: [&str; 4] = ["窓口", "案内所", "コーナー", "カウンター"];
+
+    // A service counter or section can also be an abstract contact point.
+    // Require a source modifier that links it to a real place.
+    let Some(head) = atom.doc_tok_idx else {
+        return false;
+    };
+    if atom.is_locked || atom.upos != Some(Upos::Noun) || !has_place_genitive(atoms, head, doc) {
+        return false;
+    }
+    if SERVICE_SPACES
+        .into_iter()
+        .any(|suffix| atom.surface.ends_with(suffix))
+    {
+        return true;
+    }
+
+    // Recognize a known service compound without relabeling its bare noun
+    // head or changing the token spans and noun rendering.
+    let modifier = atoms.windows(2).find_map(|pair| {
+        let dependent = &pair[0];
+        let noun = &pair[1];
+        (noun.doc_tok_idx == Some(head)
+            && noun.span == atom.span
+            && dependent.head == Some(head)
+            && dependent.deprel == "compound"
+            && dependent.span.end_char == atom.span.start_char
+            && is_compound_noun_pair(dependent, Some(atom)))
+        .then_some(dependent.surface.as_str())
+    });
+    modifier.is_some_and(|modifier| {
+        SERVICE_SPACES.into_iter().any(|name| {
+            name.strip_suffix(atom.surface.as_str())
+                .is_some_and(|stem| modifier.ends_with(stem))
+        })
+    })
 }
 
 fn has_floor_order_context(atoms: &[Atom], floor: usize, predicate: usize) -> bool {
@@ -11173,6 +11199,32 @@ mod existence_rule_tests {
                 "{source}: {text}"
             );
         }
+    }
+
+    #[test]
+    fn building_floor_uses_linked_service_compound_without_relabeling_bare_counter() {
+        let glossary = TranslationGlossary::new();
+        for (source, floor) in [
+            ("市民会館の案内所は四階です。", "在四樓"),
+            ("病院の案内所は二階です。", "在二樓"),
+        ] {
+            let output = translate(source, &glossary).target_text;
+            assert!(output.contains(floor), "{source}: {output}");
+        }
+
+        let bare = translate("市民会館の所は四階です。", &glossary).target_text;
+        assert!(bare.contains("四階") && !bare.contains("四樓"), "{bare}");
+        let count = translate("病院の入口は二か所です。", &glossary).target_text;
+        assert!(count.contains('二') && !count.contains('樓'), "{count}");
+
+        let source = "市民会館の`案内所`は四階です。";
+        let locked = translate(source, &glossary).target_text;
+        assert!(
+            locked.matches("`案内所`").count() == 1
+                && locked.contains("四階")
+                && !locked.contains("四樓"),
+            "{locked}"
+        );
     }
 
     #[test]

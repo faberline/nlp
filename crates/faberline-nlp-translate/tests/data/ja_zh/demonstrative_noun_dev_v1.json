@@ -1,0 +1,302 @@
+{
+  "schema": "faberline.nlp.ja_zh.demonstrative_noun_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "reused_existing_controls": [
+    {
+      "file": "nlevels_expansion_dev_v1.json",
+      "sha256": "22d0753fd384ae5f07a118c6417c53b213cc66c1637a8369b8c0315e69ab4fcc",
+      "ids": [
+        "N5X-07",
+        "N5X-08"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "DEM-N5-01",
+      "level_approx": "N5",
+      "jp": "私はその本を読みます。",
+      "zh_hant": "我讀那本書。",
+      "allowed_variants": [
+        "我看那本書。"
+      ],
+      "semantic_checks": [
+        "我方是閱讀者，書是 を 標示的直接受詞。",
+        "在這筆沒有近指情境的參考譯文中採用「那本書」，不把這項選擇擴成所有語境的唯一譯法。",
+        "保留肯定，不翻成不讀。"
+      ],
+      "semantic_unknowns": [
+        "句子沒有前文或空間情境，不能判定 その 是因前文提及還是聽者可辨認。",
+        "非過去式可依情境表示習慣或意圖，沒有上下文時不確定時間讀法。"
+      ],
+      "control": {
+        "kind": "prenominal",
+        "contrast_ids": [
+          "DEM-N5-02",
+          "DEM-N5-03",
+          "N5X-07",
+          "N5X-08"
+        ],
+        "stable": ["DEM-N5-01/02/03 保留我方作閱讀者、本作直接受詞及 読みます 述語。", "N5X-07/08 是既有 この箱 肯定／否定錨點。"],
+        "changed": ["01/02 只改變極性。", "01/03 只把 その 換成 あの。", "相對於 N5X-07/08，本組把指示名詞放在 を 直接受詞位置。"],
+        "limits": [
+        "臺灣華語可用同一個 那本書 表達 その本 和 あの本。缺少情境時，這個參考選擇不表示所有語境都必須排除 這本書。這組不聲稱能保留所有日文指示距離或語篇差異。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DEM-N5-02",
+      "level_approx": "N5",
+      "jp": "私はその本を読みません。",
+      "zh_hant": "我不讀那本書。",
+      "allowed_variants": [
+        "我不看那本書。"
+      ],
+      "semantic_checks": [
+        "我方是閱讀者，書是 を 標示的直接受詞。",
+        "在這筆沒有近指情境的參考譯文中採用「那本書」，不把這項選擇擴成所有語境的唯一譯法。",
+        "保留否定，不翻成會讀。"
+      ],
+      "semantic_unknowns": [
+        "句子沒有前文或空間情境，不能判定 その 是因前文提及還是聽者可辨認。",
+        "非過去否定可依情境表示習慣或意圖，沒有上下文時不確定時間讀法。"
+      ],
+      "control": {
+        "kind": "prenominal",
+        "contrast_ids": [
+          "DEM-N5-01"
+        ],
+        "stable": ["與 DEM-N5-01 相同的主詞、指示名詞、受詞角色及述語。"],
+        "changed": ["相對 DEM-N5-01 只把肯定改為否定。"],
+        "limits": [
+          "此句不說明不讀是習慣、意願或預測。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DEM-N5-03",
+      "level_approx": "N5",
+      "jp": "私はあの本を読みます。",
+      "zh_hant": "我讀那本書。",
+      "allowed_variants": [
+        "我看那本書。"
+      ],
+      "semantic_checks": [
+        "我方是閱讀者，書是 を 標示的直接受詞。",
+        "在這筆沒有近指情境的參考譯文中採用「那本書」，不把這項選擇擴成所有語境的唯一譯法。",
+        "保留肯定。"
+      ],
+      "semantic_unknowns": [
+        "沒有共同知識或空間情境，不能確定 あの 的遠距或共同可辨識條件。",
+        "非過去式可依情境表示習慣或意圖，沒有上下文時不確定時間讀法。"
+      ],
+      "control": {
+        "kind": "prenominal",
+        "contrast_ids": [
+          "DEM-N5-01"
+        ],
+        "stable": ["與 DEM-N5-01 保留相同的主詞、本、を 受詞及肯定述語。"],
+        "changed": ["相對 DEM-N5-01 只把 その 換成 あの。"],
+        "limits": [
+        "臺灣華語可用同一個 那本書 表達 その本 和 あの本。缺少情境時，這個參考選擇不表示所有語境都必須排除 這本書。此對照不能單獨證明語篇距離細節已翻出。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DEM-N5-04",
+      "level_approx": "N5",
+      "jp": "これは私の本です。",
+      "zh_hant": "這是我的書。",
+      "allowed_variants": [
+        "這本是我的書。"
+      ],
+      "semantic_checks": [
+        "これ 是獨立代詞，不能改讀成 この 加名詞。",
+        "本是 私の 所修飾的名詞。"
+      ],
+      "semantic_unknowns": [
+        "說話者未交代手勢或其他指示情境。"
+      ],
+      "control": {
+        "kind": "standalone",
+        "contrast_ids": [
+          "DEM-N5-05",
+          "DEM-N5-06"
+        ],
+        "stable": ["04/05/06 使用同一個 私の本 述語名詞組。"],
+        "changed": ["三筆只改變獨立指示代詞 これ、それ、あれ。"],
+        "limits": [
+          "臺灣華語在此可用 這／那 區分近指和非近指，但句子沒有手勢或對話情境。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DEM-N5-05",
+      "level_approx": "N5",
+      "jp": "それは私の本です。",
+      "zh_hant": "那是我的書。",
+      "allowed_variants": [
+        "那本是我的書。"
+      ],
+      "semantic_checks": [
+        "それ 是獨立代詞，不能改讀成 その 加名詞。",
+        "本是 私の 所修飾的名詞。"
+      ],
+      "semantic_unknowns": [
+        "說話者未交代聽者附近的物件或先前提及內容。"
+      ],
+      "control": {
+        "kind": "standalone",
+        "contrast_ids": [
+          "DEM-N5-04",
+          "DEM-N5-06"
+        ],
+        "stable": ["04/05/06 使用同一個 私の本 述語名詞組。"],
+        "changed": ["三筆只改變獨立指示代詞 これ、それ、あれ。"],
+        "limits": [
+          "參照對象的語篇位置未提供。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DEM-N5-06",
+      "level_approx": "N5",
+      "jp": "あれは私の本です。",
+      "zh_hant": "那是我的書。",
+      "allowed_variants": [
+        "那本是我的書。"
+      ],
+      "semantic_checks": [
+        "あれ 是獨立代詞，不能改讀成 あの 加名詞。",
+        "本是 私の 所修飾的名詞。"
+      ],
+      "semantic_unknowns": [
+        "沒有共同空間情境，不能確定物件相對說話者和聽者的位置。"
+      ],
+      "control": {
+        "kind": "standalone",
+        "contrast_ids": [
+          "DEM-N5-04",
+          "DEM-N5-05"
+        ],
+        "stable": ["04/05/06 使用同一個 私の本 述語名詞組。"],
+        "changed": ["三筆只改變獨立指示代詞 これ、それ、あれ。"],
+        "limits": [
+          "臺灣華語的 那 是自然的概括譯法，但不保留日文三分指示系統的全部細節。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DEM-N5-07",
+      "level_approx": "N5",
+      "jp": "この車は白いです。",
+      "zh_hant": "這輛車是白色的。",
+      "allowed_variants": [
+        "這台車是白色的。"
+      ],
+      "semantic_checks": [
+        "この 修飾 車，指示車輛，不表示所有關係。",
+        "保留車輛為白色的肯定敘述。"
+      ],
+      "semantic_unknowns": [
+        "沒有說車輛屬於誰或與另一輛車比較。"
+      ],
+      "control": {
+        "kind": "prenominal",
+        "contrast_ids": [
+          "DEM-N5-08",
+          "N5X-07",
+          "N5X-08"
+        ],
+        "stable": ["07/08 使用同一個 車 主題和 白い 述語。", "N5X-07/08 是另一個 この 名詞的肯定／否定錨點。"],
+        "changed": ["07/08 只改變車輛的限定方式，從 この 指示改為 先生の 所有關係。"],
+        "limits": [
+          "此控制比較兩個指稱／所有關係，不是相同指涉物的純詞形替換。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DEM-N5-08",
+      "level_approx": "N5",
+      "jp": "先生の車は白いです。",
+      "zh_hant": "老師的車是白色的。",
+      "allowed_variants": [
+        "老師的車是白色的。"
+      ],
+      "semantic_checks": [
+        "先生 是車的所有者或關聯者，先生の車 是真正的名詞加 の 加名詞結構。",
+        "保留車輛為白色的肯定敘述。",
+        "不把 先生の 誤當成指示詞。"
+      ],
+      "semantic_unknowns": [
+        "先生與車的所有關係未再說明，句子只建立一般關聯。"
+      ],
+      "control": {
+        "kind": "genitive",
+        "contrast_ids": [
+          "DEM-N5-07"
+        ],
+        "stable": ["與 DEM-N5-07 使用同一個 車 主題及 白い 述語。"],
+        "changed": ["主題限定從 この車 改為名詞 先生 加 の 加 車。"],
+        "limits": [
+          "相對 DEM-N5-07，指稱限定和所有／關聯來源同時改變。此 pair 用來檢查真正 の 關係，不聲稱只改一個表面詞就保留相同指涉。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

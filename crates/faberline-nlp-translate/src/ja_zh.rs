@@ -6043,18 +6043,7 @@ fn translate_clause_bunsetsus(
         for o in &mut obliques {
             if o.is_instrument_de
                 && let Some(veh) = o.text.strip_prefix('用')
-                && matches!(
-                    veh,
-                    "電車"
-                        | "公車"
-                        | "巴士"
-                        | "計程車"
-                        | "新幹線"
-                        | "飛機"
-                        | "船"
-                        | "列車"
-                        | "地鐵"
-                )
+                && is_transport_term(veh)
             {
                 o.text = format!("坐{veh}");
             }
@@ -8861,6 +8850,41 @@ fn has_verb_reading(surface: &str) -> bool {
         .is_some_and(|hit| hit.upos_candidates.contains(&Upos::Verb))
 }
 
+fn is_transport_term(term: &str) -> bool {
+    matches!(
+        term,
+        "電車" | "公車" | "巴士" | "計程車" | "新幹線" | "飛機" | "船" | "列車" | "地鐵"
+    )
+}
+
+fn is_motion_actor(a: &Atom) -> bool {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+    if a.is_locked {
+        return false;
+    }
+    match a.upos {
+        Some(Upos::Pron) => {
+            let base = ["たち", "達", "ら", "等"]
+                .iter()
+                .find_map(|suffix| a.surface.strip_suffix(suffix))
+                .unwrap_or(&a.surface);
+            matches!(base, "私" | "僕" | "俺" | "彼" | "彼女" | "あなた" | "君")
+        }
+        Some(Upos::Noun) => {
+            is_demonstrative_person_noun(a)
+                || lookup_ja(&a.surface).is_some_and(|hit| {
+                    hit.upos_candidates.as_slice() == [Upos::Noun]
+                        && hit.counterpart.as_deref().is_some_and(is_transport_term)
+                })
+        }
+        Some(Upos::Propn) => lookup_ja(&a.surface).is_some_and(|hit| {
+            hit.sem_class == Some(SemanticClass::Person)
+                && hit.upos_candidates.as_slice() == [Upos::Propn]
+        }),
+        _ => false,
+    }
+}
+
 // For 戻る and other verbs of movement or change, a subject can be the
 // mover or the thing restored. An independent location or a human subject
 // supports actual movement. An unrelated subject's modifier is insufficient.
@@ -8886,19 +8910,17 @@ fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool
         .iter()
         .filter(|a| a.head == Some(head) && a.deprel == "nsubj")
         .all(|a| {
-            !a.is_locked
-                && match a.upos {
-                    Some(Upos::Noun) => is_demonstrative_person_noun(a),
-                    Some(Upos::Pron) => matches!(
-                        a.surface.as_str(),
-                        "私" | "僕" | "俺" | "彼" | "彼女" | "あなた" | "君"
-                    ),
-                    Some(Upos::Propn) => lookup_ja(&a.surface).is_some_and(|hit| {
-                        hit.sem_class == Some(SemanticClass::Person)
-                            && hit.upos_candidates.as_slice() == [Upos::Propn]
-                    }),
-                    _ => false,
-                }
+            is_motion_actor(a)
+                || (!a.is_locked
+                    && a.upos == Some(Upos::Noun)
+                    && matches!(a.surface.as_str(), "たち" | "達" | "ら" | "等")
+                    && a.doc_tok_idx.is_some()
+                    && source.iter().any(|stem| {
+                        stem.head == a.doc_tok_idx
+                            && stem.deprel == "compound"
+                            && stem.span.end_char == a.span.start_char
+                            && is_motion_actor(stem)
+                    }))
         })
 }
 
@@ -8967,6 +8989,10 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
                     || (!a.is_locked
                         && a.head == Some(head)
                         && (is_daypart_surface(&a.surface)
+                            || a.surface
+                                .strip_suffix('時')
+                                .and_then(clock_number)
+                                .is_some_and(|h| h <= 24)
                             || faberline_nlp::lexicon::lookup_ja(&a.surface).is_some_and(|hit| {
                                 hit.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Time)
                             })))
@@ -8974,8 +9000,9 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
     }) {
         return false;
     }
-    if matches!(lemma, "戻る" | "移る" | "動く" | "帰る")
-        && !has_motion_reading(clause, source, head)
+    // 帰る expresses a return home. 戻る can instead restore a setting,
+    // and 移る / 動く can move a scheduled value.
+    if matches!(lemma, "戻る" | "移る" | "動く") && !has_motion_reading(clause, source, head)
     {
         return false;
     }
@@ -9496,6 +9523,27 @@ mod motion_endpoint_tests {
             translate("兄は夕方に病院から戻りました。"),
             "哥哥傍晚從醫院回來了。"
         );
+    }
+
+    #[test]
+    fn personal_plurals_and_vehicles_can_return_at_a_time() {
+        for (source, expected) in [
+            ("私たちは夕方に戻りました。", "我們傍晚回來了。"),
+            ("先生たちが夕方に戻りました。", "老師們傍晚回來了。"),
+            ("バスは夕方に戻りました。", "公車傍晚回來了。"),
+            ("両親は正午に帰りました。", "父母正午回去了。"),
+            ("犬は夕方に帰りました。", "狗傍晚回去了。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for source in [
+            "私たちの時計の針が正午に戻りました。",
+            "時計たちが正午に戻りました。",
+            "時計の針が五時から正午に戻りました。",
+        ] {
+            let text = translate(source);
+            assert!(text.contains("到正午"), "{source}: {text}");
+        }
     }
 
     #[test]

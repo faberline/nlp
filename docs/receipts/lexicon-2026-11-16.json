@@ -2,7 +2,7 @@
   "schema": "nlp.lexicon.receipt.v1",
   "date": "2026-11-16",
   "binary_format": "FNLPLX01",
-  "binary_bytes": 15124438,
+  "binary_bytes": 15124422,
   "total_entries": 350906,
   "total_rules": 1389,
   "variants": {
@@ -34,8 +34,8 @@
     {
       "path": "lexicon/data/en.tsv",
       "entries": 66000,
-      "bytes": 2921339,
-      "sha256": "43c460aeac0707526c1fc40ea4ea39fb5193e63a2438adb2dcf3c77dcb364ae0"
+      "bytes": 2921349,
+      "sha256": "a63f63f39d3dd978456dbc63b0cc1b23fa51b9a248d7a4bee41ad5550399d150"
     },
     {
       "path": "lexicon/data/ja.tsv",
@@ -146,8 +146,8 @@
       "core_lex_zip_sha256": "e9ac06222f0ce401a0fef9b129e61e93d59e3ff395a1b037f498962ee5b8ad8b"
     }
   ],
-  "lexicon_bin_bytes": 15124438,
-  "lexicon_bin_sha256": "ed91380631d031c7f742013d0485bef1a56c6f425c438a6a4f20657dcfd1c462",
+  "lexicon_bin_bytes": 15124422,
+  "lexicon_bin_sha256": "5948ee8f3435275958381847c1ab0e75b09a2d52ed9341ec6822d61d284d0fe0",
   "upstream_inputs": {
     "wordnet_3_1": {
       "archive": "wn3.1.dict.tar.gz",
@@ -334,5 +334,244 @@
       "manifest_zh_hans.tsv": "088eba03a5a9d8594626e05193ff6edff6e455318ef8492d21132e9b64a3dd6c",
       "manifest_summary.json": "812a04306035d95973a0e6c70d5f8a7a4b0df4305f84d94c75ea33e2b596e608"
     }
-  }
+  },
+  "pos_repair_batches": [
+    {
+      "kind": "first-party-english-pos-lemma-repair",
+      "base_ref": "b0ad8bdc0477cfc3432d8dc1950d23cee44832d8",
+      "scope": "14 English POS/mask/lemma changes after C1; previous impact_manifests describe the historical C1/D99 comparison and are not this batch.",
+      "builder_path": "tools/lexicon_build/build_en.py",
+      "builder_sha256": "be2ec1c6ba95669a7b17adcd22cff0fb3f34da3d9503d9c7470b0b999c7cebc7",
+      "prepared_corpus_sha256": "12e8da345d24a9e4225c552a87bd198736673cd1bc15297ca482a6e0fd1d87be",
+      "baseline_en_sha256": "43c460aeac0707526c1fc40ea4ea39fb5193e63a2438adb2dcf3c77dcb364ae0",
+      "candidate_en_sha256": "a63f63f39d3dd978456dbc63b0cc1b23fa51b9a248d7a4bee41ad5550399d150",
+      "rows_compared": 66000,
+      "changed_rows": 14,
+      "surface_variant_cost_counterpart_meta_unchanged": true,
+      "changes": [
+        {
+          "surface": "hypostasising",
+          "variant": "en-GB",
+          "old": {
+            "decided_upos": "NOUN",
+            "upos_mask": "NOUN",
+            "lemma": "hypostasis"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|VERB",
+            "lemma": "hypostasise"
+          }
+        },
+        {
+          "surface": "hypostasizing",
+          "variant": "en-US",
+          "old": {
+            "decided_upos": "NOUN",
+            "upos_mask": "NOUN",
+            "lemma": "hypostasis"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|VERB",
+            "lemma": "hypostasize"
+          }
+        },
+        {
+          "surface": "metathesising",
+          "variant": "en-GB",
+          "old": {
+            "decided_upos": "NOUN",
+            "upos_mask": "NOUN",
+            "lemma": "metathesis"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|VERB",
+            "lemma": "metathesise"
+          }
+        },
+        {
+          "surface": "metathesizing",
+          "variant": "en-US",
+          "old": {
+            "decided_upos": "NOUN",
+            "upos_mask": "NOUN",
+            "lemma": "metathesis"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|VERB",
+            "lemma": "metathesize"
+          }
+        },
+        {
+          "surface": "parenthesising",
+          "variant": "en-GB",
+          "old": {
+            "decided_upos": "NOUN",
+            "upos_mask": "NOUN",
+            "lemma": "parenthesis"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|VERB",
+            "lemma": "parenthesise"
+          }
+        },
+        {
+          "surface": "parenthesizing",
+          "variant": "en-US",
+          "old": {
+            "decided_upos": "NOUN",
+            "upos_mask": "NOUN",
+            "lemma": "parenthesis"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|VERB",
+            "lemma": "parenthesize"
+          }
+        },
+        {
+          "surface": "photosynthesising",
+          "variant": "en-GB",
+          "old": {
+            "decided_upos": "NOUN",
+            "upos_mask": "NOUN",
+            "lemma": "photosynthesis"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|VERB",
+            "lemma": "photosynthesise"
+          }
+        },
+        {
+          "surface": "photosynthesizing",
+          "variant": "en-US",
+          "old": {
+            "decided_upos": "NOUN",
+            "upos_mask": "NOUN",
+            "lemma": "photosynthesis"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|VERB",
+            "lemma": "photosynthesize"
+          }
+        },
+        {
+          "surface": "saltierwise",
+          "variant": "en-US",
+          "old": {
+            "decided_upos": "VERB",
+            "upos_mask": "VERB",
+            "lemma": "-"
+          },
+          "new": {
+            "decided_upos": "ADV",
+            "upos_mask": "ADV",
+            "lemma": "-"
+          }
+        },
+        {
+          "surface": "saltirewise",
+          "variant": "en-GB",
+          "old": {
+            "decided_upos": "VERB",
+            "upos_mask": "VERB",
+            "lemma": "-"
+          },
+          "new": {
+            "decided_upos": "ADV",
+            "upos_mask": "ADV",
+            "lemma": "-"
+          }
+        },
+        {
+          "surface": "synopsising",
+          "variant": "en-GB",
+          "old": {
+            "decided_upos": "NOUN",
+            "upos_mask": "NOUN",
+            "lemma": "synopsis"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|VERB",
+            "lemma": "synopsise"
+          }
+        },
+        {
+          "surface": "synopsizing",
+          "variant": "en-US",
+          "old": {
+            "decided_upos": "NOUN",
+            "upos_mask": "NOUN",
+            "lemma": "synopsis"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|VERB",
+            "lemma": "synopsize"
+          }
+        },
+        {
+          "surface": "weftwise",
+          "variant": "en-GB",
+          "old": {
+            "decided_upos": "VERB",
+            "upos_mask": "VERB",
+            "lemma": "-"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "ADJ|ADV",
+            "lemma": "-"
+          }
+        },
+        {
+          "surface": "weftwize",
+          "variant": "en-US",
+          "old": {
+            "decided_upos": "VERB",
+            "upos_mask": "VERB",
+            "lemma": "-"
+          },
+          "new": {
+            "decided_upos": "-",
+            "upos_mask": "-",
+            "lemma": "-"
+          }
+        }
+      ],
+      "evidence_sources": [
+        "https://www.collinsdictionary.com/de/worterbuch/englisch/saltirewise",
+        "https://dictionary.cambridge.org/thesaurus/synopsize"
+      ],
+      "limits": "First-party POS/lemma repair; independent semantic review remains required. No source glosses copied or new input license claimed.",
+      "reviewed_exact_spelling_pos": [
+        {
+          "surface": "weftwise",
+          "variant": "en-GB",
+          "upos": [
+            "ADJ",
+            "ADV"
+          ],
+          "evidence": [
+            "https://www.merriam-webster.com/dictionary/weftwise",
+            "https://www.collinsdictionary.com/dictionary/english/weftwise"
+          ],
+          "method": "First-party review of POS labels; no dictionary gloss copied."
+        },
+        {
+          "surface": "weftwize",
+          "variant": "en-US",
+          "upos": [],
+          "method": "No independent exact-spelling POS evidence identified; VarCon preserves the spelling pair but does not establish POS."
+        }
+      ]
+    }
+  ]
 }

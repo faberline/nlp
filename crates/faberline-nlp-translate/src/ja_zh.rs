@@ -2554,14 +2554,28 @@ fn translate_clause_atoms(
         return res;
     }
 
+    // Group the nominal complement before attaching the conditional copula so
+    // its modifiers are folded in the same way as other noun phrases.
+    let (body, condition_tail) = match nominal_conditional_tail(atoms) {
+        Some((body, tail)) => (body, Some(tail)),
+        None => (atoms, None),
+    };
+
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
-    let merged_atoms = apply_phrase_matches(atoms);
+    let merged_atoms = apply_phrase_matches(body);
     let norm_atoms = normalize_ja_atoms(&merged_atoms);
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
     let grouped = compose_relative_daypart(grouped);
-    let bunsetsus = merge_adnominal_bunsetsus(grouped, doc, sentence_idx, target);
+    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, doc, sentence_idx, target);
+    if let Some(tail) = condition_tail
+        && let Some(complement) = bunsetsus.last_mut()
+    {
+        complement.atoms.extend(tail);
+        complement.role = BunsetsuRole::Predicate;
+        complement.sconj_tail = Some("ば".to_owned());
+    }
 
     translate_clause_bunsetsus(
         bunsetsus,
@@ -2571,6 +2585,42 @@ fn translate_clause_atoms(
         ctx,
         target,
     )
+}
+
+// Only match at a clause boundary. In obligation and proportional patterns,
+// the existing splitter keeps the continuation after ば in the same clause.
+fn nominal_conditional_tail(atoms: &[Atom]) -> Option<(&[Atom], [Atom; 2])> {
+    let [body @ .., de, inflection, ba] = atoms else {
+        return None;
+    };
+    let nominal = body.last()?;
+    if [nominal, de, inflection, ba].iter().any(|a| a.is_locked)
+        || !matches!(
+            nominal.upos,
+            Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Num)
+        )
+        || de.surface != "で"
+        || !matches!(de.upos, Some(Upos::Adp | Upos::Aux))
+        || ba.surface != "ば"
+        || ba.upos != Some(Upos::Sconj)
+        || ![nominal, de, inflection, ba]
+            .windows(2)
+            .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+    {
+        return None;
+    }
+
+    let copula = match (inflection.surface.as_str(), inflection.upos) {
+        ("あれ", Some(Upos::Verb | Upos::Aux)) => "だ",
+        ("なけれ", Some(Upos::Adj | Upos::Aux)) => "ではない",
+        _ => return None,
+    };
+    let mut predicate = inflection.clone();
+    predicate.span.start_char = de.span.start_char;
+    predicate.surface = copula.to_owned();
+    predicate.lemma = Some(copula.to_owned());
+    predicate.upos = Some(Upos::Aux);
+    Some((body, [predicate, ba.clone()]))
 }
 
 fn core_non_punct(atoms: &[Atom]) -> &[Atom] {
@@ -10217,6 +10267,55 @@ mod existence_rule_tests {
             deprel: String::new(),
             is_locked: false,
         }
+    }
+
+    #[test]
+    fn nominal_conditions_keep_polarity_in_their_own_clause() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "彼が学生であれば、この本を読みますか。",
+                "如果他是學生，讀這本書嗎。",
+            ),
+            (
+                "彼が学生であればこの本を読みませんか。",
+                "如果他是學生，不讀這本書嗎。",
+            ),
+            (
+                "彼が学生でなければ、この本を読みますか。",
+                "如果他不是學生，讀這本書嗎。",
+            ),
+            (
+                "彼が学生でなければこの本を読みませんか。",
+                "如果他不是學生，不讀這本書嗎。",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let qualified = translate("彼がこの学校の先生であれば、説明します。", &glossary);
+        assert_eq!(qualified.target_text, "如果他是這學校的老師，說明。");
+    }
+
+    #[test]
+    fn nominal_conditions_leave_locative_obligation_and_proportion_alone() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("学校で本を読めば、分かります。", "如果在學校讀書，明白。"),
+            ("便利になればなるほど、使います。", "越方便，使用。"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let obligation = translate("学生でなければならない。", &glossary);
+        assert!(obligation.target_text.contains("必須"));
+        assert!(!obligation.target_text.contains("如果"));
     }
 
     #[test]

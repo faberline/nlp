@@ -3073,7 +3073,7 @@ fn translate_clause_atoms(
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
     let grouped = compose_relative_daypart(grouped);
-    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, doc, sentence_idx, target);
+    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, target);
     if let Some(tail) = condition_tail
         && let Some(complement) = bunsetsus.last_mut()
     {
@@ -3084,6 +3084,7 @@ fn translate_clause_atoms(
 
     translate_clause_bunsetsus(
         bunsetsus,
+        atoms,
         &raw_clause,
         conditioning,
         allow_pro_drop_inject,
@@ -5396,6 +5397,7 @@ fn normalize_building_floors(mut atoms: Vec<Atom>, doc: &Document) -> Vec<Atom> 
 
 fn translate_clause_bunsetsus(
     mut bunsetsus: Vec<Bunsetsu>,
+    source: &[Atom],
     raw_clause: &str,
     conditioning: Option<&SentenceConditioning>,
     allow_pro_drop_inject: bool,
@@ -5575,7 +5577,32 @@ fn translate_clause_bunsetsus(
         }
     }
 
-    for b in bunsetsus.drain(..) {
+    // Resolve time and result roles while the other arguments of the predicate are available.
+    let timed_result = timed_result_frame(&bunsetsus, source);
+    let mut affected_object = None;
+    let mut result_value = None;
+    let daypart_groups: Vec<_> = bunsetsus
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
+        .collect();
+    for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if timed_result.is_some_and(|f| f.object == idx) {
+            affected_object = Some(render_bunsetsu_np(&b, target));
+            continue;
+        }
+        if let Some(frame) = timed_result.filter(|f| f.value == idx) {
+            result_value = Some(
+                frame
+                    .site_name
+                    .map_or_else(|| render_bunsetsu_np(&b, target), str::to_owned),
+            );
+            continue;
+        }
+        if daypart_groups.contains(&idx) || timed_result.is_some_and(|f| f.when == idx) {
+            temporal_others.push(render_bunsetsu_np(&b, target));
+            continue;
+        }
         if b.case_particle.as_deref() == Some("へ") && !is_time_or_place_bunsetsu(&b.atoms) {
             has_competing_transfer_recipient = true;
         }
@@ -5851,6 +5878,9 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if let Some(frame) = timed_result {
+        verb_core = frame.action.to_owned();
+    }
 
     if inanimate_past {
         pre_verb_mods.insert(0, "當時".to_owned());
@@ -6291,18 +6321,7 @@ fn translate_clause_bunsetsus(
         for o in &mut obliques {
             if o.is_instrument_de
                 && let Some(veh) = o.text.strip_prefix('用')
-                && matches!(
-                    veh,
-                    "電車"
-                        | "公車"
-                        | "巴士"
-                        | "計程車"
-                        | "新幹線"
-                        | "飛機"
-                        | "船"
-                        | "列車"
-                        | "地鐵"
-                )
+                && is_transport_term(veh)
             {
                 o.text = format!("坐{veh}");
             }
@@ -6729,6 +6748,9 @@ fn translate_clause_bunsetsus(
     let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
     parts.extend(transfer_prefix);
+    if let Some(object) = affected_object {
+        parts.push(format!("把{object}"));
+    }
     // 到 already expresses the destination relation of bare 去. Other motion
     // verbs retain their manner: 走到, 跑到.
     let keep_go = has_spatial_made && preserve_go && verb_core == "去";
@@ -6746,6 +6768,7 @@ fn translate_clause_bunsetsus(
         }
     }
     parts.extend(made_endpoints);
+    parts.extend(result_value);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
     let trailing_change_le =
@@ -8366,8 +8389,7 @@ fn prepend_locked_atom(head: &mut Bunsetsu, text: String) {
 
 fn merge_adnominal_bunsetsus(
     bunsetsus: Vec<Bunsetsu>,
-    _doc: &Document,
-    _sentence_idx: usize,
+    source: &[Atom],
     target: TargetVariant,
 ) -> Vec<Bunsetsu> {
     let mut res: Vec<Bunsetsu> = Vec::with_capacity(bunsetsus.len());
@@ -8424,6 +8446,7 @@ fn merge_adnominal_bunsetsus(
                 acl_bunsetsus.push(pred_b);
                 let (mut inner, _) = translate_clause_bunsetsus(
                     acl_bunsetsus,
+                    source,
                     "",
                     None,
                     false,
@@ -8483,6 +8506,7 @@ fn merge_adnominal_bunsetsus(
                         acl_bunsetsus.push(mod_b);
                         let (mut inner, _) = translate_clause_bunsetsus(
                             acl_bunsetsus,
+                            source,
                             "",
                             None,
                             false,
@@ -8586,6 +8610,7 @@ fn merge_adnominal_bunsetsus(
                     acl_bunsetsus.push(pred_b);
                     let (mut inner, _) = translate_clause_bunsetsus(
                         acl_bunsetsus,
+                        source,
                         "",
                         None,
                         false,
@@ -9026,6 +9051,531 @@ fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
         })
 }
 
+fn is_daypart_surface(surface: &str) -> bool {
+    matches!(
+        surface,
+        "早朝"
+            | "明け方"
+            | "朝"
+            | "午前"
+            | "正午"
+            | "昼"
+            | "昼間"
+            | "午後"
+            | "夕方"
+            | "夜"
+            | "夜中"
+            | "夜間"
+            | "深夜"
+    )
+}
+
+// These predicates can select the time itself. The analyzer uses the same obl
+// relation for the selected value and for an ordinary event-time modifier.
+fn selects_time_value(lemma: &str) -> bool {
+    let stem = lemma.strip_suffix("する").unwrap_or(lemma);
+    if time_adjustment_action(stem).is_some() {
+        return true;
+    }
+    // Result and selection, e.g. 会議を夕方に決める.
+    const CHOOSES_VALUE: &[&str] = &[
+        "なる",
+        "成る",
+        "変わる",
+        "決まる",
+        "定まる",
+        "選ぶ",
+        "選択",
+        "予定",
+        "予約",
+    ];
+    // Rescheduling a source time, including verbal nouns followed by する.
+    const RESCHEDULES: &[&str] = &[
+        "合う",
+        "ずれる",
+        "ずれ込む",
+        "延びる",
+        "遅れる",
+        "早まる",
+        "繰り上がる",
+        "繰り下がる",
+    ];
+    // The time can be a reference or endpoint rather than when one acts.
+    const TAKES_REFERENCE: &[&str] = &[
+        "似る",
+        "比べる",
+        "備える",
+        "慣れる",
+        "間に合う",
+        "近づく",
+        "及ぶ",
+        "至る",
+    ];
+    CHOOSES_VALUE.contains(&stem) || RESCHEDULES.contains(&stem) || TAKES_REFERENCE.contains(&stem)
+}
+
+fn has_verb_reading(surface: &str) -> bool {
+    faberline_nlp::lexicon::lookup_ja(surface)
+        .is_some_and(|hit| hit.upos_candidates.contains(&Upos::Verb))
+}
+
+#[derive(Clone, Copy)]
+struct TimedResult {
+    when: usize,
+    object: usize,
+    value: usize,
+    action: &'static str,
+    site_name: Option<&'static str>,
+}
+
+// The transitive members of the time-value predicates can set a new value.
+// A comparison, an intransitive change, or a plain temporal adjunct cannot.
+fn time_adjustment_action(stem: &str) -> Option<&'static str> {
+    match stem {
+        "戻す" => Some("改回"),
+        "変える" | "変更" => Some("改到"),
+        "合わせる" | "調整" => Some("調到"),
+        "ずらす" | "移す" => Some("移到"),
+        "決める" | "定める" | "決定" | "設定" | "指定" => Some("定在"),
+        "延期" | "延ばす" | "遅らせる" | "繰り下げる" | "先送り" => Some("延到"),
+        "早める" | "繰り上げる" | "前倒し" => Some("提前到"),
+        _ => None,
+    }
+}
+
+// Tに [setting を] Vに [change] has two time arguments. Their positions
+// around the affected object and attachment to the same predicate identify
+// the new value even when the two source times are exchanged.
+fn timed_result_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimedResult> {
+    let covers = |b: &Bunsetsu, a: &Atom| {
+        b.atoms
+            .iter()
+            .any(|p| p.span.start_char <= a.span.start_char && a.span.end_char <= p.span.end_char)
+    };
+    let predicates = groups.iter().filter(|b| b.role == BunsetsuRole::Predicate);
+    let root = source.iter().find(|a| {
+        !a.is_locked
+            && a.upos == Some(Upos::Verb)
+            && a.deprel == "root"
+            && predicates.clone().any(|p| covers(p, a))
+    })?;
+    // 変更する can be a single verb. For 延期 + する the lexical verb
+    // carries all three arguments and directly adjoins the light verb.
+    let verb = if root.lemma.as_deref() == Some("する") {
+        source.iter().find(|a| {
+            !a.is_locked
+                && a.upos == Some(Upos::Verb)
+                && a.deprel == "advcl"
+                && root.doc_tok_idx.is_some()
+                && a.head == root.doc_tok_idx
+                && a.span.end_char == root.span.start_char
+        })?
+    } else {
+        root
+    };
+    if predicates.clone().any(|p| {
+        (!covers(p, root) && !covers(p, verb)) || predicates_has_passive(std::slice::from_ref(p))
+    }) {
+        return None;
+    }
+    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    let action = time_adjustment_action(lemma.strip_suffix("する").unwrap_or(lemma))?;
+    let id = verb.doc_tok_idx?;
+    let mut objects = groups
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.role == BunsetsuRole::Obj && b.case_particle.as_deref() == Some("を"));
+    let (object, group) = objects.next()?;
+    if objects.next().is_some() {
+        return None;
+    }
+    let noun = group
+        .atoms
+        .iter()
+        .find(|a| a.head == Some(id) && a.deprel == "obj" && !a.is_locked)?;
+    let wo = group.atoms.last()?;
+    if wo.is_locked
+        || wo.surface != "を"
+        || wo.deprel != "case"
+        || noun.doc_tok_idx.is_none()
+        || wo.head != noun.doc_tok_idx
+        || noun.span.end_char != wo.span.start_char
+    {
+        return None;
+    }
+    let mut args = groups.iter().enumerate().filter_map(|(i, b)| {
+        let [.., t, ni] = b.atoms.as_slice() else {
+            return None;
+        };
+        (b.case_particle.as_deref() == Some("に")
+            && !t.is_locked
+            && !ni.is_locked
+            && matches!(
+                t.upos,
+                Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Adv)
+            )
+            && matches!(t.deprel.as_str(), "obl" | "advmod")
+            && t.head == Some(id)
+            && t.doc_tok_idx.is_some()
+            && ni.head == t.doc_tok_idx
+            && ni.surface == "に"
+            && ni.upos == Some(Upos::Adp)
+            && ni.deprel == "case"
+            && t.span.end_char == ni.span.start_char)
+            .then_some((i, t, ni))
+    });
+    let a = args.next()?;
+    let b = args.next()?;
+    if args.next().is_some() {
+        return None;
+    }
+    let a_time = groups[a.0].atoms.len() == 2 && is_daypart_surface(&a.1.surface);
+    let b_time = groups[b.0].atoms.len() == 2 && is_daypart_surface(&b.1.surface);
+    if a_time && b_time {
+        return (source_time_head(noun)
+            && a.0 < object
+            && object < b.0
+            && a.2.span.end_char <= noun.span.start_char
+            && wo.span.end_char <= b.1.span.start_char
+            && b.2.span.end_char == verb.span.start_char)
+            .then_some(TimedResult {
+                when: a.0,
+                object,
+                value: b.0,
+                action,
+                site_name: None,
+            });
+    }
+    // With one time adjunct and a different に complement, 戻す returns
+    // the object to that complement. The attachment, not a known place
+    // name, identifies when the return happened in either word order.
+    if lemma != "戻す" || a_time == b_time {
+        return None;
+    }
+    let (when, site) = if a_time { (a.0, b) } else { (b.0, a) };
+    let atoms = &groups[site.0].atoms;
+    if atoms.iter().any(|p| p.is_locked) || source_time_head(site.1) {
+        return None;
+    }
+    // The ordinary noun renderer supplies the destination. Use a more
+    // specific Chinese locative only when the whole Japanese noun supports it.
+    let name: String = atoms[..atoms.len() - 1]
+        .iter()
+        .map(|p| p.surface.as_str())
+        .collect();
+    let site_name = match name.as_str() {
+        "棚" => Some("架上"),
+        "本棚" | "書棚" => Some("書架上"),
+        "机" => Some("桌上"),
+        "箱" => Some("箱子裡"),
+        "引き出し" => Some("抽屜裡"),
+        "車庫" => Some("車庫"),
+        _ => None,
+    };
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+    let person = match site.1.upos {
+        Some(Upos::Pron | Upos::Propn) => is_motion_actor(site.1),
+        Some(Upos::Noun) => is_demonstrative_person_noun(site.1),
+        _ => false,
+    };
+    let action = if person {
+        "還給"
+    } else if site_name.is_some() {
+        "放回"
+    } else if is_existing_spatial_head(site.1)
+        || lookup_ja(&site.1.surface).is_some_and(|e| e.sem_class == Some(SemanticClass::Location))
+    {
+        "帶回"
+    } else if has_verb_reading(&noun.surface) {
+        "改回"
+    } else {
+        "放回"
+    };
+    Some(TimedResult {
+        when,
+        object,
+        value: site.0,
+        action,
+        site_name,
+    })
+}
+
+fn is_transport_term(term: &str) -> bool {
+    matches!(
+        term,
+        "電車" | "公車" | "巴士" | "計程車" | "新幹線" | "飛機" | "船" | "列車" | "地鐵"
+    )
+}
+
+fn is_motion_actor(a: &Atom) -> bool {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+    if a.is_locked {
+        return false;
+    }
+    match a.upos {
+        Some(Upos::Pron) => {
+            let base = ["たち", "達", "ら", "等"]
+                .iter()
+                .find_map(|suffix| a.surface.strip_suffix(suffix))
+                .unwrap_or(&a.surface);
+            matches!(base, "私" | "僕" | "俺" | "彼" | "彼女" | "あなた" | "君")
+        }
+        Some(Upos::Noun) => {
+            is_demonstrative_person_noun(a)
+                || lookup_ja(&a.surface).is_some_and(|hit| {
+                    hit.upos_candidates.as_slice() == [Upos::Noun]
+                        && hit.counterpart.as_deref().is_some_and(is_transport_term)
+                })
+        }
+        Some(Upos::Propn) => lookup_ja(&a.surface).is_some_and(|hit| {
+            hit.sem_class == Some(SemanticClass::Person)
+                && hit.upos_candidates.as_slice() == [Upos::Propn]
+        }),
+        _ => false,
+    }
+}
+
+// A source nominal can itself have a scheduled time or display a reading.
+// Only inspect its own head and its direct compound; a person or clock in
+// a possessor phrase does not change the identity of the subject.
+fn source_time_head(a: &Atom) -> bool {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+    is_clock_atom(a)
+        || (!a.is_locked
+            && (is_daypart_surface(&a.surface)
+                || matches!(
+                    a.surface.as_str(),
+                    "時間"
+                        | "時刻"
+                        | "日時"
+                        | "日程"
+                        | "日付"
+                        | "時計"
+                        | "針"
+                        | "時針"
+                        | "分針"
+                        | "秒針"
+                )
+                || lookup_ja(&a.surface)
+                    .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Time))))
+}
+
+fn is_time_setting(a: &Atom, source: &[Atom]) -> bool {
+    if a.is_locked {
+        return is_clock_atom(a);
+    }
+    if source_time_head(a) {
+        return true;
+    }
+    if a.upos == Some(Upos::Noun) && has_verb_reading(&a.surface) {
+        return true;
+    }
+    matches!(
+        a.surface.as_str(),
+        "枠" | "帯" | "表" | "欄" | "盤" | "目盛り"
+    ) && a.doc_tok_idx.is_some()
+        && source.iter().any(|part| {
+            part.head == a.doc_tok_idx
+                && part.deprel == "compound"
+                && !part.is_locked
+                && (is_daypart_surface(&part.surface)
+                    || has_verb_reading(&part.surface)
+                    || matches!(part.surface.as_str(), "時間" | "時刻" | "時計"))
+        })
+}
+
+// For 戻る and other verbs of movement or change, a subject can be the
+// mover or the thing restored. An independent location or a human subject
+// supports actual movement. An unrelated subject's modifier is insufficient.
+fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+    let spatial_path = clause.iter().any(|b| {
+        matches!(
+            b.case_particle.as_deref(),
+            Some("から" | "に" | "へ" | "まで")
+        ) && b.atoms.iter().any(|a| {
+            !a.is_locked
+                && a.head == Some(head)
+                && a.deprel == "obl"
+                && (is_place_location_bunsetsu(std::slice::from_ref(a))
+                    || lookup_ja(&a.surface)
+                        .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Location)))
+        })
+    });
+    if spatial_path {
+        return true;
+    }
+    source
+        .iter()
+        .filter(|a| a.head == Some(head) && a.deprel == "nsubj")
+        .all(|a| {
+            is_motion_actor(a)
+                || (!a.is_locked
+                    && a.upos == Some(Upos::Noun)
+                    && !matches!(a.surface.as_str(), "たち" | "達" | "ら" | "等")
+                    && !is_time_setting(a, source))
+                || (!a.is_locked
+                    && a.upos == Some(Upos::Noun)
+                    && matches!(a.surface.as_str(), "たち" | "達" | "ら" | "等")
+                    && a.doc_tok_idx.is_some()
+                    && source.iter().any(|stem| {
+                        stem.head == a.doc_tok_idx
+                            && stem.deprel == "compound"
+                            && stem.span.end_char == a.span.start_char
+                            && is_motion_actor(stem)
+                    }))
+        })
+}
+
+// 夕方に働く, 夕方にする and 夕方に戻る can share the same case relation.
+// Keep the time only when its own governor and that governor's other
+// arguments support an event-time reading.
+fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> bool {
+    let [time, ni] = group.atoms.as_slice() else {
+        return false;
+    };
+    let (Some(time_id), Some(head)) = (time.doc_tok_idx, time.head) else {
+        return false;
+    };
+    if group.case_particle.as_deref() != Some("に")
+        || !matches!(group.role, BunsetsuRole::IObj | BunsetsuRole::Obl)
+        || group.sconj_tail.is_some()
+        || group.sfp_tail.is_some()
+        || time.is_locked
+        || ni.is_locked
+        || !is_daypart_surface(&time.surface)
+        || !matches!(time.upos, Some(Upos::Noun | Upos::Adv))
+        || !matches!(time.deprel.as_str(), "obl" | "advmod" | "iobj")
+        || ni.surface != "に"
+        || ni.upos != Some(Upos::Adp)
+        || ni.deprel != "case"
+        || ni.doc_tok_idx.is_none()
+        || ni.head != Some(time_id)
+        || time.span.end_char != ni.span.start_char
+    {
+        return false;
+    }
+    // Phrase rendering can join a lexical governor and する into one translated
+    // atom. Read its original dependency and verify its span in this clause.
+    let Some(verb) = source
+        .iter()
+        .find(|a| a.doc_tok_idx == Some(head) && !a.is_locked && a.upos == Some(Upos::Verb))
+    else {
+        return false;
+    };
+    if !clause
+        .iter()
+        .flat_map(|b| &b.atoms)
+        .any(|a| a.span.start_char <= verb.span.start_char && verb.span.end_char <= a.span.end_char)
+    {
+        return false;
+    }
+    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    if !has_verb_reading(lemma) || selects_time_value(lemma) {
+        return false;
+    }
+    // With a transfer predicate the analyzer labels every に as iobj. The
+    // separately attached theme or recipient supplies the transfer argument.
+    if time.deprel == "iobj"
+        && !source.iter().any(|a| {
+            a.doc_tok_idx != Some(time_id)
+                && a.head == Some(head)
+                && matches!(a.deprel.as_str(), "obj" | "iobj")
+        })
+    {
+        return false;
+    }
+    if clause.iter().any(|b| {
+        b.case_particle.as_deref() == Some("から")
+            && b.atoms.iter().any(|a| {
+                is_clock_atom(a)
+                    || (!a.is_locked
+                        && a.head == Some(head)
+                        && (is_daypart_surface(&a.surface)
+                            || a.surface
+                                .strip_suffix('時')
+                                .and_then(clock_number)
+                                .is_some_and(|h| h <= 24)
+                            || faberline_nlp::lexicon::lookup_ja(&a.surface).is_some_and(|hit| {
+                                hit.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Time)
+                            })))
+            })
+    }) {
+        return false;
+    }
+    // 帰る expresses a return home. 戻る can instead restore a setting,
+    // and 移る / 動く can move a scheduled value.
+    if matches!(lemma, "戻る" | "移る" | "動く") && !has_motion_reading(clause, source, head)
+    {
+        return false;
+    }
+    // A replacement can take both an affected object and the new value,
+    // as in Xを夕方に書き換える. Ordinary observation or writing has no
+    // replacement argument, regardless of which noun is being observed.
+    if matches!(lemma, "書き換える" | "置き換える" | "切り替える")
+        && ni.span.end_char == verb.span.start_char
+        && source.iter().any(|a| {
+            a.head == Some(head) && a.deprel == "obj" && a.span.end_char <= time.span.start_char
+        })
+    {
+        return false;
+    }
+
+    if verb.deprel == "root" {
+        if lemma != "する" {
+            return true;
+        }
+        // A separate する needs a following action noun: 夕方に買い物をする.
+        // In 買い物を夕方にする the time can instead be the selected value.
+        return clause.iter().any(|b| {
+            let [action, wo] = b.atoms.as_slice() else {
+                return false;
+            };
+            !action.is_locked
+                && !wo.is_locked
+                && action.deprel == "obj"
+                && action.head == Some(head)
+                && action.span.start_char >= ni.span.end_char
+                && action.span.end_char == wo.span.start_char
+                && wo.span.end_char == verb.span.start_char
+                && wo.surface == "を"
+                && wo.deprel == "case"
+                && action.doc_tok_idx.is_some()
+                && wo.head == action.doc_tok_idx
+                && has_verb_reading(&action.surface)
+                && !selects_time_value(&action.surface)
+        });
+    }
+    let Some(aux_head) = verb.head.filter(|_| verb.deprel == "advcl") else {
+        return false;
+    };
+    let Some(aux) = source.iter().find(|a| {
+        a.doc_tok_idx == Some(aux_head)
+            && !a.is_locked
+            && a.upos == Some(Upos::Verb)
+            && a.deprel == "root"
+    }) else {
+        return false;
+    };
+    match aux.lemma.as_deref() {
+        // A bound verbal noun and its light verb form one lexical event.
+        Some("する") => verb.span.end_char == aux.span.start_char && lemma != "する",
+        // A linked て／で + いる expresses the aspect of the lexical event.
+        Some("いる") => {
+            lemma != "する"
+                && source.iter().any(|a| {
+                    !a.is_locked
+                        && matches!(a.surface.as_str(), "て" | "で")
+                        && a.deprel == "mark"
+                        && a.head == Some(head)
+                        && verb.span.end_char == a.span.start_char
+                        && a.span.end_char == aux.span.start_char
+                })
+        }
+        _ => false,
+    }
+}
+
 fn predicates_has_passive(predicates: &[Bunsetsu]) -> bool {
     predicates.iter().any(|b| {
         b.atoms.iter().any(|a| {
@@ -9392,6 +9942,163 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn dayparts_mark_event_time_without_displacing_destinations_or_recipients() {
+        for (source, expected) in [
+            ("私は夕方に帰ります。", "我傍晚回去。"),
+            ("お母さんは夕方に家に帰ります。", "母親傍晚回到家。"),
+            ("夕方に図書館で勉強します。", "傍晚在圖書館學習。"),
+            ("私は夕方に帰りません。", "我傍晚不回去。"),
+            ("私は早朝に家に帰ります。", "我清晨回到家。"),
+            ("私は夕方に本を読みます。", "我傍晚讀書。"),
+            ("私は夕方に働きます。", "我傍晚工作。"),
+            ("夕方にご飯を食べます。", "傍晚吃飯。"),
+            ("夕方に働きませんでした。", "傍晚沒有工作。"),
+            ("私は夕方に先生に電話します。", "我傍晚給老師打電話。"),
+            ("夕方に散歩します。", "傍晚散步。"),
+            ("会議が夕方に始まります。", "會議傍晚開始。"),
+            ("私は夕方に家に戻りました。", "我傍晚回來到家了。"),
+            ("私は夕方を待ちます。", "我等待傍晚。"),
+            ("夕方から図書館で勉強します。", "從傍晚在圖書館學習。"),
+            ("私は先生に手紙を書きます。", "我給老師寫信。"),
+            ("私は`夕方`に帰ります。", "我回到`夕方`。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn restoring_a_schedule_keeps_its_time_endpoint() {
+        let interval = translate("集合時間が夜から夕方に戻りました。");
+        let (before, after) = interval.split_once("從夜晚").unwrap();
+        assert!(
+            before.contains("集合時間") && after.contains("到傍晚"),
+            "{interval}"
+        );
+        let restored = translate("会議の時間が夕方に戻りました。");
+        assert!(
+            restored.contains("會議的時間") && restored.contains("到傍晚"),
+            "{restored}"
+        );
+    }
+
+    #[test]
+    fn a_direct_object_does_not_change_when_one_checks_or_writes_it() {
+        for (source, expected) in [
+            ("私は夕方に名前を確認しました。", "我傍晚確認了名字。"),
+            ("私は夕方に時間を確認しました。", "我傍晚確認了時間。"),
+            (
+                "私は夕方に会議の日程を確認しました。",
+                "我傍晚確認了會議的日程。",
+            ),
+            ("私は夕方に名前を書きました。", "我傍晚寫了名字。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        let date = translate("私は夕方に日付を書きました。");
+        assert!(
+            date.starts_with("我傍晚寫了") && (date.contains("日期") || date.contains("日付")),
+            "{date}"
+        );
+        let transfer = translate("私は夕方に友達に本を渡します。");
+        assert!(
+            transfer.starts_with("我傍晚")
+                && transfer.contains("朋友")
+                && transfer.contains("書")
+                && transfer.contains("遞給"),
+            "{transfer}"
+        );
+    }
+
+    #[test]
+    fn the_same_return_verb_preserves_physical_and_time_endpoints() {
+        for (source, endpoint) in [
+            ("時計の針が五時から正午に戻りました。", "從五點回來到正午"),
+            (
+                "午後一時の時計を一時間戻すと、針が正午に戻りました。",
+                "針回來到正午",
+            ),
+            ("夜の放送枠が夕方に戻りました。", "回來到傍晚"),
+        ] {
+            let text = translate(source);
+            assert!(text.contains(endpoint), "{source}: {text}");
+        }
+        assert_eq!(
+            translate("兄は夕方に病院から戻りました。"),
+            "哥哥傍晚從醫院回來了。"
+        );
+    }
+
+    #[test]
+    fn personal_plurals_and_vehicles_can_return_at_a_time() {
+        for (source, expected) in [
+            ("私たちは夕方に戻りました。", "我們傍晚回來了。"),
+            ("先生たちが夕方に戻りました。", "老師們傍晚回來了。"),
+            ("バスは夕方に戻りました。", "公車傍晚回來了。"),
+            ("両親は正午に帰りました。", "父母正午回去了。"),
+            ("犬は夕方に帰りました。", "狗傍晚回去了。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for source in [
+            "私たちの時計の針が正午に戻りました。",
+            "時計たちが正午に戻りました。",
+            "時計の針が五時から正午に戻りました。",
+        ] {
+            let text = translate(source);
+            assert!(text.contains("到正午"), "{source}: {text}");
+        }
+    }
+
+    #[test]
+    fn ordinary_returning_subjects_and_time_holders_are_distinct() {
+        for (s, expected) in [
+            ("家族が夕方に戻りました。", "家人傍晚回來了。"),
+            ("同僚が夕方に戻りました。", "同僚傍晚回來了。"),
+            ("客は正午に戻りました。", "客正午回來了。"),
+            ("犬が夕方に戻りました。", "狗傍晚回來了。"),
+            ("彼の車は夕方に戻りました。", "他的車傍晚回來了。"),
+        ] {
+            assert_eq!(translate(s), expected, "{s}");
+        }
+    }
+
+    #[test]
+    fn a_restoration_keeps_the_event_time_and_the_new_clock_value() {
+        for (s, before, after) in [
+            (
+                "私は夕方に会議の開始時刻を正午に戻しました。",
+                "我傍晚把",
+                "改回正午",
+            ),
+            (
+                "私は正午に会議の開始時刻を夕方に戻しました。",
+                "我正午把",
+                "改回傍晚",
+            ),
+            (
+                "朝に予約の時間を夜に戻しませんでした。",
+                "早上沒有把",
+                "改回夜晚",
+            ),
+        ] {
+            let text = translate(s);
+            assert!(
+                text.starts_with(before) && text.contains(after),
+                "{s}: {text}"
+            );
+            assert!(
+                text.contains("時刻") || text.contains("時間"),
+                "{s}: {text}"
+            );
+        }
+        let physical = translate("私は夕方に本を棚に戻しました。");
+        assert!(
+            !physical.contains("改回") && physical.contains("書"),
+            "{physical}"
+        );
+    }
+
+    #[test]
     fn wishes_and_negative_questions_keep_the_direction() {
         assert_eq!(translate("駅まで行きたいです。"), "想去車站。");
         assert_eq!(translate("公園まで行きたいです。"), "想去公園。");
@@ -9399,6 +10106,83 @@ mod motion_endpoint_tests {
         assert_eq!(translate("駅まで行きませんか。"), "不去車站嗎。");
         assert_eq!(translate("公園まで行きませんか。"), "不去公園嗎。");
         assert_eq!(translate("公園まで走りませんか。"), "不跑到公園嗎。");
+    }
+
+    #[test]
+    fn changing_a_schedule_keeps_the_event_time_and_result_value_distinct() {
+        for (source, expected) in [
+            (
+                "父は朝に会議の時刻を夕方に延期しました。",
+                "父親早上把會議的時刻延到傍晚了。",
+            ),
+            (
+                "父は夕方に会議の時刻を正午に調整しました。",
+                "父親傍晚把會議的時刻調到正午了。",
+            ),
+            (
+                "先生は朝に出発の時刻を夕方に変更しました。",
+                "老師早上把出發的時刻改到傍晚了。",
+            ),
+            (
+                "先生は夕方に出発の時刻を朝に変更しました。",
+                "老師傍晚把出發的時刻改到早上了。",
+            ),
+            (
+                "朝に集合時刻を夕方に変更しませんでした。",
+                "早上沒有把集合時刻改到傍晚。",
+            ),
+            (
+                "母は正午に時計を夕方に合わせました。",
+                "母親正午把手錶調到傍晚了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for source in [
+            "母は正午に先生に時計を返しました。",
+            "朝に車を車庫に戻しました。",
+            "生徒は先生に時計を友達に渡しました。",
+            "私は正午に会議の時間を朝と比べました。",
+        ] {
+            let text = translate(source);
+            assert!(
+                !text.contains("改回") && !text.contains("改到") && !text.contains("調到"),
+                "{source}: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn physical_return_keeps_the_time_object_and_storage_site() {
+        for (source, expected) in [
+            ("私は夕方に本を棚に戻しました。", "我傍晚把書放回架上了。"),
+            ("私は本を棚に夕方に戻しました。", "我傍晚把書放回架上了。"),
+            (
+                "私は朝に本を棚に戻しませんでした。",
+                "我早上沒有把書放回架上。",
+            ),
+            (
+                "私は夕方に鍵を箱に戻しました。",
+                "我傍晚把鑰匙放回箱子裡了。",
+            ),
+            (
+                "私は夕方に財布を鞄に戻しました。",
+                "我傍晚把錢包放回包包了。",
+            ),
+            ("私は夕方に本を教室に戻しました。", "我傍晚把書放回教室了。"),
+            ("私は本を先生に夕方に戻しました。", "我傍晚把書還給老師了。"),
+            ("私は夕方に本を彼に戻しました。", "我傍晚把書還給他了。"),
+            (
+                "私は夕方に設定を標準に戻しました。",
+                "我傍晚把設定改回標準了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        let recipient = translate("私は夕方に本を先生に返しました。");
+        assert!(
+            recipient.contains("老師") && recipient.contains('書') && !recipient.contains("放回")
+        );
     }
 
     #[test]

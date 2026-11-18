@@ -1,0 +1,217 @@
+{
+  "schema": "faberline.nlp.ja_zh.volitional_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "reused_existing_controls": [
+    {
+      "file": "nlevels_dev_v1.json",
+      "sha256": "a24d91502b3d361eec1ff2bf97381d0accbf27d7516ba2188e77b3b4e96695c0",
+      "ids": [
+        "L5-01"
+      ]
+    }
+  ],
+  "reused_standing_controls": [
+    {
+      "id": "jz148",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    },
+    {
+      "id": "jz149",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    },
+    {
+      "id": "jz056",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    }
+  ],
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "VOL-N5-01",
+      "level_approx": "N5",
+      "jp": "みんなで歌います。",
+      "zh_hant": "大家一起唱歌。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The sentence states that the group sings together.",
+        "It is an ordinary polite statement, not a proposal."
+      ],
+      "semantic_unknowns": [
+        "Context can affect the force of a short Japanese sentence.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "ordinary_polite_statement",
+        "contrast_ids": [
+          "VOL-N5-02",
+          "VOL-N5-03",
+          "VOL-N5-04"
+        ],
+        "stable": [
+          "All four Japanese rows use the same prefix みんなで歌い and the same full stop 。",
+          "All four rows keep the group, activity and absence of time or location information."
+        ],
+        "changed": [
+          "This row ends with ます。 and states the activity."
+        ],
+        "limits": [
+          "The reference uses a concise Taiwan Chinese statement; it does not add an actor or time."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VOL-N5-02",
+      "level_approx": "N5",
+      "jp": "みんなで歌いましょう。",
+      "zh_hant": "大家一起唱歌吧。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The sentence proposes that the group sing together.",
+        "It keeps the proposal force without requiring one Chinese particle."
+      ],
+      "semantic_unknowns": [
+        "Context can affect the force of a short Japanese sentence.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "polite_volitional_proposal",
+        "contrast_ids": [
+          "VOL-N5-01",
+          "VOL-N5-03",
+          "VOL-N5-04"
+        ],
+        "stable": [
+          "All four Japanese rows use the same prefix みんなで歌い and the same full stop 。",
+          "All four rows keep the group, activity and absence of time or location information."
+        ],
+        "changed": [
+          "This row ends with ましょう。 and proposes the activity."
+        ],
+        "limits": [
+          "The Taiwan reference uses 吧 as one natural proposal form, not the only valid form."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VOL-N5-03",
+      "level_approx": "N5",
+      "jp": "みんなで歌いますか。",
+      "zh_hant": "大家一起唱歌嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The sentence asks whether the group sings together.",
+        "It asks for information and does not propose the activity."
+      ],
+      "semantic_unknowns": [
+        "Context can affect whether a question sounds like an invitation.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "ordinary_polite_information_question",
+        "contrast_ids": [
+          "VOL-N5-01",
+          "VOL-N5-02",
+          "VOL-N5-04"
+        ],
+        "stable": [
+          "All four Japanese rows use the same prefix みんなで歌い and the same full stop 。",
+          "All four rows keep the group, activity and absence of time or location information."
+        ],
+        "changed": [
+          "This row ends with ますか。 and asks an ordinary information question."
+        ],
+        "limits": [
+          "The intended reading is a neutral question about the activity; another context could make it sound invitational."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VOL-N5-04",
+      "level_approx": "N5",
+      "jp": "みんなで歌いましょうか。",
+      "zh_hant": "大家一起唱歌，好嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The sentence asks whether the group should sing together as a proposal.",
+        "It keeps proposal force and does not add a time or place."
+      ],
+      "semantic_unknowns": [
+        "Context can affect the force of a short Japanese sentence.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "polite_volitional_proposal_question",
+        "contrast_ids": [
+          "VOL-N5-01",
+          "VOL-N5-02",
+          "VOL-N5-03"
+        ],
+        "stable": [
+          "All four Japanese rows use the same prefix みんなで歌い and the same full stop 。",
+          "All four rows keep the group, activity and absence of time or location information."
+        ],
+        "changed": [
+          "This row ends with ましょうか。 and asks about the proposal."
+        ],
+        "limits": [
+          "The Taiwan reference uses 好嗎 as one natural proposal question form, not the only valid form."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

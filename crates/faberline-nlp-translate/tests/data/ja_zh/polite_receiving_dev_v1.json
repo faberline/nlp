@@ -1,0 +1,271 @@
+{
+  "schema": "faberline.nlp.ja_zh.polite_receiving_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "reused_existing_controls": [],
+  "reused_standing_controls": [
+    {
+      "id": "jz151",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    },
+    {
+      "id": "jz116",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    }
+  ],
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "POLITE-N5-01",
+      "level_approx": "N5",
+      "jp": "この資料をいただけませんか。",
+      "zh_hant": "可以給我這份資料嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The speaker politely asks to receive this material.",
+        "This is a request, not a question about access eligibility."
+      ],
+      "semantic_unknowns": [
+        "The Japanese does not name the addressee.",
+        "The provisional Taiwan wording needs independent review."
+      ],
+      "control": {
+        "kind": "nominal_receiving_request",
+        "contrast_ids": [
+          "POLITE-N5-02",
+          "jz151"
+        ],
+        "stable": [
+          "The nominal request uses いただけませんか."
+        ],
+        "changed": [
+          "This sentence directly asks for a copy; POLITE-N5-02 asks about a stated access restriction."
+        ],
+        "limits": [
+          "The addressee is not named.",
+          "The pair changes the context so that request and restriction readings are source-supported."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "POLITE-N5-02",
+      "level_approx": "N5",
+      "jp": "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。",
+      "zh_hant": "這份資料只發給參加者。非參加者不能領取嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The first sentence states that only participants receive the material.",
+        "The second asks whether people outside that group cannot receive it.",
+        "The question concerns eligibility and does not ask the addressee to hand over a copy."
+      ],
+      "semantic_unknowns": [
+        "The negative question can seek confirmation of the stated restriction.",
+        "The provisional Taiwan wording needs independent review."
+      ],
+      "control": {
+        "kind": "nominal_receiving_inability",
+        "contrast_ids": [
+          "POLITE-N5-01",
+          "jz151"
+        ],
+        "stable": [
+          "The question uses the nominal receiving form いただけませんか."
+        ],
+        "changed": [
+          "The explicit distribution rule and recipient group make this a question about restricted access."
+        ],
+        "limits": [
+          "This is a source-supported eligibility question, not a universal reading for いただけませんか."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "POLITE-N5-03",
+      "level_approx": "N5",
+      "jp": "この荷物を持っていただけますか。",
+      "zh_hant": "可以請您幫我拿這件行李嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The speaker politely asks the listener to hold or carry this luggage as a favor.",
+        "The request is affirmative in form."
+      ],
+      "semantic_unknowns": [
+        "The Japanese does not specify how long the listener should carry it.",
+        "The provisional Taiwan wording needs independent review."
+      ],
+      "control": {
+        "kind": "te_receiving_request_positive",
+        "contrast_ids": [
+          "POLITE-N5-04",
+          "jz116"
+        ],
+        "stable": [
+          "Both paired rows use the same te-form action, object and beneficiary structure."
+        ],
+        "changed": [
+          "This row uses the positive polite ending いただけますか."
+        ],
+        "limits": [
+          "The source leaves the addressee implicit, as a polite request commonly does."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "POLITE-N5-04",
+      "level_approx": "N5",
+      "jp": "この荷物を持っていただけませんか。",
+      "zh_hant": "可以麻煩您幫我拿這件行李嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The speaker politely asks the listener to hold or carry this luggage as a favor.",
+        "The negative-form ending softens the request; it does not request that the listener avoid carrying the luggage."
+      ],
+      "semantic_unknowns": [
+        "The Japanese does not specify how long the listener should carry it.",
+        "The provisional Taiwan wording needs independent review."
+      ],
+      "control": {
+        "kind": "te_receiving_request_negative_form",
+        "contrast_ids": [
+          "POLITE-N5-03",
+          "jz116"
+        ],
+        "stable": [
+          "Both paired rows use the same te-form action, object and beneficiary structure."
+        ],
+        "changed": [
+          "This row uses the negative-form polite ending いただけませんか while retaining request force."
+        ],
+        "limits": [
+          "The source leaves the addressee implicit, as a polite request commonly does."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "POLITE-N5-05",
+      "level_approx": "N5",
+      "jp": "この犬の泳ぐ力を調べています。泳げますか。",
+      "zh_hant": "正在確認這隻狗的游泳能力。牠會游泳嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The context states that the dog's swimming ability is being checked.",
+        "The question asks whether the dog can swim."
+      ],
+      "semantic_unknowns": [
+        "The source does not state who is checking the ability.",
+        "The provisional Taiwan wording needs independent review."
+      ],
+      "control": {
+        "kind": "literal_ability_positive",
+        "contrast_ids": [
+          "POLITE-N5-06"
+        ],
+        "stable": [
+          "Both paired rows use the same ability context, dog and swimming predicate."
+        ],
+        "changed": [
+          "This row asks the positive ability question with 泳げますか."
+        ],
+        "limits": [
+          "The context supports a literal ability reading and does not prove how all negative questions behave."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "POLITE-N5-06",
+      "level_approx": "N5",
+      "jp": "この犬の泳ぐ力を調べています。泳げませんか。",
+      "zh_hant": "正在確認這隻狗的游泳能力。牠不會游泳嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The context states that the dog's swimming ability is being checked.",
+        "The question asks whether the dog cannot swim and keeps that negative proposition."
+      ],
+      "semantic_unknowns": [
+        "The source does not state who is checking the ability.",
+        "Context may affect whether a negative question sounds surprised.",
+        "The provisional Taiwan wording needs independent review."
+      ],
+      "control": {
+        "kind": "literal_ability_negative",
+        "contrast_ids": [
+          "POLITE-N5-05"
+        ],
+        "stable": [
+          "Both paired rows use the same ability context, dog and swimming predicate."
+        ],
+        "changed": [
+          "This row uses the negative ability question ending 泳げませんか."
+        ],
+        "limits": [
+          "The context supports a literal ability reading and does not prove how all negative questions behave."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

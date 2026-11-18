@@ -92,6 +92,7 @@ enum BunsetsuRole {
     MotionPurpose,
     PurposeModifier,
     PurposePartner,
+    PurposeRecipient,
     Adv,
     IObj,
     Obj,
@@ -3072,7 +3073,8 @@ fn translate_clause_atoms(
 
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
     let merged_atoms = apply_phrase_matches(body);
-    let norm_atoms = normalize_ja_atoms(&merged_atoms);
+    let mut norm_atoms = normalize_ja_atoms(&merged_atoms);
+    recover_split_purpose_stems(&mut norm_atoms);
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
@@ -5182,6 +5184,7 @@ fn translate_clause_bunsetsus(
     let mut objs: Vec<String> = Vec::new();
     let mut purpose = None;
     let mut purpose_partners = Vec::new();
+    let mut purpose_recipients = Vec::new();
     let mut go_together = None;
     let mut to_complements: Vec<(String, bool)> = Vec::new();
     let mut predicates: Vec<Bunsetsu> = Vec::new();
@@ -5378,6 +5381,9 @@ fn translate_clause_bunsetsus(
             BunsetsuRole::PurposeModifier => temporal_others.push(render_bunsetsu_np(&b, target)),
             BunsetsuRole::PurposePartner => {
                 purpose_partners.push(format!("和{}", render_bunsetsu_np(&b, target)));
+            }
+            BunsetsuRole::PurposeRecipient => {
+                purpose_recipients.push(format!("給{}", render_bunsetsu_np(&b, target)));
             }
             BunsetsuRole::Connector => {
                 let s = render_bunsetsu_np(&b, target);
@@ -6535,12 +6541,23 @@ fn translate_clause_bunsetsus(
         let action = match (lemma.as_str(), objs.is_empty()) {
             ("借りる", false) => "借".to_owned(),
             ("探す", false) => "找".to_owned(),
-            _ => translate_single_ja_term(&lemma, Some(&lemma), Some(Upos::Verb)),
+            ("迎える", false) => "迎接".to_owned(),
+            _ => {
+                let action = translate_single_ja_term(&lemma, Some(&lemma), Some(Upos::Verb));
+                if objs.is_empty() {
+                    action
+                } else {
+                    purpose_transfer_action(&action)
+                        .unwrap_or(&action)
+                        .to_owned()
+                }
+            }
         };
         parts.push(action);
     }
     parts.extend(transfer_recipient);
     parts.extend(objs);
+    parts.extend(purpose_recipients);
     if let Some(le) = trailing_change_le {
         parts.push(le);
     }
@@ -7911,6 +7928,94 @@ fn purpose_stem_lemma(stem: &Atom) -> Option<String> {
     Some(lemma.to_owned())
 }
 
+// Some continuatives appear as a nominal base and kana fragments. Only join the
+// full span between an attached を and に when the inflection table recognizes
+// it and the source dependency graph leads from both arguments to 行く.
+fn recover_split_purpose_stems(atoms: &mut Vec<Atom>) {
+    let mut i = 0;
+    while i < atoms.len() {
+        if atoms[i].surface == "に"
+            && let Some((start, stem)) = split_purpose_stem(&atoms[..i], &atoms[i], &atoms[i + 1..])
+        {
+            atoms.splice(start..i, [stem]);
+            i = start + 1;
+        }
+        i += 1;
+    }
+}
+
+fn split_purpose_stem(before: &[Atom], ni: &Atom, after: &[Atom]) -> Option<(usize, Atom)> {
+    if ni.is_locked || ni.upos != Some(Upos::Adp) || ni.deprel != "case" {
+        return None;
+    }
+    let wo_at = before
+        .iter()
+        .rposition(|a| !a.is_locked && a.surface == "を")?;
+    let obj = before.get(wo_at.checked_sub(1)?)?;
+    let wo = &before[wo_at];
+    let pieces = &before[wo_at + 1..];
+    let [first, tail @ ..] = pieces else {
+        return None;
+    };
+    let last = pieces.last()?;
+    let anchor = pieces
+        .iter()
+        .find(|p| p.doc_tok_idx.is_some() && p.doc_tok_idx == ni.head)?;
+    if tail.is_empty()
+        || first.is_locked
+        || first.upos != Some(Upos::Noun)
+        || anchor.deprel != "obl"
+        || obj.doc_tok_idx.is_none()
+        || obj.deprel != "obj"
+        || obj.head != anchor.head
+        || wo.upos != Some(Upos::Adp)
+        || wo.deprel != "case"
+        || wo.head != obj.doc_tok_idx
+        || obj.span.end_char != wo.span.start_char
+        || wo.span.end_char != first.span.start_char
+        || last.span.end_char != ni.span.start_char
+        || pieces
+            .windows(2)
+            .any(|p| p[0].span.end_char != p[1].span.start_char)
+        || tail
+            .iter()
+            .any(|p| !p.surface.chars().all(|c| ('ぁ'..='ゖ').contains(&c)))
+        || pieces.iter().any(|p| {
+            p.is_locked
+                || p.doc_tok_idx.is_none()
+                || !(p.head == anchor.doc_tok_idx || (p.deprel == "obl" && p.head == anchor.head))
+        })
+    {
+        return None;
+    }
+    let go = after
+        .iter()
+        .find(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == anchor.head)?;
+    if go.is_locked || go.deprel != "root" || go.lemma.as_deref() != Some("行く") {
+        return None;
+    }
+    let mut stem = first.clone();
+    stem.doc_tok_idx = ni.head;
+    stem.head = anchor.head;
+    stem.deprel = anchor.deprel.clone();
+    stem.surface = pieces.iter().map(|p| p.surface.as_str()).collect();
+    stem.span.end_char = last.span.end_char;
+    stem.lemma = Some(purpose_stem_lemma(&stem)?);
+    Some((wo_at + 1, stem))
+}
+
+// These dictionary glosses encode a transfer. Mandarin places the item after
+// the bare action and the recipient after 給.
+fn purpose_transfer_action(gloss: &str) -> Option<&str> {
+    match gloss {
+        "寄送" => Some("寄"),
+        "贈送" | "送達" => Some("送"),
+        "出借" => Some("借"),
+        "付錢" => Some("付"),
+        _ => gloss.strip_suffix('給').filter(|action| !action.is_empty()),
+    }
+}
+
 fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom]) {
     use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
     let mut found = None;
@@ -7972,6 +8077,17 @@ fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom]) {
         return;
     };
     let meeting = lemma == "会う";
+    let nominal_stem = groups[index].atoms[0].upos == Some(Upos::Noun);
+    let direct_object = source
+        .iter()
+        .any(|a| a.deprel == "obj" && (a.head == Some(id) || (nominal_stem && a.head == go)));
+    let transfer = direct_object
+        && purpose_transfer_action(&translate_single_ja_term(
+            &lemma,
+            Some(&lemma),
+            Some(Upos::Verb),
+        ))
+        .is_some();
     groups[index].role = BunsetsuRole::MotionPurpose;
     groups[index].atoms[0].lemma = Some(lemma);
     for group in groups {
@@ -7992,6 +8108,12 @@ fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom]) {
         }
         if noun.deprel == "obl" && noun.head == Some(id) && meeting && is_person_like_atom(noun) {
             group.role = BunsetsuRole::PurposePartner;
+        } else if transfer
+            && matches!(noun.deprel.as_str(), "obl" | "iobj")
+            && (noun.head == Some(id) || (nominal_stem && noun.head == go))
+            && is_person_like_atom(noun)
+        {
+            group.role = BunsetsuRole::PurposeRecipient;
         } else if matches!(noun.deprel.as_str(), "obl" | "advmod")
             && (noun.head == go || noun.head == Some(id))
             && (matches!(noun.surface.as_str(), "週末" | "月末" | "年末" | "一緒")
@@ -9304,6 +9426,14 @@ mod motion_endpoint_tests {
             ("私は友達を探しに行きます。", "我去找朋友。"),
             ("私は鍵を探しに行きます。", "我去找鑰匙。"),
             ("本を買いに行きます。", "去買書。"),
+            ("私はパンを食べに行きます。", "我去吃麵包。"),
+            ("魚を食べに行きます。", "去吃魚。"),
+            ("野菜を混ぜに行きます。", "去攪拌蔬菜。"),
+            ("窓を閉めに行きます。", "去關上窗戶。"),
+            ("父を迎えに行きます。", "去迎接父親。"),
+            ("私は先生に本を返しに行きます。", "我去還書給老師。"),
+            ("先生に花を渡しに行きます。", "去遞花給老師。"),
+            ("図書館に本を返しに行きます。", "去到圖書館還書。"),
             ("本を読みに行きません。", "不去讀書。"),
             ("音楽を聞きに行った。", "去聽音樂了。"),
             ("花を見に行きませんか。", "要不要去看花？"),

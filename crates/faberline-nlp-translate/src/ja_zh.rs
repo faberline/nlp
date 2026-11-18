@@ -12892,7 +12892,7 @@ mod existence_rule_tests {
             ("私は三階から歩きます。", "我從三樓走。"),
             ("私は三階まで走ります。", "我跑到三樓。"),
             ("私は三階まで歩きません。", "我不走到三樓。"),
-            ("私は夕方まで走ります。", "我連傍晚都跑。"),
+            ("私は夕方まで走ります。", "我跑到傍晚。"),
         ] {
             assert_eq!(
                 translate(source, &TranslationGlossary::new()).target_text,

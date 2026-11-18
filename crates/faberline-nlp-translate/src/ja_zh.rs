@@ -1535,9 +1535,35 @@ fn normalize_drawer_extraction(atoms: &mut [Atom]) {
             atom.doc_tok_idx == predicate
                 && atom.upos == Some(Upos::Verb)
                 && atom.lemma.as_deref() == Some("出す")
-        }) || !after.any(|atom| atom.head == predicate && atom.deprel == "obj")
-        {
+        }) {
             continue;
+        }
+        if !after
+            .clone()
+            .any(|atom| atom.head == predicate && atom.deprel == "obj")
+        {
+            // In object-first order, the analyzer may attach Nを to the
+            // apparent 引き出す stem. Recover it only next to the drawer
+            // and its established source relation.
+            let Some(object_idx) = index.checked_sub(2) else {
+                continue;
+            };
+            let object = &atoms[object_idx];
+            let wo = &atoms[object_idx + 1];
+            if object.is_locked
+                || !matches!(object.upos, Some(Upos::Noun | Upos::Propn))
+                || object.deprel != "obj"
+                || (object.head != predicate && object.head != drawer.doc_tok_idx)
+                || wo.surface != "を"
+                || !dasu_case_link(object, wo)
+                || wo.span.end_char != drawer.span.start_char
+                || after
+                    .find(|atom| atom.upos == Some(Upos::Verb))
+                    .is_none_or(|atom| atom.doc_tok_idx != predicate)
+            {
+                continue;
+            }
+            atoms[object_idx].head = predicate;
         }
         let drawer = &mut atoms[index];
         drawer.surface = "抽屜".to_owned();
@@ -3210,7 +3236,7 @@ fn translate_clause_atoms(
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, target);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
-        && let Some(homework) = try_translate_homework_transfer(&bunsetsus, target)
+        && let Some(homework) = try_translate_homework_transfer(&bunsetsus, body, target)
     {
         return (homework, false);
     }
@@ -3280,21 +3306,52 @@ fn nominal_conditional_tail(atoms: &[Atom]) -> Option<(&[Atom], [Atom; 2])> {
     Some((body, [predicate, ba.clone()]))
 }
 
-fn classroom_role(atom: &Atom) -> Option<&'static str> {
+enum ClassroomRole {
+    Student,
+    Teacher,
+}
+
+fn classroom_role(modifiers: &[Atom], atom: &Atom) -> Option<(ClassroomRole, &'static str)> {
     if atom.upos != Some(Upos::Noun) {
         return None;
     }
-    match atom.lemma.as_deref().unwrap_or(&atom.surface) {
-        "生徒" | "学生" => Some("學生"),
-        "先生" | "教師" => Some("老師"),
+    let name = atom.lemma.as_deref().unwrap_or(&atom.surface);
+    match (modifiers, name) {
+        ([], "生徒" | "学生") => Some((ClassroomRole::Student, "學生")),
+        ([], "先生" | "教師") => Some((ClassroomRole::Teacher, "老師")),
+        ([], "大学生") => Some((ClassroomRole::Student, "大學生")),
+        ([school], "生")
+            if school.upos == Some(Upos::Noun)
+                && school.surface == "大学"
+                && school.deprel == "compound"
+                && school.head == atom.doc_tok_idx
+                && school.span.end_char == atom.span.start_char =>
+        {
+            Some((ClassroomRole::Student, "大學生"))
+        }
         _ => None,
     }
 }
 
+fn dasu_case_link(noun: &Atom, particle: &Atom) -> bool {
+    !particle.is_locked
+        && particle.upos == Some(Upos::Adp)
+        && particle.deprel == "case"
+        && noun.doc_tok_idx.is_some()
+        && particle.head == noun.doc_tok_idx
+        && noun.span.end_char == particle.span.start_char
+}
+
 fn try_translate_homework_transfer(
     bunsetsus: &[Bunsetsu],
+    source: &[Atom],
     target: TargetVariant,
 ) -> Option<String> {
+    // Merged nominal modifiers may already contain rendered atoms. Guard
+    // protected source content separately, before inspecting those groups.
+    if source.iter().any(|atom| atom.is_locked) {
+        return None;
+    }
     let mut predicates = bunsetsus
         .iter()
         .filter(|bunsetsu| bunsetsu.role == BunsetsuRole::Predicate);
@@ -3327,43 +3384,49 @@ fn try_translate_homework_transfer(
     let mut subject = None;
     let mut recipient = None;
     let mut homework = None;
-    let mut adverbs = Vec::new();
+    let mut adjuncts = Vec::new();
     for bunsetsu in bunsetsus {
         if bunsetsu.sconj_tail.is_some()
             || bunsetsu.sfp_tail.is_some()
-            || bunsetsu.atoms.iter().any(|atom| atom.is_locked)
+            || (bunsetsu.role != BunsetsuRole::Obj
+                && bunsetsu.atoms.iter().any(|atom| atom.is_locked))
         {
             return None;
         }
         if bunsetsu.role == BunsetsuRole::Predicate || bunsetsu.role == BunsetsuRole::Punct {
             continue;
         }
-        if matches!(bunsetsu.role, BunsetsuRole::Adv | BunsetsuRole::Other)
-            && bunsetsu.case_particle.is_none()
-            && bunsetsu
-                .atoms
-                .iter()
-                .any(|atom| atom.head == head && atom.deprel == "advmod")
+        if is_event_daypart(bunsetsu, bunsetsus, source)
+            || (matches!(bunsetsu.role, BunsetsuRole::Adv | BunsetsuRole::Other)
+                && bunsetsu.case_particle.is_none()
+                && bunsetsu
+                    .atoms
+                    .iter()
+                    .any(|atom| atom.head == head && atom.deprel == "advmod"))
         {
-            adverbs.push(render_bunsetsu_np(bunsetsu, target));
+            adjuncts.push(render_bunsetsu_np(bunsetsu, target));
             continue;
         }
-        let [noun, marker] = bunsetsu.atoms.as_slice() else {
+        let [modifiers @ .., noun, marker] = bunsetsu.atoms.as_slice() else {
             return None;
         };
-        if noun.head != head
-            || noun.doc_tok_idx.is_none()
-            || marker.head != noun.doc_tok_idx
-            || marker.deprel != "case"
-        {
+        if noun.head != head || !dasu_case_link(noun, marker) {
             return None;
         }
         match (noun.deprel.as_str(), marker.surface.as_str()) {
             ("nsubj", "は" | "が") if subject.is_none() => {
-                subject = Some(classroom_role(noun)?);
+                subject = Some(classroom_role(modifiers, noun)?);
             }
             ("obl" | "iobj", "に") if recipient.is_none() => {
-                recipient = Some(classroom_role(noun)?);
+                recipient = Some(classroom_role(modifiers, noun)?);
+            }
+            ("obl", "で")
+                if noun.surface == "教室"
+                    || is_existing_spatial_head(noun)
+                    || faberline_nlp::lexicon::lookup_ja(&noun.surface)
+                        .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Location)) =>
+            {
+                adjuncts.push(render_bunsetsu_obl(bunsetsu, target));
             }
             ("obj", "を")
                 if noun.upos == Some(Upos::Noun)
@@ -3375,10 +3438,11 @@ fn try_translate_homework_transfer(
             _ => return None,
         }
     }
-    let (subject, recipient, homework) = (subject?, recipient?, homework?);
-    let action = match (subject, recipient) {
-        ("學生", "老師") => format!("把{homework}交給{recipient}"),
-        ("老師", "學生") => format!("出{homework}給{recipient}"),
+    let ((subject_role, subject), (recipient_role, recipient)) = (subject?, recipient?);
+    let homework = homework?;
+    let action = match (subject_role, recipient_role) {
+        (ClassroomRole::Student, ClassroomRole::Teacher) => format!("把{homework}交給{recipient}"),
+        (ClassroomRole::Teacher, ClassroomRole::Student) => format!("出{homework}給{recipient}"),
         _ => return None,
     };
     let (before_verb, verb, after_verb, passive) =
@@ -3387,7 +3451,7 @@ fn try_translate_homework_transfer(
         return None;
     }
     let mut parts = vec![subject.to_owned()];
-    parts.extend(adverbs);
+    parts.extend(adjuncts);
     parts.extend(before_verb);
     parts.push(action);
     parts.extend(after_verb);

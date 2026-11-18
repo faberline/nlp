@@ -8878,19 +8878,37 @@ fn time_adjustment_action(stem: &str) -> Option<&'static str> {
 // around the affected object and attachment to the same predicate identify
 // the new value even when the two source times are exchanged.
 fn time_adjustment_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimeAdjustment> {
-    let mut predicates = groups.iter().filter(|b| b.role == BunsetsuRole::Predicate);
-    let predicate = predicates.next()?;
-    if predicates.next().is_some() || predicates_has_passive(std::slice::from_ref(predicate)) {
-        return None;
-    }
-    let verb = source.iter().find(|a| {
+    let covers = |b: &Bunsetsu, a: &Atom| {
+        b.atoms
+            .iter()
+            .any(|p| p.span.start_char <= a.span.start_char && a.span.end_char <= p.span.end_char)
+    };
+    let predicates = groups.iter().filter(|b| b.role == BunsetsuRole::Predicate);
+    let root = source.iter().find(|a| {
         !a.is_locked
             && a.upos == Some(Upos::Verb)
             && a.deprel == "root"
-            && predicate.atoms.iter().any(|p| {
-                p.span.start_char <= a.span.start_char && a.span.end_char <= p.span.end_char
-            })
+            && predicates.clone().any(|p| covers(p, a))
     })?;
+    // 変更する can be a single verb. For 延期 + する the lexical verb
+    // carries all three arguments and directly adjoins the light verb.
+    let verb = if root.lemma.as_deref() == Some("する") {
+        source.iter().find(|a| {
+            !a.is_locked
+                && a.upos == Some(Upos::Verb)
+                && a.deprel == "advcl"
+                && root.doc_tok_idx.is_some()
+                && a.head == root.doc_tok_idx
+                && a.span.end_char == root.span.start_char
+        })?
+    } else {
+        root
+    };
+    if predicates.clone().any(|p| {
+        (!covers(p, root) && !covers(p, verb)) || predicates_has_passive(std::slice::from_ref(p))
+    }) {
+        return None;
+    }
     let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
     let action = time_adjustment_action(lemma.strip_suffix("する").unwrap_or(lemma))?;
     let id = verb.doc_tok_idx?;
@@ -9763,6 +9781,14 @@ mod motion_endpoint_tests {
     #[test]
     fn changing_a_schedule_keeps_the_event_time_and_result_value_distinct() {
         for (source, expected) in [
+            (
+                "父は朝に会議の時刻を夕方に延期しました。",
+                "父親早上把會議的時刻延到傍晚了。",
+            ),
+            (
+                "父は夕方に会議の時刻を正午に調整しました。",
+                "父親傍晚把會議的時刻調到正午了。",
+            ),
             (
                 "先生は朝に出発の時刻を夕方に変更しました。",
                 "老師早上把出發的時刻改到傍晚了。",

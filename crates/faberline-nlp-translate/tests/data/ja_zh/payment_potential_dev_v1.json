@@ -1,0 +1,275 @@
+{
+  "schema": "faberline.nlp.ja_zh.payment_potential_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2aec70abfa0e4b7f7aa8f2f60aadd79481b4487d",
+  "source_tree": "bf1fa2f5f961244f36e62d612f6aa45d692c9c7f",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "reused_existing_controls": [
+    {
+      "file": "polite_receiving_dev_v1.json",
+      "sha256": "144f2140209f644227413adea22725d0913756d0d27bdaf609f878ab8192860e",
+      "ids": [
+        "POLITE-N5-05",
+        "POLITE-N5-06"
+      ]
+    }
+  ],
+  "reused_standing_controls": [],
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "PAY-N5-01",
+      "level_approx": "N5",
+      "jp": "この店の支払い方法を調べています。お客さんはスマホで支払えますか。",
+      "zh_hant": "正在查這家店的付款方式。客人能用手機付款嗎？",
+      "allowed_variants": [
+        "正在查這家店的付款方式。客人可以用手機付款嗎？"
+      ],
+      "semantic_checks": [
+        "The first sentence describes a check of this shop's payment methods.",
+        "The customers are the prospective payers. The question proposes the phone as the payment means.",
+        "The question asks whether customers can pay by phone."
+      ],
+      "semantic_unknowns": [
+        "The source leaves open who checks the payment methods.",
+        "The source leaves the payment amount, recipient and phone payment service unspecified."
+      ],
+      "control": {
+        "kind": "payment_ability_question_positive",
+        "contrast_ids": [
+          "PAY-N5-02"
+        ],
+        "stable": [
+          "The two rows share the shop context, customer role, phone and payment action."
+        ],
+        "changed": [
+          "The final verb asks an affirmative ability question with 支払えますか."
+        ],
+        "limits": [
+          "The context concerns what customers can do at the shop."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "PAY-N5-02",
+      "level_approx": "N5",
+      "jp": "この店の支払い方法を調べています。お客さんはスマホで支払えませんか。",
+      "zh_hant": "正在查這家店的付款方式。客人不能用手機付款嗎？",
+      "allowed_variants": [
+        "正在查這家店的付款方式。客人沒辦法用手機付款嗎？"
+      ],
+      "semantic_checks": [
+        "The first sentence describes a check of this shop's payment methods.",
+        "The customers are the prospective payers. The question proposes the phone as the payment means.",
+        "The question asks whether customers cannot pay by phone and keeps that negative proposition."
+      ],
+      "semantic_unknowns": [
+        "The source leaves open who checks the payment methods.",
+        "The source leaves the payment amount, recipient and phone payment service unspecified."
+      ],
+      "control": {
+        "kind": "payment_ability_question_negative",
+        "contrast_ids": [
+          "PAY-N5-01"
+        ],
+        "stable": [
+          "The two rows share the shop context, customer role, phone and payment action."
+        ],
+        "changed": [
+          "The final verb asks a negative ability question with 支払えませんか."
+        ],
+        "limits": [
+          "The third-person context supports a literal ability reading. Context can change the function of this ending."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "PAY-N5-03",
+      "level_approx": "N5",
+      "jp": "兄は今月の家賃を払えます。",
+      "zh_hant": "哥哥能付這個月的房租。",
+      "allowed_variants": [
+        "哥哥可以付這個月的房租。"
+      ],
+      "semantic_checks": [
+        "The older brother is the payer. This month's rent is the payment object.",
+        "The statement says the older brother can pay the rent."
+      ],
+      "semantic_unknowns": [
+        "The source gives no reason for the ability or inability and gives no payment method or recipient."
+      ],
+      "control": {
+        "kind": "payment_ability_statement_positive",
+        "contrast_ids": [
+          "PAY-N5-04"
+        ],
+        "stable": [
+          "The two rows share the payer, month and rent."
+        ],
+        "changed": [
+          "The verb states affirmative ability with 払えます."
+        ],
+        "limits": [
+          "The statement gives the ability to pay. It leaves the actual payment open."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "PAY-N5-04",
+      "level_approx": "N5",
+      "jp": "兄は今月の家賃を払えません。",
+      "zh_hant": "哥哥沒辦法付這個月的房租。",
+      "allowed_variants": [
+        "哥哥不能付這個月的房租。"
+      ],
+      "semantic_checks": [
+        "The older brother is the payer. This month's rent is the payment object.",
+        "The statement says the older brother cannot pay the rent. The negation applies to ability."
+      ],
+      "semantic_unknowns": [
+        "The source gives no reason for the ability or inability and gives no payment method or recipient."
+      ],
+      "control": {
+        "kind": "payment_ability_statement_negative",
+        "contrast_ids": [
+          "PAY-N5-03"
+        ],
+        "stable": [
+          "The two rows share the payer, month and rent."
+        ],
+        "changed": [
+          "The verb states negative ability with 払えません."
+        ],
+        "limits": [
+          "The statement gives the inability to pay. The reason remains open."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "PAY-N5-05",
+      "level_approx": "N5",
+      "jp": "窓口で切符を買います。切符代はカードで支払います。",
+      "zh_hant": "在售票窗口買票。刷卡付票款。",
+      "allowed_variants": [
+        "在售票窗口買票。票款用卡付。"
+      ],
+      "semantic_checks": [
+        "The ticket purchase takes place at the ticket counter.",
+        "The second sentence states the action of paying the fare.",
+        "The card is the means of paying the fare."
+      ],
+      "semantic_unknowns": [
+        "The source leaves the payer and payment recipient implicit.",
+        "The source leaves the type of payment card open."
+      ],
+      "control": {
+        "kind": "ordinary_payment_by_card",
+        "contrast_ids": [
+          "PAY-N5-06"
+        ],
+        "stable": [
+          "The two rows share the ticket purchase, counter, fare and ordinary payment verb."
+        ],
+        "changed": [
+          "The payment clause specifies a card with カードで."
+        ],
+        "limits": [
+          "支払います states the payment action without an ability expression."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "PAY-N5-06",
+      "level_approx": "N5",
+      "jp": "窓口で切符を買います。切符代は現金で支払います。",
+      "zh_hant": "在售票窗口買票。用現金付票款。",
+      "allowed_variants": [
+        "在售票窗口買票。票款用現金付。"
+      ],
+      "semantic_checks": [
+        "The ticket purchase takes place at the ticket counter.",
+        "The second sentence states the action of paying the fare.",
+        "Cash is the means of paying the fare."
+      ],
+      "semantic_unknowns": [
+        "The source leaves the payer and payment recipient implicit."
+      ],
+      "control": {
+        "kind": "ordinary_payment_by_cash",
+        "contrast_ids": [
+          "PAY-N5-05"
+        ],
+        "stable": [
+          "The two rows share the ticket purchase, counter, fare and ordinary payment verb."
+        ],
+        "changed": [
+          "The payment clause specifies cash with 現金で."
+        ],
+        "limits": [
+          "支払います states the payment action without an ability expression."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

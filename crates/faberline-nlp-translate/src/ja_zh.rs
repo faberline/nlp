@@ -6523,11 +6523,71 @@ fn format_goal_tail(verb_core: &str, raw_np: &str) -> String {
     }
 }
 
+/// Recover a kana noun whose internal か was tagged as a discourse particle.
+/// Both forms require a case marker governed by the noun and a clear left
+/// boundary. A predicate followed by an embedded か, or two nouns linked by
+/// a choice particle, has different dependencies.
+fn recover_split_kana_noun(atoms: &[Atom], start: usize) -> Option<(Atom, usize)> {
+    let first = &atoms[start];
+    let is_ka = |a: &Atom| a.upos == Some(Upos::Part) && a.surface == "か";
+    let (head, parts, case) = match &atoms[start..] {
+        [ka, noun, case, ..] if is_ka(ka) && noun.upos == Some(Upos::Noun) => (noun, 2, case),
+        [noun, ka, suffix, case, ..]
+            if is_ka(ka)
+                && matches!(suffix.upos, Some(Upos::Aux | Upos::Part))
+                && ka.head == noun.doc_tok_idx
+                && suffix.head == noun.doc_tok_idx =>
+        {
+            (noun, 3, case)
+        }
+        _ => return None,
+    };
+    if case.is_locked
+        || case.upos != Some(Upos::Adp)
+        || case.deprel != "case"
+        || head.doc_tok_idx.is_none()
+        || head.doc_tok_idx != case.head
+        || !matches!(head.deprel.as_str(), "obj" | "nsubj" | "obl" | "nmod")
+        || start.checked_sub(1).is_some_and(|i| {
+            let before = &atoms[i];
+            before.span.end_char == first.span.start_char
+                && (before.is_locked || !(before.deprel == "case" || is_punct_atom(before)))
+        })
+    {
+        return None;
+    }
+    let span = &atoms[start..start + parts];
+    if span
+        .iter()
+        .any(|a| a.is_locked || !a.surface.chars().all(|ch| matches!(ch, 'ぁ'..='ゖ')))
+        || atoms[start..=start + parts]
+            .windows(2)
+            .any(|p| p[0].span.end_char != p[1].span.start_char)
+    {
+        return None;
+    }
+    // Keep the Japanese spelling and original offsets. Let normal noun
+    // rendering use the dictionary or retain the entire unresolved word.
+    let mut noun = head.clone();
+    noun.surface = span.iter().map(|a| a.surface.as_str()).collect();
+    noun.lemma = None;
+    noun.upos = Some(Upos::Noun);
+    noun.span.start_char = first.span.start_char;
+    noun.span.end_char = case.span.start_char;
+    Some((noun, parts))
+}
+
 fn normalize_ja_atoms(atoms: &[Atom]) -> Vec<Atom> {
     let mut out = Vec::with_capacity(atoms.len());
     let mut i = 0usize;
     while i < atoms.len() {
         let a = &atoms[i];
+
+        if let Some((noun, used)) = recover_split_kana_noun(atoms, i) {
+            out.push(noun);
+            i += used;
+            continue;
+        }
 
         // A. Chained coordinate `・` between nouns/proper nouns (`政府・日銀`, `A・B・C`).
         if !a.is_locked
@@ -8774,6 +8834,99 @@ fn predicates_has_passive(predicates: &[Bunsetsu]) -> bool {
                     || a.surface.ends_with("された"))
         })
     })
+}
+
+#[cfg(test)]
+mod kana_noun_rule_tests {
+    use super::*;
+    use crate::{TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    fn atom(
+        word: &str,
+        start: usize,
+        pos: Upos,
+        index: usize,
+        head: usize,
+        relation: &str,
+    ) -> Atom {
+        Atom {
+            surface: word.to_owned(),
+            lemma: None,
+            upos: Some(pos),
+            span: Span {
+                start_char: start,
+                end_char: start + word.chars().count(),
+            },
+            doc_tok_idx: Some(index),
+            head: Some(head),
+            deprel: relation.to_owned(),
+            is_locked: false,
+        }
+    }
+
+    #[test]
+    fn recovered_fragments_keep_the_whole_source_and_the_governor() {
+        let head = atom("み", 4, Upos::Noun, 1, 7, "obj");
+        let ka = atom("か", 5, Upos::Part, 2, 1, "discourse");
+        let tail = atom("ん", 6, Upos::Aux, 3, 1, "aux");
+        let case = atom("を", 7, Upos::Adp, 4, 1, "case");
+        let mut fragments = [head, ka, tail, case];
+        let (word, used) = recover_split_kana_noun(&fragments, 0).unwrap();
+        assert_eq!((word.surface.as_str(), used), ("みかん", 3));
+        assert_eq!((word.span.start_char, word.span.end_char), (4, 7));
+        assert_eq!(
+            (word.doc_tok_idx, word.head, word.deprel.as_str()),
+            (Some(1), Some(7), "obj")
+        );
+        fragments[2].is_locked = true;
+        assert!(recover_split_kana_noun(&fragments, 0).is_none());
+        fragments[2].is_locked = false;
+        fragments[3].head = Some(7);
+        assert!(recover_split_kana_noun(&fragments, 0).is_none());
+
+        let mut initial = [
+            atom("は", 1, Upos::Adp, 1, 0, "case"),
+            atom("か", 2, Upos::Part, 2, 0, "discourse"),
+            atom("ばん", 3, Upos::Noun, 3, 5, "obj"),
+            atom("を", 5, Upos::Adp, 4, 3, "case"),
+        ];
+        let (word, used) = recover_split_kana_noun(&initial, 1).unwrap();
+        assert_eq!((word.surface.as_str(), used), ("かばん", 2));
+        assert_eq!((word.span.start_char, word.span.end_char), (2, 5));
+        // The same middle particle after an alternative nominal has no left boundary.
+        initial[0] = atom("本", 1, Upos::Noun, 1, 3, "nmod");
+        assert!(recover_split_kana_noun(&initial, 1).is_none());
+        initial[0] = atom("は", 1, Upos::Adp, 1, 0, "case");
+        initial[2].span.start_char += 1;
+        assert!(recover_split_kana_noun(&initial, 1).is_none());
+    }
+
+    #[test]
+    fn only_the_real_final_question_changes_the_clause_mood() {
+        let translate = |source| {
+            analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap()
+            .target_text
+        };
+        for source in [
+            "姉はかばんを持っています。",
+            "みかんを三つ買いました。",
+            "かばんを買います。",
+        ] {
+            assert!(!translate(source).contains('嗎'), "{source}");
+        }
+        for source in ["姉はかばんを持っていますか。", "ここに座ってもいいですか。"]
+        {
+            assert!(translate(source).ends_with("嗎。"), "{source}");
+        }
+    }
 }
 
 #[cfg(test)]

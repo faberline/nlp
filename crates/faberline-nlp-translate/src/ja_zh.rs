@@ -9505,19 +9505,21 @@ fn fold_nominalized_deadline_ability(
         _ => return,
     };
     let additive = case.surface == "も";
-    let wh = source.iter().any(|a| {
+    let wh = source.iter().enumerate().any(|(i, a)| {
         !a.is_locked
             && a.upos == Some(Upos::Pron)
             && a.head == Some(action_idx)
             && matches!(a.surface.as_str(), "誰" | "何" | "どこ" | "どれ")
             && !source
-                .iter()
-                .any(|ka| ka.surface == "か" && ka.head == a.doc_tok_idx)
+                .get(i..i + 2)
+                .is_some_and(|pair| indefinite_argument(pair, action_idx).is_some())
     });
     let particle = matrix.sfp_tail.clone().filter(|s| s != "か" || !wh);
+    let action = action.clone();
     groups.truncate(groups.len() - 2);
     groups.last_mut().unwrap().sfp_tail = particle;
     groups[deadline_idx].role = BunsetsuRole::ExplicitDeadline { modal, additive };
+    localize_indefinite_arguments(groups, &action, source);
 }
 
 fn deadline_ability_action(groups: &[Bunsetsu]) -> Option<String> {

@@ -89,6 +89,7 @@ enum BunsetsuRole {
     Connector,
     Subj,
     Obl,
+    ExplicitDeadline { modal: &'static str, additive: bool },
     MotionPurpose,
     PurposeModifier,
     PurposeCompanion,
@@ -3162,6 +3163,7 @@ fn translate_clause_atoms(
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
+    fold_nominalized_deadline_ability(&mut grouped, body, doc, target);
     if let Some(go) = motion_go {
         mark_motion_purpose(&mut grouped, &norm_atoms, go);
     }
@@ -5688,7 +5690,15 @@ fn translate_clause_bunsetsus(
         }
     }
 
-    let deadline_action = deadline_ability_action(&bunsetsus);
+    let explicit_deadline = bunsetsus.iter().find_map(|b| match b.role {
+        BunsetsuRole::ExplicitDeadline { modal, additive } => Some((modal, additive)),
+        _ => None,
+    });
+    let deadline_action = if explicit_deadline.is_none() {
+        deadline_ability_action(&bunsetsus)
+    } else {
+        None
+    };
     // Resolve time and result roles while the other arguments of the predicate are available.
     let timed_result = timed_result_frame(&bunsetsus, source);
     let mut affected_object = None;
@@ -5816,7 +5826,7 @@ fn translate_clause_bunsetsus(
                     }
                 }
             }
-            BunsetsuRole::Obl => {
+            BunsetsuRole::Obl | BunsetsuRole::ExplicitDeadline { .. } => {
                 let is_inst = b.case_particle.as_deref() == Some("で")
                     && !is_place_location_bunsetsu(&b.atoms)
                     && is_instrument_bunsetsu(&b.atoms);
@@ -6894,13 +6904,18 @@ fn translate_clause_bunsetsus(
         } else if o.case_particle.as_deref() == Some("までに") {
             // Earliest completion is unrestricted. The stated time itself is
             // allowed. Keep tense, mood and polarity on the original predicate.
-            if let Some(modal) = deadline_modal {
+            if let Some((modal, additive)) =
+                explicit_deadline.or(deadline_modal.map(|m| (m, false)))
+            {
                 // 明天截止前 includes the deadline day; 明天前 can mean today.
                 let cutoff = if o.is_clock || o.is_daypart {
                     "前"
                 } else {
                     "截止前"
                 };
+                if additive {
+                    parts.push("也".to_owned());
+                }
                 parts.push(format!("{modal}在{}{cutoff}", o.text));
             } else if predicate_is_negative {
                 parts.push(format!("到{}為止", o.text));
@@ -9325,7 +9340,7 @@ fn deadline_weekday(surface: &str) -> Option<&'static str> {
 }
 
 fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
-    let [.., time, made, ni] = atoms else {
+    let [prefix @ .., time, made, ni] = atoms else {
         return false;
     };
     if made.is_locked
@@ -9350,9 +9365,31 @@ fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
     if head.span.start_char < time.span.start_char || head.span.end_char > time.span.end_char {
         return false;
     }
+    // The segmenter emits 六月 as one noun, but 12月 as a number and 月.
+    let month_number = time.surface.strip_suffix('月').and_then(|n| {
+        if n.is_empty() {
+            prefix
+                .last()
+                .filter(|a| {
+                    !a.is_locked
+                        && a.head == time.doc_tok_idx
+                        && matches!(a.deprel.as_str(), "nummod" | "compound")
+                        && a.span.end_char == time.span.start_char
+                })
+                .map(|a| a.surface.as_str())
+        } else {
+            Some(n)
+        }
+    });
     is_clock_atom(time)
         || (!time.is_locked
-            && (is_daypart_surface(&time.surface)
+            && (time.upos == Some(Upos::Noun)
+                && month_number.is_some_and(|n| {
+                    n.chars().count() <= 3
+                        && crate::opaque::parse_cjk_or_ascii_num(n)
+                            .is_some_and(|m| (1..=12).contains(&m))
+                })
+                || is_daypart_surface(&time.surface)
                 || deadline_weekday(&time.surface).is_some()
                 || matches!(
                     time.surface.as_str(),
@@ -9373,6 +9410,114 @@ fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
                         | "来年"
                         | "年末"
                 )))
+}
+
+// The deadline belongs to the action in [V こと] が できる. Keep all its
+// arguments on the normal assembly path and move only the outer ability.
+fn fold_nominalized_deadline_ability(
+    groups: &mut Vec<Bunsetsu>,
+    source: &[Atom],
+    doc: &Document,
+    target: TargetVariant,
+) {
+    let [arguments @ .., action_group, nominal, matrix] = groups.as_slice() else {
+        return;
+    };
+    let ([compound @ .., action], [koto, case], [ability, tail @ ..]) = (
+        action_group.atoms.as_slice(),
+        nominal.atoms.as_slice(),
+        matrix.atoms.as_slice(),
+    ) else {
+        return;
+    };
+    let Some(action_idx) = action.doc_tok_idx else {
+        return;
+    };
+    if compound.iter().any(|a| {
+        a.is_locked
+            || a.upos != Some(Upos::Noun)
+            || a.deprel != "compound"
+            || a.head != Some(action_idx)
+    }) || [action, koto, case, ability].iter().any(|a| a.is_locked)
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "acl"
+        || koto.surface != "こと"
+        || koto.upos != Some(Upos::Noun)
+        || koto.doc_tok_idx.is_none()
+        || action.head != koto.doc_tok_idx
+        || koto.deprel != "nsubj"
+        || !matches!(case.surface.as_str(), "が" | "は" | "も")
+        || case.upos != Some(Upos::Adp)
+        || case.deprel != "case"
+        || case.head != koto.doc_tok_idx
+        || ability.deprel != "root"
+        || ability.upos != Some(Upos::Verb)
+        || ability.doc_tok_idx.is_none()
+        || !matches!(
+            ability.lemma.as_deref().unwrap_or(&ability.surface),
+            "できる" | "出来る"
+        )
+        || koto.head != ability.doc_tok_idx
+        || [action, koto, case, ability]
+            .windows(2)
+            .any(|p| p[0].span.end_char != p[1].span.start_char)
+        || matrix
+            .atoms
+            .windows(2)
+            .any(|p| p[0].span.end_char != p[1].span.start_char)
+        || tail.iter().any(|a| {
+            a.is_locked
+                || a.head != ability.doc_tok_idx
+                || !(a.upos == Some(Upos::Aux) && a.deprel == "aux"
+                    || a.upos == Some(Upos::Part)
+                        && a.deprel == "discourse"
+                        && matrix.sfp_tail.as_deref() == Some(a.surface.as_str()))
+        })
+    {
+        return;
+    }
+    let mut deadlines = arguments
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.case_particle.as_deref() == Some("までに"));
+    let Some((deadline_idx, deadline)) = deadlines.next() else {
+        return;
+    };
+    // A normalized clock retains the original time head on both case markers.
+    let Some(time_idx) = deadline.atoms.last().and_then(|a| a.head) else {
+        return;
+    };
+    if deadlines.next().is_some()
+        || !doc
+            .syntax
+            .iter()
+            .any(|a| a.token == time_idx && a.head == Some(action_idx))
+    {
+        return;
+    }
+    let (before, _, after, passive) =
+        synthesize_predicate_complex(std::slice::from_ref(matrix), false, target, None);
+    let modal = match (before.as_slice(), after.as_slice(), passive) {
+        ([], [], false) => "可以",
+        ([], [past], false) if past == "了" => "得以",
+        ([negative], [], false) if negative == "不" => "沒辦法",
+        ([negative], [], false) if negative == "沒有" => "沒能",
+        _ => return,
+    };
+    let additive = case.surface == "も";
+    let wh = source.iter().any(|a| {
+        !a.is_locked
+            && a.upos == Some(Upos::Pron)
+            && a.head == Some(action_idx)
+            && matches!(a.surface.as_str(), "誰" | "何" | "どこ" | "どれ")
+            && !source
+                .iter()
+                .any(|ka| ka.surface == "か" && ka.head == a.doc_tok_idx)
+    });
+    let particle = matrix.sfp_tail.clone().filter(|s| s != "か" || !wh);
+    groups.truncate(groups.len() - 2);
+    groups.last_mut().unwrap().sfp_tail = particle;
+    groups[deadline_idx].role = BunsetsuRole::ExplicitDeadline { modal, additive };
 }
 
 fn deadline_ability_action(groups: &[Bunsetsu]) -> Option<String> {
@@ -10751,6 +10896,73 @@ mod clock_rule_tests {
             ("六時に手紙を書けません。", "在六點不能寫信。"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn explicit_ability_keeps_the_deadline_inside_the_action() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "私は六時までに会場に来ることができません。",
+                "我沒辦法在六點前來到會場。",
+            ),
+            (
+                "六時までに会場に来ることができません。",
+                "沒辦法在六點前來到會場。",
+            ),
+            (
+                "誰が六時までに会場に来ることができますか。",
+                "誰可以在六點前來到會場？",
+            ),
+            (
+                "ハルコは明日までに帰ることができません。",
+                "ハルコ沒辦法在明天截止前回去。",
+            ),
+            (
+                "明日までに手紙を書くことができませんでした。",
+                "沒能在明天截止前寫信。",
+            ),
+            (
+                "明日までに手紙を書くことができますか。",
+                "可以在明天截止前寫信嗎？",
+            ),
+            (
+                "明日までに漢字を書くことが出来ません。",
+                "沒辦法在明天截止前寫漢字。",
+            ),
+            (
+                "六月までに書類を提出することはできません。",
+                "沒辦法在六月截止前提出書類。",
+            ),
+            (
+                "12月までに帰ることができません。",
+                "沒辦法在12月截止前回去。",
+            ),
+            (
+                "六時までに手紙を書くこともできません。",
+                "也沒辦法在六點前寫信。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        for source in [
+            "六時に来ることができません。",
+            "六時まで会社に来ることができません。",
+            "私は六時までに会場に来ることを決めました。",
+            "明日までに雨が降ることがあります。",
+            "私は六時までに会場に来られません。",
+            "明日までに言うことができた人はいますか。",
+        ] {
+            let text = public_translate(source, &glossary).target_text;
+            assert!(
+                !text.contains("沒辦法在") && !text.contains("得以在"),
+                "{source}: {text}"
+            );
         }
     }
 

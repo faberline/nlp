@@ -4589,6 +4589,7 @@ fn translate_clause_bunsetsus(
         is_spatial_made: bool,
         is_clock: bool,
         transfer_dative: bool,
+        physical_goal_head: Option<usize>,
     }
 
     struct PlacedSubj {
@@ -4852,6 +4853,7 @@ fn translate_clause_bunsetsus(
                         is_clock: b.atoms.iter().any(is_clock_atom),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
+                        physical_goal_head: negative_go_place_head(&b),
                     });
                 }
             }
@@ -4893,6 +4895,7 @@ fn translate_clause_bunsetsus(
                         is_clock: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
+                        physical_goal_head: negative_go_place_head(&b),
                     });
                 }
             }
@@ -5278,6 +5281,7 @@ fn translate_clause_bunsetsus(
                     is_spatial_made: false,
                     is_clock: false,
                     transfer_dative: false,
+                    physical_goal_head: None,
                 });
             }
         }
@@ -5477,6 +5481,44 @@ fn translate_clause_bunsetsus(
     let is_cause_verb = predicates_is_cause_verb(&predicates);
     let has_causative = pre_verb_mods.iter().any(|m| m == "讓");
 
+    // Only a single directly linked physical goal of a directly negated 行く
+    // can use Chinese 去 + place order. Leave competing に / まで untouched.
+    let mut lexical_verbs = predicates
+        .iter()
+        .flat_map(|b| &b.atoms)
+        .filter(|a| !a.is_locked && a.upos == Some(Upos::Verb));
+    let direct_go = lexical_verbs
+        .next()
+        .filter(|a| a.lemma.as_deref().unwrap_or(&a.surface) == "行く");
+    let negative_go_head = if lexical_verbs.next().is_none()
+        && verb_core == "去"
+        && pre_verb_mods
+            .iter()
+            .any(|m| matches!(m.as_str(), "不" | "沒有"))
+        && !has_causative
+        && !passive_agent_needed
+        && objs.is_empty()
+        && !predicates
+            .iter()
+            .flat_map(|b| &b.atoms)
+            .any(|a| a.is_locked)
+    {
+        direct_go.and_then(|a| a.doc_tok_idx)
+    } else {
+        None
+    };
+    let marked_goals = obliques
+        .iter()
+        .chain(&iobjs)
+        .filter(|o| matches!(o.case_particle.as_deref(), Some("に" | "へ")))
+        .collect::<Vec<_>>();
+    let direct_negative_physical_go = negative_go_head.is_some()
+        && marked_goals.len() == 1
+        && marked_goals[0].physical_goal_head == negative_go_head
+        && !obliques
+            .iter()
+            .any(|o| o.case_particle.as_deref() == Some("まで"));
+
     // Extract directional `に` goals (from `obliques` or `iobjs`) BEFORE passive agent consumes `iobjs`!
     let mut goal_tails: Vec<String> = Vec::new();
     let mut cause_prefixes: Vec<String> = Vec::new();
@@ -5492,7 +5534,11 @@ fn translate_clause_bunsetsus(
                     .or_else(|| o.text.strip_prefix('對'))
                     .or_else(|| o.text.strip_prefix('給'))
                     .unwrap_or(&o.text);
-                goal_tails.push(format_goal_tail(&verb_core, raw_np));
+                if direct_negative_physical_go && o.physical_goal_head == negative_go_head {
+                    goal_tails.push(raw_np.to_owned());
+                } else {
+                    goal_tails.push(format_goal_tail(&verb_core, raw_np));
+                }
             } else {
                 kept_obls.push(o);
             }
@@ -5508,7 +5554,11 @@ fn translate_clause_bunsetsus(
                     .or_else(|| io.text.strip_prefix('給'))
                     .or_else(|| io.text.strip_prefix('在'))
                     .unwrap_or(&io.text);
-                goal_tails.push(format_goal_tail(&verb_core, raw_np));
+                if direct_negative_physical_go && io.physical_goal_head == negative_go_head {
+                    goal_tails.push(raw_np.to_owned());
+                } else {
+                    goal_tails.push(format_goal_tail(&verb_core, raw_np));
+                }
             } else {
                 kept_iobjs.push(io);
             }
@@ -5824,6 +5874,15 @@ fn translate_clause_bunsetsus(
         } else if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
             let raw_np = o.text.strip_prefix('到').unwrap_or(&o.text);
             parts.push(format!("連{raw_np}都"));
+        } else if direct_negative_physical_go
+            && o.case_particle.as_deref() == Some("へ")
+            && o.physical_goal_head == negative_go_head
+        {
+            if let Some(place) = o.text.strip_prefix('往') {
+                goal_tails.push(place.to_owned());
+            } else {
+                parts.push(o.text);
+            }
         } else {
             parts.push(o.text);
         }
@@ -8477,8 +8536,10 @@ mod clock_rule_tests {
 
 #[cfg(test)]
 mod motion_endpoint_tests {
+    use super::{Atom, Bunsetsu, BunsetsuRole, negative_go_place_head};
     use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
     use faberline_nlp::doc::model::Backend;
+    use faberline_nlp::{Span, doc::Upos};
 
     fn translate(source: &str) -> String {
         let mut options = TranslateOptions::new(TargetVariant::ZhHant);
@@ -8514,6 +8575,65 @@ mod motion_endpoint_tests {
             translate("この電車は駅まで行きませんか。"),
             "這輛電車不去車站嗎。"
         );
+    }
+
+    #[test]
+    fn negative_go_keeps_physical_destination_after_go() {
+        for source in ["図書館に行かなかった。", "図書館へ行かなかった。"] {
+            let output = translate(source);
+            assert!(output.contains("沒有去圖書館"), "{source}: {output}");
+        }
+        let positive = translate("図書館へ行きました。");
+        assert!(positive.contains("往圖書館"), "{positive}");
+        let question = translate("図書館に行きませんか。");
+        assert!(question.contains('嗎'), "{question}");
+        let endpoint = translate("図書館まで行かなかった。");
+        assert!(
+            endpoint.contains("圖書館") && endpoint.contains("沒有"),
+            "{endpoint}"
+        );
+    }
+
+    #[test]
+    fn negative_go_goal_guard_requires_source_link_and_unlocked_place() {
+        fn atom(surface: &str, start: usize, locked: bool) -> Atom {
+            Atom {
+                span: Span {
+                    start_char: start,
+                    end_char: start + surface.chars().count(),
+                },
+                surface: surface.to_owned(),
+                lemma: None,
+                upos: Some(Upos::Noun),
+                doc_tok_idx: None,
+                head: None,
+                deprel: String::new(),
+                is_locked: locked,
+            }
+        }
+        let mut place = atom("図書館", 0, false);
+        place.head = Some(8);
+        let particle = Atom {
+            surface: "に".to_owned(),
+            upos: Some(Upos::Adp),
+            ..atom("に", 3, false)
+        };
+        let mut b = Bunsetsu {
+            atoms: vec![place, particle],
+            role: BunsetsuRole::Obl,
+            case_particle: Some("に".to_owned()),
+            sconj_tail: None,
+            sfp_tail: None,
+        };
+        assert_eq!(negative_go_place_head(&b), Some(8));
+        b.atoms[0].is_locked = true;
+        assert_eq!(negative_go_place_head(&b), None);
+        b.atoms[0].is_locked = false;
+        b.atoms[0].head = None;
+        assert_eq!(negative_go_place_head(&b), None);
+        b.atoms[0].surface = "夕方".to_owned();
+        b.atoms[0].head = Some(8);
+        assert_eq!(negative_go_place_head(&b), None);
     }
 
     #[test]
@@ -8588,6 +8708,29 @@ mod motion_endpoint_tests {
         assert!(sequence.contains("見面"), "{sequence}");
         assert!(!sequence.contains("連公園"), "{sequence}");
     }
+}
+
+fn negative_go_place_head(b: &Bunsetsu) -> Option<usize> {
+    if !matches!(b.case_particle.as_deref(), Some("に" | "へ"))
+        || b.atoms.iter().any(|a| a.is_locked)
+    {
+        return None;
+    }
+    let mut content = b
+        .atoms
+        .iter()
+        .filter(|a| !matches!(a.upos, Some(Upos::Adp | Upos::Part | Upos::Punct)));
+    let noun = content.next()?;
+    if content.next().is_some() || noun.upos != Some(Upos::Noun) {
+        return None;
+    }
+    // Reuse the established physical endpoint classifier without changing it.
+    let mut spatial_probe = b.clone();
+    spatial_probe.case_particle = Some("まで".to_owned());
+    if !is_spatial_made_bunsetsu(&spatial_probe) {
+        return None;
+    }
+    noun.head
 }
 
 fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {

@@ -4588,6 +4588,7 @@ fn translate_clause_bunsetsus(
         is_instrument_de: bool,
         is_spatial_made: bool,
         is_clock: bool,
+        is_plain_clock_ni: bool,
         transfer_dative: bool,
         physical_goal_head: Option<usize>,
     }
@@ -4851,6 +4852,7 @@ fn translate_clause_bunsetsus(
                         is_instrument_de: is_inst,
                         is_spatial_made: is_spatial_made_bunsetsu(&b),
                         is_clock: b.atoms.iter().any(is_clock_atom),
+                        is_plain_clock_ni: is_plain_clock_ni(&b),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: negative_go_place_head(&b),
@@ -4893,6 +4895,7 @@ fn translate_clause_bunsetsus(
                         is_instrument_de: false,
                         is_spatial_made: false,
                         is_clock: false,
+                        is_plain_clock_ni: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: negative_go_place_head(&b),
@@ -5280,6 +5283,7 @@ fn translate_clause_bunsetsus(
                     is_instrument_de: false,
                     is_spatial_made: false,
                     is_clock: false,
+                    is_plain_clock_ni: false,
                     transfer_dative: false,
                     physical_goal_head: None,
                 });
@@ -5507,10 +5511,9 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
-    let mut marked_goals = obliques
-        .iter()
-        .chain(&iobjs)
-        .filter(|o| matches!(o.case_particle.as_deref(), Some("に" | "へ")));
+    let mut marked_goals = obliques.iter().chain(&iobjs).filter(|o| {
+        matches!(o.case_particle.as_deref(), Some("に" | "へ")) && !o.is_plain_clock_ni
+    });
     let only_goal = marked_goals.next();
     let direct_negative_physical_go = negative_go_head.is_some()
         && only_goal.is_some_and(|o| o.physical_goal_head == negative_go_head)
@@ -8536,7 +8539,10 @@ mod clock_rule_tests {
 
 #[cfg(test)]
 mod motion_endpoint_tests {
-    use super::{Atom, Bunsetsu, BunsetsuRole, negative_go_place_head};
+    use super::{
+        Atom, Bunsetsu, BunsetsuRole, CLOCK_ATOM, OPAQUE_PERIOD_CLOCK, is_plain_clock_ni,
+        negative_go_place_head,
+    };
     use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
     use faberline_nlp::doc::model::Backend;
     use faberline_nlp::{Span, doc::Upos};
@@ -8596,6 +8602,94 @@ mod motion_endpoint_tests {
             endpoint.contains("圖書館") && endpoint.contains("沒有"),
             "{endpoint}"
         );
+    }
+
+    #[test]
+    fn negative_go_keeps_clock_and_direct_destination() {
+        for source in [
+            "午前九時に学校へ行きませんでした。",
+            "午前九時に学校に行きませんでした。",
+        ] {
+            let output = translate(source);
+            assert!(
+                output.contains("上午九點") && output.contains("沒有去學校"),
+                "{source}: {output}"
+            );
+            assert!(
+                !output.contains("去到學校") && !output.contains("往學校"),
+                "{source}: {output}"
+            );
+        }
+        let positive = translate("午前九時に学校へ行きました。");
+        assert!(
+            positive.contains("上午九點") && positive.contains("往學校"),
+            "{positive}"
+        );
+        let endpoint = translate("午前九時に学校まで行きませんでした。");
+        assert!(
+            endpoint.contains("上午九點") && endpoint.contains("學校") && endpoint.contains("沒有"),
+            "{endpoint}"
+        );
+    }
+
+    #[test]
+    fn clock_exclusion_requires_plain_contiguous_clock_particle() {
+        let clock = Atom {
+            span: Span {
+                start_char: 0,
+                end_char: 4,
+            },
+            surface: "上午九點".to_owned(),
+            lemma: Some(CLOCK_ATOM.to_owned()),
+            upos: Some(Upos::Noun),
+            doc_tok_idx: None,
+            head: None,
+            deprel: String::new(),
+            is_locked: true,
+        };
+        let particle = Atom {
+            span: Span {
+                start_char: 4,
+                end_char: 5,
+            },
+            surface: "に".to_owned(),
+            lemma: None,
+            upos: Some(Upos::Adp),
+            doc_tok_idx: None,
+            head: None,
+            deprel: "case".to_owned(),
+            is_locked: false,
+        };
+        let mut b = Bunsetsu {
+            atoms: vec![clock, particle],
+            role: BunsetsuRole::Obl,
+            case_particle: Some("に".to_owned()),
+            sconj_tail: None,
+            sfp_tail: None,
+        };
+        assert!(is_plain_clock_ni(&b));
+        b.atoms[0].lemma = Some(OPAQUE_PERIOD_CLOCK.to_owned());
+        assert!(!is_plain_clock_ni(&b));
+        b.atoms[0].lemma = Some(CLOCK_ATOM.to_owned());
+        b.atoms[0].surface = "[[PH0]]".to_owned();
+        assert!(!is_plain_clock_ni(&b));
+        b.atoms[0].surface = "上午九點".to_owned();
+        b.atoms[1].span.start_char += 1;
+        assert!(!is_plain_clock_ni(&b));
+        b.atoms[1].span.start_char -= 1;
+        b.atoms[1].is_locked = true;
+        assert!(!is_plain_clock_ni(&b));
+        b.atoms[1].is_locked = false;
+        b.role = BunsetsuRole::IObj;
+        assert!(!is_plain_clock_ni(&b));
+        b.role = BunsetsuRole::Obl;
+        b.atoms[1].surface = "へ".to_owned();
+        b.case_particle = Some("へ".to_owned());
+        assert!(!is_plain_clock_ni(&b));
+        b.atoms[1].surface = "に".to_owned();
+        b.case_particle = Some("に".to_owned());
+        b.atoms.push(b.atoms[1].clone());
+        assert!(!is_plain_clock_ni(&b));
     }
 
     #[test]
@@ -8741,6 +8835,24 @@ mod motion_endpoint_tests {
         assert!(sequence.contains("見面"), "{sequence}");
         assert!(!sequence.contains("連公園"), "{sequence}");
     }
+}
+
+// A recognized, self-contained numeric clock followed directly by its time
+// particle is not a competing destination. Opaque/glossary placeholders and
+// mixed groups remain on the conservative path.
+fn is_plain_clock_ni(b: &Bunsetsu) -> bool {
+    let [clock, particle] = b.atoms.as_slice() else {
+        return false;
+    };
+    b.role == BunsetsuRole::Obl
+        && b.case_particle.as_deref() == Some("に")
+        && clock.lemma.as_deref() == Some(CLOCK_ATOM)
+        && clock.is_locked
+        && !clock.surface.contains("[[PH")
+        && !particle.is_locked
+        && particle.upos == Some(Upos::Adp)
+        && particle.surface == "に"
+        && clock.span.end_char == particle.span.start_char
 }
 
 fn negative_go_place_head(b: &Bunsetsu) -> Option<usize> {

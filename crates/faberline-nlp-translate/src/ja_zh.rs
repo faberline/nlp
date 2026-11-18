@@ -8946,7 +8946,10 @@ fn timed_result_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimedResul
         (b.case_particle.as_deref() == Some("に")
             && !t.is_locked
             && !ni.is_locked
-            && matches!(t.upos, Some(Upos::Noun | Upos::Propn | Upos::Adv))
+            && matches!(
+                t.upos,
+                Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Adv)
+            )
             && matches!(t.deprel.as_str(), "obl" | "advmod")
             && t.head == Some(id)
             && t.doc_tok_idx.is_some()
@@ -8979,16 +8982,19 @@ fn timed_result_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimedResul
                 site_name: None,
             });
     }
-    // With one time and one actual storage site, 戻す returns the direct object
-    // to the site. The time remains an adjunct in either word order.
+    // With one time adjunct and a different に complement, 戻す returns
+    // the object to that complement. The attachment, not a known place
+    // name, identifies when the return happened in either word order.
     if lemma != "戻す" || a_time == b_time {
         return None;
     }
     let (when, site) = if a_time { (a.0, b) } else { (b.0, a) };
     let atoms = &groups[site.0].atoms;
-    if atoms.iter().any(|p| p.is_locked) || is_person_like_atom(site.1) {
+    if atoms.iter().any(|p| p.is_locked) || source_time_head(site.1) {
         return None;
     }
+    // The ordinary noun renderer supplies the destination. Use a more
+    // specific Chinese locative only when the whole Japanese noun supports it.
     let name: String = atoms[..atoms.len() - 1]
         .iter()
         .map(|p| p.surface.as_str())
@@ -9002,19 +9008,30 @@ fn timed_result_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimedResul
         "車庫" => Some("車庫"),
         _ => None,
     };
-    (site_name.is_some()
-        || is_existing_spatial_head(site.1)
-        || faberline_nlp::lexicon::lookup_ja(&site.1.surface)
-            .is_some_and(|e| e.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Location)))
-    .then_some(TimedResult {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+    let person = match site.1.upos {
+        Some(Upos::Pron | Upos::Propn) => is_motion_actor(site.1),
+        Some(Upos::Noun) => is_demonstrative_person_noun(site.1),
+        _ => false,
+    };
+    let action = if person {
+        "還給"
+    } else if site_name.is_some() {
+        "放回"
+    } else if is_existing_spatial_head(site.1)
+        || lookup_ja(&site.1.surface).is_some_and(|e| e.sem_class == Some(SemanticClass::Location))
+    {
+        "帶回"
+    } else if has_verb_reading(&noun.surface) {
+        "改回"
+    } else {
+        "放回"
+    };
+    Some(TimedResult {
         when,
         object,
         value: site.0,
-        action: if site_name.is_some() {
-            "放回"
-        } else {
-            "帶回"
-        },
+        action,
         site_name,
     })
 }
@@ -9883,6 +9900,17 @@ mod motion_endpoint_tests {
             (
                 "私は夕方に鍵を箱に戻しました。",
                 "我傍晚把鑰匙放回箱子裡了。",
+            ),
+            (
+                "私は夕方に財布を鞄に戻しました。",
+                "我傍晚把錢包放回包包了。",
+            ),
+            ("私は夕方に本を教室に戻しました。", "我傍晚把書放回教室了。"),
+            ("私は本を先生に夕方に戻しました。", "我傍晚把書還給老師了。"),
+            ("私は夕方に本を彼に戻しました。", "我傍晚把書還給他了。"),
+            (
+                "私は夕方に設定を標準に戻しました。",
+                "我傍晚把設定改回標準了。",
             ),
         ] {
             assert_eq!(translate(source), expected, "{source}");

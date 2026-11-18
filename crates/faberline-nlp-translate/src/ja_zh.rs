@@ -4541,6 +4541,36 @@ fn bare_absence_past(predicates: &[Bunsetsu]) -> bool {
     form == "なかった"
 }
 
+// Grammatical attachment alone cannot distinguish temporal 前/後 from place.
+fn fused_relational_location(pair: &[Bunsetsu], predicate_idx: Option<usize>) -> bool {
+    let [owner, location] = pair else {
+        return false;
+    };
+    let Some(spatial) = location.atoms.first() else {
+        return false;
+    };
+    let Some(genitive) = owner.atoms.last() else {
+        return false;
+    };
+    let Some(owner_idx) = genitive.head else {
+        return false;
+    };
+    ends_in_genitive_no(owner)
+        && !genitive.is_locked
+        && owner.atoms.iter().any(|a| a.doc_tok_idx == Some(owner_idx))
+        && owner.atoms.iter().all(|a| a.upos != Some(Upos::Verb))
+        && genitive.span.end_char == spatial.span.start_char
+        && location.role == BunsetsuRole::Adv
+        && location.atoms.len() == 1
+        && !spatial.is_locked
+        && matches!(
+            spatial.surface.as_str(),
+            "中に" | "上に" | "下に" | "外に" | "横に"
+        )
+        && spatial.head.is_some()
+        && spatial.head == predicate_idx
+}
+
 fn translate_clause_bunsetsus(
     mut bunsetsus: Vec<Bunsetsu>,
     raw_clause: &str,
@@ -4684,28 +4714,7 @@ fn translate_clause_bunsetsus(
         .windows(2)
         .enumerate()
         .filter_map(|(idx, pair)| {
-            let spatial = pair[1].atoms.first()?;
-            let genitive = pair[0].atoms.last()?;
-            let owner_idx = genitive.head?;
-            let owner_linked = pair[0]
-                .atoms
-                .iter()
-                .any(|a| a.doc_tok_idx == Some(owner_idx));
-            (ends_in_genitive_no(&pair[0])
-                && !genitive.is_locked
-                && owner_linked
-                && pair[0].atoms.iter().all(|a| a.upos != Some(Upos::Verb))
-                && genitive.span.end_char == spatial.span.start_char
-                && pair[1].role == BunsetsuRole::Adv
-                && pair[1].atoms.len() == 1
-                && !spatial.is_locked
-                && matches!(
-                    spatial.surface.as_str(),
-                    "中に" | "上に" | "下に" | "外に" | "前に" | "後に" | "横に"
-                )
-                && spatial.head.is_some()
-                && spatial.head == absence_predicate_idx)
-                .then_some(idx)
+            fused_relational_location(pair, absence_predicate_idx).then_some(idx)
         })
         .collect();
     let unique_absence_location =
@@ -9785,6 +9794,38 @@ mod existence_rule_tests {
         clock.atoms[0].head = Some(2);
         clock.atoms[0].deprel = "obl".to_owned();
         assert!(!existential_location_link(&clock, 2));
+    }
+
+    #[test]
+    fn fused_location_requires_unambiguous_relation_and_source_attachment() {
+        // The token structure follows the adopted jz155 source observation.
+        let mut owner = atom("財布", None, Upos::Noun, 0);
+        owner.doc_tok_idx = Some(0);
+        let mut genitive = atom("の", None, Upos::Adp, 2);
+        genitive.head = Some(0);
+        let mut spatial = atom("中に", None, Upos::Adv, 3);
+        spatial.head = Some(5);
+        let owner_b = Bunsetsu {
+            atoms: vec![owner, genitive],
+            role: BunsetsuRole::Other,
+            case_particle: Some("の".to_owned()),
+            sconj_tail: None,
+            sfp_tail: None,
+        };
+        let spatial_b = Bunsetsu {
+            atoms: vec![spatial],
+            role: BunsetsuRole::Adv,
+            case_particle: None,
+            sconj_tail: None,
+            sfp_tail: None,
+        };
+        let mut pair = vec![owner_b, spatial_b];
+        assert!(fused_relational_location(&pair, Some(5)));
+        assert!(!fused_relational_location(&pair, Some(6)));
+        for ambiguous in ["前に", "後に"] {
+            pair[1].atoms[0].surface = ambiguous.to_owned();
+            assert!(!fused_relational_location(&pair, Some(5)));
+        }
     }
 
     #[test]

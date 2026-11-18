@@ -9,7 +9,9 @@ Strict A2 rules:
   1. Preserve ja.tsv UTF-8 byte row ordering `(c[0].encode("utf-8"), c[1].encode("utf-8"))`
      matching apply_a1_lexemes.py / build_ja.py so diffs only touch modified/inserted rows.
   2. Never modify `cost` or any column other than `counterpart` (col 6) and `meta` (col 7)
-     on existing rows; only fill existing unglossed (`cols[6] == '-'`) rows.
+     on existing rows; fill unglossed (`cols[6] == '-'`) rows. The sole
+     reviewed exception replaces the `午後` noun/adverb identity gloss using
+     its matching first-party noun gloss and adds first-party provenance.
   3. Only insert missing rows (<= 35 total) for the explicit closed paradigms and two
      approved everyday nouns:
      (a) Step 4 Keigo verbs (`拝見する`)
@@ -115,7 +117,14 @@ def main() -> int:
         ]
         if matched:
             for r in matched:
-                if r[6] == "-" and cp != "-":
+                reviewed_identity = (
+                    surf == "午後"
+                    and upos == "NOUN"
+                    and r[:6] == ["午後", "ja", "756", "-", "ADV|NOUN", "-"]
+                    and r[6] == surf
+                    and cp not in ("-", surf)
+                )
+                if (r[6] == "-" or reviewed_identity) and cp != "-":
                     r[6] = cp
                     r[7] = merge_meta(r[7], "-")
                     updated_count += 1

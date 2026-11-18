@@ -5362,6 +5362,15 @@ fn translate_clause_bunsetsus(
             };
         }
 
+        if let Some(daypart) = event_daypart_noun(&b, &candidates) {
+            temporal_others.push(translate_single_ja_term(
+                &daypart.surface,
+                daypart.lemma.as_deref(),
+                daypart.upos,
+            ));
+            continue;
+        }
+
         match b.role {
             BunsetsuRole::Connector => {
                 let s = render_bunsetsu_np(&b, target);
@@ -8762,6 +8771,81 @@ fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
         })
 }
 
+// A daypart followed by に can be an event time or the value selected by
+// 夕方にする / 夕方になる. The case relation alone is identical in both.
+fn event_daypart_noun<'a>(group: &'a Bunsetsu, predicates: &[Bunsetsu]) -> Option<&'a Atom> {
+    let [time, ni] = group.atoms.as_slice() else {
+        return None;
+    };
+    if group.case_particle.as_deref() != Some("に")
+        || !matches!(group.role, BunsetsuRole::IObj | BunsetsuRole::Obl)
+        || group.sconj_tail.is_some()
+        || group.sfp_tail.is_some()
+        || time.is_locked
+        || ni.is_locked
+        || !matches!(time.upos, Some(Upos::Noun | Upos::Adv))
+        || !matches!(time.deprel.as_str(), "obl" | "advmod")
+        || ni.surface != "に"
+        || ni.upos != Some(Upos::Adp)
+        || ni.deprel != "case"
+        || ni.doc_tok_idx.is_none()
+        || ni.head != Some(time.doc_tok_idx?)
+        || time.span.end_char != ni.span.start_char
+        || !matches!(
+            time.surface.as_str(),
+            "早朝"
+                | "明け方"
+                | "朝"
+                | "午前"
+                | "正午"
+                | "昼"
+                | "昼間"
+                | "午後"
+                | "夕方"
+                | "夜"
+                | "夜中"
+                | "夜間"
+                | "深夜"
+        )
+    {
+        return None;
+    }
+    let head = time.head?;
+    let mut verbs = predicates.iter().flat_map(|group| &group.atoms);
+    let verb = verbs
+        .find(|a| a.doc_tok_idx == Some(head) && !a.is_locked && a.upos == Some(Upos::Verb))?;
+    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    let temporal_reading = if verb.deprel == "root" {
+        matches!(
+            lemma,
+            "帰る"
+                | "戻る"
+                | "行く"
+                | "来る"
+                | "歩く"
+                | "走る"
+                | "読む"
+                | "寝る"
+                | "起きる"
+                | "勉強する"
+        )
+    } else {
+        // The parser splits 勉強します into 勉強 and its light verb する.
+        verb.deprel == "advcl"
+            && lemma == "勉強"
+            && verbs.any(|light| {
+                !light.is_locked
+                    && light.upos == Some(Upos::Verb)
+                    && light.deprel == "root"
+                    && light.lemma.as_deref() == Some("する")
+                    && light.doc_tok_idx.is_some()
+                    && verb.head == light.doc_tok_idx
+                    && verb.span.end_char == light.span.start_char
+            })
+    };
+    temporal_reading.then_some(time)
+}
+
 fn predicates_has_passive(predicates: &[Bunsetsu]) -> bool {
     predicates.iter().any(|b| {
         b.atoms.iter().any(|a| {
@@ -9125,6 +9209,24 @@ mod motion_endpoint_tests {
         )
         .expect("CPU rules translate the control sentence")
         .target_text
+    }
+
+    #[test]
+    fn dayparts_mark_event_time_without_displacing_destinations_or_recipients() {
+        for (source, expected) in [
+            ("私は夕方に帰ります。", "我傍晚回去。"),
+            ("お母さんは夕方に家に帰ります。", "母親傍晚回到家。"),
+            ("夕方に図書館で勉強します。", "傍晚在圖書館學習。"),
+            ("私は夕方に帰りません。", "我傍晚不回去。"),
+            ("私は早朝に家に帰ります。", "我清晨回到家。"),
+            ("私は夕方に本を読みます。", "我傍晚讀書。"),
+            ("私は夕方を待ちます。", "我等待傍晚。"),
+            ("夕方から図書館で勉強します。", "從傍晚在圖書館學習。"),
+            ("私は先生に手紙を書きます。", "我給老師寫信。"),
+            ("私は`夕方`に帰ります。", "我回到`夕方`。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
     }
 
     #[test]

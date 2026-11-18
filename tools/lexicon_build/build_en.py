@@ -84,6 +84,7 @@ REVIEWED_POS_EVIDENCE: dict[str, frozenset[str]] = {
     "recolouring": frozenset({"NOUN", "VERB"}),
     "moulder": frozenset({"NOUN", "VERB"}),
     "morselling": frozenset({"NOUN", "VERB"}),
+    "cimicide": frozenset({"NOUN"}),
 }
 
 # Exact source-attested inflected form and its base; do not propagate to a
@@ -100,6 +101,10 @@ REVIEWED_BAD_COUNTERPARTS: frozenset[tuple[str, str]] = frozenset({
     ("creatin", "ceratin"),
     ("ceratins", "creatins"),
     ("creatins", "ceratins"),
+    ("chaces", "chacoes"),
+    ("chacoes", "chaces"),
+    ("cimicide", "cimicidae"),
+    ("cimicidae", "cimicide"),
 })
 
 

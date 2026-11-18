@@ -1,0 +1,279 @@
+{
+  "schema": "nlp.ja_zh.honorific_boundary_dev.v1",
+  "status": "PROPOSED_UNADOPTED",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "source_catalog_sha256": "f325354f6771bc5bb02514af4fab4884234bd89d49d9946cdde08ecc702930da",
+  "control_inventory_sha256": "1a364d7ecbe387ee904a734dda35e9b0b1d4a5a5957b4437480cf5bd9bc11d48",
+  "scope_plan_sha256": "3bf1d9af42bb3326eb52cd23714349d7f4cf8c385b55f64365bb18ca6fb83a53",
+  "source_proof_sha256": "c77228ee3324a9db23e2216400f544acc90c8f5ad3c2d1f8cb073b48c7678a5f",
+  "provenance": "First-party original Japanese sentences and provisional AI-assisted Taiwan Traditional Chinese references. first_party_mit. Not human gold. No external sentence or gloss text is copied.",
+  "span_convention": "Zero-based half-open Unicode scalar ranges and UTF-8 byte ranges into the exact source or named reference. Lock offsets are source-authored expectations and must be checked against actual adopted output after adoption; they are not runtime observations.",
+  "dedup_method": "Compare exact and NFKC plus collapsed-whitespace Japanese against all 269 fixed adopted DEV contexts and all rows in this bank. Any text collision requires full fixture comparison including options, glossary, backend and models_directory. No Japanese collisions found. full_fixture_duplicate means the same full Japanese case and fixture.",
+  "reused_existing_controls": {
+    "actor_boundary": [
+      "existence_location_dev_v1::EL-G02"
+    ],
+    "opaque_boundary": [
+      "existence_location_dev_v1::EL-O02"
+    ],
+    "ordinary_lexical": [
+      "honorific_san_dev_v1::HS-09",
+      "honorific_san_dev_v1::HS-11",
+      "issue86_standing_dev_export_059c10a::jz133"
+    ]
+  },
+  "aliases_not_new_rows": [],
+  "tokenizer_contact_status": "UNKNOWN until a separately authorized measurement after data adoption and merge. Source spelling, glossary spans, and opaque syntax do not prove tokenization or runtime rule contact.",
+  "items": [
+    {
+      "id": "HB-A01",
+      "canonical_id": "honorific_boundary_dev_v1::HB-A01",
+      "jp": "山田花子さんは会議室で待っています。",
+      "zh_hant": "山田花子在會議室等候。",
+      "allowed_variants": [],
+      "meaning": "山田花子 is waiting in the meeting room. The source gives no gender or additional title. The configured actor name is 山田花子; さん follows the name outside the actor glossary span.",
+      "control": "existence_location_dev_v1::EL-G02",
+      "control_relationship": "EL-G02 protects 青木さん together in an actor entry. This new row protects only 山田花子 and places the independent さん immediately after the protected name, before は. It is a separate fixture boundary.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write the issue91 rule",
+      "provenance": "Original Japanese sentence composed for this DEV control. Taiwan Traditional Chinese reference written for this control. No external sentence or gloss was copied. Provisional reference, not human gold.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [
+            {
+              "canonical": "山田花子",
+              "surfaces": [
+                "山田花子"
+              ],
+              "targets": {
+                "zh-Hant": "山田花子"
+              },
+              "pronoun_class": "unspecified",
+              "speech_register": "unspecified"
+            }
+          ],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [
+        {
+          "kind": "typed_glossary",
+          "source": {
+            "literal": "山田花子",
+            "occurrence_count": 1,
+            "occurrence_index_1based": 1,
+            "scalar_half_open": [
+              0,
+              4
+            ],
+            "utf8_byte_half_open": [
+              0,
+              12
+            ]
+          },
+          "references": [
+            {
+              "field": "zh_hant",
+              "literal": "山田花子",
+              "occurrence_count": 1,
+              "occurrence_index_1based": 1,
+              "scalar_half_open": [
+                0,
+                4
+              ],
+              "utf8_byte_half_open": [
+                0,
+                12
+              ]
+            }
+          ],
+          "relative_position": "Source lock is the complete configured actor name only; さん is immediately outside it and precedes は. Reference preserves the actor string once at sentence start before the location and predicate. Target span is an expectation to check after adoption, not an observed output.",
+          "opaque_semantics": null
+        }
+      ],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "HB-O01",
+      "canonical_id": "honorific_boundary_dev_v1::HB-O01",
+      "jp": "`ZX-7`さんの情報を記録に追加しました。",
+      "zh_hant": "已將`ZX-7`的資訊新增至紀錄中。",
+      "allowed_variants": [],
+      "meaning": "The source contains an opaque inline marker followed by an external さん. The marker referent is unknown. Preserve the marker exactly; do not infer identity, personhood, or gender from its contents. In Taiwan Chinese the external honorific may be omitted without adding a title.",
+      "control": "existence_location_dev_v1::EL-O02",
+      "control_relationship": "EL-O02 protects an opaque recipient. This row places さん immediately outside the opaque span and checks that the protected span ends before the honorific. The payload semantics remain unknown.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write the issue91 rule",
+      "provenance": "Original Japanese sentence composed for this DEV control. Taiwan Traditional Chinese reference written for this control. The inline marker is a synthetic opaque placeholder; its meaning is unknown. No external sentence or gloss was copied. Provisional reference, not human gold.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [
+        {
+          "kind": "inline_opaque",
+          "source": {
+            "literal": "`ZX-7`",
+            "occurrence_count": 1,
+            "occurrence_index_1based": 1,
+            "scalar_half_open": [
+              0,
+              6
+            ],
+            "utf8_byte_half_open": [
+              0,
+              6
+            ]
+          },
+          "references": [
+            {
+              "field": "zh_hant",
+              "literal": "`ZX-7`",
+              "occurrence_count": 1,
+              "occurrence_index_1based": 1,
+              "scalar_half_open": [
+                2,
+                8
+              ],
+              "utf8_byte_half_open": [
+                6,
+                12
+              ]
+            }
+          ],
+          "relative_position": "The opaque source marker ends immediately before the external さん. The reference keeps the marker once, in the corresponding topic position before 的資訊; it adds no name, title, or gender. Target position is a source-authored expectation, not an observed restoration.",
+          "opaque_semantics": "unknown; preserve marker only; infer no identity, personhood, or gender"
+        }
+      ],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    },
+    {
+      "id": "HB-L01",
+      "canonical_id": "honorific_boundary_dev_v1::HB-L01",
+      "jp": "みなさんは資料を確認しました。",
+      "zh_hant": "大家都確認了資料。",
+      "allowed_variants": [],
+      "meaning": "みなさん is a conventional all-hiragana collective pronoun meaning everyone. It is not a personal name followed by さん. Preserve the group reading and completed action. This is a source-level lexical obligation, not an observed tokenizer result.",
+      "control": "honorific_san_dev_v1::HS-11",
+      "control_relationship": "A new, source-original all-hiragana lexical pronoun, みなさん, occurs at clause start before は. The Japanese lexicon tags this exact spelling as PRON. This supplies a known-word veto obligation rather than a person-name-plus-suffix reading. It is related to HS-11's さん substring and HS-09's ordinary lexical confound, but is not a minimal pair. Tokenizer contact remains unknown until post-adoption measurement.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "author_role": "independent data author; did not write the issue91 rule",
+      "provenance": "Original Japanese sentence composed for this DEV control. The Japanese lexical choice was cross-checked against the repository Japanese lexicon POS entry. Taiwan Traditional Chinese reference written for this control; no dictionary gloss was copied. Provisional reference, not human gold.",
+      "derived_from": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectations": [],
+      "lexical_boundary_expectations": [
+        {
+          "kind": "complete_known_lexical_pronoun",
+          "source": {
+            "literal": "みなさん",
+            "occurrence_count": 1,
+            "occurrence_index_1based": 1,
+            "scalar_half_open": [
+              0,
+              4
+            ],
+            "utf8_byte_half_open": [
+              0,
+              12
+            ]
+          },
+          "references": [
+            {
+              "field": "zh_hant",
+              "literal": "大家",
+              "occurrence_count": 1,
+              "occurrence_index_1based": 1,
+              "scalar_half_open": [
+                0,
+              2
+              ],
+              "utf8_byte_half_open": [
+                0,
+              6
+              ]
+            }
+          ],
+          "relative_position": "The complete all-hiragana source pronoun occurs once at clause start before は. The reference uses 大家 once as the group subject. This is a source-level known-word expectation, not an assertion about tokenizer segmentation."
+        }
+      ],
+      "dedup": {
+        "exact_jp_matches": [],
+        "nfkc_jp_matches": [],
+        "full_fixture_duplicate": false
+      }
+    }
+  ]
+}

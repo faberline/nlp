@@ -97,6 +97,7 @@ enum BunsetsuRole {
     JointManner {
         manner: JointManner,
         invitation: bool,
+        wh_question: bool,
     },
     JointCompanion,
     Subj,
@@ -5279,6 +5280,7 @@ fn translate_clause_bunsetsus(
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
     let mut joint_manner = None;
+    let mut joint_participants = None;
     let mut joint_companion = None;
     let mut adverbs: Vec<String> = Vec::new();
     let mut iobjs: Vec<PlacedArg> = Vec::new();
@@ -5512,10 +5514,14 @@ fn translate_clause_bunsetsus(
         }
 
         match b.role {
-            BunsetsuRole::JointManner { manner, invitation } => {
-                let text = match manner {
-                    JointManner::Together => "一起".to_owned(),
-                    JointManner::Everyone => "大家一起".to_owned(),
+            BunsetsuRole::JointManner {
+                manner,
+                invitation,
+                wh_question,
+            } => {
+                joint_participants = match manner {
+                    JointManner::Together => None,
+                    JointManner::Everyone => Some("大家".to_owned()),
                     JointManner::Counted => {
                         let count = normalize_decimal_digits(&b.atoms[0].surface);
                         let count = if matches!(count.as_str(), "二" | "2") {
@@ -5523,10 +5529,10 @@ fn translate_clause_bunsetsus(
                         } else {
                             &count
                         };
-                        format!("{count}人一起")
+                        Some(format!("{count}人"))
                     }
                 };
-                joint_manner = Some((text, invitation));
+                joint_manner = Some((invitation, wh_question));
             }
             BunsetsuRole::JointCompanion => {
                 joint_companion = Some(format!("和{}", render_bunsetsu_np(&b, target)));
@@ -6528,7 +6534,7 @@ fn translate_clause_bunsetsus(
             .any(|m| matches!(m.as_str(), "不" | "沒有"));
     let offer = polite_negative_question
         && front_modals.is_empty()
-        && joint_manner.as_ref().is_some_and(|(_, offer)| *offer);
+        && joint_manner.is_some_and(|(invitation, _)| invitation);
     if offer {
         inner_pre_mods.retain(|m| m != "不");
         sfp_suffix = Some("？");
@@ -6537,6 +6543,8 @@ fn translate_clause_bunsetsus(
         } else if verb_core == "哼唱" {
             verb_core = if objs.is_empty() { "唱歌" } else { "唱" }.to_owned();
         }
+    } else if polite_negative_question && joint_manner.is_some_and(|(_, wh_question)| wh_question) {
+        sfp_suffix = Some("？");
     } else if purpose.is_some() && sfp_suffix == Some("嗎") {
         if wh_argument {
             sfp_suffix = Some("？");
@@ -6577,9 +6585,9 @@ fn translate_clause_bunsetsus(
                 parts.push(adverbs.remove(0));
             }
             parts.extend(joint_companion.take());
-            if let Some((manner, _)) = joint_manner.take() {
-                parts.push(manner);
-            }
+            parts.extend(joint_participants.take());
+            parts.push("一起".to_owned());
+            joint_manner.take();
         }
         for adv in adverbs {
             if matches!(
@@ -6675,6 +6683,9 @@ fn translate_clause_bunsetsus(
     parts.extend(pre_iobjs);
     parts.extend(others);
     let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
+    // A head count or みんな is the participant group. Negation scopes
+    // over its activity, so keep the group before the negative or modal.
+    parts.extend(joint_participants);
     parts.extend(inner_pre_mods);
     // 遊べる and 飲める already carry ability in their Chinese lexical gloss.
     // Keep 不能 together, then put the shared activity before the action.
@@ -6690,8 +6701,8 @@ fn translate_clause_bunsetsus(
         }
     }
     parts.extend(joint_companion);
-    if let Some((manner, _)) = joint_manner {
-        parts.push(manner);
+    if joint_manner.is_some() {
+        parts.push("一起".to_owned());
     }
     parts.extend(go_together);
     parts.extend(transfer_prefix);
@@ -8231,13 +8242,24 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
         });
     let actionable_gloss = faberline_nlp::lexicon::ja::lookup_ja_gloss(lemma, Some(Upos::Verb))
         .is_some_and(|value| !value.starts_with('能') && !value.starts_with("可以"));
+    let wh_question = body.windows(2).any(|pair| {
+        let (word, case) = (&pair[0], &pair[1]);
+        !word.is_locked
+            && !case.is_locked
+            && governs(word)
+            && word.doc_tok_idx.is_some()
+            && case.head == word.doc_tok_idx
+            && case.upos == Some(Upos::Adp)
+            && case.deprel == "case"
+            && word.span.end_char == case.span.start_char
+            && matches!(
+                word.surface.as_str(),
+                "誰" | "何" | "どれ" | "どこ" | "いつ"
+            )
+    });
     let can_offer = listeners_only
         && actionable_gloss
-        && !body.iter().any(|a| {
-            governs(a)
-                && !a.is_locked
-                && matches!(a.surface.as_str(), "誰" | "何" | "どれ" | "どこ" | "いつ")
-        })
+        && !wh_question
         && !matches!(
             lemma,
             "ある"
@@ -8319,6 +8341,7 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
     groups[i].role = BunsetsuRole::JointManner {
         manner: text,
         invitation: can_offer,
+        wh_question,
     };
     if let Some(before) = i.checked_sub(1)
         && let [.., noun, to] = groups[before].atoms.as_slice()
@@ -10775,6 +10798,12 @@ mod motion_endpoint_tests {
         );
         assert_eq!(translate("行きませんか。"), "不去嗎？");
         assert_eq!(translate("一緒に遊べませんか。"), "不能一起玩嗎？");
+        assert_eq!(
+            translate("みんなで何を読みませんか。"),
+            "大家不一起讀什麼？"
+        );
+        assert_eq!(translate("みんなで遊べませんか。"), "大家不能一起玩嗎？");
+        assert_eq!(translate("二人で何を読みませんか。"), "兩人不一起讀什麼？");
         assert_eq!(translate("一緒に飲めませんか。"), "不能一起喝嗎？");
         assert_eq!(
             translate("先生は一緒に歌いませんか。"),

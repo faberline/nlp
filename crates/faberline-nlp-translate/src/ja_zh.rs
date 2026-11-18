@@ -651,8 +651,22 @@ pub(crate) fn translate_ja_sentence(
                     sentence_topic_pronoun,
                     sonomono_antecedent: sonomono_antecedent.clone(),
                 };
+                let receiving_request = if target == TargetVariant::ZhHant
+                    && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
+                {
+                    try_translate_nominal_receiving_request(trimmed_atoms, doc, sentence_idx)
+                } else {
+                    None
+                };
+                let trailing_punct = if receiving_request.is_some() {
+                    Some("？")
+                } else {
+                    trailing_punct.as_deref()
+                };
                 let (mut rendered, had_subj_only) = if editorial_shikashi {
                     ("然而".to_owned(), false)
+                } else if let Some(rendered) = receiving_request {
+                    (rendered, false)
                 } else {
                     translate_clause_atoms(
                         trimmed_atoms,
@@ -3024,6 +3038,164 @@ fn localize_punct(p: &str) -> String {
         "?" => "？".to_owned(),
         other => other.to_owned(),
     }
+}
+
+fn nominal_receiving_request_position(
+    segments: &[Segment],
+    seg_idx: usize,
+    doc: &Document,
+    sentence_idx: usize,
+) -> bool {
+    let [prefix @ .., Segment::Clause { trailing_punct, .. }] = segments else {
+        return false;
+    };
+    if seg_idx != prefix.len()
+        || !matches!(trailing_punct.as_deref(), None | Some("。" | "？" | "?"))
+    {
+        return false;
+    }
+    // A preceding sentence in the same paragraph can supply a restriction
+    // or a third-person receiver even when this question has no subject.
+    if sentence_idx > 0
+        && doc.segmentation.sentences[sentence_idx - 1].paragraph
+            == doc.segmentation.sentences[sentence_idx].paragraph
+    {
+        return false;
+    }
+    match prefix {
+        [] => true,
+        [
+            Segment::Clause {
+                atoms,
+                trailing_punct: Some(comma),
+                ..
+            },
+        ] if matches!(comma.as_str(), "、" | "，" | ",") => match atoms.as_slice() {
+            [time] => direct_quote_time(time, doc).is_some(),
+            [date, no, period] => {
+                !date.is_locked
+                    && !no.is_locked
+                    && !period.is_locked
+                    && matches!(date.surface.as_str(), "今日" | "明日" | "昨日")
+                    && no.surface == "の"
+                    && matches!(
+                        period.surface.as_str(),
+                        "朝" | "午前" | "午後" | "昼" | "夜"
+                    )
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn nominal_receiving_amount(atom: &Atom, predicate: usize) -> Option<&str> {
+    if atom.head != Some(predicate) || atom.deprel != "advmod" || atom.upos != Some(Upos::Adv) {
+        return None;
+    }
+    match atom.surface.as_str() {
+        "少し" | "ちょっと" => lookup_curated_ja_word(&atom.surface),
+        surface => {
+            // A counted cup can stand after を. Bare いっぱい also means “full”.
+            let count = surface.strip_suffix('杯')?;
+            (!count.is_empty()
+                && count.chars().all(|ch| {
+                    matches!(ch, '0'..='9' | '０'..='９' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十')
+                }))
+            .then_some(surface)
+        }
+    }
+}
+
+fn try_translate_nominal_receiving_request(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence_idx: usize,
+) -> Option<String> {
+    let [args @ .., verb, masu, neg, question] = atoms else {
+        return None;
+    };
+    if atoms.iter().any(|atom| atom.is_locked)
+        || ![verb, masu, neg, question]
+            .windows(2)
+            .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+        || verb.upos != Some(Upos::Verb)
+        || verb.surface != "いただけ"
+        || verb.lemma.as_deref() != Some("いただける")
+        || verb.deprel != "root"
+        || masu.surface != "ませ"
+        || neg.surface != "ん"
+        || question.surface != "か"
+        || [masu, neg].iter().any(|a| a.upos != Some(Upos::Aux))
+        || question.upos != Some(Upos::Part)
+    {
+        return None;
+    }
+    let predicate = verb.doc_tok_idx?;
+    if [masu, neg, question]
+        .iter()
+        .any(|a| a.head != Some(predicate))
+    {
+        return None;
+    }
+
+    let case_index = args
+        .iter()
+        .position(|a| a.surface == "を" && a.upos == Some(Upos::Adp) && a.deprel == "case")?;
+    let (phrase, after) = args.split_at(case_index + 1);
+    let [.., noun, particle] = phrase else {
+        return None;
+    };
+    if !matches!(noun.upos, Some(Upos::Noun | Upos::Propn))
+        || noun.head != Some(predicate)
+        || noun.deprel != "obj"
+        || particle.head != Some(noun.doc_tok_idx?)
+    {
+        return None;
+    }
+
+    let (phrase, amount) = if let [first, rest @ ..] = phrase
+        && let Some(amount) = nominal_receiving_amount(first, predicate)
+    {
+        (rest, Some(amount))
+    } else {
+        (phrase, None)
+    };
+    let amount = match (after, amount) {
+        ([], amount) => amount.unwrap_or_default(),
+        ([measure], None) => nominal_receiving_amount(measure, predicate)?,
+        _ => return None,
+    };
+
+    // Keep overt participants, restrictions and verbal complements on their
+    // existing path. Render only a plain object and its nominal modifiers.
+    let [modifiers @ .., _, _] = phrase else {
+        return None;
+    };
+    if !modifiers.iter().all(|a| match a.upos {
+        Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Det | Upos::Num) => {
+            matches!(a.deprel.as_str(), "compound" | "nmod" | "det" | "nummod")
+        }
+        Some(Upos::Adp) => a.surface == "の" && a.deprel == "case",
+        Some(Upos::Intj) => a.surface == "お",
+        _ => false,
+    }) {
+        return None;
+    }
+    let normalized = normalize_ja_atoms(&apply_phrase_matches(phrase));
+    let object = classify_bunsetsu(normalized, doc, sentence_idx);
+    if object.role != BunsetsuRole::Obj || object.case_particle.as_deref() != Some("を") {
+        return None;
+    }
+    let object = render_bunsetsu_np(&object, TargetVariant::ZhHant);
+    if object.is_empty() || has_kana_no_hangul(&object) {
+        return None;
+    }
+    if object == "時間" {
+        let quantity = if amount.is_empty() { "的" } else { amount };
+        return Some(format!("可以占用您{quantity}{object}嗎"));
+    }
+    Some(format!("可以給我{amount}{object}嗎"))
 }
 
 /// Core clause translator:

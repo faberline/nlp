@@ -631,7 +631,12 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
-                    inside_quote: false,
+                    inside_quote: ends_continued_quote(
+                        segments.get(seg_idx + 1),
+                        doc,
+                        sentence_idx,
+                        chars,
+                    ),
                     in_nagara_follow: prev_was_nagara,
                     in_concessive_follow: prev_concessive_dou,
                     in_kuseni_follow,
@@ -2241,6 +2246,34 @@ fn classify_post_quote_clause(atoms: &[Atom]) -> PostQuoteKind {
 
 fn is_quote_mark(atom: &Atom) -> bool {
     !atom.is_locked && matches!(atom.surface.as_str(), "「" | "」" | "『" | "』")
+}
+
+// In a later sentence the final quoted clause and its closing mark are
+// separate segments. Require the corresponding open mark in this paragraph.
+fn ends_continued_quote(
+    next: Option<&Segment>,
+    doc: &Document,
+    sentence_idx: usize,
+    chars: &[char],
+) -> bool {
+    let Some(Segment::CloseQuote(close, span)) = next else {
+        return false;
+    };
+    let sent = &doc.segmentation.sentences[sentence_idx];
+    let start = doc.segmentation.paragraphs[sent.paragraph].span.start_char;
+    (start..span.start_char)
+        .rev()
+        .find(|&i| {
+            matches!(chars[i], '「' | '」' | '『' | '』')
+                && !doc
+                    .segmentation
+                    .opaque
+                    .iter()
+                    .any(|opaque| opaque.span.start_char <= i && i < opaque.span.end_char)
+        })
+        .is_some_and(|i| {
+            i < sent.span.start_char && matches!((chars[i], close), ('「', '」') | ('『', '』'))
+        })
 }
 
 fn is_quote_terminal(ch: char) -> bool {
@@ -9528,6 +9561,14 @@ mod motion_endpoint_tests {
                 "「本を買いに行きません」と先生が言いました。",
                 "「不去買書」老師說了。",
             ),
+            (
+                "先生は学生に「明日は家に帰ります。本を借りに行きます」と伝えた。",
+                "老師告訴學生：「明天回到家。去借書。」",
+            ),
+            (
+                "「明日は家に帰ります。本を借りに行きます」と先生が言いました。",
+                "「明天回到家。去借書」老師說了。",
+            ),
             ("食べに行きませんか。", "要不要去吃？"),
             ("材料を混ぜに行きます。", "去攪拌材料。"),
             ("窓を閉めに行きます。", "去關上窗戶。"),
@@ -9559,6 +9600,18 @@ mod motion_endpoint_tests {
             ("彼は帰りに駅に行きました。", "他去到車站到帰り了。"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn stray_closing_quote_does_not_supply_a_motion_governor() {
+        for source in [
+            "本を借りに行きます」と先生が言いました。",
+            "「明日、帰ります。」本を借りに行きます」と先生が言いました。",
+            "挨拶は`「`です。本を借りに行きます」と先生が言いました。",
+        ] {
+            let output = translate(source);
+            assert!(!output.contains("去借書"), "{source}: {output}");
         }
     }
 

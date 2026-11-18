@@ -90,6 +90,7 @@ enum BunsetsuRole {
     Subj,
     Obl,
     ExplicitDeadline { modal: &'static str, additive: bool },
+    DeadlineWithDetachedNegation,
     MotionPurpose,
     PurposeModifier,
     PurposeCompanion,
@@ -3430,6 +3431,12 @@ fn translate_clause_atoms(
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
+    for group in &mut grouped {
+        if deadline_governor(group, doc).is_some_and(|head| has_detached_voice_negation(body, head))
+        {
+            group.role = BunsetsuRole::DeadlineWithDetachedNegation;
+        }
+    }
     fold_nominalized_deadline_ability(&mut grouped, body, doc, target);
     if let Some(go) = motion_go {
         mark_motion_purpose(&mut grouped, &norm_atoms, go);
@@ -5777,6 +5784,7 @@ fn translate_clause_bunsetsus(
         is_clock: bool,
         is_building_floor: bool,
         is_daypart: bool,
+        deadline_has_detached_negation: bool,
         is_plain_clock_ni: bool,
         transfer_dative: bool,
         physical_goal_head: Option<usize>,
@@ -6093,7 +6101,9 @@ fn translate_clause_bunsetsus(
                     }
                 }
             }
-            BunsetsuRole::Obl | BunsetsuRole::ExplicitDeadline { .. } => {
+            BunsetsuRole::Obl
+            | BunsetsuRole::ExplicitDeadline { .. }
+            | BunsetsuRole::DeadlineWithDetachedNegation => {
                 let is_inst = b.case_particle.as_deref() == Some("で")
                     && !is_place_location_bunsetsu(&b.atoms)
                     && is_instrument_bunsetsu(&b.atoms);
@@ -6111,6 +6121,8 @@ fn translate_clause_bunsetsus(
                             .atoms
                             .iter()
                             .any(|a| !a.is_locked && is_daypart_surface(&a.surface)),
+                        deadline_has_detached_negation: b.role
+                            == BunsetsuRole::DeadlineWithDetachedNegation,
                         is_plain_clock_ni: is_plain_clock_ni(&b),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
@@ -6157,6 +6169,7 @@ fn translate_clause_bunsetsus(
                         is_clock: false,
                         is_building_floor: b.atoms.iter().any(is_building_floor),
                         is_daypart: false,
+                        deadline_has_detached_negation: false,
                         is_plain_clock_ni: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
@@ -6551,6 +6564,7 @@ fn translate_clause_bunsetsus(
                     is_clock: false,
                     is_building_floor: false,
                     is_daypart: false,
+                    deadline_has_detached_negation: false,
                     is_plain_clock_ni: false,
                     transfer_dative: false,
                     physical_goal_head: None,
@@ -7184,7 +7198,7 @@ fn translate_clause_bunsetsus(
                     parts.push("也".to_owned());
                 }
                 parts.push(format!("{modal}在{}{cutoff}", o.text));
-            } else if predicate_is_negative {
+            } else if predicate_is_negative && !o.deadline_has_detached_negation {
                 parts.push(format!("到{}為止", o.text));
             } else {
                 parts.push(format!("最晚在{}", o.text));
@@ -9681,6 +9695,40 @@ fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
                 )))
 }
 
+// A split voice form can put られる on the timed verb but attach the negative
+// auxiliary to a second verb. That negation does not establish an interval
+// throughout which the timed event fails. Keep the affirmative cutoff marker.
+fn has_detached_voice_negation(source: &[Atom], timed: usize) -> bool {
+    let Some(other) = source
+        .iter()
+        .find(|a| {
+            a.doc_tok_idx == Some(timed)
+                && !a.is_locked
+                && a.upos == Some(Upos::Verb)
+                && a.deprel == "advcl"
+        })
+        .and_then(|a| a.head)
+    else {
+        return false;
+    };
+    source.iter().any(|a| {
+        !a.is_locked
+            && a.head == Some(timed)
+            && a.upos == Some(Upos::Aux)
+            && a.deprel == "aux"
+            && matches!(a.lemma.as_deref(), Some("れる" | "られる"))
+    }) && source
+        .iter()
+        .any(|a| !a.is_locked && a.doc_tok_idx == Some(other) && a.upos == Some(Upos::Verb))
+        && source.iter().any(|a| {
+            !a.is_locked
+                && a.head == Some(other)
+                && a.upos == Some(Upos::Aux)
+                && a.deprel == "aux"
+                && matches!(a.lemma.as_deref().unwrap_or(&a.surface), "ない" | "ん")
+        })
+}
+
 fn deadline_governor(group: &Bunsetsu, doc: &Document) -> Option<usize> {
     if group.case_particle.as_deref() != Some("までに") {
         return None;
@@ -11305,6 +11353,25 @@ mod clock_rule_tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn a_detached_negative_does_not_turn_the_cutoff_into_an_interval() {
+        let glossary = TranslationGlossary::new();
+        for (source, cutoff) in [
+            ("六時までに駅に来られません。", "最晚在六點"),
+            ("明日までに映画を見られません。", "最晚在明天"),
+        ] {
+            let text = public_translate(source, &glossary).target_text;
+            assert!(
+                text.contains(cutoff) && !text.contains("為止") && !text.contains("沒辦法"),
+                "{source}: {text}"
+            );
+        }
+        assert_eq!(
+            public_translate("六時までに会場に来ませんでした。", &glossary).target_text,
+            "到六點為止沒有來到會場。"
+        );
     }
 
     #[test]

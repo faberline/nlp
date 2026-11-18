@@ -5321,24 +5321,28 @@ fn translate_clause_bunsetsus(
     }
 
     // Resolve time and result roles while the other arguments of the predicate are available.
-    let restored = time_adjustment_frame(&bunsetsus, source);
-    let mut restored_object = None;
-    let mut restored_value = None;
+    let timed_result = timed_result_frame(&bunsetsus, source);
+    let mut affected_object = None;
+    let mut result_value = None;
     let daypart_groups: Vec<_> = bunsetsus
         .iter()
         .enumerate()
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
-        if restored.is_some_and(|f| f.object == idx) {
-            restored_object = Some(render_bunsetsu_np(&b, target));
+        if timed_result.is_some_and(|f| f.object == idx) {
+            affected_object = Some(render_bunsetsu_np(&b, target));
             continue;
         }
-        if restored.is_some_and(|f| f.value == idx) {
-            restored_value = Some(render_bunsetsu_np(&b, target));
+        if let Some(frame) = timed_result.filter(|f| f.value == idx) {
+            result_value = Some(
+                frame
+                    .site_name
+                    .map_or_else(|| render_bunsetsu_np(&b, target), str::to_owned),
+            );
             continue;
         }
-        if daypart_groups.contains(&idx) || restored.is_some_and(|f| f.when == idx) {
+        if daypart_groups.contains(&idx) || timed_result.is_some_and(|f| f.when == idx) {
             temporal_others.push(render_bunsetsu_np(&b, target));
             continue;
         }
@@ -5615,7 +5619,7 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
-    if let Some(frame) = restored {
+    if let Some(frame) = timed_result {
         verb_core = frame.action.to_owned();
     }
 
@@ -6484,7 +6488,7 @@ fn translate_clause_bunsetsus(
     let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
     parts.extend(transfer_prefix);
-    if let Some(object) = restored_object {
+    if let Some(object) = affected_object {
         parts.push(format!("把{object}"));
     }
     // 到 already expresses the destination relation of bare 去. Other motion
@@ -6504,7 +6508,7 @@ fn translate_clause_bunsetsus(
         }
     }
     parts.extend(made_endpoints);
-    parts.extend(restored_value);
+    parts.extend(result_value);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
     let trailing_change_le =
@@ -8852,11 +8856,12 @@ fn has_verb_reading(surface: &str) -> bool {
 }
 
 #[derive(Clone, Copy)]
-struct TimeAdjustment {
+struct TimedResult {
     when: usize,
     object: usize,
     value: usize,
     action: &'static str,
+    site_name: Option<&'static str>,
 }
 
 // The transitive members of the time-value predicates can set a new value.
@@ -8877,7 +8882,7 @@ fn time_adjustment_action(stem: &str) -> Option<&'static str> {
 // Tに [setting を] Vに [change] has two time arguments. Their positions
 // around the affected object and attachment to the same predicate identify
 // the new value even when the two source times are exchanged.
-fn time_adjustment_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimeAdjustment> {
+fn timed_result_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimedResult> {
     let covers = |b: &Bunsetsu, a: &Atom| {
         b.atoms
             .iter()
@@ -8925,8 +8930,7 @@ fn time_adjustment_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimeAdj
         .iter()
         .find(|a| a.head == Some(id) && a.deprel == "obj" && !a.is_locked)?;
     let wo = group.atoms.last()?;
-    if !source_time_head(noun)
-        || wo.is_locked
+    if wo.is_locked
         || wo.surface != "を"
         || wo.deprel != "case"
         || noun.doc_tok_idx.is_none()
@@ -8935,15 +8939,14 @@ fn time_adjustment_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimeAdj
     {
         return None;
     }
-    let mut times = groups.iter().enumerate().filter_map(|(i, b)| {
-        let [t, ni] = b.atoms.as_slice() else {
+    let mut args = groups.iter().enumerate().filter_map(|(i, b)| {
+        let [.., t, ni] = b.atoms.as_slice() else {
             return None;
         };
         (b.case_particle.as_deref() == Some("に")
             && !t.is_locked
             && !ni.is_locked
-            && is_daypart_surface(&t.surface)
-            && matches!(t.upos, Some(Upos::Noun | Upos::Adv))
+            && matches!(t.upos, Some(Upos::Noun | Upos::Propn | Upos::Adv))
             && matches!(t.deprel.as_str(), "obl" | "advmod")
             && t.head == Some(id)
             && t.doc_tok_idx.is_some()
@@ -8952,22 +8955,68 @@ fn time_adjustment_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimeAdj
             && ni.upos == Some(Upos::Adp)
             && ni.deprel == "case"
             && t.span.end_char == ni.span.start_char)
-            .then_some((i, t.span.start_char, ni.span.end_char))
+            .then_some((i, t, ni))
     });
-    let (when, _, first_end) = times.next()?;
-    let (value, second_start, second_end) = times.next()?;
-    (times.next().is_none()
-        && when < object
-        && object < value
-        && first_end <= noun.span.start_char
-        && wo.span.end_char <= second_start
-        && second_end == verb.span.start_char)
-        .then_some(TimeAdjustment {
-            when,
-            object,
-            value,
-            action,
-        })
+    let a = args.next()?;
+    let b = args.next()?;
+    if args.next().is_some() {
+        return None;
+    }
+    let a_time = groups[a.0].atoms.len() == 2 && is_daypart_surface(&a.1.surface);
+    let b_time = groups[b.0].atoms.len() == 2 && is_daypart_surface(&b.1.surface);
+    if a_time && b_time {
+        return (source_time_head(noun)
+            && a.0 < object
+            && object < b.0
+            && a.2.span.end_char <= noun.span.start_char
+            && wo.span.end_char <= b.1.span.start_char
+            && b.2.span.end_char == verb.span.start_char)
+            .then_some(TimedResult {
+                when: a.0,
+                object,
+                value: b.0,
+                action,
+                site_name: None,
+            });
+    }
+    // With one time and one actual storage site, 戻す returns the direct object
+    // to the site. The time remains an adjunct in either word order.
+    if lemma != "戻す" || a_time == b_time {
+        return None;
+    }
+    let (when, site) = if a_time { (a.0, b) } else { (b.0, a) };
+    let atoms = &groups[site.0].atoms;
+    if atoms.iter().any(|p| p.is_locked) || is_person_like_atom(site.1) {
+        return None;
+    }
+    let name: String = atoms[..atoms.len() - 1]
+        .iter()
+        .map(|p| p.surface.as_str())
+        .collect();
+    let site_name = match name.as_str() {
+        "棚" => Some("架上"),
+        "本棚" | "書棚" => Some("書架上"),
+        "机" => Some("桌上"),
+        "箱" => Some("箱子裡"),
+        "引き出し" => Some("抽屜裡"),
+        "車庫" => Some("車庫"),
+        _ => None,
+    };
+    (site_name.is_some()
+        || is_existing_spatial_head(site.1)
+        || faberline_nlp::lexicon::lookup_ja(&site.1.surface)
+            .is_some_and(|e| e.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Location)))
+    .then_some(TimedResult {
+        when,
+        object,
+        value: site.0,
+        action: if site_name.is_some() {
+            "放回"
+        } else {
+            "帶回"
+        },
+        site_name,
+    })
 }
 
 fn is_transport_term(term: &str) -> bool {
@@ -9816,10 +9865,32 @@ mod motion_endpoint_tests {
         ] {
             let text = translate(source);
             assert!(
-                !text.contains('把') && !text.contains("改到") && !text.contains("調到"),
+                !text.contains("改回") && !text.contains("改到") && !text.contains("調到"),
                 "{source}: {text}"
             );
         }
+    }
+
+    #[test]
+    fn physical_return_keeps_the_time_object_and_storage_site() {
+        for (source, expected) in [
+            ("私は夕方に本を棚に戻しました。", "我傍晚把書放回架上了。"),
+            ("私は本を棚に夕方に戻しました。", "我傍晚把書放回架上了。"),
+            (
+                "私は朝に本を棚に戻しませんでした。",
+                "我早上沒有把書放回架上。",
+            ),
+            (
+                "私は夕方に鍵を箱に戻しました。",
+                "我傍晚把鑰匙放回箱子裡了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        let recipient = translate("私は夕方に本を先生に返しました。");
+        assert!(
+            recipient.contains("老師") && recipient.contains('書') && !recipient.contains("放回")
+        );
     }
 
     #[test]

@@ -221,6 +221,80 @@ fn convert_fragment_variant_inner(
     }
 }
 
+/// A complete Japanese dictionary word in a sentence otherwise detected as Chinese.
+#[derive(Clone, Copy)]
+pub(crate) struct HintedJapaneseTerm {
+    span: Span,
+    gloss: &'static str,
+}
+
+impl HintedJapaneseTerm {
+    pub(crate) fn lookup(
+        chars: &[char],
+        span: Span,
+        target: TargetVariant,
+        hint: Option<TargetVariant>,
+    ) -> Option<Self> {
+        if hint != Some(TargetVariant::Ja) || target != TargetVariant::ZhHant {
+            return None;
+        }
+        let text = &chars[span.start_char..span.end_char];
+        let boundary = |c: char| {
+            c.is_whitespace()
+                || matches!(
+                    c,
+                    '「' | '」'
+                        | '『'
+                        | '』'
+                        | '“'
+                        | '”'
+                        | '"'
+                        | '（'
+                        | '）'
+                        | '('
+                        | ')'
+                        | '。'
+                        | '！'
+                        | '？'
+                        | '.'
+                        | '!'
+                        | '?'
+                )
+        };
+        let first = text.iter().position(|&c| !boundary(c))?;
+        let last = text.iter().rposition(|&c| !boundary(c))? + 1;
+        let word = &text[first..last];
+        if !word.iter().copied().all(is_han) {
+            return None;
+        }
+        let surface: String = word.iter().collect();
+        let gloss = faberline_nlp::lexicon::ja::lookup_ja_gloss(&surface, None)?;
+        if gloss.is_empty() {
+            return None;
+        }
+        Some(Self {
+            span: Span {
+                start_char: span.start_char + first,
+                end_char: span.start_char + last,
+            },
+            gloss,
+        })
+    }
+
+    /// Only replace the complete word inside an unlocked source span.
+    pub(crate) fn render(self, chars: &[char], span: Span) -> Option<String> {
+        if self.span.start_char < span.start_char || self.span.end_char > span.end_char {
+            return None;
+        }
+        let mut out: String = chars[span.start_char..self.span.start_char]
+            .iter()
+            .collect();
+        out.push_str(self.gloss);
+        out.extend(&chars[self.span.end_char..span.end_char]);
+        Some(out)
+    }
+}
+
 /// Convert a sentence span `[sent_span.start_char, sent_span.end_char)` using `nlp.doc.v1` tokens
 /// and UPOS tags while preserving exact non-locked spans (`locked_spans` are copied from
 /// `locked_replacements` or handled by `SpanLockTable`).
@@ -1356,4 +1430,154 @@ fn preserve_case(original: &str, converted_lower: &str) -> String {
         return out;
     }
     converted_lower.to_owned()
+}
+
+#[cfg(test)]
+mod hinted_japanese_term_tests {
+    use crate::{
+        TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+        doc_options_for_translate, translate_document,
+    };
+    use faberline_nlp::doc::{Lang, analyze_document, model::Backend};
+
+    #[test]
+    fn japanese_source_hint_uses_the_whole_word_and_aligns_the_result() {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("新聞。", "報紙。"),
+            ("「手紙」。", "「信」。"),
+            ("午前", "上午"),
+        ] {
+            let doc = analyze_document(source, &doc_options_for_translate(&options, &glossary));
+            assert_eq!(doc.segmentation.sentences[0].lang, Lang::Zh);
+            let translated = translate_document(
+                source,
+                &doc,
+                #[cfg(feature = "narrative")]
+                None,
+                &options,
+                &glossary,
+                None,
+            )
+            .unwrap();
+            assert_eq!(translated.target_text, expected);
+            assert_eq!(translated.source_lang, Lang::Ja);
+            assert_eq!(translated.sentences[0].source_lang, Lang::Ja);
+            assert_eq!(
+                translated.sentences[0].target_span.end_char,
+                expected.chars().count()
+            );
+            assert_eq!(
+                translated
+                    .clause_alignments
+                    .last()
+                    .unwrap()
+                    .target_span
+                    .end_char,
+                expected.chars().count()
+            );
+        }
+    }
+
+    #[test]
+    fn structured_japanese_words_report_the_language_and_translation_track() {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        use crate::TranslationTrack::{Passthrough, VariantRule};
+
+        for (source, hint, expected, lang, track) in [
+            (
+                "## 新聞",
+                Some(TargetVariant::Ja),
+                "## 報紙",
+                Lang::Ja,
+                VariantRule,
+            ),
+            (
+                "- 手紙",
+                Some(TargetVariant::Ja),
+                "- 信",
+                Lang::Ja,
+                VariantRule,
+            ),
+            (
+                "## 新聞\n- 手紙",
+                Some(TargetVariant::Ja),
+                "## 報紙\n- 信",
+                Lang::Ja,
+                VariantRule,
+            ),
+            ("## 新聞", None, "## 新聞", Lang::Und, Passthrough),
+            (
+                "## 世界",
+                Some(TargetVariant::Ja),
+                "## 世界",
+                Lang::Ja,
+                VariantRule,
+            ),
+            (
+                "- 手紙龘",
+                Some(TargetVariant::Ja),
+                "- 手紙龘",
+                Lang::Und,
+                Passthrough,
+            ),
+            (
+                "```\n新聞\n```",
+                Some(TargetVariant::Ja),
+                "```\n新聞\n```",
+                Lang::Und,
+                Passthrough,
+            ),
+        ] {
+            options.source_hint = hint;
+            let doc =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(
+                (doc.target_text.as_str(), doc.source_lang, doc.track),
+                (expected, lang, track),
+                "{source}"
+            );
+            assert!(doc.sentences.is_empty(), "{source}");
+        }
+    }
+
+    #[test]
+    fn auto_detection_chinese_and_unknown_whole_words_keep_their_reading() {
+        let glossary = TranslationGlossary::new();
+        for (source, hint, expected) in [
+            ("新聞", None, "新聞"),
+            ("新聞", Some(TargetVariant::ZhHant), "新聞"),
+            ("新聞龘龘", Some(TargetVariant::Ja), "新聞龘龘"),
+            (
+                "會議將在下午開始。",
+                Some(TargetVariant::Ja),
+                "會議將在下午開始。",
+            ),
+        ] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = hint;
+            let translated =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(translated.target_text, expected);
+            assert_eq!(translated.source_lang, Lang::Zh);
+        }
+    }
+
+    #[test]
+    fn explicit_glossary_has_priority_over_the_japanese_word() {
+        let glossary: TranslationGlossary = serde_json::from_value(serde_json::json!({
+            "schema":"nlp.translate.glossary.v1", "actors":[], "places":[], "objects":[],
+            "domain_terms":[{"canonical":"晨報","surfaces":["新聞"],"targets":{"zh-Hant":"晨報"}}]
+        }))
+        .unwrap();
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        let translated =
+            analyze_and_translate("新聞。", &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_eq!(translated.target_text, "晨報。");
+        assert_eq!(translated.glossary_hits.len(), 1);
+    }
 }

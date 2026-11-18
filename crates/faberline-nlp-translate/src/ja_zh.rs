@@ -1871,13 +1871,6 @@ fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span)
 
     let flush_clause = |buf: &mut Vec<Atom>, punct: Option<String>, out: &mut Vec<Segment>| {
         if !buf.is_empty() {
-            let punct = if punct.as_deref() == Some("。")
-                && polite_volitional(buf).is_some_and(|(_, question)| question)
-            {
-                Some("？".to_owned())
-            } else {
-                punct
-            };
             let s = buf
                 .first()
                 .map(|a| a.span.start_char)
@@ -3208,11 +3201,13 @@ fn translate_clause_atoms(
         } else if body.iter().enumerate().any(|(i, a)| {
             !a.is_locked
                 && proposal_attachment(a, predicate, body)
-                && !body.get(i + 1).is_some_and(|next| next.surface == "か")
                 && matches!(
                     a.surface.as_str(),
                     "何" | "何時" | "誰" | "いつ" | "どこ" | "どれ" | "どう" | "どちら"
                 )
+                && !body
+                    .get(i..i + 2)
+                    .is_some_and(|pair| indefinite_argument(pair, predicate).is_some())
         }) {
             text.push_str("好呢");
         } else if matches!(body, [verb, _, _] if verb.lemma.as_deref() == Some("手伝う")) {
@@ -3293,6 +3288,12 @@ fn localize_proposal_arguments(
     source: &[Atom],
     target: TargetVariant,
 ) {
+    let Some(action) = source.iter().find(|a| a.doc_tok_idx == Some(predicate)) else {
+        return;
+    };
+    let has_object = source
+        .iter()
+        .any(|a| a.head == Some(predicate) && a.deprel == "obj");
     let speaker_offers = source.iter().any(|a| {
         !a.is_locked
             && a.head == Some(predicate)
@@ -3305,6 +3306,30 @@ fn localize_proposal_arguments(
     // Keep modifiers separate before the general noun/coordination fold.
     let mut previous: Vec<Bunsetsu> = Vec::with_capacity(groups.len());
     for mut group in std::mem::take(groups) {
+        if let Some(modifier) = previous
+            .last()
+            .and_then(|prior| indefinite_object_modifier(prior, &group, predicate))
+        {
+            previous.pop();
+            group.atoms.insert(0, modifier);
+        }
+        // Consume the か attached to a pronoun before the clause collects its
+        // sentence-final particles. Keep the pronounced case for the assembler.
+        if let Some((mut noun, case)) = indefinite_argument(&group.atoms, predicate) {
+            if indefinite_content_object(
+                &group.atoms[0],
+                case.as_ref(),
+                noun.span.end_char,
+                action,
+                has_object,
+            ) {
+                noun.surface = "點什麼".to_owned();
+                group.role = BunsetsuRole::Obj;
+            }
+            group.sfp_tail = None;
+            group.atoms = vec![noun];
+            group.atoms.extend(case);
+        }
         if let [prefix @ .., noun, case] = group.atoms.as_slice()
             && !noun.is_locked
             && !case.is_locked
@@ -10755,6 +10780,24 @@ mod motion_endpoint_tests {
             ("何曜日に本を読みましょうか。", "星期幾讀書好呢？"),
             ("いつ駅に行きましょうか。", "什麼時候去到車站好呢？"),
             ("先生に手紙を書きましょうか。", "給老師寫信，好嗎？"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn proposals_distinguish_indefinite_arguments_from_open_questions() {
+        for (source, expected) in [
+            ("誰かと一緒に歌いましょう。", "和某個人一起哼唱吧。"),
+            ("誰かと一緒に歩きましょうか。", "和某個人一起走，好嗎？"),
+            ("誰と一緒に歌いましょうか。", "和誰一起哼唱好呢？"),
+            ("誰かと何時に会いましょうか。", "幾點跟某個人見面好呢？"),
+            ("何か読みましょうか。", "讀點什麼，好嗎？"),
+            ("何かを食べましょう。", "吃點什麼吧。"),
+            ("何か作業をしましょうか。", "做一些作業，好嗎？"),
+            ("どこかで会いましょうか。", "在某個地方見面，好嗎？"),
+            ("どこで会いましょうか。", "在哪裡見面好呢？"),
+            ("誰かが手伝いましょう。", "某個人協助吧。"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }

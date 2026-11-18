@@ -11799,6 +11799,32 @@ fn indefinite_argument(atoms: &[Atom], predicate: usize) -> Option<(Atom, Option
     Some((noun, case))
 }
 
+// A content object may omit を immediately before a transitive activity.
+// A separate object or a non-transitive predicate leaves that reading open.
+fn indefinite_content_object(
+    word: &Atom,
+    case: Option<&Atom>,
+    end: usize,
+    action: &Atom,
+    has_object: bool,
+) -> bool {
+    if word.surface != "何" {
+        return false;
+    }
+    match (word.deprel.as_str(), case) {
+        ("obj", Some(case)) => case.surface == "を",
+        ("obl", None) => {
+            !has_object
+                && end == action.span.start_char
+                && matches!(
+                    action.lemma.as_deref().unwrap_or(&action.surface),
+                    "読む" | "飲む" | "食べる" | "書く" | "買う" | "作る" | "見る" | "聞く" | "選ぶ"
+                )
+        }
+        _ => false,
+    }
+}
+
 fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;

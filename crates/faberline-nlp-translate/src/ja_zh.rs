@@ -2556,7 +2556,7 @@ fn translate_clause_atoms(
 
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
     let merged_atoms = apply_phrase_matches(atoms);
-    let norm_atoms = normalize_ja_atoms(&merged_atoms);
+    let norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms));
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
@@ -4572,6 +4572,172 @@ fn fused_relational_location(pair: &[Bunsetsu], predicate_idx: Option<usize>) ->
         && spatial.head == predicate_idx
 }
 
+const BUILDING_FLOOR: &str = "__ja_zh_building_floor";
+
+fn is_building_floor(atom: &Atom) -> bool {
+    !atom.is_locked && atom.lemma.as_deref() == Some(BUILDING_FLOOR)
+}
+
+fn is_floor_number(surface: &str) -> bool {
+    !surface.is_empty()
+        && surface.chars().all(|ch| {
+            matches!(
+                ch,
+                '0'..='9' | '０'..='９' | '〇' | '零' | '一' | '二' | '三' | '四' | '五'
+                    | '六' | '七' | '八' | '九' | '十' | '百' | '千' | '万' | '萬'
+            )
+        })
+}
+
+// Identify the complete floor label in the source before changing how it is
+// rendered. Keep the head of 階 and the span of the entire numeral and suffix.
+fn building_floor_start(atoms: &[Atom], end: usize) -> Option<usize> {
+    let floor = &atoms[end];
+    if floor.is_locked || floor.upos != Some(Upos::Noun) {
+        return None;
+    }
+    let floor_idx = floor.doc_tok_idx?;
+    let prefix = floor.surface.strip_suffix('階')?;
+    let mut start = end;
+    if prefix.is_empty() {
+        while let Some(number) = start.checked_sub(1).and_then(|i| atoms.get(i))
+            && !number.is_locked
+            && matches!(number.upos, Some(Upos::Num | Upos::Noun))
+            && is_floor_number(&number.surface)
+            && number.span.end_char == atoms[start].span.start_char
+        {
+            start -= 1;
+        }
+        if start == end {
+            return None;
+        }
+    } else if !is_floor_number(prefix.strip_prefix("地下").unwrap_or(prefix)) {
+        return None;
+    }
+    if !prefix.starts_with("地下") && start > 0 {
+        let before = &atoms[start - 1];
+        if !before.is_locked
+            && before.span.end_char == atoms[start].span.start_char
+            && before.surface == "地下"
+        {
+            start -= 1;
+        } else if start > 1
+            && !before.is_locked
+            && before.span.end_char == atoms[start].span.start_char
+            && before.surface == "下"
+            && !atoms[start - 2].is_locked
+            && atoms[start - 2].surface == "地"
+            && atoms[start - 2].span.end_char == before.span.start_char
+        {
+            start -= 2;
+        }
+    }
+    if start > 0 {
+        let before = &atoms[start - 1];
+        if before.span.end_char == atoms[start].span.start_char
+            && (before.is_locked
+                || matches!(before.upos, Some(Upos::Noun | Upos::Propn | Upos::Num))
+                || before.surface == "第")
+        {
+            return None;
+        }
+    }
+
+    let tail = atoms.get(end + 1)?;
+    if tail.is_locked || floor.span.end_char != tail.span.start_char {
+        return None;
+    }
+    let negative_copula = matches!(
+        tail.surface.as_str(),
+        "じゃない" | "ではない" | "ではありません"
+    );
+    if tail.upos == Some(Upos::Aux)
+        && (matches!(tail.surface.as_str(), "だ" | "です") || negative_copula)
+    {
+        // Polite negative ではありません can attach both nouns to the
+        // original ある. The normalized negative copula retains that head.
+        let shared_negative_head = floor
+            .head
+            .filter(|head| negative_copula && floor.deprel == "nsubj" && tail.head == Some(*head));
+        return atoms[..start]
+            .iter()
+            .any(|subject| {
+                !subject.is_locked
+                    && subject.deprel == "nsubj"
+                    && (subject.head == Some(floor_idx)
+                        || shared_negative_head.is_some_and(|head| subject.head == Some(head)))
+                    && matches!(
+                        subject.surface.as_str(),
+                        "部屋"
+                            | "教室"
+                            | "会議室"
+                            | "研究室"
+                            | "事務室"
+                            | "事務所"
+                            | "受付"
+                            | "食堂"
+                            | "台所"
+                            | "浴室"
+                            | "トイレ"
+                            | "玄関"
+                            | "売り場"
+                            | "店舗"
+                    )
+            })
+            .then_some(start);
+    }
+
+    let governor = floor.head?;
+    if tail.upos != Some(Upos::Adp) || tail.head != Some(floor_idx) {
+        return None;
+    }
+    atoms
+        .iter()
+        .any(|predicate| {
+            !predicate.is_locked
+                && predicate.doc_tok_idx == Some(governor)
+                && predicate.upos == Some(Upos::Verb)
+                && match tail.surface.as_str() {
+                    "に" | "へ" => {
+                        matches!(
+                            predicate.lemma.as_deref().unwrap_or(&predicate.surface),
+                            "行く" | "来る" | "帰る" | "戻る" | "着く" | "向かう" | "入る"
+                        ) || (tail.surface == "に"
+                            && matches!(
+                                predicate.lemma.as_deref().unwrap_or(&predicate.surface),
+                                "ある" | "いる"
+                            ))
+                    }
+                    "で" => matches!(
+                        predicate.lemma.as_deref().unwrap_or(&predicate.surface),
+                        "待つ" | "働く" | "食べる" | "寝る" | "読む" | "会う"
+                    ),
+                    _ => false,
+                }
+        })
+        .then_some(start)
+}
+
+fn normalize_building_floors(mut atoms: Vec<Atom>) -> Vec<Atom> {
+    let mut end = atoms.len();
+    while end > 0 {
+        end -= 1;
+        let Some(start) = building_floor_start(&atoms, end) else {
+            continue;
+        };
+        let mut floor = atoms[end].clone();
+        floor.span.start_char = atoms[start].span.start_char;
+        floor.surface = atoms[start..=end]
+            .iter()
+            .map(|a| a.surface.as_str())
+            .collect();
+        floor.lemma = Some(BUILDING_FLOOR.to_owned());
+        atoms.splice(start..=end, [floor]);
+        end = start;
+    }
+    atoms
+}
+
 fn translate_clause_bunsetsus(
     mut bunsetsus: Vec<Bunsetsu>,
     raw_clause: &str,
@@ -4588,6 +4754,7 @@ fn translate_clause_bunsetsus(
         is_instrument_de: bool,
         is_spatial_made: bool,
         is_clock: bool,
+        is_building_floor: bool,
         transfer_dative: bool,
     }
 
@@ -4850,6 +5017,7 @@ fn translate_clause_bunsetsus(
                         is_instrument_de: is_inst,
                         is_spatial_made: is_spatial_made_bunsetsu(&b),
                         is_clock: b.atoms.iter().any(is_clock_atom),
+                        is_building_floor: b.atoms.iter().any(is_building_floor),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                     });
@@ -4891,6 +5059,7 @@ fn translate_clause_bunsetsus(
                         is_instrument_de: false,
                         is_spatial_made: false,
                         is_clock: false,
+                        is_building_floor: b.atoms.iter().any(is_building_floor),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                     });
@@ -5277,6 +5446,7 @@ fn translate_clause_bunsetsus(
                     is_instrument_de: false,
                     is_spatial_made: false,
                     is_clock: false,
+                    is_building_floor: false,
                     transfer_dative: false,
                 });
             }
@@ -5492,7 +5662,7 @@ fn translate_clause_bunsetsus(
                     .or_else(|| o.text.strip_prefix('對'))
                     .or_else(|| o.text.strip_prefix('給'))
                     .unwrap_or(&o.text);
-                goal_tails.push(format_goal_tail(&verb_core, raw_np));
+                goal_tails.push(format_goal_tail(&verb_core, raw_np, o.is_building_floor));
             } else {
                 kept_obls.push(o);
             }
@@ -5508,7 +5678,7 @@ fn translate_clause_bunsetsus(
                     .or_else(|| io.text.strip_prefix('給'))
                     .or_else(|| io.text.strip_prefix('在'))
                     .unwrap_or(&io.text);
-                goal_tails.push(format_goal_tail(&verb_core, raw_np));
+                goal_tails.push(format_goal_tail(&verb_core, raw_np, io.is_building_floor));
             } else {
                 kept_iobjs.push(io);
             }
@@ -5887,8 +6057,9 @@ fn translate_clause_bunsetsus(
     (join_zh_parts(&parts), had_overt_subj_no_pred)
 }
 
-fn format_goal_tail(verb_core: &str, raw_np: &str) -> String {
-    if verb_core == "進入" || raw_np.starts_with('到') {
+fn format_goal_tail(verb_core: &str, raw_np: &str, is_building_floor: bool) -> String {
+    if verb_core == "進入" || raw_np.starts_with('到') || (is_building_floor && verb_core == "去")
+    {
         raw_np.to_owned()
     } else {
         format!("到{raw_np}")
@@ -8033,6 +8204,9 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
 
 fn is_place_location_bunsetsu(atoms: &[Atom]) -> bool {
     atoms.iter().any(|a| {
+        if is_building_floor(a) {
+            return true;
+        }
         matches!(
             a.surface.as_str(),
             "部屋"
@@ -9056,6 +9230,7 @@ fn synthesize_predicate_complex(
             || joined.contains("ではない")
             || joined.contains("ではありません"));
     let is_copula_pos = !is_copula_neg && surfaces.iter().any(|&s| matches!(s, "だ" | "です"));
+    let has_locative_floor = all_atoms.iter().any(|a| is_building_floor(a));
     let is_stative_te_iru = has_te_iru
         && all_atoms.iter().any(|a| {
             !a.is_locked
@@ -9116,7 +9291,14 @@ fn synthesize_predicate_complex(
         pre.push("並不是".to_owned());
     }
     if is_copula_neg {
-        pre.push("不是".to_owned());
+        pre.push(
+            if has_locative_floor {
+                "不在"
+            } else {
+                "不是"
+            }
+            .to_owned(),
+        );
     } else if is_stative_cogn_neg_past {
         pre.push("不".to_owned());
     } else if has_neg_past || (has_te_iru && has_neg) {
@@ -9263,7 +9445,7 @@ fn synthesize_predicate_complex(
             .iter()
             .any(|a| a.upos == Some(Upos::Verb) || a.upos == Some(Upos::Adj))
     {
-        pre.insert(0, "是".to_owned());
+        pre.insert(0, if has_locative_floor { "在" } else { "是" }.to_owned());
     }
 
     if has_te_shimau {
@@ -9516,6 +9698,11 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
 }
 
 fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upos>) -> String {
+    if lemma == Some(BUILDING_FLOOR)
+        && let Some(label) = surface.strip_suffix('階')
+    {
+        return format!("{label}樓");
+    }
     // 1. Curated Japanese -> zh-Hant dictionary (covers false friends, pronouns, connectors,
     //    core verbs/adjectives/nouns, katakana, onomatopoeia, and adult/erotic terms).
     if let Some(cur) = lookup_curated_ja_word(surface) {
@@ -9902,6 +10089,64 @@ mod existence_rule_tests {
             deprel: String::new(),
             is_locked: false,
         }
+    }
+
+    #[test]
+    fn building_floor_keeps_location_destination_and_polarity() {
+        for (source, expected) in [
+            ("私の部屋は七階です。", "我的房間在七樓。"),
+            ("私の部屋は七階ではありません。", "我的房間不在七樓。"),
+            ("私は学校の二階に行きます。", "我去學校的二樓。"),
+            ("私は学校の二階に行きません。", "我不去學校的二樓。"),
+            ("学校の地下二階に行きます。", "去學校的地下二樓。"),
+        ] {
+            assert_eq!(
+                translate(source, &TranslationGlossary::new()).target_text,
+                expected
+            );
+        }
+        let direction = translate("私は四階へ行きます。", &TranslationGlossary::new());
+        assert_eq!(direction.target_text, "我往四樓去。");
+        let fullwidth = translate("学校の１２階に行きます。", &TranslationGlossary::new());
+        assert!(
+            fullwidth.target_text.contains("１２樓"),
+            "{}",
+            fullwidth.target_text
+        );
+    }
+
+    #[test]
+    fn building_floor_leaves_compounds_names_and_locks_alone() {
+        for (source, keep) in [
+            ("この計画は三段階です。", "三段階"),
+            ("階段を上ります。", "樓梯"),
+            ("階級を確認します。", "階級"),
+            ("二階堂さんは来ました。", "二階堂"),
+        ] {
+            let result = translate(source, &TranslationGlossary::new());
+            assert!(result.target_text.contains(keep), "{}", result.target_text);
+        }
+        let source = "私は`二階`に行きます。";
+        let result = translate(source, &TranslationGlossary::new());
+        let [record] = result.opaque_spans.as_slice() else {
+            panic!("expected one protected span");
+        };
+        let target_span = record.target_span.expect("protected target span");
+        let slice: String = result
+            .target_text
+            .chars()
+            .skip(target_span.start_char)
+            .take(target_span.end_char - target_span.start_char)
+            .collect();
+        assert_eq!(slice, "`二階`");
+        assert_eq!(result.target_text.matches("`二階`").count(), 1);
+        assert_eq!(
+            record.source_span,
+            Span {
+                start_char: 2,
+                end_char: 6
+            }
+        );
     }
 
     #[test]

@@ -1,0 +1,176 @@
+{
+  "schema": "faberline.nlp.ja_zh.invitation_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "reused_existing_controls": [],
+  "reused_standing_controls": [
+    {
+      "id": "jz150",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    },
+    {
+      "id": "jz148",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    },
+    {
+      "id": "jz149",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    },
+    {
+      "id": "jz151",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    }
+  ],
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "INV-N5-01",
+      "level_approx": "N5",
+      "jp": "一緒に走りませんか。",
+      "zh_hant": "要不要一起跑步？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The speaker invites another person to run together.",
+        "The invitation has no stated time or destination."
+      ],
+      "semantic_unknowns": [
+        "No translator or tokenizer behavior has been measured.",
+        "Context can affect the force of ませんか."
+      ],
+      "control": {
+        "kind": "joint_motion_invitation",
+        "contrast_ids": [
+          "jz148",
+          "jz150"
+        ],
+        "stable": [
+          "The sentence uses the polite negative-form ending ませんか。",
+          "The Japanese sentence proposes a shared activity without a time clause or purpose stem."
+        ],
+        "changed": [
+          "This example uses a motion activity, 走る."
+        ],
+        "limits": [
+          "This is a short invitation example, not a matched pair with the standing controls.",
+          "The standing controls add other speech-act or content cues."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "INV-N5-02",
+      "level_approx": "N5",
+      "jp": "一緒にお茶を飲みませんか。",
+      "zh_hant": "要不要一起喝茶？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The speaker invites another person to drink tea together.",
+        "The invitation has no stated time or destination."
+      ],
+      "semantic_unknowns": [
+        "No translator or tokenizer behavior has been measured.",
+        "Context can affect the force of ませんか."
+      ],
+      "control": {
+        "kind": "joint_nonmotion_invitation",
+        "contrast_ids": [
+          "jz149",
+          "jz150"
+        ],
+        "stable": [
+          "The sentence uses the polite negative-form ending ませんか。",
+          "The Japanese sentence proposes a shared activity without a time clause or purpose stem."
+        ],
+        "changed": [
+          "This example uses a nonmotion activity, お茶を飲む."
+        ],
+        "limits": [
+          "This is a short invitation example, not a matched pair with the standing controls.",
+          "The standing controls add other speech-act or content cues."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "INV-N5-03",
+      "level_approx": "N5",
+      "jp": "この犬は泳ぎませんか。",
+      "zh_hant": "這隻狗不游泳嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The sentence asks whether this dog does not swim.",
+        "The negative swimming proposition remains negative.",
+        "The nonhuman subject and factual predicate do not suggest an invitation or request."
+      ],
+      "semantic_unknowns": [
+        "No translator or tokenizer behavior has been measured.",
+        "Context can affect whether a negative question carries an expectation."
+      ],
+      "control": {
+        "kind": "genuine_negative_question",
+        "contrast_ids": [
+          "jz150",
+          "jz151"
+        ],
+        "stable": [
+          "The sentence uses the polite negative-form ending ませんか。",
+        "The dog is the explicit nonhuman subject, and the question concerns its swimming."
+        ],
+        "changed": [
+          "Unlike the invitation examples, this sentence asks about a negative factual proposition."
+        ],
+        "limits": [
+          "This example does not establish a universal reading for negative questions.",
+          "The standing invitation and request controls contain different context cues."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

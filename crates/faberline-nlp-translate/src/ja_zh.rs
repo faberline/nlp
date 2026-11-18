@@ -1822,6 +1822,27 @@ fn has_temporal_te_kara_tail(atoms: &[Atom]) -> bool {
         && atoms[i - 2].upos == Some(Upos::Verb)
 }
 
+// Japanese can write a full stop after the question particle. Only replace
+// the stop belonging to this clause. A quoted or embedded か cannot change
+// the punctuation of a later clause.
+fn direct_ka_before_period(clause: &[Atom], end: &Atom) -> bool {
+    let Some((ka, body)) = clause.split_last() else {
+        return false;
+    };
+    end.surface == "。"
+        && !ka.is_locked
+        && ka.surface == "か"
+        && ka.upos == Some(Upos::Part)
+        && ka.deprel == "discourse"
+        && ka.span.end_char == end.span.start_char
+        && ka.head.is_some()
+        && body.iter().any(|a| {
+            !a.is_locked
+                && a.doc_tok_idx == ka.head
+                && (matches!(a.upos, Some(Upos::Verb | Upos::Adj)) || a.deprel == "root")
+        })
+}
+
 fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<Atom> = Vec::new();
@@ -1908,7 +1929,12 @@ fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span)
                 "、" | "，" | "。" | "！" | "？" | "!" | "?" | "…" | "……"
             )
         {
-            flush_clause(&mut current, Some(a.surface.clone()), &mut segments);
+            let punctuation = if direct_ka_before_period(&current, a) {
+                "？".to_owned()
+            } else {
+                a.surface.clone()
+            };
+            flush_clause(&mut current, Some(punctuation), &mut segments);
             i += 1;
             continue;
         }
@@ -8902,19 +8928,20 @@ mod kana_noun_rule_tests {
         assert!(recover_split_kana_noun(&initial, 1).is_none());
     }
 
+    fn translate(source: &str) -> String {
+        analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap()
+        .target_text
+    }
+
     #[test]
     fn only_the_real_final_question_changes_the_clause_mood() {
-        let translate = |source| {
-            analyze_and_translate(
-                source,
-                &TranslateOptions::new(TargetVariant::ZhHant),
-                &TranslationGlossary::new(),
-                None,
-                Backend::Onnx,
-            )
-            .unwrap()
-            .target_text
-        };
         for source in [
             "姉はかばんを持っています。",
             "みかんを三つ買いました。",
@@ -8924,8 +8951,31 @@ mod kana_noun_rule_tests {
         }
         for source in ["姉はかばんを持っていますか。", "ここに座ってもいいですか。"]
         {
-            assert!(translate(source).ends_with("嗎。"), "{source}");
+            assert!(translate(source).ends_with("嗎？"), "{source}");
         }
+    }
+
+    #[test]
+    fn question_mark_belongs_to_the_terminated_clause() {
+        let quoted = translate("彼は「行きますか。」と言った。");
+        assert!(
+            quoted.contains("嗎？」") && quoted.ends_with('。'),
+            "{quoted}"
+        );
+        let outside = translate("彼は「行きます。」と聞きますか。");
+        assert!(
+            outside.contains("。」") && outside.ends_with("嗎？"),
+            "{outside}"
+        );
+        for source in [
+            "本か雑誌を買います。",
+            "誰が来るか分かりません。",
+            "「行きますか」と聞いた。",
+        ] {
+            assert!(!translate(source).contains('？'), "{source}");
+        }
+        assert!(translate("駅に行きますか！").ends_with("嗎！"));
+        assert!(translate("駅に行きますか？").ends_with("嗎？"));
     }
 }
 
@@ -9285,20 +9335,20 @@ mod motion_endpoint_tests {
         assert_eq!(translate("駅まで行きたいです。"), "想去車站。");
         assert_eq!(translate("公園まで行きたいです。"), "想去公園。");
         assert_eq!(translate("公園まで走りたいです。"), "想跑到公園。");
-        assert_eq!(translate("駅まで行きませんか。"), "不去車站嗎。");
-        assert_eq!(translate("公園まで行きませんか。"), "不去公園嗎。");
-        assert_eq!(translate("公園まで走りませんか。"), "不跑到公園嗎。");
+        assert_eq!(translate("駅まで行きませんか。"), "不去車站嗎？");
+        assert_eq!(translate("公園まで行きませんか。"), "不去公園嗎？");
+        assert_eq!(translate("公園まで走りませんか。"), "不跑到公園嗎？");
     }
 
     #[test]
     fn negative_questions_keep_nonhuman_subjects() {
         assert_eq!(
             translate("このバスは駅まで行きませんか。"),
-            "這輛公車不去車站嗎。"
+            "這輛公車不去車站嗎？"
         );
         assert_eq!(
             translate("この電車は駅まで行きませんか。"),
-            "這輛電車不去車站嗎。"
+            "這輛電車不去車站嗎？"
         );
     }
 
@@ -9484,8 +9534,8 @@ mod motion_endpoint_tests {
 
     #[test]
     fn near_negative_controls_keep_their_existing_meaning() {
-        assert_eq!(translate("駅まで行きませんでしたか。"), "到車站沒有去嗎。");
-        assert_eq!(translate("公園まで描きませんか。"), "連公園都不畫畫嗎。");
+        assert_eq!(translate("駅まで行きませんでしたか。"), "到車站沒有去嗎？");
+        assert_eq!(translate("公園まで描きませんか。"), "連公園都不畫畫嗎？");
         assert_eq!(translate("駅まで行かなかった。"), "到車站沒有去。");
     }
 
@@ -10944,19 +10994,19 @@ mod existence_rule_tests {
         for (source, expected) in [
             (
                 "彼が学生であれば、この本を読みますか。",
-                "如果他是學生，讀這本書嗎。",
+                "如果他是學生，讀這本書嗎？",
             ),
             (
                 "彼が学生であればこの本を読みませんか。",
-                "如果他是學生，不讀這本書嗎。",
+                "如果他是學生，不讀這本書嗎？",
             ),
             (
                 "彼が学生でなければ、この本を読みますか。",
-                "如果他不是學生，讀這本書嗎。",
+                "如果他不是學生，讀這本書嗎？",
             ),
             (
                 "彼が学生でなければこの本を読みませんか。",
-                "如果他不是學生，不讀這本書嗎。",
+                "如果他不是學生，不讀這本書嗎？",
             ),
         ] {
             assert_eq!(

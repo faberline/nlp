@@ -1,0 +1,204 @@
+{
+  "schema": "faberline.nlp.ja_zh.hajime_controls_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "reused_existing_controls": [
+    {
+      "file": "clock_boundary_lock_dev_v1.json",
+      "sha256": "6bc9fc2dd0560ae9305a4a183a727fe80d07a310bdd65a250255a674378742d3",
+      "ids": [
+        "CB-B16"
+      ]
+    }
+  ],
+  "reused_standing_controls": [
+    {
+      "id": "jz149",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    }
+  ],
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "HAJIME-N5-01",
+      "level_approx": "N5",
+      "jp": "先生は授業を始めます。",
+      "zh_hant": "老師開始上課。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "先生 is the participant who starts the class.",
+        "授業 is the direct object of the transitive verb 始める.",
+        "The sentence is an ordinary polite statement."
+      ],
+      "semantic_unknowns": [
+        "The sentence gives no time or place for the class.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "ordinary_transitive_statement",
+        "contrast_ids": [
+          "HAJIME-N5-02",
+          "CB-B16",
+          "jz149"
+        ],
+        "stable": [
+          "The paired rows keep the same participant, direct object and transitive verb.",
+          "Both paired rows end with the same full stop 。"
+        ],
+        "changed": [
+          "This row ends with 始めます。 and states that the class starts."
+        ],
+        "limits": [
+          "CB-B16 adds a clock-time cue, and jz149 uses a volitional proposal form; they are context controls, not minimal pairs."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "HAJIME-N5-02",
+      "level_approx": "N5",
+      "jp": "先生は授業を始めますか。",
+      "zh_hant": "老師開始上課嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "先生 is the participant who starts the class.",
+        "授業 is the direct object of the transitive verb 始める.",
+        "The sentence asks whether the class starts."
+      ],
+      "semantic_unknowns": [
+        "The sentence gives no time or place for the class.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "ordinary_transitive_question",
+        "contrast_ids": [
+          "HAJIME-N5-01",
+          "CB-B16",
+          "jz149"
+        ],
+        "stable": [
+          "The paired rows keep the same participant, direct object and transitive verb.",
+          "Both paired rows end with the same full stop 。"
+        ],
+        "changed": [
+          "This row adds only final か to the shared ordinary polite prefix."
+        ],
+        "limits": [
+          "The question can depend on context, but the source does not propose or request that the class start."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "HAJIME-N5-03",
+      "level_approx": "N5",
+      "jp": "本の始めは大切です。",
+      "zh_hant": "書的開頭很重要。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The surface string 始め appears in the noun phrase 本の始め.",
+        "The phrase refers to the opening part of a book."
+      ],
+      "semantic_unknowns": [
+        "This example identifies the phrase function in context; it does not claim a universal part-of-speech label for the spelling.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "lexical_beginning_nominal",
+        "contrast_ids": [
+          "HAJIME-N5-04"
+        ],
+        "stable": [
+          "The rows contrast beginning-related spellings in different, explicit contexts."
+        ],
+        "changed": [
+          "This row uses 始め as the nominal head in 本の始め."
+        ],
+        "limits": [
+          "This is a lexical near-control, not a minimal pair with HAJIME-N5-04."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "HAJIME-N5-04",
+      "level_approx": "N5",
+      "jp": "私は初めに名前を書きます。",
+      "zh_hant": "我先寫名字。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The surface string 初め appears in the phrase 初めに.",
+        "In this sentence, 初めに functions as a sequence adverbial meaning first.",
+        "The sentence says that the speaker writes a name first."
+      ],
+      "semantic_unknowns": [
+        "The phrase-function label does not claim that the token has a universal part of speech.",
+        "No translator or tokenizer behavior has been measured."
+      ],
+      "control": {
+        "kind": "lexical_beginning_adverbial",
+        "contrast_ids": [
+          "HAJIME-N5-03"
+        ],
+        "stable": [
+          "The rows contrast beginning-related spellings in different, explicit contexts."
+        ],
+        "changed": [
+          "This row uses 初めに as a sequence adverbial."
+        ],
+        "limits": [
+          "This is a lexical near-control, not a minimal pair with HAJIME-N5-03."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

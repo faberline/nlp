@@ -157,7 +157,10 @@ pub(crate) fn translate_ja_sentence(
     direct_quote: Option<&DirectQuotePlacement>,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
-    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    if target == TargetVariant::ZhHant {
+        normalize_drawer_extraction(&mut atoms, doc);
+    }
 
     if atoms.is_empty() {
         let masked = lock_table.mask_span(chars, sent_span);
@@ -1523,6 +1526,95 @@ fn normalized_sentence_atoms(
     let atoms = normalize_glossary_clocks(&atoms, chars, locks);
     let atoms = normalize_clock_atoms(&atoms);
     preserve_clock_adjacent_locks(&atoms, doc, sentence_idx)
+}
+
+// The inflection analyzer can read 引き出し as the stem of 引き出す. A linked
+// から source on an extraction predicate instead identifies the drawer noun.
+fn normalize_drawer_extraction(atoms: &mut [Atom], doc: &Document) {
+    for index in 0..atoms.len().saturating_sub(1) {
+        let drawer = &atoms[index];
+        let source = &atoms[index + 1];
+        if drawer.is_locked
+            || drawer.surface != "引き出し"
+            || drawer.deprel != "obl"
+            || drawer.head.is_none()
+            || source.is_locked
+            || source.surface != "から"
+            || source.upos != Some(Upos::Adp)
+            || source.deprel != "case"
+            || drawer.doc_tok_idx.is_none()
+            || source.head != drawer.doc_tok_idx
+        {
+            continue;
+        }
+        let predicate = drawer.head;
+        let drawer_id = drawer.doc_tok_idx;
+        let after_start = index + 2;
+        let clause_end = atoms[after_start..]
+            .iter()
+            .position(|atom| is_punct_atom(atom) || atom.is_locked)
+            .map_or(atoms.len(), |boundary| after_start + boundary);
+        let after = &atoms[after_start..clause_end];
+        if !after.iter().any(|atom| {
+            atom.doc_tok_idx == predicate
+                && atom.upos == Some(Upos::Verb)
+                && atom.lemma.as_deref() == Some("出す")
+        }) {
+            continue;
+        }
+        let recovered_object = if after
+            .iter()
+            .any(|atom| atom.head == predicate && atom.deprel == "obj")
+        {
+            None
+        } else {
+            // In object-first order, the analyzer may attach Nを to the
+            // apparent 引き出す stem. Recover it only next to the drawer
+            // and its established source relation.
+            let Some(object_idx) = index.checked_sub(2) else {
+                continue;
+            };
+            let object = &atoms[object_idx];
+            let wo = &atoms[object_idx + 1];
+            if object.is_locked
+                || !matches!(object.upos, Some(Upos::Noun | Upos::Propn))
+                || object.deprel != "obj"
+                || (object.head != predicate && object.head != drawer_id)
+                || wo.surface != "を"
+                || !dasu_case_link(object, wo)
+                || wo.span.end_char != drawer.span.start_char
+                || after
+                    .iter()
+                    .find(|atom| atom.upos == Some(Upos::Verb))
+                    .is_none_or(|atom| atom.doc_tok_idx != predicate)
+            {
+                continue;
+            }
+            Some(object_idx)
+        };
+        // Preserve an already grounded floor location when its apparent
+        // verbal governor becomes the drawer noun.
+        let clause_start = atoms[..index]
+            .iter()
+            .rposition(|atom| atom.is_locked || is_punct_atom(atom))
+            .map_or(0, |boundary| boundary + 1);
+        for floor in clause_start..index.saturating_sub(1) {
+            if atoms[floor].head == drawer_id
+                && atoms[floor + 1].surface == "で"
+                && building_floor_start(&atoms[clause_start..clause_end], floor - clause_start, doc)
+                    .is_some()
+            {
+                atoms[floor].head = predicate;
+            }
+        }
+        if let Some(object_idx) = recovered_object {
+            atoms[object_idx].head = predicate;
+        }
+        let drawer = &mut atoms[index];
+        drawer.surface = "抽屜".to_owned();
+        drawer.lemma = None;
+        drawer.upos = Some(Upos::Noun);
+    }
 }
 
 fn merge_literal_placeholders(atoms: Vec<Atom>) -> Vec<Atom> {
@@ -3429,6 +3521,12 @@ fn translate_clause_atoms(
         localize_proposal_arguments(&mut grouped, predicate, body, target);
     }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
+    if target == TargetVariant::ZhHant
+        && condition_tail.is_none()
+        && let Some(homework) = try_translate_homework_transfer(&bunsetsus, body, target)
+    {
+        return (homework, false);
+    }
     if let Some(tail) = condition_tail
         && let Some(complement) = bunsetsus.last_mut()
     {
@@ -3702,6 +3800,159 @@ fn nominal_conditional_tail(atoms: &[Atom]) -> Option<(&[Atom], [Atom; 2])> {
     predicate.lemma = Some(copula.to_owned());
     predicate.upos = Some(Upos::Aux);
     Some((body, [predicate, ba.clone()]))
+}
+
+enum ClassroomRole {
+    Student,
+    Teacher,
+}
+
+fn classroom_role(modifiers: &[Atom], atom: &Atom) -> Option<(ClassroomRole, &'static str)> {
+    if atom.upos != Some(Upos::Noun) {
+        return None;
+    }
+    let name = atom.lemma.as_deref().unwrap_or(&atom.surface);
+    match (modifiers, name) {
+        ([], "生徒" | "学生") => Some((ClassroomRole::Student, "學生")),
+        ([], "先生" | "教師") => Some((ClassroomRole::Teacher, "老師")),
+        ([], "大学生") => Some((ClassroomRole::Student, "大學生")),
+        ([school], "生")
+            if school.upos == Some(Upos::Noun)
+                && school.surface == "大学"
+                && school.deprel == "compound"
+                && school.head == atom.doc_tok_idx
+                && school.span.end_char == atom.span.start_char =>
+        {
+            Some((ClassroomRole::Student, "大學生"))
+        }
+        _ => None,
+    }
+}
+
+fn dasu_case_link(noun: &Atom, particle: &Atom) -> bool {
+    !particle.is_locked
+        && particle.upos == Some(Upos::Adp)
+        && particle.deprel == "case"
+        && noun.doc_tok_idx.is_some()
+        && particle.head == noun.doc_tok_idx
+        && noun.span.end_char == particle.span.start_char
+}
+
+fn try_translate_homework_transfer(
+    bunsetsus: &[Bunsetsu],
+    source: &[Atom],
+    target: TargetVariant,
+) -> Option<String> {
+    // Merged nominal modifiers may already contain rendered atoms. Guard
+    // protected source content separately, before inspecting those groups.
+    if source.iter().any(|atom| atom.is_locked) {
+        return None;
+    }
+    let mut predicates = bunsetsus
+        .iter()
+        .filter(|bunsetsu| bunsetsu.role == BunsetsuRole::Predicate);
+    let predicate = predicates.next()?;
+    let (verb, endings) = predicate.atoms.split_first()?;
+    if predicates.next().is_some()
+        || verb.upos != Some(Upos::Verb)
+        || verb.lemma.as_deref().unwrap_or(&verb.surface) != "出す"
+        || !endings.iter().all(|atom| {
+            matches!(
+                atom.surface.as_str(),
+                "ます"
+                    | "まし"
+                    | "ました"
+                    | "た"
+                    | "ない"
+                    | "なかっ"
+                    | "なかった"
+                    | "ません"
+                    | "ませ"
+                    | "ん"
+                    | "でし"
+                    | "でした"
+            )
+        })
+    {
+        return None;
+    }
+    let head = Some(verb.doc_tok_idx?);
+    let mut subject = None;
+    let mut recipient = None;
+    let mut homework = None;
+    let mut adjuncts = Vec::new();
+    for bunsetsu in bunsetsus {
+        if bunsetsu.sconj_tail.is_some()
+            || bunsetsu.sfp_tail.is_some()
+            || (bunsetsu.role != BunsetsuRole::Obj
+                && bunsetsu.atoms.iter().any(|atom| atom.is_locked))
+        {
+            return None;
+        }
+        if bunsetsu.role == BunsetsuRole::Predicate || bunsetsu.role == BunsetsuRole::Punct {
+            continue;
+        }
+        if is_event_daypart(bunsetsu, bunsetsus, source)
+            || (matches!(bunsetsu.role, BunsetsuRole::Adv | BunsetsuRole::Other)
+                && bunsetsu.case_particle.is_none()
+                && bunsetsu
+                    .atoms
+                    .iter()
+                    .any(|atom| atom.head == head && atom.deprel == "advmod"))
+        {
+            adjuncts.push(render_bunsetsu_np(bunsetsu, target));
+            continue;
+        }
+        let [modifiers @ .., noun, marker] = bunsetsu.atoms.as_slice() else {
+            return None;
+        };
+        if noun.head != head || !dasu_case_link(noun, marker) {
+            return None;
+        }
+        match (noun.deprel.as_str(), marker.surface.as_str()) {
+            ("nsubj", "は" | "が") if subject.is_none() => {
+                subject = Some(classroom_role(modifiers, noun)?);
+            }
+            ("obl" | "iobj", "に") if recipient.is_none() => {
+                recipient = Some(classroom_role(modifiers, noun)?);
+            }
+            ("obl", "で")
+                if noun.surface == "教室"
+                    || is_building_floor(noun)
+                    || is_existing_spatial_head(noun)
+                    || faberline_nlp::lexicon::lookup_ja(&noun.surface)
+                        .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Location)) =>
+            {
+                adjuncts.push(render_bunsetsu_obl(bunsetsu, target));
+            }
+            ("obj", "を")
+                if noun.upos == Some(Upos::Noun)
+                    && noun.surface == "宿題"
+                    && homework.is_none() =>
+            {
+                homework = Some(render_bunsetsu_np(bunsetsu, target));
+            }
+            _ => return None,
+        }
+    }
+    let ((subject_role, subject), (recipient_role, recipient)) = (subject?, recipient?);
+    let homework = homework?;
+    let action = match (subject_role, recipient_role) {
+        (ClassroomRole::Student, ClassroomRole::Teacher) => format!("把{homework}交給{recipient}"),
+        (ClassroomRole::Teacher, ClassroomRole::Student) => format!("出{homework}給{recipient}"),
+        _ => return None,
+    };
+    let (before_verb, verb, after_verb, passive) =
+        synthesize_predicate_complex(std::slice::from_ref(predicate), true, target, None);
+    if verb != "拿出" || passive {
+        return None;
+    }
+    let mut parts = vec![subject.to_owned()];
+    parts.extend(adjuncts);
+    parts.extend(before_verb);
+    parts.push(action);
+    parts.extend(after_verb);
+    Some(join_zh_parts(&parts))
 }
 
 fn core_non_punct(atoms: &[Atom]) -> &[Atom] {

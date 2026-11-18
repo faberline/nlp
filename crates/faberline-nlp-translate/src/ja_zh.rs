@@ -3089,22 +3089,103 @@ fn nominal_receiving_request_position(
     }
 }
 
-fn nominal_receiving_amount(atom: &Atom, predicate: usize) -> Option<&str> {
-    if atom.head != Some(predicate) || atom.deprel != "advmod" || atom.upos != Some(Upos::Adv) {
-        return None;
-    }
-    match atom.surface.as_str() {
-        "少し" | "ちょっと" => lookup_curated_ja_word(&atom.surface),
-        surface => {
-            // A counted cup can stand after を. Bare いっぱい also means “full”.
-            let count = surface.strip_suffix('杯')?;
-            (!count.is_empty()
-                && count.chars().all(|ch| {
-                    matches!(ch, '0'..='9' | '０'..='９' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十')
-                }))
-            .then_some(surface)
+#[derive(Clone, Copy)]
+enum NominalReceivingAmount<'a> {
+    Approximate(&'a str),
+    Count { numeral: &'a str, unit: &'a str },
+}
+
+fn nominal_receiving_amount(
+    atoms: &[Atom],
+    predicate: usize,
+) -> Option<NominalReceivingAmount<'_>> {
+    let (numeral, unit) = match atoms {
+        [atom]
+            if atom.head == Some(predicate)
+                && atom.deprel == "advmod"
+                && atom.upos == Some(Upos::Adv) =>
+        {
+            if matches!(atom.surface.as_str(), "少し" | "ちょっと") {
+                return lookup_curated_ja_word(&atom.surface)
+                    .map(NominalReceivingAmount::Approximate);
+            }
+            // The analyzer may give an undivided counter such as 一杯.
+            let (index, _) = atom.surface.char_indices().next_back()?;
+            atom.surface.split_at(index)
         }
+        [numeral, unit]
+            if numeral.upos == Some(Upos::Num)
+                && numeral.deprel == "nummod"
+                && numeral.head == Some(unit.doc_tok_idx?)
+                && numeral.span.end_char == unit.span.start_char
+                && unit.upos == Some(Upos::Noun)
+                && unit.deprel == "obl"
+                && unit.head == Some(predicate) =>
+        {
+            (numeral.surface.as_str(), unit.surface.as_str())
+        }
+        _ => return None,
+    };
+    let explicit_number = !numeral.is_empty()
+        && (numeral
+            .chars()
+            .all(|ch| matches!(ch, '0'..='9' | '０'..='９'))
+            || numeral
+                .chars()
+                .all(|ch| "〇零一二三四五六七八九十百千万萬億".contains(ch)));
+    explicit_number.then_some(NominalReceivingAmount::Count { numeral, unit })
+}
+
+fn nominal_receiving_counter(unit: &str, noun: &Atom) -> Option<&'static str> {
+    let noun = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
+    Some(match unit {
+        "枚" => match noun.as_str() {
+            "紙" | "地圖" | "照片" | "票" | "海報" | "明信片" | "表格" => "張",
+            _ => "枚",
+        },
+        "冊" => "本",
+        "個" => "個",
+        "台" => match noun.as_str() {
+            "車" | "公車" | "汽車" | "卡車" | "機車" | "自行車" | "腳踏車" => "輛",
+            _ => "台",
+        },
+        "件" => "件",
+        "匹" => "隻",
+        "杯" => "杯",
+        // 本 is a shape counter. The target depends on the object itself.
+        "本" => match noun.as_str() {
+            "筆" | "鉛筆" | "鋼筆" | "原子筆" => "支",
+            "水" | "酒" | "啤酒" | "果汁" => "瓶",
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+
+fn render_nominal_receiving_count(
+    object: &mut Bunsetsu,
+    noun: &Atom,
+    numeral: &str,
+    unit: &str,
+) -> Option<String> {
+    let counter = nominal_receiving_counter(unit, noun)?;
+    let mut quantity = String::new();
+    if object.atoms.iter().any(|atom| atom.upos == Some(Upos::Det)) {
+        // The explicit counter takes the place of the nominal renderer's
+        // default classifier after a demonstrative attached to the object.
+        let [det, head, _] = object.atoms.as_slice() else {
+            return None;
+        };
+        quantity.push(attached_demonstrative(det, head)?);
+        object.atoms.remove(0);
     }
+    if numeral == "二" {
+        quantity.push('兩');
+    } else {
+        quantity.push_str(&translate_single_ja_term(numeral, None, Some(Upos::Num)));
+    }
+    quantity.push_str(counter);
+    Some(quantity)
 }
 
 fn try_translate_nominal_receiving_request(
@@ -3155,15 +3236,15 @@ fn try_translate_nominal_receiving_request(
     }
 
     let (phrase, amount) = if let [first, rest @ ..] = phrase
-        && let Some(amount) = nominal_receiving_amount(first, predicate)
+        && let Some(amount) = nominal_receiving_amount(std::slice::from_ref(first), predicate)
     {
         (rest, Some(amount))
     } else {
         (phrase, None)
     };
     let amount = match (after, amount) {
-        ([], amount) => amount.unwrap_or_default(),
-        ([measure], None) => nominal_receiving_amount(measure, predicate)?,
+        ([], amount) => amount,
+        (measures, None) => Some(nominal_receiving_amount(measures, predicate)?),
         _ => return None,
     };
 
@@ -3183,19 +3264,33 @@ fn try_translate_nominal_receiving_request(
         return None;
     }
     let normalized = normalize_ja_atoms(&apply_phrase_matches(phrase));
-    let object = classify_bunsetsu(normalized, doc, sentence_idx);
+    let mut object = classify_bunsetsu(normalized, doc, sentence_idx);
     if object.role != BunsetsuRole::Obj || object.case_particle.as_deref() != Some("を") {
         return None;
     }
+    let amount_text = match amount {
+        Some(NominalReceivingAmount::Count { numeral, unit }) => {
+            render_nominal_receiving_count(&mut object, noun, numeral, unit)?
+        }
+        Some(NominalReceivingAmount::Approximate(text)) => text.to_owned(),
+        None => String::new(),
+    };
     let object = render_bunsetsu_np(&object, TargetVariant::ZhHant);
     if object.is_empty() || has_kana_no_hangul(&object) {
         return None;
     }
     if object == "時間" {
-        let quantity = if amount.is_empty() { "的" } else { amount };
+        if matches!(amount, Some(NominalReceivingAmount::Count { .. })) {
+            return None;
+        }
+        let quantity = if amount_text.is_empty() {
+            "的"
+        } else {
+            &amount_text
+        };
         return Some(format!("可以占用您{quantity}{object}嗎"));
     }
-    Some(format!("可以給我{amount}{object}嗎"))
+    Some(format!("可以給我{amount_text}{object}嗎"))
 }
 
 /// Core clause translator:

@@ -1613,6 +1613,12 @@ fn nominal_receiving_request_keeps_object_time_quantity_and_question() {
             "明天午後，可以占用您一點時間嗎？",
         ),
         ("お水を一杯いただけませんか。", "可以給我一杯水嗎？"),
+        ("地図を一枚いただけませんか。", "可以給我一張地圖嗎？"),
+        ("この紙を一枚いただけませんか。", "可以給我這一張紙嗎？"),
+        (
+            "明日の午後、地図を一枚いただけませんか。",
+            "明天午後，可以給我一張地圖嗎？",
+        ),
     ] {
         let doc = analyze_and_translate(
             source,

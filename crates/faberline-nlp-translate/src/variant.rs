@@ -1482,6 +1482,69 @@ mod hinted_japanese_term_tests {
     }
 
     #[test]
+    fn structured_japanese_words_report_the_language_and_translation_track() {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        use crate::TranslationTrack::{Passthrough, VariantRule};
+
+        for (source, hint, expected, lang, track) in [
+            (
+                "## 新聞",
+                Some(TargetVariant::Ja),
+                "## 報紙",
+                Lang::Ja,
+                VariantRule,
+            ),
+            (
+                "- 手紙",
+                Some(TargetVariant::Ja),
+                "- 信",
+                Lang::Ja,
+                VariantRule,
+            ),
+            (
+                "## 新聞\n- 手紙",
+                Some(TargetVariant::Ja),
+                "## 報紙\n- 信",
+                Lang::Ja,
+                VariantRule,
+            ),
+            ("## 新聞", None, "## 新聞", Lang::Und, Passthrough),
+            (
+                "## 世界",
+                Some(TargetVariant::Ja),
+                "## 世界",
+                Lang::Ja,
+                VariantRule,
+            ),
+            (
+                "- 手紙龘",
+                Some(TargetVariant::Ja),
+                "- 手紙龘",
+                Lang::Und,
+                Passthrough,
+            ),
+            (
+                "```\n新聞\n```",
+                Some(TargetVariant::Ja),
+                "```\n新聞\n```",
+                Lang::Und,
+                Passthrough,
+            ),
+        ] {
+            options.source_hint = hint;
+            let doc =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(
+                (doc.target_text.as_str(), doc.source_lang, doc.track),
+                (expected, lang, track),
+                "{source}"
+            );
+            assert!(doc.sentences.is_empty(), "{source}");
+        }
+    }
+
+    #[test]
     fn auto_detection_chinese_and_unknown_whole_words_keep_their_reading() {
         let glossary = TranslationGlossary::new();
         for (source, hint, expected) in [

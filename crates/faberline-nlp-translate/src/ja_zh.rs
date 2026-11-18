@@ -8734,8 +8734,7 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
                 "資料" | "文件" | "報告" | "報紙" => "份",
                 "商店" | "餐廳" | "公司" => "家",
                 "寺" | "寺廟" | "橋" => "座",
-                "藥" => "種",
-                "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" => "個",
+                "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
                 _ if is_demonstrative_person_noun(noun) => "個",
                 // With no established unit or count reading, keep the deictic
                 // without guessing an amount, e.g. 這水 rather than a cup of water.
@@ -9977,6 +9976,27 @@ mod existence_rule_tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn pointing_at_medicine_does_not_supply_a_kind_or_dosage() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("その薬は床に落ちました。", "那個藥掉落到地板了。"),
+            ("その薬を拾います。", "拾起那個藥。"),
+            ("私はこの薬を飲みます。", "我喝這個藥。"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let explicit = translate("その薬の種類を調べます。", &glossary);
+        assert!(
+            explicit.target_text.contains("那個藥的種類"),
+            "{explicit:?}"
+        );
     }
 
     #[test]

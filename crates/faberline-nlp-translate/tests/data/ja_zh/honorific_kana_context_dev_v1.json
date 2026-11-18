@@ -1,0 +1,84 @@
+{
+  "schema": "faberline.nlp.ja_zh.honorific_kana_context_dev.v1",
+  "version": 1,
+  "status": "development-visible-proposal",
+  "source_main": "adf9f9b1a4a2c873f352fec37e1444c742e5587b",
+  "source_tree": "54ddbadfbf4cc9cfcaec45bd076ef1a7b118a7b7",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "author": "Codex dev_semantics",
+    "issue": 196,
+    "source_url": "https://github.com/faberline/nlp/issues/196"
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "HKC-N5-01",
+      "level_approx": "N5",
+      "jp": "「ことり」は、私の友だちのあだ名です。ことりさんは、ここにいます。",
+      "zh_hant": "「Kotori」是我朋友的綽號。Kotori 在這裡。",
+      "allowed_variants": ["「ことり」是我朋友的綽號。ことり在這裡。"],
+      "control": {
+        "contrast_id": "HKC-N5-02",
+        "referent": "person_nickname"
+      },
+      "semantic_checks": [
+        "保留引號，表明「ことり」是說話者朋友的綽號。",
+        "末句沿用同一個綽號，保留朋友在這裡。",
+        "保留原假名或中性轉寫。不要增添漢字姓名、性別或職稱。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代朋友的性別、姓名寫法或職稱。",
+        "「ここ」的具體地點未知。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    },
+    {
+      "id": "HKC-N5-02",
+      "level_approx": "N5",
+      "jp": "動物のお話です。「ことり」は、小さな鳥のことです。ことりさんは、ここにいます。",
+      "zh_hant": "這是一則動物故事。「小鳥」指的是體型小的鳥。小鳥在這裡。",
+      "allowed_variants": [],
+      "control": {
+        "contrast_id": "HKC-N5-01",
+        "referent": "ordinary_small_bird"
+      },
+      "semantic_checks": [
+        "保留動物故事的背景，並用引號標出正在說明的「小鳥」。",
+        "「小鳥」是普通名詞。末句仍指這隻鳥，並保留牠在這裡。",
+        "不要增添人名、鳥名、性別或職稱。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代小鳥的種類或性別。",
+        "「ここ」的具體地點未知。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT"}
+    }
+  ]
+}

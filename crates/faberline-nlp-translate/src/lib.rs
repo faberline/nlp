@@ -48,7 +48,7 @@ pub use crate::schema::{
     TranslateOptions, TranslateUnknown, TranslateUnknownKind, TranslatedDocument,
     TranslatedParagraph, TranslatedSentence, TranslationGlossary, TranslationTrack, sha256_hex,
 };
-use crate::variant::{convert_fragment_variant, convert_sentence_variant};
+use crate::variant::{HintedJapaneseTerm, convert_fragment_variant, convert_sentence_variant};
 
 /// Reusable loaded Seq2Seq translation model + tokenizer bundle for multi-document / batch runs.
 pub struct LoadedTranslateModel {
@@ -246,6 +246,7 @@ pub fn translate_document(
     let mut skip_single_leading_newline = false;
 
     let mut out_sentences: Vec<TranslatedSentence> = Vec::with_capacity(sent_count);
+    let mut japanese_term_blocks = 0;
     let mut out_clauses: Vec<ClauseAlignment> = Vec::new();
     let mut out_glossary_hits: Vec<GlossaryHit> = Vec::new();
     let mut out_opaque_records: Vec<OpaqueSpanRecord> =
@@ -303,7 +304,7 @@ pub fn translate_document(
                     }
                     OpaquePolicy::StructuralUnwrap => {
                         let start = target_char_pos;
-                        let (rendered, local_hits, local_unks) = translate_structural_block(
+                        let block = translate_structural_block(
                             op,
                             &raw_slice,
                             &chars,
@@ -311,14 +312,15 @@ pub fn translate_document(
                             &compiled_glossary,
                             seq2seq,
                         );
-                        let r_chars = rendered.chars().count();
-                        for mut h in local_hits {
+                        japanese_term_blocks += usize::from(block.used_japanese_term);
+                        let r_chars = block.text.chars().count();
+                        for mut h in block.hits {
                             h.target_span.start_char += start;
                             h.target_span.end_char += start;
                             out_glossary_hits.push(h);
                         }
-                        out_unknown.extend(local_unks);
-                        target_text.push_str(&rendered);
+                        out_unknown.extend(block.unknowns);
+                        target_text.push_str(&block.text);
                         target_char_pos += r_chars;
                         out_opaque_records.push(OpaqueSpanRecord {
                             kind: op.kind,
@@ -336,6 +338,16 @@ pub fn translate_document(
                 let sent = &doc.segmentation.sentences[si];
                 let sent_inline_opaques = sentence_opaques(&inline_opaques, sent.span);
 
+                let hinted_term = if sent.lang == Lang::Zh && seq2seq.is_none() {
+                    HintedJapaneseTerm::lookup(
+                        &chars,
+                        sent.span,
+                        options.target,
+                        options.source_hint,
+                    )
+                } else {
+                    None
+                };
                 let outcome = translate_single_sentence(
                     si,
                     &chars,
@@ -343,6 +355,7 @@ pub fn translate_document(
                     narrative,
                     &tokens_by_sent[si],
                     &sent_inline_opaques,
+                    hinted_term,
                     options,
                     glossary,
                     &compiled_glossary,
@@ -388,7 +401,11 @@ pub fn translate_document(
                 out_sentences.push(TranslatedSentence {
                     sentence: si,
                     paragraph: sent.paragraph,
-                    source_lang: sent.lang,
+                    source_lang: if hinted_term.is_some() {
+                        Lang::Ja
+                    } else {
+                        sent.lang
+                    },
                     track: outcome.track,
                     source_span: sent.span,
                     target_span: Span {
@@ -459,8 +476,13 @@ pub fn translate_document(
     out_opaque_records.sort_by_key(|o| (o.source_span.start_char, o.source_span.end_char));
     out_unknown.sort_by_key(|u| (u.source_span.start_char, u.source_span.end_char, u.kind));
 
-    let doc_lang = dominant_doc_lang(doc);
-    let doc_track = summarize_doc_track(&out_sentences, options.target, doc_lang);
+    let doc_lang = dominant_doc_lang(&out_sentences, japanese_term_blocks);
+    let doc_track = summarize_doc_track(
+        &out_sentences,
+        options.target,
+        doc_lang,
+        japanese_term_blocks > 0,
+    );
     let target_sha256 = sha256_hex(&target_text);
 
     debug_assert_eq!(target_char_pos, target_text.chars().count());
@@ -706,6 +728,7 @@ fn translate_single_sentence(
     #[cfg(not(feature = "narrative"))] narrative: Option<&()>,
     sent_tokens: &[&Token],
     sent_inline_opaques: &[&Opaque],
+    hinted_term: Option<HintedJapaneseTerm>,
     options: &TranslateOptions,
     glossary: &TranslationGlossary,
     compiled_glossary: &CompiledGlossary,
@@ -789,8 +812,8 @@ fn translate_single_sentence(
             sent_span,
             sent_tokens,
             &lock_table,
-            options.target,
-            options.source_hint,
+            options,
+            hinted_term,
         );
         let report = lock_table.restore(&converted);
         let clause_alignments = build_same_family_clause_alignments(
@@ -800,6 +823,7 @@ fn translate_single_sentence(
             sent_tokens,
             &lock_table,
             options,
+            hinted_term,
         );
         let mut outcome = finalize_sentence_outcome(
             sentence_idx,
@@ -965,14 +989,7 @@ fn translate_single_sentence(
     // emit `TranslateUnknownKind::NoModel`.
     let fallback_masked =
         if sent.lang == Lang::Mixed && (options.target.is_zh() || options.target.is_en()) {
-            convert_sentence_with_locks(
-                chars,
-                sent_span,
-                sent_tokens,
-                &lock_table,
-                options.target,
-                options.source_hint,
-            )
+            convert_sentence_with_locks(chars, sent_span, sent_tokens, &lock_table, options, None)
         } else {
             lock_table.mask_span(chars, sent_span)
         };
@@ -1141,11 +1158,18 @@ fn convert_sentence_with_locks(
     sent_span: Span,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
-    target: TargetVariant,
-    source_hint: Option<TargetVariant>,
+    options: &TranslateOptions,
+    hinted_term: Option<HintedJapaneseTerm>,
 ) -> String {
+    let convert = |span, tokens: &[&Token]| {
+        hinted_term
+            .and_then(|term| term.render(chars, span))
+            .unwrap_or_else(|| {
+                convert_sentence_variant(chars, span, tokens, options.target, options.source_hint)
+            })
+    };
     if lock_table.is_empty() {
-        return convert_sentence_variant(chars, sent_span, sent_tokens, target, source_hint);
+        return convert(sent_span, sent_tokens);
     }
 
     let mut out = String::new();
@@ -1168,13 +1192,7 @@ fn convert_sentence_with_locks(
                 .copied()
                 .filter(|t| t.span.start_char >= cursor && t.span.end_char <= s)
                 .collect();
-            out.push_str(&convert_sentence_variant(
-                chars,
-                sub_span,
-                &sub_tokens,
-                target,
-                source_hint,
-            ));
+            out.push_str(&convert(sub_span, &sub_tokens));
         }
         out.push_str(&lock.placeholder);
         cursor = e;
@@ -1189,13 +1207,7 @@ fn convert_sentence_with_locks(
             .copied()
             .filter(|t| t.span.start_char >= cursor && t.span.end_char <= sent_span.end_char)
             .collect();
-        out.push_str(&convert_sentence_variant(
-            chars,
-            sub_span,
-            &sub_tokens,
-            target,
-            source_hint,
-        ));
+        out.push_str(&convert(sub_span, &sub_tokens));
     }
     out
 }
@@ -1207,6 +1219,7 @@ fn build_same_family_clause_alignments(
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
     options: &TranslateOptions,
+    hinted_term: Option<HintedJapaneseTerm>,
 ) -> Vec<ClauseAlignment> {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let clauses: Vec<(usize, &faberline_nlp::doc::Clause)> = doc
@@ -1241,8 +1254,8 @@ fn build_same_family_clause_alignments(
             clause.span,
             &c_tokens,
             lock_table,
-            options.target,
-            options.source_hint,
+            options,
+            hinted_term,
         );
         let restored_c = restore_existing_only(lock_table, &masked_c);
         let mut final_c = restored_c;
@@ -1275,6 +1288,14 @@ fn restore_existing_only(lock_table: &SpanLockTable, text: &str) -> String {
     out
 }
 
+#[derive(Default)]
+struct TranslatedBlock {
+    text: String,
+    hits: Vec<GlossaryHit>,
+    unknowns: Vec<TranslateUnknown>,
+    used_japanese_term: bool,
+}
+
 fn translate_structural_block(
     op: &Opaque,
     raw_slice: &str,
@@ -1282,17 +1303,16 @@ fn translate_structural_block(
     options: &TranslateOptions,
     compiled_glossary: &CompiledGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
-) -> (String, Vec<GlossaryHit>, Vec<TranslateUnknown>) {
+) -> TranslatedBlock {
     match op.kind {
         faberline_nlp::doc::OpaqueKind::Heading => {
             let unwrapped = unwrap_heading(raw_slice);
             let body = unwrapped.body();
             if body.is_empty() {
-                return (
-                    render_heading(&unwrapped, "", options.target),
-                    Vec::new(),
-                    Vec::new(),
-                );
+                return TranslatedBlock {
+                    text: render_heading(&unwrapped, "", options.target),
+                    ..Default::default()
+                };
             }
             let body_offset = raw_slice
                 .find(body)
@@ -1302,7 +1322,7 @@ fn translate_structural_block(
                 start_char: op.span.start_char + body_offset,
                 end_char: op.span.start_char + body_offset + body.chars().count(),
             };
-            let (tr_body, mut hits, unks) = translate_inline_fragment(
+            let mut fragment = translate_inline_fragment(
                 body,
                 body_span,
                 chars,
@@ -1310,31 +1330,35 @@ fn translate_structural_block(
                 compiled_glossary,
                 seq2seq,
             );
-            let full = render_heading(&unwrapped, &tr_body, options.target);
-            let prefix_chars = if !tr_body.trim().is_empty() {
-                full.rfind(tr_body.trim())
+            let full = render_heading(&unwrapped, &fragment.text, options.target);
+            let prefix_chars = if !fragment.text.trim().is_empty() {
+                full.rfind(fragment.text.trim())
                     .map(|b| full[..b].chars().count())
                     .unwrap_or(0)
             } else {
                 0
             };
-            for h in &mut hits {
+            for h in &mut fragment.hits {
                 h.target_span.start_char += prefix_chars;
                 h.target_span.end_char += prefix_chars;
             }
-            (full, hits, unks)
+            fragment.text = full;
+            fragment
         }
         faberline_nlp::doc::OpaqueKind::ListItem => {
             let (prefix, body) = unwrap_list_item(raw_slice);
             if body.trim().is_empty() {
-                return (raw_slice.to_owned(), Vec::new(), Vec::new());
+                return TranslatedBlock {
+                    text: raw_slice.to_owned(),
+                    ..Default::default()
+                };
             }
             let prefix_chars = prefix.chars().count();
             let body_span = Span {
                 start_char: op.span.start_char + prefix_chars,
                 end_char: op.span.end_char,
             };
-            let (tr_body, mut hits, unks) = translate_inline_fragment(
+            let mut fragment = translate_inline_fragment(
                 body,
                 body_span,
                 chars,
@@ -1342,13 +1366,17 @@ fn translate_structural_block(
                 compiled_glossary,
                 seq2seq,
             );
-            for h in &mut hits {
+            for h in &mut fragment.hits {
                 h.target_span.start_char += prefix_chars;
                 h.target_span.end_char += prefix_chars;
             }
-            (format!("{prefix}{tr_body}"), hits, unks)
+            fragment.text.insert_str(0, prefix);
+            fragment
         }
-        _ => (raw_slice.to_owned(), Vec::new(), Vec::new()),
+        _ => TranslatedBlock {
+            text: raw_slice.to_owned(),
+            ..Default::default()
+        },
     }
 }
 
@@ -1359,7 +1387,7 @@ fn translate_inline_fragment(
     options: &TranslateOptions,
     compiled_glossary: &CompiledGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
-) -> (String, Vec<GlossaryHit>, Vec<TranslateUnknown>) {
+) -> TranslatedBlock {
     // Detect inline opaques (`code`, `formula`, `url`, `emoji`, `citation`) and emails inside
     // unwrapped heading / list-item bodies so backticks, `$...$`, and URLs remain untouched.
     let sub_doc = analyze_document(body, &DocOptions::default());
@@ -1406,6 +1434,18 @@ fn translate_inline_fragment(
     let ascii_only = body.is_ascii();
     let mut unks = Vec::new();
 
+    if seq2seq.is_none()
+        && lock_table.is_empty()
+        && let Some(term) =
+            HintedJapaneseTerm::lookup(chars, body_span, options.target, options.source_hint)
+        && let Some(rendered) = term.render(chars, body_span)
+    {
+        return TranslatedBlock {
+            text: rendered,
+            used_japanese_term: true,
+            ..Default::default()
+        };
+    }
     let converted =
         if seq2seq.is_none() && options.target.is_zh() && ja_zh::has_kana_no_hangul(body) {
             ja_zh::translate_ja_fragment(&masked, options.target)
@@ -1450,7 +1490,12 @@ fn translate_inline_fragment(
             _ => None,
         })
         .collect();
-    (report.text, hits, unks)
+    TranslatedBlock {
+        text: report.text,
+        hits,
+        unknowns: unks,
+        used_japanese_term: false,
+    }
 }
 
 fn convert_fragment_preserving_placeholders(masked: &str, target: TargetVariant) -> String {
@@ -1507,10 +1552,11 @@ fn localize_window_sep(sep: &str, target: TargetVariant) -> String {
     }
 }
 
-fn dominant_doc_lang(doc: &Document) -> Lang {
+fn dominant_doc_lang(sentences: &[TranslatedSentence], japanese_term_blocks: usize) -> Lang {
     let mut counts = [0usize; 6];
-    for s in &doc.segmentation.sentences {
-        match s.lang {
+    counts[2] = japanese_term_blocks;
+    for s in sentences {
+        match s.source_lang {
             Lang::Zh => counts[0] += 1,
             Lang::En => counts[1] += 1,
             Lang::Ja => counts[2] += 1,
@@ -1539,16 +1585,18 @@ fn summarize_doc_track(
     sentences: &[TranslatedSentence],
     target: TargetVariant,
     doc_lang: Lang,
+    has_japanese_term_block: bool,
 ) -> TranslationTrack {
-    if sentences.is_empty() {
+    if sentences.is_empty() && !has_japanese_term_block {
         if (doc_lang == Lang::Zh && target.is_zh()) || (doc_lang == Lang::En && target.is_en()) {
             return TranslationTrack::VariantRule;
         }
         return TranslationTrack::Passthrough;
     }
-    let has_var = sentences
-        .iter()
-        .any(|s| s.track == TranslationTrack::VariantRule);
+    let has_var = has_japanese_term_block
+        || sentences
+            .iter()
+            .any(|s| s.track == TranslationTrack::VariantRule);
     let has_nmt = sentences
         .iter()
         .any(|s| s.track == TranslationTrack::NeuralSeq2Seq);

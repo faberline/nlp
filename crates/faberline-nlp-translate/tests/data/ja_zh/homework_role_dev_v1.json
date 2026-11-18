@@ -1,0 +1,174 @@
+{
+  "schema": "faberline.nlp.ja_zh.homework_role_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "reused_existing_controls": [],
+  "reused_standing_controls": [
+    {
+      "id": "jz031",
+      "source_name": "issue86_standing_dev_export_059c10a",
+      "source_sha256": "31776ea83cc2046ef84f905f5ba2bdfee7261aaa68124cc3405cdad05441555d"
+    }
+  ],
+  "items": [
+    {
+      "id": "HWR-N5-01",
+      "level_approx": "N5",
+      "jp": "生徒は先生に宿題を出します。",
+      "zh_hant": "學生把作業交給老師。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "保留學生是交出作業的人，老師是接收者。",
+        "本句的「宿題を出す」表示學生把作業交給老師。",
+        "不要翻成老師布置作業，也不要加入老師已經批改的事實。"
+      ],
+      "semantic_unknowns": [
+        "實際引擎如何分析「宿題を出す」仍未知。",
+        "這些參考譯文尚待獨立自然度審查。"
+      ],
+      "control": {
+        "kind": "learner_submits_homework",
+        "contrast_ids": [
+          "HWR-N5-02",
+          "HWR-N5-03",
+          "jz031"
+        ],
+        "stable": [
+          "HWR-N5-01 和 HWR-N5-02 都是肯定的禮貌非過去式陳述句。",
+          "兩句都使用完全相同的「宿題を出します」。",
+          "兩句的主語和接受者只交換「生徒」與「先生」。"
+        ],
+        "changed": [
+          "本句以「生徒」為主語，以「先生」為接受者。",
+          "本句表示學生交出作業。"
+        ],
+        "limits": [
+          "角色方向由句中的主語和「に」名詞組共同提供。",
+          "本句和 HWR-N5-02 只構成這組明示角色的對照，不代表所有「出す」用法。",
+          "jz031 只錨定「宿題」這個名詞。它沒有「出す」角色。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "HWR-N5-02",
+      "level_approx": "N5",
+      "jp": "先生は生徒に宿題を出します。",
+      "zh_hant": "老師出作業給學生。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "保留老師是給出作業的人，學生是接收者。",
+        "本句的「宿題を出す」表示老師布置作業給學生。",
+        "不要翻成學生交作業，也不要加入外部期限或規定。"
+      ],
+      "semantic_unknowns": [
+        "實際引擎如何分析「宿題を出す」仍未知。",
+        "這些參考譯文尚待獨立自然度審查。"
+      ],
+      "control": {
+        "kind": "teacher_assigns_homework",
+        "contrast_ids": [
+          "HWR-N5-01",
+          "HWR-N5-03",
+          "jz031"
+        ],
+        "stable": [
+          "HWR-N5-01 和 HWR-N5-02 都是肯定的禮貌非過去式陳述句。",
+          "兩句都使用完全相同的「宿題を出します」。",
+          "兩句的主語和接受者只交換「先生」與「生徒」。"
+        ],
+        "changed": [
+          "本句以「先生」為主語，以「生徒」為接受者。",
+          "本句表示老師布置作業。"
+        ],
+        "limits": [
+          "角色方向由句中的主語和「に」名詞組共同提供。",
+          "本句和 HWR-N5-01 只構成這組明示角色的對照，不代表所有「出す」用法。",
+          "jz031 只錨定「宿題」這個名詞。它沒有「出す」角色。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "HWR-N5-03",
+      "level_approx": "N5",
+      "jp": "私は机の引き出しから宿題を出します。",
+      "zh_hant": "我從書桌抽屜拿出作業。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "保留作業從書桌抽屜被取出的物理動作。",
+        "保留「引き出しから」作為物件原先所在的位置。",
+        "不要翻成布置作業或交作業給某人。"
+      ],
+      "semantic_unknowns": [
+        "實際引擎如何區分物理取出和交付作業仍未知。",
+        "這些參考譯文尚待獨立自然度審查。"
+      ],
+      "control": {
+        "kind": "physical_removal_from_container",
+        "contrast_ids": [
+          "HWR-N5-01",
+          "HWR-N5-02",
+          "jz031"
+        ],
+        "stable": [
+          "本句與前兩句都使用「宿題を出します」。",
+          "本句與前兩句都是肯定的禮貌非過去式陳述句。"
+        ],
+        "changed": [
+          "本句用「机の引き出しから」明示具體容器來源。",
+          "本句的「出す」表示把作業實物取出，不涉及作業角色的給予方向。"
+        ],
+        "limits": [
+          "本句與前兩句不是一變項對照。",
+          "本句只表示從這個抽屜取出作業，不代表所有物理「出す」句。",
+          "jz031 只錨定「宿題」這個名詞，不是取出控制。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

@@ -7278,33 +7278,35 @@ fn ends_in_coord_to(b: &Bunsetsu) -> bool {
 }
 
 fn is_person_like_bunsetsu(b: &Bunsetsu) -> bool {
-    b.atoms.iter().any(|a| {
-        matches!(a.upos, Some(Upos::Pron | Upos::Propn))
-            || matches!(
-                a.surface.as_str(),
-                "友達"
-                    | "先生"
-                    | "先輩"
-                    | "人"
-                    | "彼"
-                    | "彼女"
-                    | "私"
-                    | "父"
-                    | "母"
-                    | "兄"
-                    | "姉"
-                    | "弟"
-                    | "妹"
-                    | "子供"
-                    | "学生"
-                    | "お父さん"
-                    | "お母さん"
-                    | "お兄さん"
-                    | "お姉さん"
-                    | "おじさん"
-                    | "おばさん"
-            )
-    })
+    b.atoms.iter().any(is_person_like_atom)
+}
+
+fn is_person_like_atom(a: &Atom) -> bool {
+    matches!(a.upos, Some(Upos::Pron | Upos::Propn))
+        || matches!(
+            a.surface.as_str(),
+            "友達"
+                | "先生"
+                | "先輩"
+                | "人"
+                | "彼"
+                | "彼女"
+                | "私"
+                | "父"
+                | "母"
+                | "兄"
+                | "姉"
+                | "弟"
+                | "妹"
+                | "子供"
+                | "学生"
+                | "お父さん"
+                | "お母さん"
+                | "お兄さん"
+                | "お姉さん"
+                | "おじさん"
+                | "おばさん"
+        )
 }
 
 fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
@@ -7379,6 +7381,33 @@ fn attached_demonstrative(det: &Atom, noun: &Atom) -> Option<char> {
         "その" | "あの" => Some('那'),
         _ => None,
     }
+}
+
+/// A demonstrative already has an attached noun here. Use complete person nouns,
+/// including occupations whose dictionary entries have no semantic tag.
+fn is_demonstrative_person_noun(noun: &Atom) -> bool {
+    is_person_like_atom(noun)
+        || matches!(
+            noun.surface.as_str(),
+            "医師"
+                | "医者"
+                | "教師"
+                | "教員"
+                | "教授"
+                | "店員"
+                | "職員"
+                | "社員"
+                | "社長"
+                | "部長"
+                | "課長"
+                | "作家"
+                | "友人"
+                | "生徒"
+        )
+        || faberline_nlp::lexicon::lookup_ja(&noun.surface).is_some_and(|hit| {
+            hit.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Person)
+                && hit.upos_candidates.as_slice() == [Upos::Noun]
+        })
 }
 
 fn is_embedded_acl_arg(b: &Bunsetsu) -> bool {
@@ -8707,6 +8736,7 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
                 "寺" | "寺廟" | "橋" => "座",
                 "藥" => "種",
                 "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" => "個",
+                _ if is_demonstrative_person_noun(noun) => "個",
                 // With no established unit or count reading, keep the deictic
                 // without guessing an amount, e.g. 這水 rather than a cup of water.
                 _ => "",
@@ -9925,6 +9955,28 @@ mod existence_rule_tests {
         assert_eq!(slice(source, hit.source_span), "その本");
         assert_eq!(slice(&doc.target_text, hit.target_span), "藏書甲");
         assert_eq!(doc.target_text.matches("藏書甲").count(), 1);
+    }
+
+    #[test]
+    fn demonstrative_classifiers_preserve_people_and_mass_nouns() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("その先生は来ます。", "那個老師來。"),
+            ("その先生が来ます。", "那個老師來。"),
+            ("あの先生は忙しいです。", "那個老師忙碌。"),
+            ("私はこの先生を見ます。", "我看這個老師。"),
+            ("その医師は来ます。", "那個醫師來。"),
+            ("私はその友人を見ます。", "我看那個朋友。"),
+            ("私はその後輩を見ます。", "我看那個後輩。"),
+            ("私はこの水を飲みます。", "我喝這水。"),
+            ("私はその砂糖を買います。", "我買那砂糖。"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
     }
 
     #[test]

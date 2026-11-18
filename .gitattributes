@@ -2,3 +2,7 @@
 /crates/faberline-nlp/lexicon/LICENSES/* -text
 /crates/faberline-nlp-translate/tests/data/ja_zh/*.json text eol=lf
 /crates/faberline-nlp-translate/tests/data/ja_zh/*.tsv text eol=lf
+/crates/faberline-nlp-translate/tests/data/ja_zh/phenomena/baseline.tsv text eol=lf
+/crates/faberline-nlp-translate/tests/data/ja_zh/phenomena/dev_groups_v1.json text eol=lf
+/crates/faberline-nlp-translate/models/translate-test-tiny/tokenizer.json text eol=lf
+/crates/faberline-nlp-translate/models/translate-test-tiny/expected.json text eol=lf

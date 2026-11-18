@@ -1,0 +1,106 @@
+{
+  "schema": "faberline.nlp.ja_zh.direct_quote_speaker_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "review_status": "pending_independent_adoption",
+  "source_main": "51c639573691d3ebe1ebc4dcfbca212344311663",
+  "source_tree": "c491e6901d65a157919bb3d2df8caa44ff4305ad",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "related_adopted_dev": {
+    "file": "crates/faberline-nlp-translate/tests/data/ja_zh/nlevels_expansion_dev_v1.json",
+    "id": "N1-D05",
+    "purpose": "indirect_report_comparison"
+  },
+  "control_pairs": [
+    {
+      "ids": ["DQ-01", "DQ-02"],
+      "variable": "speaker_listener",
+      "fixed": "整段引文、引文中的動作角色、說話動詞和引號外的判斷相同。"
+    },
+    {
+      "ids": ["DQ-01", "DQ-03"],
+      "variable": "judgment_source",
+      "fixed": "說話者、聽者、引文中的動作與角色、說話動詞和判斷的內容相同。"
+    }
+  ],
+  "items": [
+    {
+      "id": "DQ-01",
+      "jp": "佐藤は田中に「中村が来週、資料を公開する予定だ」と伝えた。ただ、その予定が正式に決まったかどうかはまだ明らかではない。",
+      "zh_hant": "佐藤告訴田中：「中村預計下週公開資料。」不過，這項安排是否已正式定案，目前還不清楚。",
+      "allowed_variants": [
+        "佐藤對田中說：「中村預計下週公開資料。」但目前仍不清楚這項安排是否已正式定案。"
+      ],
+      "expected_roles": {
+        "speaker": "佐藤",
+        "listener": "田中",
+        "quoted_actor": "中村",
+        "judgment_source": "narrator"
+      },
+      "semantic_checks": [
+        "佐藤告訴田中，引述內容是中村預計下週公開資料。",
+        "引號結束後，敘述者指出這項安排是否已正式定案仍不清楚。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代誰負責正式定案。",
+        "原文未確認是否已正式定案，或是否會按預計時間公開資料。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit"
+    },
+    {
+      "id": "DQ-02",
+      "jp": "田中は佐藤に「中村が来週、資料を公開する予定だ」と伝えた。ただ、その予定が正式に決まったかどうかはまだ明らかではない。",
+      "zh_hant": "田中告訴佐藤：「中村預計下週公開資料。」不過，這項安排是否已正式定案，目前還不清楚。",
+      "allowed_variants": [
+        "田中對佐藤說：「中村預計下週公開資料。」但目前仍不清楚這項安排是否已正式定案。"
+      ],
+      "expected_roles": {
+        "speaker": "田中",
+        "listener": "佐藤",
+        "quoted_actor": "中村",
+        "judgment_source": "narrator"
+      },
+      "semantic_checks": [
+        "田中告訴佐藤，引述內容是中村預計下週公開資料。",
+        "引號結束後，敘述者指出這項安排是否已正式定案仍不清楚。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代誰負責正式定案。",
+        "原文未確認是否已正式定案，或是否會按預計時間公開資料。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit"
+    },
+    {
+      "id": "DQ-03",
+      "jp": "佐藤は田中に「中村が来週、資料を公開する予定だ。ただ、その予定が正式に決まったかどうかはまだ明らかではない」と伝えた。",
+      "zh_hant": "佐藤告訴田中：「中村預計下週公開資料。不過，這項安排是否已正式定案，目前還不清楚。」",
+      "allowed_variants": [
+        "佐藤對田中說：「中村預計下週公開資料。但目前仍不清楚這項安排是否已正式定案。」"
+      ],
+      "expected_roles": {
+        "speaker": "佐藤",
+        "listener": "田中",
+        "quoted_actor": "中村",
+        "judgment_source": "speaker"
+      },
+      "semantic_checks": [
+        "佐藤告訴田中，中村預計下週公開資料。",
+        "佐藤在引號內指出這項安排是否已正式定案仍不清楚，兩個敘述都屬於同一次引述。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代誰負責正式定案。",
+        "原文未確認是否已正式定案，或是否會按預計時間公開資料。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": "first_party_mit"
+    }
+  ]
+}

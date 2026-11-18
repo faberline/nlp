@@ -10,6 +10,18 @@ spec.loader.exec_module(builder)
 
 
 class PosRepairTests(unittest.TestCase):
+    def test_reviewed_evidence_is_exact_spelling_and_preserves_ambiguity(self):
+        reviewed = {"samplewise": frozenset({"ADJ", "ADV"}), "samplewize": frozenset()}
+        self.assertEqual(builder.apply_reviewed_pos_evidence("samplewise", set(), reviewed),
+                         {"ADJ", "ADV"})
+        self.assertEqual(builder.apply_reviewed_pos_evidence("samplewize", set(), reviewed),
+                         set())
+        self.assertEqual(builder.apply_reviewed_pos_evidence("samplewize", {"NOUN"}, reviewed),
+                         {"NOUN"})
+        self.assertIsNone(builder.apply_reviewed_pos_evidence("crosswise", set(), reviewed))
+        self.assertEqual(builder.infer_derivational_pos_and_lemma("crosswise", {"cross": {"NOUN"}}),
+                         ({"ADV"}, "-"))
+
     def test_noun_based_wise_and_unverified_partner(self):
         known = {"cross": {"NOUN"}}
         self.assertEqual(builder.infer_derivational_pos_and_lemma("crosswise", known), ({"ADV"}, "-"))

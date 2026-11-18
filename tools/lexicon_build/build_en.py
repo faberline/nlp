@@ -74,6 +74,24 @@ TARGET_MIN = 50_000
 TARGET_MAX = 70_000
 TARGET_GOAL = 66_000
 
+# First-party reviewed POS facts; an empty set withholds an unsupported
+# inferred assignment while still allowing independently sourced exact POS.
+REVIEWED_POS_EVIDENCE: dict[str, frozenset[str]] = {
+    "weftwise": frozenset({"ADJ", "ADV"}),
+    "weftwize": frozenset(),
+}
+
+
+def apply_reviewed_pos_evidence(
+    word: str,
+    direct_pos: set[str],
+    evidence: dict[str, frozenset[str]],
+) -> set[str] | None:
+    """Return reviewed and direct POS, or None when no review applies."""
+    if word not in evidence:
+        return None
+    return set(evidence[word]) | direct_pos
+
 
 def is_valid_token(w: str) -> bool:
     return bool(WORD_RE.match(w) or w in CLITICS)
@@ -806,8 +824,21 @@ def main() -> int:
         if w in gold_upos:
             pos_set.update(gold_upos[w])
 
+        # Evidence belongs to the exact spelling, never to the generic suffix
+        # inference or an unverified spelling counterpart.
+        reviewed_pos = None
+        if w in REVIEWED_POS_EVIDENCE:
+            direct_pos = set(wn_pos.get(w, set())) | set(gold_upos.get(w, set()))
+            if w in en_decided:
+                direct_pos.add(en_decided[w])
+            reviewed_pos = apply_reviewed_pos_evidence(w, direct_pos, REVIEWED_POS_EVIDENCE)
+        if reviewed_pos is not None:
+            pos_set = reviewed_pos
+
         # Determine decided_upos (emit "-", "-" when no reliable POS evidence exists)
-        if w in en_ambiguous:
+        if reviewed_pos is not None:
+            decided_upos = next(iter(pos_set)) if len(pos_set) == 1 else "-"
+        elif w in en_ambiguous:
             decided_upos = "-"
         elif w in en_decided and (w not in gold_upos or gold_upos[w] == {en_decided[w]}):
             decided_upos = en_decided[w]

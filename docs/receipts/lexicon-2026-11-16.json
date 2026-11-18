@@ -34,8 +34,8 @@
     {
       "path": "lexicon/data/en.tsv",
       "entries": 66000,
-      "bytes": 2921351,
-      "sha256": "cf03dd6b8c1bc5272c7018ecd477ceb3af0cc5a59220fe50374a52221dc97d0e"
+      "bytes": 2921349,
+      "sha256": "a63f63f39d3dd978456dbc63b0cc1b23fa51b9a248d7a4bee41ad5550399d150"
     },
     {
       "path": "lexicon/data/ja.tsv",
@@ -147,7 +147,7 @@
     }
   ],
   "lexicon_bin_bytes": 15124422,
-  "lexicon_bin_sha256": "9d5b02daa0d30ba1db3dc744be185b489f3a2732d8e12efdbf09f6bf39edacda",
+  "lexicon_bin_sha256": "5948ee8f3435275958381847c1ab0e75b09a2d52ed9341ec6822d61d284d0fe0",
   "upstream_inputs": {
     "wordnet_3_1": {
       "archive": "wn3.1.dict.tar.gz",
@@ -341,10 +341,10 @@
       "base_ref": "b0ad8bdc0477cfc3432d8dc1950d23cee44832d8",
       "scope": "14 English POS/mask/lemma changes after C1; previous impact_manifests describe the historical C1/D99 comparison and are not this batch.",
       "builder_path": "tools/lexicon_build/build_en.py",
-      "builder_sha256": "ace072729320e814c170ec170cbbce9fa0806ba04e376fa2c7086a17f437f814",
+      "builder_sha256": "be2ec1c6ba95669a7b17adcd22cff0fb3f34da3d9503d9c7470b0b999c7cebc7",
       "prepared_corpus_sha256": "12e8da345d24a9e4225c552a87bd198736673cd1bc15297ca482a6e0fd1d87be",
       "baseline_en_sha256": "43c460aeac0707526c1fc40ea4ea39fb5193e63a2438adb2dcf3c77dcb364ae0",
-      "candidate_en_sha256": "cf03dd6b8c1bc5272c7018ecd477ceb3af0cc5a59220fe50374a52221dc97d0e",
+      "candidate_en_sha256": "a63f63f39d3dd978456dbc63b0cc1b23fa51b9a248d7a4bee41ad5550399d150",
       "rows_compared": 66000,
       "changed_rows": 14,
       "surface_variant_cost_counterpart_meta_unchanged": true,
@@ -526,8 +526,8 @@
             "lemma": "-"
           },
           "new": {
-            "decided_upos": "ADV",
-            "upos_mask": "ADV",
+            "decided_upos": "-",
+            "upos_mask": "ADJ|ADV",
             "lemma": "-"
           }
         },
@@ -540,8 +540,8 @@
             "lemma": "-"
           },
           "new": {
-            "decided_upos": "ADV",
-            "upos_mask": "ADV",
+            "decided_upos": "-",
+            "upos_mask": "-",
             "lemma": "-"
           }
         }
@@ -550,7 +550,28 @@
         "https://www.collinsdictionary.com/de/worterbuch/englisch/saltirewise",
         "https://dictionary.cambridge.org/thesaurus/synopsize"
       ],
-      "limits": "First-party POS/lemma repair; independent semantic review remains required. No source glosses copied or new input license claimed."
+      "limits": "First-party POS/lemma repair; independent semantic review remains required. No source glosses copied or new input license claimed.",
+      "reviewed_exact_spelling_pos": [
+        {
+          "surface": "weftwise",
+          "variant": "en-GB",
+          "upos": [
+            "ADJ",
+            "ADV"
+          ],
+          "evidence": [
+            "https://www.merriam-webster.com/dictionary/weftwise",
+            "https://www.collinsdictionary.com/dictionary/english/weftwise"
+          ],
+          "method": "First-party review of POS labels; no dictionary gloss copied."
+        },
+        {
+          "surface": "weftwize",
+          "variant": "en-US",
+          "upos": [],
+          "method": "No independent exact-spelling POS evidence identified; VarCon preserves the spelling pair but does not establish POS."
+        }
+      ]
     }
   ]
 }

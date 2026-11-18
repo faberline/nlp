@@ -64891,8 +64891,8 @@ weeping	en	1384	-	ADJ|NOUN	-	-	-
 weepy	en	1700	ADJ	ADJ	-	-	infl=irr
 weeviled	en-US	1650	-	-	-	weevilled	-
 weevilled	en-GB	1650	-	-	-	weeviled	-
-weftwise	en-GB	1650	ADV	ADV	-	weftwize	-
-weftwize	en-US	1650	ADV	ADV	-	weftwise	-
+weftwise	en-GB	1650	-	ADJ|ADV	-	weftwize	-
+weftwize	en-US	1650	-	-	-	weftwise	-
 weigh	en	1073	VERB	VERB	-	-	-
 weighs	en	1507	VERB	VERB	weigh	-	-
 weight	en	992	-	NOUN|VERB	-	-	-

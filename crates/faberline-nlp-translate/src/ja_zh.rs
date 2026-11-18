@@ -11448,6 +11448,74 @@ fn indefinite_object_modifier(
     Some(modifier)
 }
 
+// In 先生と図書館に the person and the place have separate case particles.
+// Two places share their direction instead (東京と大阪に).
+fn place_companion(source: &[Atom], predicate: usize) -> Option<usize> {
+    use faberline_nlp::lexicon::SemanticClass;
+    let mut person = None;
+    let mut has_place = false;
+    for (i, marker) in source.iter().enumerate() {
+        if marker.is_locked
+            || marker.upos != Some(Upos::Adp)
+            || marker.deprel != "case"
+            || !matches!(marker.surface.as_str(), "と" | "へ" | "に" | "で" | "まで")
+        {
+            continue;
+        }
+        let prefix = &source[..i];
+        let Some(last) = prefix.last() else { continue };
+        let noun = if last.surface == "か"
+            && i >= 2
+            && indefinite_argument(&source[i - 2..=i], predicate).is_some()
+        {
+            &source[i - 2]
+        } else {
+            last
+        };
+        if noun.is_locked
+            || noun.doc_tok_idx.is_none()
+            || noun.doc_tok_idx != marker.head
+            || noun.head != Some(predicate)
+            || noun.deprel != "obl"
+            || last.span.end_char != marker.span.start_char
+        {
+            continue;
+        }
+        let class = faberline_nlp::lexicon::lookup_ja(&noun.surface).and_then(|hit| hit.sem_class);
+        if marker.surface == "と" {
+            let human = match noun.upos {
+                Some(Upos::Pron) => matches!(
+                    noun.surface.as_str(),
+                    "誰" | "だれ" | "私" | "僕" | "彼" | "彼女" | "君" | "あなた" | "みんな" | "皆"
+                ),
+                Some(Upos::Propn) => {
+                    class == Some(SemanticClass::Person) || is_honorific_suffix(&noun.surface)
+                }
+                Some(Upos::Noun) => is_demonstrative_person_noun(noun),
+                _ => false,
+            };
+            if human && person.replace(noun.doc_tok_idx?).is_some() {
+                return None;
+            }
+        } else {
+            let place = is_place_location_bunsetsu(std::slice::from_ref(noun))
+                || class == Some(SemanticClass::Location)
+                || noun.surface == "どこ"
+                || noun.upos == Some(Upos::Noun)
+                    && (noun.surface.ends_with('園')
+                        || matches!(noun.surface.as_str(), "階" | "屋")
+                            && source.iter().any(|part| {
+                                !part.is_locked
+                                    && part.head == noun.doc_tok_idx
+                                    && part.span.end_char == noun.span.start_char
+                                    && matches!(part.deprel.as_str(), "nummod" | "compound")
+                            }));
+            has_place |= place;
+        }
+    }
+    person.filter(|_| has_place)
+}
+
 fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;

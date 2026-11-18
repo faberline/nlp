@@ -11627,6 +11627,52 @@ fn predicates_is_cause_verb(predicates: &[Bunsetsu]) -> bool {
     })
 }
 
+// In 誰かと, the first か belongs to the pronoun, not to the finite verb.
+// Preserve the original case particle so callers can place this argument.
+fn indefinite_argument(atoms: &[Atom], predicate: usize) -> Option<(Atom, Option<Atom>)> {
+    let [word, ka, rest @ ..] = atoms else {
+        return None;
+    };
+    let noun_idx = word.doc_tok_idx?;
+    if word.is_locked
+        || ka.is_locked
+        || word.upos != Some(Upos::Pron)
+        || word.head != Some(predicate)
+        || ka.upos != Some(Upos::Part)
+        || ka.surface != "か"
+        || ka.deprel != "discourse"
+        || ka.head != Some(noun_idx)
+        || word.span.end_char != ka.span.start_char
+    {
+        return None;
+    }
+    let case = match rest {
+        [] => None,
+        [case]
+            if !case.is_locked
+                && case.upos == Some(Upos::Adp)
+                && case.deprel == "case"
+                && case.head == Some(noun_idx)
+                && ka.span.end_char == case.span.start_char =>
+        {
+            Some(case.clone())
+        }
+        _ => return None,
+    };
+    let text = match word.surface.as_str() {
+        "誰" => "某個人",
+        "何" => "某樣東西",
+        "どこ" => "某個地方",
+        _ => return None,
+    };
+    let mut noun = word.clone();
+    noun.surface = text.to_owned();
+    noun.lemma = None;
+    noun.span.end_char = ka.span.end_char;
+    noun.is_locked = true;
+    Some((noun, case))
+}
+
 fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;

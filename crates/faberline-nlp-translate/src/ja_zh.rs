@@ -9818,11 +9818,22 @@ fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> 
             && matches!(atom.surface.as_str(), "て" | "で")
             && next.is_some_and(is_te_subsidiary_atom);
 
+        // 明日 and 先生と can modify the same activity independently.
+        // A time attached to the companion itself stays inside its noun phrase.
+        let time_before_companion = atom.deprel == "advmod"
+            && !atom.is_locked
+            && atom.head.is_some()
+            && source_time_head(atom)
+            && matches!((next, atoms.get(idx + 2)), (Some(noun), Some(to))
+                if !noun.is_locked && !to.is_locked && noun.head == atom.head
+                    && noun.deprel == "obl" && noun.doc_tok_idx.is_some()
+                    && to.head == noun.doc_tok_idx && to.deprel == "case"
+                    && to.surface == "と" && to.span.start_char == noun.span.end_char);
         // Keep `A の B`, `Verb+て+いる/しまう/ください`, or `A さんの` together up to the trailing particles.
         if !next_is_func
             && !next_is_aux
             && !keep_te_subsidiary
-            && (is_func || !is_compound_noun_pair(atom, next))
+            && (is_func || time_before_companion || !is_compound_noun_pair(atom, next))
         {
             bunsetsus.push(classify_bunsetsu(
                 std::mem::take(&mut cur),
@@ -12099,6 +12110,24 @@ mod motion_endpoint_tests {
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
+    }
+
+    #[test]
+    fn activity_time_and_genitive_time_have_separate_attachments() {
+        for source in [
+            "私は明日先生と二人で公園まで歩きませんか。",
+            "私は先生と二人で明日公園まで歩きませんか。",
+        ] {
+            assert_eq!(
+                translate(source),
+                "我和老師兩人明天不一起走到公園嗎？",
+                "{source}"
+            );
+        }
+        assert_eq!(
+            translate("私は明日の先生と二人で公園まで歩きませんか。"),
+            "我和明天的老師兩人不一起走到公園嗎？",
+        );
     }
 
     #[test]

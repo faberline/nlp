@@ -1,0 +1,27 @@
+# Japanese to Taiwan Traditional Chinese development phenomenon baseline
+# schema	faberline.nlp.ja_zh.dev_phenomenon_baseline.v1
+# engine_rev	90c97a5db6d41aaa41d04a5546c7d51b04dd769f
+# map_sha256	53e1f5361480f81b315ed94885a9bc61932e9b1e68b61f14046f72c3fd122499
+# report_sha256	9e1402fefb1f8b8ec32e8de813d351de6be29de73f0fdd55f5f4d00678e1b257
+# reference	primary-only
+# report_count	82
+# mapped_count	32
+# group_count	13
+# bank fields are file, sha256, rows, and mapped_rows.
+# bank	nlevels_dev_v1.json	a24d91502b3d361eec1ff2bf97381d0accbf27d7516ba2188e77b3b4e96695c0	20	20
+# bank	honorific_san_dev_v1.json	280da5014f9069994bce1f23e8cdc10c3cad3200450278c9b4e3618231134229	12	12
+# bank	nlevels_expansion_dev_v1.json	22d0753fd384ae5f07a118c6417c53b213cc66c1637a8369b8c0315e69ab4fcc	50	0
+group_id	n	chrf	exact
+apparent_acknowledgment_vs_addition	2	15.32	0
+cause_concession_and_outcome	2	12.90	0
+condition_vs_concession_and_necessity	2	20.27	0
+explicit_gender_and_teacher_title	2	14.04	0
+gradual_change_vs_completion	2	8.35	0
+habitual_action_polarity	2	52.33	0
+inference_rejection_vs_uncertainty	2	21.50	0
+movement_origin_destination	2	19.18	0
+non_name_san_boundaries	3	17.29	0
+past_destination_polarity	2	24.36	0
+personal_name_honorific_gender_neutrality	7	16.22	0
+standing_procedure_vs_intention	2	11.72	0
+weather_cause_and_intention	2	56.43	0

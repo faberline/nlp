@@ -70,6 +70,47 @@ fn actor_glossary(alice: &str) -> TranslationGlossary {
 }
 
 #[test]
+fn homework_dasu_keeps_roles_and_physical_sources() {
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let glossary = TranslationGlossary::new();
+    let translate = |source: &str| {
+        let doc = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        doc.target_text
+    };
+
+    let bank: serde_json::Value =
+        serde_json::from_str(include_str!("data/ja_zh/homework_role_dev_v1.json")).unwrap();
+    let items = bank["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    for (id, expected) in [
+        ("HWR-N5-01", "學生把作業交給老師。"),
+        ("HWR-N5-02", "老師出作業給學生。"),
+    ] {
+        let row = items.iter().find(|row| row["id"] == id).unwrap();
+        assert_eq!(translate(row["jp"].as_str().unwrap()), expected, "{id}");
+    }
+
+    let physical = items.iter().find(|row| row["id"] == "HWR-N5-03").unwrap();
+    let actual = translate(physical["jp"].as_str().unwrap());
+    assert!(
+        matches!(
+            actual.as_str(),
+            "我從書桌抽屜拿出作業。" | "我從書桌的抽屜拿出作業。"
+        ),
+        "{actual}"
+    );
+    for (source, expected) in [
+        ("先生は書類を出します。", "老師拿出書類。"),
+        ("私は引き出しから鍵を出します。", "我從抽屜拿出鑰匙。"),
+        ("宿題を出します。", "拿出作業。"),
+        ("まだ宿題が終わっていない。", "作業還沒有結束。"),
+    ] {
+        assert_eq!(translate(source), expected, "{source}");
+    }
+}
+
+#[test]
 fn shinjitai_fallback_keeps_word_glosses_and_mixed_script_terms() {
     for (source, target, expected) in [
         ("私は製糸を見る。", TargetVariant::ZhHant, "我看製絲。"),

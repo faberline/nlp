@@ -1,0 +1,138 @@
+{
+  "schema": "faberline.nlp.ja_zh.time_point_goal_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "source_tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "reused_existing_controls": [
+    {
+      "file": "honorific_san_dev_v1.json",
+      "sha256": "280da5014f9069994bce1f23e8cdc10c3cad3200450278c9b4e3618231134229",
+      "ids": [
+        "HS-09",
+        "HS-03",
+        "HS-04"
+      ]
+    },
+    {
+      "file": "clock_time_dev_v1.json",
+      "sha256": "01db148efcc90ca4fe025a65c6e39fb712ce6643e5c27d3018cbc6e691e1bf69",
+      "ids": [
+        "CLOCK-C13"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "TPG-N5-01",
+      "level_approx": "N5",
+      "jp": "私は夕方に帰ります。",
+      "zh_hant": "我傍晚回去。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "私は是回去的人。",
+        "夕方に表示回去的時間，不是地點。",
+        "句中沒有明示回去的地點，不增補一個具體地點。"
+      ],
+      "semantic_unknowns": [
+        "夕方沒有精確到鐘點。",
+        "句子沒有說這是習慣、安排或意圖。"
+      ],
+      "control": {
+        "kind": "time_point",
+        "contrast_ids": [
+          "TPG-N5-02",
+          "HS-09",
+          "HS-03",
+          "HS-04"
+        ],
+        "stable": [
+          "兩筆新句都以 私 は標示回去者。",
+          "兩筆都使用肯定、禮貌非過去式 帰ります。",
+          "每筆都只有一個 に 標示的名詞組。"
+        ],
+        "changed": [
+          "本筆的 夕方に 是事件時間。TPG-N5-02 的 家に 是移動目標。"
+        ],
+        "limits": [
+          "本組只測這組時間點與回家目標的對照，不代表所有 に 用法。",
+          "HS-09 在同一句中含 夕方に 和 家に，並列為既有雙角色控制。HS-03/04 的 店長に 是通話對象，時間詞本身不帶 に。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TPG-N5-02",
+      "level_approx": "N5",
+      "jp": "私は家に帰ります。",
+      "zh_hant": "我回家。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "私は是回去的人。",
+        "家に 表示回去的實際目標，不是時間。",
+        "保留回家的目的地。"
+      ],
+      "semantic_unknowns": [
+        "句子沒有說回家的時間。",
+        "句子沒有說這是習慣、安排或意圖。"
+      ],
+      "control": {
+        "kind": "physical_goal",
+        "contrast_ids": [
+          "TPG-N5-01",
+          "HS-09",
+          "CLOCK-C13"
+        ],
+        "stable": [
+          "兩筆新句都以 私 は標示回去者。",
+          "兩筆都使用肯定、禮貌非過去式 帰ります。",
+          "每筆都只有一個 に 標示的名詞組。"
+        ],
+        "changed": [
+          "本筆的 家に 是移動目標。TPG-N5-01 的 夕方に 是事件時間。"
+        ],
+        "limits": [
+          "本組只測這組時間點與回家目標的對照，不代表所有 に 用法。",
+          "CLOCK-C13 是既有 教室に行く 目標例；它使用不同的移動動詞和目的地。"
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

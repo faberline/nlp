@@ -1605,6 +1605,103 @@ fn narrative_dialogue_and_pro_drop_both_scripts() {
 }
 
 #[test]
+fn nominal_receiving_request_keeps_object_time_quantity_and_question() {
+    for (source, expected) in [
+        ("この資料をいただけませんか。", "可以給我這份資料嗎？"),
+        (
+            "明日の午後、少しお時間をいただけませんか。",
+            "明天下午，可以占用您一點時間嗎？",
+        ),
+        ("お水を一杯いただけませんか。", "可以給我一杯水嗎？"),
+        ("地図を一枚いただけませんか。", "可以給我一張地圖嗎？"),
+        ("この紙を一枚いただけませんか。", "可以給我這一張紙嗎？"),
+        (
+            "明日の午後、地図を一枚いただけませんか。",
+            "明天下午，可以給我一張地圖嗎？",
+        ),
+    ] {
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert_eq!(doc.target_text, expected, "{source}");
+        assert_eq!(doc.sentences.len(), 1, "{source}");
+        assert_eq!(slice_chars(source, doc.sentences[0].source_span), source);
+        assert_eq!(
+            doc.clause_alignments
+                .last()
+                .map(|clause| clause.target_span.end_char),
+            Some(doc.target_chars),
+            "{source}"
+        );
+    }
+}
+
+#[test]
+fn nominal_receiving_request_keeps_eligibility_assistance_and_ability_paths() {
+    for (source, expected) in [
+        (
+            "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。",
+            "這份資料給參加者只發放。參加者以外面的人不能得到資料嗎？",
+        ),
+        ("この荷物を持っていただけますか。", "拿著這荷物，能得到嗎？"),
+        (
+            "この荷物を持っていただけませんか。",
+            "拿著這荷物，不能得到嗎？",
+        ),
+        (
+            "この犬の泳ぐ力を調べています。泳げますか。",
+            "正在調查這狗的游泳的力。能游泳嗎？",
+        ),
+        (
+            "この犬の泳ぐ力を調べています。泳げませんか。",
+            "正在調查這狗的游泳的力。不能游泳嗎？",
+        ),
+        ("写真を撮ってもらえますか。", "拍攝照片，もらえ嗎？"),
+    ] {
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert_eq!(doc.target_text, expected, "{source}");
+    }
+}
+
+#[test]
+fn nominal_receiving_request_leaves_a_locked_object_on_its_existing_path() {
+    let source = "この資料をいただけませんか。";
+    let mut glossary = TranslationGlossary::new();
+    glossary.objects.push(GlossaryEntry {
+        canonical: "資料".to_owned(),
+        surfaces: vec!["資料".to_owned()],
+        targets: BTreeMap::from([(TargetVariant::ZhHant, "資料原件".to_owned())]),
+        ..GlossaryEntry::default()
+    });
+    let doc = analyze_and_translate(
+        source,
+        &TranslateOptions::new(TargetVariant::ZhHant),
+        &glossary,
+        None,
+        Backend::Onnx,
+    )
+    .unwrap();
+    assert_valid_ja_zh_doc(source, &doc);
+    assert!(doc.target_text.contains("資料原件"), "{}", doc.target_text);
+    assert!(doc.target_text.contains("不能得到"), "{}", doc.target_text);
+    assert_eq!(doc.glossary_hits.len(), 1);
+}
+
+#[test]
 fn direct_reporting_keeps_adopted_roles_and_judgment_scope() {
     let cases: serde_json::Value =
         serde_json::from_str(include_str!("data/ja_zh/direct_quote_speaker_dev_v1.json")).unwrap();

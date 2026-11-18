@@ -3168,7 +3168,7 @@ fn translate_clause_atoms(
         mark_motion_purpose(&mut grouped, &norm_atoms, go);
     }
     let grouped = compose_relative_daypart(grouped);
-    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, target);
+    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if let Some(tail) = condition_tail
         && let Some(complement) = bunsetsus.last_mut()
     {
@@ -8993,9 +8993,54 @@ fn prepend_locked_atom(head: &mut Bunsetsu, text: String) {
     );
 }
 
+// A deadline can precede the topic of an embedded action. Inspect the
+// source dependency even when the time and verb are in separate groups.
+fn take_adnominal_arguments(
+    remaining: &mut Vec<Bunsetsu>,
+    predicate: Bunsetsu,
+    doc: &Document,
+    allow_bare_duration: bool,
+) -> Vec<Bunsetsu> {
+    let mut deadlines: Vec<_> = remaining
+        .extract_if(.., |arg| {
+            deadline_governor(arg, doc).is_some_and(|head| {
+                predicate
+                    .atoms
+                    .iter()
+                    .any(|a| !a.is_locked && a.doc_tok_idx == Some(head))
+            })
+        })
+        .collect();
+    let mut arguments = Vec::new();
+    while let Some(cand) = remaining.last() {
+        let duration = allow_bare_duration
+            && matches!(cand.role, BunsetsuRole::Other | BunsetsuRole::Adv)
+            && cand.case_particle.is_none()
+            && cand.atoms.iter().any(|a| {
+                !a.is_locked
+                    && matches!(
+                        a.surface.as_str(),
+                        "長年" | "長期間" | "長い間" | "数年" | "数ヶ月" | "数日" | "何年"
+                    )
+            });
+        if !is_embedded_acl_arg(cand) && !duration {
+            break;
+        }
+        arguments.push(remaining.pop().unwrap());
+    }
+    arguments.reverse();
+    if !deadlines.is_empty() {
+        arguments.append(&mut deadlines);
+        arguments.sort_by_key(|arg| arg.atoms.first().map(|a| a.span.start_char));
+    }
+    arguments.push(predicate);
+    arguments
+}
+
 fn merge_adnominal_bunsetsus(
     bunsetsus: Vec<Bunsetsu>,
     source: &[Atom],
+    doc: &Document,
     target: TargetVariant,
 ) -> Vec<Bunsetsu> {
     let mut res: Vec<Bunsetsu> = Vec::with_capacity(bunsetsus.len());
@@ -9024,32 +9069,7 @@ fn merge_adnominal_bunsetsus(
                 });
             if is_sue_ni {
                 let pred_b = res.pop().expect("checked last");
-                let mut acl_bunsetsus: Vec<Bunsetsu> = Vec::new();
-                while let Some(cand) = res.last() {
-                    let is_bare_temporal =
-                        matches!(cand.role, BunsetsuRole::Other | BunsetsuRole::Adv)
-                            && cand.case_particle.is_none()
-                            && cand.atoms.iter().any(|a| {
-                                !a.is_locked
-                                    && matches!(
-                                        a.surface.as_str(),
-                                        "長年"
-                                            | "長期間"
-                                            | "長い間"
-                                            | "数年"
-                                            | "数ヶ月"
-                                            | "数日"
-                                            | "何年"
-                                    )
-                            });
-                    if is_embedded_acl_arg(cand) || is_bare_temporal {
-                        acl_bunsetsus.push(res.pop().expect("checked last"));
-                    } else {
-                        break;
-                    }
-                }
-                acl_bunsetsus.reverse();
-                acl_bunsetsus.push(pred_b);
+                let acl_bunsetsus = take_adnominal_arguments(&mut res, pred_b, doc, true);
                 let (mut inner, _) = translate_clause_bunsetsus(
                     acl_bunsetsus,
                     source,
@@ -9100,16 +9120,7 @@ fn merge_adnominal_bunsetsus(
                         mod_b.case_particle = None;
                         mod_b.role = BunsetsuRole::Predicate;
 
-                        let mut acl_bunsetsus: Vec<Bunsetsu> = Vec::new();
-                        while let Some(cand) = res.last() {
-                            if is_embedded_acl_arg(cand) {
-                                acl_bunsetsus.push(res.pop().expect("checked last"));
-                            } else {
-                                break;
-                            }
-                        }
-                        acl_bunsetsus.reverse();
-                        acl_bunsetsus.push(mod_b);
+                        let acl_bunsetsus = take_adnominal_arguments(&mut res, mod_b, doc, false);
                         let (mut inner, _) = translate_clause_bunsetsus(
                             acl_bunsetsus,
                             source,
@@ -9208,16 +9219,7 @@ fn merge_adnominal_bunsetsus(
                     }
 
                     // Relative clause (`彼は` stops, `彼が書いた` merges into `手紙`).
-                    let mut acl_bunsetsus: Vec<Bunsetsu> = Vec::new();
-                    while let Some(cand) = res.last() {
-                        if is_embedded_acl_arg(cand) {
-                            acl_bunsetsus.push(res.pop().expect("checked last"));
-                        } else {
-                            break;
-                        }
-                    }
-                    acl_bunsetsus.reverse();
-                    acl_bunsetsus.push(pred_b);
+                    let acl_bunsetsus = take_adnominal_arguments(&mut res, pred_b, doc, false);
                     let (mut inner, _) = translate_clause_bunsetsus(
                         acl_bunsetsus,
                         source,
@@ -9412,6 +9414,15 @@ fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
                 )))
 }
 
+fn deadline_governor(group: &Bunsetsu, doc: &Document) -> Option<usize> {
+    if group.case_particle.as_deref() != Some("までに") {
+        return None;
+    }
+    // Even on a normalized clock, the case marker retains the original time token.
+    let time = group.atoms.last()?.head?;
+    doc.syntax.iter().find(|node| node.token == time)?.head
+}
+
 // The deadline belongs to the action in [V こと] が できる. Keep all its
 // arguments on the normal assembly path and move only the outer ability.
 fn fold_nominalized_deadline_ability(
@@ -9483,16 +9494,7 @@ fn fold_nominalized_deadline_ability(
     let Some((deadline_idx, deadline)) = deadlines.next() else {
         return;
     };
-    // A normalized clock retains the original time head on both case markers.
-    let Some(time_idx) = deadline.atoms.last().and_then(|a| a.head) else {
-        return;
-    };
-    if deadlines.next().is_some()
-        || !doc
-            .syntax
-            .iter()
-            .any(|a| a.token == time_idx && a.head == Some(action_idx))
-    {
+    if deadlines.next().is_some() || deadline_governor(deadline, doc) != Some(action_idx) {
         return;
     }
     let (before, _, after, passive) =
@@ -10987,6 +10989,47 @@ mod clock_rule_tests {
             (
                 "明日までに何か作業をすることができます。",
                 "可以在明天截止前做一些作業。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_deadline_stays_with_the_verb_that_governs_its_time() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "明日までに手紙を書くことを決めました。",
+                "決定了最晚在明天寫信。",
+            ),
+            (
+                "手紙を明日までに書くことを決めました。",
+                "決定了最晚在明天寫信。",
+            ),
+            (
+                "手紙を書くことを明日までに決めました。",
+                "最晚在明天決定了寫信。",
+            ),
+            (
+                "明日までに私は手紙を書くことを決めました。",
+                "我決定了最晚在明天寫信。",
+            ),
+            (
+                "明日までに手紙を書くことを五時までに決めました。",
+                "最晚在五點決定了最晚在明天寫信。",
+            ),
+            (
+                "明日までに手紙を書く人を探しています。",
+                "正在尋找最晚在明天寫信的人。",
+            ),
+            (
+                "手紙を書く人を明日までに探しています。",
+                "最晚在明天正在尋找寫信的人。",
             ),
         ] {
             assert_eq!(

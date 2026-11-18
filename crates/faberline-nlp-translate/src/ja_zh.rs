@@ -5757,7 +5757,7 @@ fn translate_clause_bunsetsus(
         temporal_made_time: Option<String>,
         is_clock: bool,
         is_building_floor: bool,
-        is_daypart: bool,
+        deadline_uses_plain_before: bool,
         deadline_has_detached_negation: bool,
         is_plain_clock_ni: bool,
         transfer_dative: bool,
@@ -5943,6 +5943,20 @@ fn translate_clause_bunsetsus(
         }
     }
 
+    let asks_deadline_time = source.last().is_some_and(|ka| {
+        !ka.is_locked
+            && ka.surface == "か"
+            && ka.upos == Some(Upos::Part)
+            && ka.deprel == "discourse"
+            && ka.head.is_some()
+            && bunsetsus.iter().any(|group| {
+                group.case_particle.as_deref() == Some("までに")
+                    && group
+                        .atoms
+                        .iter()
+                        .any(|time| time.head == ka.head && deadline_time_question(time).is_some())
+            })
+    });
     let explicit_deadline = bunsetsus.iter().find_map(|b| match b.role {
         BunsetsuRole::ExplicitDeadline { modal, additive } => Some((modal, additive)),
         _ => None,
@@ -6012,6 +6026,7 @@ fn translate_clause_bunsetsus(
         }
         if let Some(sfp) = b.sfp_tail.as_deref() {
             sfp_suffix = match sfp {
+                "か" if asks_deadline_time => None,
                 "か" | "かな" => Some("嗎"),
                 "よ" => Some("喔"),
                 "ね" | "よね" => Some("呢"),
@@ -6095,10 +6110,11 @@ fn translate_clause_bunsetsus(
                         temporal_made_time: temporal_made_time(&b),
                         is_clock: b.atoms.iter().any(is_clock_atom),
                         is_building_floor: b.atoms.iter().any(is_building_floor),
-                        is_daypart: b
-                            .atoms
-                            .iter()
-                            .any(|a| !a.is_locked && is_daypart_surface(&a.surface)),
+                        deadline_uses_plain_before: b.atoms.iter().any(|a| {
+                            is_clock_atom(a)
+                                || !a.is_locked && is_daypart_surface(&a.surface)
+                                || deadline_time_question(a).is_some()
+                        }),
                         deadline_has_detached_negation: b.role
                             == BunsetsuRole::DeadlineWithDetachedNegation,
                         is_plain_clock_ni: is_plain_clock_ni(&b),
@@ -6146,7 +6162,7 @@ fn translate_clause_bunsetsus(
                         temporal_made_time: None,
                         is_clock: false,
                         is_building_floor: b.atoms.iter().any(is_building_floor),
-                        is_daypart: false,
+                        deadline_uses_plain_before: false,
                         deadline_has_detached_negation: false,
                         is_plain_clock_ni: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
@@ -6549,7 +6565,7 @@ fn translate_clause_bunsetsus(
                     temporal_made_time: None,
                     is_clock: false,
                     is_building_floor: false,
-                    is_daypart: false,
+                    deadline_uses_plain_before: false,
                     deadline_has_detached_negation: false,
                     is_plain_clock_ni: false,
                     transfer_dative: false,
@@ -7177,7 +7193,7 @@ fn translate_clause_bunsetsus(
                 explicit_deadline.or(deadline_modal.map(|m| (m, false)))
             {
                 // 明天截止前 includes the deadline day; 明天前 can mean today.
-                let cutoff = if o.is_clock || o.is_daypart {
+                let cutoff = if o.deadline_uses_plain_before {
                     "前"
                 } else {
                     "截止前"
@@ -9636,6 +9652,22 @@ fn deadline_weekday(surface: &str) -> Option<&'static str> {
     })
 }
 
+// A time question can fill the endpoint slot just like a specified date or clock.
+fn deadline_time_question(atom: &Atom) -> Option<&'static str> {
+    if atom.is_locked
+        || atom.upos != Some(Upos::Pron)
+        || atom.deprel != "obl"
+        || atom.head.is_none()
+    {
+        return None;
+    }
+    match atom.surface.as_str() {
+        "何時" => Some("幾點"),
+        "いつ" => Some("什麼時候"),
+        _ => None,
+    }
+}
+
 fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
     let [prefix @ .., time, made, ni] = atoms else {
         return false;
@@ -9679,6 +9711,7 @@ fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
         }
     });
     is_clock_atom(time)
+        || deadline_time_question(time).is_some()
         || (!time.is_locked
             && (time.upos == Some(Upos::Noun)
                 && month_number.is_some_and(|n| {
@@ -9840,7 +9873,10 @@ fn fold_nominalized_deadline_ability(
         !a.is_locked
             && a.upos == Some(Upos::Pron)
             && a.head == Some(action_idx)
-            && matches!(a.surface.as_str(), "誰" | "何" | "どこ" | "どれ")
+            && (matches!(a.surface.as_str(), "誰" | "何" | "どこ" | "どれ")
+                || deadline.atoms.iter().any(|time| {
+                    time.doc_tok_idx == a.doc_tok_idx && deadline_time_question(time).is_some()
+                }))
             && !source
                 .get(i..i + 2)
                 .is_some_and(|pair| indefinite_argument(pair, action_idx).is_some())
@@ -11325,6 +11361,37 @@ mod clock_rule_tests {
                 expected,
                 "{source}"
             );
+        }
+    }
+
+    #[test]
+    fn an_open_deadline_asks_for_the_time_of_its_own_action() {
+        let glossary = TranslationGlossary::new();
+        let translate = |source: &str| public_translate(source, &glossary).target_text;
+        for (source, expected) in [
+            ("いつまでに手紙を書きますか。", "最晚在什麼時候寫信？"),
+            ("何時までに駅に着きますか。", "最晚在幾點抵達到車站？"),
+            ("何時までに手紙を書けますか。", "可以在幾點前寫信？"),
+            (
+                "いつまでに手紙を書くことができますか。",
+                "可以在什麼時候前寫信？",
+            ),
+            // The か asks whether a decision occurred. The deadline is on reading.
+            (
+                "何時までに本を読むことを決めましたか。",
+                "決定了最晚在幾點讀書嗎？",
+            ),
+            ("六時までに本を読みますか。", "最晚在六點讀書嗎？"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for source in [
+            "何時に本を読みますか。",
+            "いつまで本を読みますか。",
+            "いつかまでに帰りますか。",
+            "駅までに銀行がありますか。",
+        ] {
+            assert!(!translate(source).contains("最晚"), "{source}");
         }
     }
 
@@ -12943,9 +13010,9 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
         let a = &b.atoms[i];
         if b.case_particle.as_deref() == Some("までに")
             && !a.is_locked
-            && let Some(day) = deadline_weekday(&a.surface)
+            && let Some(time) = deadline_time_question(a).or_else(|| deadline_weekday(&a.surface))
         {
-            out.push_str(day);
+            out.push_str(time);
             i += 1;
             continue;
         }

@@ -6869,6 +6869,17 @@ fn translate_clause_bunsetsus(
                 // The endpoint follows the full activity, including a direct object.
                 temporal_made_tails.push(format!("到{time}"));
             }
+        } else if o.case_particle.as_deref() == Some("までに") {
+            // Earliest completion is unrestricted. The stated time itself is
+            // allowed. Keep tense, mood and polarity on the original predicate.
+            if inner_pre_mods
+                .iter()
+                .any(|m| matches!(m.as_str(), "沒有" | "不"))
+            {
+                parts.push(format!("到{}為止", o.text));
+            } else {
+                parts.push(format!("最晚在{}", o.text));
+            }
         } else if has_spatial_made && o.is_spatial_made {
             made_endpoints.push(o.text);
         } else if o.case_particle.as_deref() == Some("まで") && !is_goal_verb {
@@ -9273,6 +9284,74 @@ fn is_honorific_suffix(s: &str) -> bool {
     )
 }
 
+fn deadline_weekday(surface: &str) -> Option<&'static str> {
+    Some(match surface {
+        "月曜日" => "星期一",
+        "火曜日" => "星期二",
+        "水曜日" => "星期三",
+        "木曜日" => "星期四",
+        "金曜日" => "星期五",
+        "土曜日" => "星期六",
+        "日曜日" => "星期日",
+        _ => return None,
+    })
+}
+
+fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
+    let [.., time, made, ni] = atoms else {
+        return false;
+    };
+    if made.is_locked
+        || ni.is_locked
+        || made.upos != Some(Upos::Adp)
+        || ni.upos != Some(Upos::Adp)
+        || made.surface != "まで"
+        || ni.surface != "に"
+        || made.deprel != "case"
+        || ni.deprel != "case"
+        || made.head != ni.head
+        || time.span.end_char != made.span.start_char
+        || made.span.end_char != ni.span.start_char
+    {
+        return false;
+    }
+    // Normalized clocks have no token index. The governor of both particles
+    // must still fall inside the source span of the recognized time.
+    let Some(head) = made.head.and_then(|idx| doc.tokens.get(idx)) else {
+        return false;
+    };
+    if head.span.start_char < time.span.start_char || head.span.end_char > time.span.end_char {
+        return false;
+    }
+    is_clock_atom(time)
+        || (!time.is_locked
+            && (deadline_weekday(&time.surface).is_some()
+                || matches!(
+                    time.surface.as_str(),
+                    "今" | "昨日"
+                        | "今日"
+                        | "明日"
+                        | "明後日"
+                        | "朝"
+                        | "昼"
+                        | "夜"
+                        | "午前"
+                        | "午後"
+                        | "先週"
+                        | "今週"
+                        | "来週"
+                        | "週末"
+                        | "先月"
+                        | "今月"
+                        | "来月"
+                        | "月末"
+                        | "去年"
+                        | "今年"
+                        | "来年"
+                        | "年末"
+                )))
+}
+
 fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> Bunsetsu {
     let mut case_particle = None;
     let mut sconj_tail = None;
@@ -9435,6 +9514,9 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
         BunsetsuRole::Connector
     } else if (has_verb_or_adj || has_copula || deprel_hint == "root") && !ends_with_no {
         BunsetsuRole::Predicate
+    } else if case_particle.as_deref() == Some("に") && has_temporal_deadline(&atoms, doc) {
+        case_particle = Some("までに".to_owned());
+        BunsetsuRole::Obl
     } else if let Some(cp) = case_particle.as_deref() {
         match cp {
             "が" | "は" | "も" | "だって" => BunsetsuRole::Subj,
@@ -10506,6 +10588,48 @@ mod clock_rule_tests {
             "{output}"
         );
         assert!(!output.contains("到下午兩點"), "{output}");
+    }
+
+    #[test]
+    fn deadline_keeps_the_time_separate_from_recipients_and_destinations() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("私は六時までに手紙を書きます。"),
+            "我最晚在六點寫信。"
+        );
+        assert_eq!(
+            translate("金曜日までに先生に手紙を書きます。"),
+            "最晚在星期五給老師寫信。"
+        );
+        assert_eq!(translate("週末までに本を読みます。"), "最晚在週末讀書。");
+        assert_eq!(
+            translate("六時までに駅まで走ります。"),
+            "最晚在六點跑到車站。"
+        );
+        assert_eq!(
+            translate("午後三時までに手紙を書きませんでした。"),
+            "到下午三點為止沒有寫信。"
+        );
+    }
+
+    #[test]
+    fn deadline_requires_two_case_particles_on_the_same_time_expression() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(translate("私は六時に手紙を書きます。"), "我在六點寫信。");
+        assert_eq!(translate("私は先生に手紙を書きます。"), "我給老師寫信。");
+        assert_eq!(
+            translate("私は毎朝駅までバスで行きます。"),
+            "我每天早上坐公車到車站。"
+        );
+        for source in [
+            "私は六時まで日本語を勉強します。",
+            "学校までに公園があります。",
+        ] {
+            let result = translate(source);
+            assert!(!result.contains("最晚"), "{source}: {result}");
+        }
     }
 
     #[test]
@@ -11636,6 +11760,14 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut i = 0usize;
     while i < b.atoms.len() {
         let a = &b.atoms[i];
+        if b.case_particle.as_deref() == Some("までに")
+            && !a.is_locked
+            && let Some(day) = deadline_weekday(&a.surface)
+        {
+            out.push_str(day);
+            i += 1;
+            continue;
+        }
         if let Some(noun) = b.atoms.get(i + 1)
             && let Some(demonstrative) = attached_demonstrative(a, noun)
         {

@@ -16439,7 +16439,7 @@
 コウシンバラ	ja	533	NOUN	NOUN	-	-	-
 コウシンマチ	ja	533	NOUN	NOUN	-	-	-
 コウジ	ja	451	NOUN	NOUN	-	-	-
-コウジュ	ja	589	-	NOUN|VERB	-	口授	src=first_party_mit
+コウジュ	ja	589	-	NOUN|VERB	-	香薷	src=first_party_mit
 コウジョウ	ja	454	-	NOUN|VERB	-	-	-
 コウジ菌	ja	533	NOUN	NOUN	-	-	-
 コウスイ	ja	533	NOUN	NOUN	-	-	-
@@ -22111,7 +22111,7 @@
 タンブラー	ja	533	NOUN	NOUN	-	-	-
 タンブリン	ja	533	NOUN	NOUN	-	-	-
 タンブリング	ja	533	NOUN	NOUN	-	-	-
-タンブン	ja	533	-	NOUN|VERB	-	佈施	src=first_party_mit
+タンブン	ja	533	-	NOUN|VERB	-	積功德	src=first_party_mit
 タンブール	ja	549	NOUN	NOUN	-	-	-
 タンペン	ja	532	NOUN	NOUN	-	-	-
 タンポ	ja	592	-	NOUN|VERB	-	擔保	src=first_party_mit
@@ -36352,7 +36352,7 @@
 佐	ja	1042	NOUN	NOUN	-	-	-
 佐藤	ja	360	PROPN	PROPN	-	佐藤	sem=person
 体けん	ja	761	-	NOUN|VERB	-	-	-
-体する	ja	1180	VERB	VERB	-	體會	infl=sahen;src=first_party_mit
+体する	ja	1180	VERB	VERB	-	遵循	infl=sahen;src=first_party_mit
 体制	ja	910	NOUN	NOUN	-	體制	-
 体力	ja	1028	NOUN	NOUN	-	體力	-
 体協	ja	1026	NOUN	NOUN	-	-	-
@@ -67294,7 +67294,7 @@
 遁世	ja	763	-	NOUN|VERB	-	-	-
 遁走	ja	763	-	NOUN|VERB	-	遁走	-
 遂げる	ja	1162	VERB	VERB	-	達成	infl=ichidan;src=first_party_mit
-遂せる	ja	1162	VERB	VERB	-	能實現	infl=ichidan;src=first_party_mit
+遂せる	ja	1162	VERB	VERB	-	完成	infl=ichidan;src=first_party_mit
 遂に	ja	841	ADV	ADV	-	-	-
 遂る	ja	1162	VERB	VERB	-	-	infl=ichidan
 遂行	ja	762	-	NOUN|VERB	-	遂行	-

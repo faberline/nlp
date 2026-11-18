@@ -883,17 +883,17 @@ fn is_clock_atom(atom: &Atom) -> bool {
     )
 }
 
-fn clock_number(text: &str) -> Option<u32> {
-    if text.is_empty() {
-        return None;
-    }
-    let normalized: String = text
-        .chars()
+fn normalize_decimal_digits(text: &str) -> String {
+    text.chars()
         .map(|ch| match ch {
             '０'..='９' => char::from_u32(ch as u32 - '０' as u32 + '0' as u32).unwrap_or(ch),
             _ => ch,
         })
-        .collect();
+        .collect()
+}
+
+fn clock_number(text: &str) -> Option<u32> {
+    let normalized = normalize_decimal_digits(text);
     if normalized.chars().all(|ch| ch.is_ascii_digit()) {
         return normalized.parse::<u32>().ok().filter(|&n| n <= 24);
     }
@@ -6544,6 +6544,19 @@ fn translate_clause_bunsetsus(
     parts.extend(others);
     let preserve_go = polite_negative_question || inner_pre_mods.iter().any(|m| m == "想");
     parts.extend(inner_pre_mods);
+    // 遊べる and 飲める already carry ability in their Chinese lexical gloss.
+    // Keep 不能 together, then put the shared activity before the action.
+    if joint_manner.is_some() && !offer {
+        for modal in ["可以", "能"] {
+            if let Some(action) = verb_core.strip_prefix(modal)
+                && !action.is_empty()
+            {
+                parts.push(modal.to_owned());
+                verb_core = action.to_owned();
+                break;
+            }
+        }
+    }
     parts.extend(joint_companion);
     if let Some((manner, _)) = joint_manner {
         parts.push(manner);
@@ -7935,7 +7948,27 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
         return;
     };
     let Some(head) = verb.doc_tok_idx else { return };
-    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    // 勉強し can be split into a bound verbal noun and the finite light verb.
+    // The former owns its objects and manner, the latter owns ませんか.
+    let action = body
+        .last()
+        .filter(|word| {
+            verb.lemma.as_deref() == Some("する")
+                && !word.is_locked
+                && word.upos == Some(Upos::Verb)
+                && word.deprel == "advcl"
+                && word.head == Some(head)
+                && word.span.end_char == verb.span.start_char
+                && faberline_nlp::lexicon::lookup_ja(&word.surface).is_some_and(|hit| {
+                    hit.upos_candidates.contains(&Upos::Noun)
+                        && hit.upos_candidates.contains(&Upos::Verb)
+                })
+        })
+        .unwrap_or(verb);
+    let lemma = action.lemma.as_deref().unwrap_or(&action.surface);
+    let governs = |atom: &Atom| {
+        atom.head == Some(head) || action.doc_tok_idx.is_some() && atom.head == action.doc_tok_idx
+    };
     if verb.is_locked
         || verb.upos != Some(Upos::Verb)
         || verb.deprel != "root"
@@ -7956,9 +7989,9 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
         || verb.span.end_char != polite.span.start_char
         || polite.span.end_char != neg.span.start_char
         || neg.span.end_char != ka.span.start_char
-        || body
-            .iter()
-            .any(|a| !a.is_locked && a.upos == Some(Upos::Verb))
+        || body.iter().any(|a| {
+            !a.is_locked && a.upos == Some(Upos::Verb) && a.doc_tok_idx != action.doc_tok_idx
+        })
         || !faberline_nlp::lexicon::lookup_ja(lemma)
             .is_some_and(|hit| hit.upos_candidates.contains(&Upos::Verb))
     {
@@ -7968,7 +8001,7 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
     // such as a teacher, bus or dog keeps the ordinary negative question.
     let listeners_only = body
         .iter()
-        .filter(|a| a.deprel == "nsubj" && a.head == Some(head))
+        .filter(|a| a.deprel == "nsubj" && governs(a))
         .all(|a| {
             !a.is_locked
                 && a.upos == Some(Upos::Pron)
@@ -7986,7 +8019,7 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
     let can_offer = listeners_only
         && actionable_gloss
         && !body.iter().any(|a| {
-            a.head == Some(head)
+            governs(a)
                 && !a.is_locked
                 && matches!(a.surface.as_str(), "誰" | "何" | "どれ" | "どこ" | "いつ")
         })
@@ -8010,7 +8043,7 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
     let attached_case = |noun: &Atom, tail: &Atom| {
         !noun.is_locked
             && !tail.is_locked
-            && noun.head == Some(head)
+            && governs(noun)
             && matches!(noun.deprel.as_str(), "obl" | "advmod")
             && noun.doc_tok_idx.is_some()
             && tail.head == noun.doc_tok_idx
@@ -8032,20 +8065,24 @@ fn mark_joint_question(groups: &mut [Bunsetsu], source: &[Atom]) {
                     && matches!(joint.surface.as_str(), "共に" | "ともに")
                     && joint.upos == Some(Upos::Adv)
                     && joint.deprel == "advmod"
-                    && joint.head == Some(head) =>
+                    && governs(joint) =>
             {
                 JointManner::Together
             }
             [number, people, de]
                 if !number.is_locked
-                    && number.upos == Some(Upos::Num)
-                    && number.deprel == "nummod"
+                    && ((number.upos == Some(Upos::Num) && number.deprel == "nummod")
+                        || (number.upos == Some(Upos::Noun)
+                            && number.deprel == "compound"
+                            && number.surface.chars().all(|ch| matches!(ch, '０'..='９'))))
                     && number.head == people.doc_tok_idx
                     && number.span.end_char == people.span.start_char
                     && attached_case(people, de)
                     && people.surface == "人"
                     && de.surface == "で"
-                    && (number.surface.parse::<u32>().is_ok_and(|n| n > 1)
+                    && (normalize_decimal_digits(&number.surface)
+                        .parse::<u32>()
+                        .is_ok_and(|n| n > 1)
                         || number
                             .surface
                             .chars()
@@ -10063,6 +10100,8 @@ mod motion_endpoint_tests {
             ("一緒にお茶を飲みませんか。", "要不要一起喝茶？"),
             ("一緒に公園へ行きませんか。", "要不要一起去公園？"),
             ("一緒に歌いませんか。", "要不要一起唱歌？"),
+            ("一緒に勉強しませんか。", "要不要一起學習？"),
+            ("２人で歌いませんか。", "要不要兩人一起唱歌？"),
             ("本を一緒に読みませんか。", "要不要一起讀書？"),
             ("一緒に駅まで歩きませんか。", "要不要一起走到車站？"),
             (
@@ -10088,6 +10127,8 @@ mod motion_endpoint_tests {
             "這輛公車不去機場嗎。"
         );
         assert_eq!(translate("行きませんか。"), "不去嗎。");
+        assert_eq!(translate("一緒に遊べませんか。"), "不能一起玩嗎。");
+        assert_eq!(translate("一緒に飲めませんか。"), "不能一起喝嗎。");
         assert_eq!(
             translate("先生は一緒に歌いませんか。"),
             "老師不一起哼唱嗎。"

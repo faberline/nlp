@@ -92,6 +92,7 @@ enum BunsetsuRole {
     MotionPurpose,
     PurposeModifier,
     ProposalModifier,
+    ProposalCompanion,
     PurposeCompanion,
     PurposePartner(&'static str),
     PurposeRecipient,
@@ -3291,9 +3292,8 @@ fn localize_proposal_arguments(
     let Some(action) = source.iter().find(|a| a.doc_tok_idx == Some(predicate)) else {
         return;
     };
-    let has_object = source
-        .iter()
-        .any(|a| a.head == Some(predicate) && a.deprel == "obj");
+    localize_indefinite_arguments(groups, action, source);
+    let companion = place_companion(source, predicate);
     let speaker_offers = source.iter().any(|a| {
         !a.is_locked
             && a.head == Some(predicate)
@@ -3306,29 +3306,11 @@ fn localize_proposal_arguments(
     // Keep modifiers separate before the general noun/coordination fold.
     let mut previous: Vec<Bunsetsu> = Vec::with_capacity(groups.len());
     for mut group in std::mem::take(groups) {
-        if let Some(modifier) = previous
-            .last()
-            .and_then(|prior| indefinite_object_modifier(prior, &group, predicate))
+        if companion.is_some()
+            && matches!(group.atoms.as_slice(), [.., noun, case] if noun.doc_tok_idx == companion
+                && !case.is_locked && case.surface == "と" && case.head == companion)
         {
-            previous.pop();
-            group.atoms.insert(0, modifier);
-        }
-        // Consume the か attached to a pronoun before the clause collects its
-        // sentence-final particles. Keep the pronounced case for the assembler.
-        if let Some((mut noun, case)) = indefinite_argument(&group.atoms, predicate) {
-            if indefinite_content_object(
-                &group.atoms[0],
-                case.as_ref(),
-                noun.span.end_char,
-                action,
-                has_object,
-            ) {
-                noun.surface = "點什麼".to_owned();
-                group.role = BunsetsuRole::Obj;
-            }
-            group.sfp_tail = None;
-            group.atoms = vec![noun];
-            group.atoms.extend(case);
+            group.role = BunsetsuRole::ProposalCompanion;
         }
         if let [prefix @ .., noun, case] = group.atoms.as_slice()
             && !noun.is_locked
@@ -6005,6 +5987,9 @@ fn translate_clause_bunsetsus(
             }
             BunsetsuRole::PurposeModifier | BunsetsuRole::ProposalModifier => {
                 temporal_others.push(render_bunsetsu_np(&b, target));
+            }
+            BunsetsuRole::ProposalCompanion => {
+                temporal_others.push(format!("和{}", render_bunsetsu_np(&b, target)));
             }
             BunsetsuRole::PurposePartner(marker) => {
                 purpose_partners.push(format!("{marker}{}", render_bunsetsu_np(&b, target)));
@@ -9023,6 +9008,7 @@ fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
                 | BunsetsuRole::Punct
                 | BunsetsuRole::Connector
                 | BunsetsuRole::ProposalModifier
+                | BunsetsuRole::ProposalCompanion
                 | BunsetsuRole::Adv
         )
     {
@@ -11062,6 +11048,25 @@ mod motion_endpoint_tests {
             ("どこかで会いましょうか。", "在某個地方見面，好嗎？"),
             ("どこで会いましょうか。", "在哪裡見面好呢？"),
             ("誰かが手伝いましょう。", "某個人協助吧。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn proposals_distinguish_companions_from_coordinated_destinations() {
+        for (source, expected) in [
+            ("誰かと図書館へ行きましょう。", "和某個人往圖書館去吧。"),
+            ("誰と図書館へ行きましょうか。", "和誰往圖書館去好呢？"),
+            (
+                "先生と図書館の二階に行きましょう。",
+                "和老師去圖書館的二樓吧。",
+            ),
+            ("友達と駅まで歩きましょう。", "和朋友走到車站吧。"),
+            ("図書館へ先生と行きましょう。", "和老師往圖書館去吧。"),
+            ("図書館と公園へ行きましょう。", "往圖書館和公園去吧。"),
+            ("東京と大阪に行きましょう。", "去到東京和大阪吧。"),
+            ("先生と友達に手紙を書きましょう。", "給老師和朋友寫信吧。"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }

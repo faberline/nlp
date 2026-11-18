@@ -51,11 +51,12 @@
         "正在查這家店的付款方式。客人可以用手機付款嗎？"
       ],
       "semantic_checks": [
-        "The first sentence says the speaker is checking this shop's payment methods.",
+        "The first sentence describes a check of this shop's payment methods.",
         "The customers are the prospective payers. The question proposes the phone as the payment means.",
         "The question asks whether customers can pay by phone."
       ],
       "semantic_unknowns": [
+        "The source leaves open who checks the payment methods.",
         "The source leaves the payment amount, recipient and phone payment service unspecified."
       ],
       "control": {
@@ -89,11 +90,12 @@
         "正在查這家店的付款方式。客人沒辦法用手機付款嗎？"
       ],
       "semantic_checks": [
-        "The first sentence says the speaker is checking this shop's payment methods.",
+        "The first sentence describes a check of this shop's payment methods.",
         "The customers are the prospective payers. The question proposes the phone as the payment means.",
         "The question asks whether customers cannot pay by phone and keeps that negative proposition."
       ],
       "semantic_unknowns": [
+        "The source leaves open who checks the payment methods.",
         "The source leaves the payment amount, recipient and phone payment service unspecified."
       ],
       "control": {

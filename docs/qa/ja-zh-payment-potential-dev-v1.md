@@ -4,7 +4,7 @@ This bank contains six original public development examples. The first-party exa
 
 | Rows | What to check |
 | --- | --- |
-| `PAY-N5-01` and `PAY-N5-02` | The speaker checks the shop’s payment methods. Both questions ask about customers using a phone to pay. The second asks whether customers cannot do so. |
+| `PAY-N5-01` and `PAY-N5-02` | The first sentence describes a check of the shop’s payment methods. It leaves the checker’s identity open. Both questions ask about customers using a phone to pay. The second asks whether customers cannot do so. |
 | `PAY-N5-03` and `PAY-N5-04` | Both statements keep the older brother as payer and this month’s rent as the payment object. The verb states whether he can pay. The reason and payment method remain open. |
 | `PAY-N5-05` and `PAY-N5-06` | The ticket counter is the place where the ticket is bought. The second sentence states an ordinary payment action. Check that action and the payment means separately. The first row specifies a card, and the second specifies cash. |
 
@@ -14,4 +14,4 @@ The existing `POLITE-N5-05` and `POLITE-N5-06` rows check affirmative and negati
 
 Use the same source settings as the swimming bank. The input has no source hint. The target is `zh-Hant`, with an empty glossary and no model directory. The fixture records the `Onnx` backend label and the full translation options. [Payment ability and means bank](../../crates/faberline-nlp-translate/tests/data/ja_zh/payment_potential_dev_v1.json)
 
-Review the Japanese meaning, Taiwan wording, and reference variants before adoption. This bank records source sentences and expected meanings. Runtime results are recorded during acceptance.
+Review the Japanese meaning, Taiwan wording, and reference variants before adoption. This bank records source sentences and expected meanings. Measure runtime results during rule acceptance, after data adoption.

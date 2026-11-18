@@ -1,0 +1,109 @@
+{
+  "schema": "faberline.nlp.ja_zh.number_date_boundary_dev.v1",
+  "version": "1.0.0",
+  "title": "Calendar date and elapsed-day development controls",
+  "status": "Authoring-stage proposal. Independent review and adoption are pending; do not use these rows for rule measurement before adoption and merge are recorded in issue #120.",
+  "provenance": {
+    "data_license": "first_party_mit",
+    "authorship": "Original Japanese sentences authored for this development proposal; no exam, textbook, game, dictionary, or corpus sentence was copied.",
+    "reference_provenance": "Provisional Taiwan Traditional Chinese references and variants authored before any new-row engine execution. Independent review is pending; these are not gold or human-reviewed translations.",
+    "external_sentence_or_gloss_source": "None.",
+    "level_note": "Approximate N5 planning labels only. These examples do not claim official JLPT status or broad quantity/date coverage."
+  },
+  "base": {
+    "commit": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+    "tree": "c0ee59150c9e7c7c632fdf311f5858aa39caaf83"
+  },
+  "items": [
+    {
+      "id": "ND-01-CALENDAR-DATE",
+      "level_approx": "N5",
+      "jp": "展示会を三月三日に開催します。",
+      "zh_hant": "三月三日舉辦展覽會。",
+      "allowed_variants": [
+        "展覽會在三月三日舉行。"
+      ],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "semantic_checks": [
+        "The event being held is an exhibition.",
+        "The exhibition is held on March 3.",
+        "The source leaves the organizer unspoken.",
+        "The source gives a calendar date and no clock time or duration."
+      ],
+      "semantic_unknowns": [
+        "Actual tokenizer or runtime contact with date-related number handling is unknown before independent adoption and measurement."
+      ],
+      "pair": "ND-02-DURATION-DAYS",
+      "pair_reason": "Shares the exhibition event, object, active predicate 開催します, unspoken organizer, and numeral 三 with ND-02. 三月三日 is a calendar date. The second row uses 三日間 for a duration. The Japanese forms differ in the month component and duration marker, so this is a source-near contrast, not a one-token minimal pair.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "provenance": "Original Japanese sentence authored for this proposal; provisional Taiwan Traditional Chinese reference and variant authored before engine execution; no external sentence source; independent review pending; not gold or human-reviewed."
+    },
+    {
+      "id": "ND-02-DURATION-DAYS",
+      "level_approx": "N5",
+      "jp": "展示会を三日間開催します。",
+      "zh_hant": "舉辦為期三天的展覽會。",
+      "allowed_variants": [],
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "semantic_checks": [
+        "The event being held is an exhibition.",
+        "The exhibition is held for three days.",
+        "The source states a duration, but does not say whether that duration has already elapsed.",
+        "The source leaves the organizer unspoken and gives no calendar date or clock time."
+      ],
+      "semantic_unknowns": [
+        "Actual tokenizer or runtime contact with duration-related number handling is unknown before independent adoption and measurement."
+      ],
+      "pair": "ND-01-CALENDAR-DATE",
+      "pair_reason": "Shares the exhibition event, object, active predicate 開催します, unspoken organizer, and numeral 三 with ND-01. 三日間 gives a duration of three days, without asserting that it has elapsed. The first row uses 三月三日 as a calendar date. The Japanese forms differ in the month component and duration marker, so this is a source-near contrast, not a one-token minimal pair.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "data_license": "first_party_mit",
+      "provenance": "Original Japanese sentence authored for this proposal; provisional Taiwan Traditional Chinese reference and variant authored before engine execution; no external sentence source; independent review pending; not gold or human-reviewed."
+    }
+  ]
+}

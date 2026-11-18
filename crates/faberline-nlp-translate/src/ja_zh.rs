@@ -2560,6 +2560,7 @@ fn translate_clause_atoms(
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
+    let grouped = compose_relative_daypart(grouped);
     let bunsetsus = merge_adnominal_bunsetsus(grouped, doc, sentence_idx, target);
 
     translate_clause_bunsetsus(
@@ -4431,6 +4432,146 @@ fn giving_receiving_predicate(
     })
 }
 
+// Only remove a trailing marker that clause assembly explicitly handles.
+fn finite_predicate_atoms(b: &Bunsetsu) -> Vec<&Atom> {
+    let mut atoms: Vec<&Atom> = b.atoms.iter().filter(|a| !is_punct_atom(a)).collect();
+    while let Some(last) = atoms.last() {
+        let handled_sconj = b.sconj_tail.as_deref() == Some(last.surface.as_str())
+            && matches!(
+                last.surface.as_str(),
+                "てから"
+                    | "から"
+                    | "ので"
+                    | "けれど"
+                    | "けれども"
+                    | "けど"
+                    | "のに"
+                    | "だけど"
+                    | "し"
+                    | "たら"
+                    | "なら"
+                    | "ば"
+                    | "ながら"
+                    | "つつ"
+                    | "ても"
+                    | "でも"
+                    | "としても"
+                    | "くせに"
+                    | "が"
+                    | "と"
+            );
+        let handled_sfp = b.sfp_tail.as_deref() == Some(last.surface.as_str())
+            && matches!(
+                last.surface.as_str(),
+                "か" | "かな" | "よ" | "ね" | "よね" | "わ" | "ぞ" | "ぜ"
+            );
+        if last.is_locked || !(handled_sconj || handled_sfp) {
+            break;
+        }
+        atoms.pop();
+    }
+    atoms
+}
+
+// Admit only complete, nonpast standalone forms. Unknown auxiliaries fall back.
+fn standalone_iru_nonpast(predicates: &[Bunsetsu]) -> Option<bool> {
+    if predicates.len() != 1 {
+        return None;
+    }
+    let atoms = finite_predicate_atoms(&predicates[0]);
+    let first = *atoms.first()?;
+    if first.is_locked
+        || first.upos != Some(Upos::Verb)
+        || first.lemma.as_deref() != Some("いる")
+        || atoms
+            .iter()
+            .skip(1)
+            .any(|a| a.is_locked || a.upos != Some(Upos::Aux))
+        || atoms
+            .windows(2)
+            .any(|p| p[0].span.end_char != p[1].span.start_char)
+    {
+        return None;
+    }
+    let form: String = atoms.iter().map(|a| a.surface.as_str()).collect();
+    match form.as_str() {
+        "いる" | "います" => Some(false),
+        "いない" | "いません" => Some(true),
+        _ => None,
+    }
+}
+
+fn existential_location_link(b: &Bunsetsu, predicate_idx: usize) -> bool {
+    if b.case_particle.as_deref() != Some("に")
+        || b.atoms.iter().any(is_clock_atom)
+        || (is_time_or_place_bunsetsu(&b.atoms) && !is_place_location_bunsetsu(&b.atoms))
+    {
+        return false;
+    }
+    let Some(particle) = b.atoms.iter().find(|a| !a.is_locked && a.surface == "に") else {
+        return false;
+    };
+    let Some(head) = particle.head else {
+        return false;
+    };
+    b.atoms.iter().any(|a| {
+        a.doc_tok_idx == Some(head)
+            && a.head == Some(predicate_idx)
+            && matches!(a.deprel.as_str(), "obl" | "advmod")
+    })
+}
+
+// Bare negative past can express inanimate absence. Reject other predicates
+// and all unknown morphology so this never admits animate いる past.
+fn bare_absence_past(predicates: &[Bunsetsu]) -> bool {
+    if predicates.len() != 1 {
+        return false;
+    }
+    let atoms = finite_predicate_atoms(&predicates[0]);
+    if atoms.is_empty()
+        || atoms.iter().any(|a| a.is_locked)
+        || atoms[0].lemma.as_deref() != Some("ない")
+        || atoms.iter().skip(1).any(|a| a.upos != Some(Upos::Aux))
+        || atoms
+            .windows(2)
+            .any(|p| p[0].span.end_char != p[1].span.start_char)
+    {
+        return false;
+    }
+    let form: String = atoms.iter().map(|a| a.surface.as_str()).collect();
+    form == "なかった"
+}
+
+// Grammatical attachment alone cannot distinguish temporal 前/後 from place.
+fn fused_relational_location(pair: &[Bunsetsu], predicate_idx: Option<usize>) -> bool {
+    let [owner, location] = pair else {
+        return false;
+    };
+    let Some(spatial) = location.atoms.first() else {
+        return false;
+    };
+    let Some(genitive) = owner.atoms.last() else {
+        return false;
+    };
+    let Some(owner_idx) = genitive.head else {
+        return false;
+    };
+    ends_in_genitive_no(owner)
+        && !genitive.is_locked
+        && owner.atoms.iter().any(|a| a.doc_tok_idx == Some(owner_idx))
+        && owner.atoms.iter().all(|a| a.upos != Some(Upos::Verb))
+        && genitive.span.end_char == spatial.span.start_char
+        && location.role == BunsetsuRole::Adv
+        && location.atoms.len() == 1
+        && !spatial.is_locked
+        && matches!(
+            spatial.surface.as_str(),
+            "中に" | "上に" | "下に" | "外に" | "横に"
+        )
+        && spatial.head.is_some()
+        && spatial.head == predicate_idx
+}
+
 fn translate_clause_bunsetsus(
     mut bunsetsus: Vec<Bunsetsu>,
     raw_clause: &str,
@@ -4476,6 +4617,139 @@ fn translate_clause_bunsetsus(
     let mut is_toshitemo_clause = false;
     let mut has_competing_transfer_recipient = false;
 
+    let mut candidates: Vec<Bunsetsu> = bunsetsus
+        .iter()
+        .filter(|b| b.role == BunsetsuRole::Predicate)
+        .cloned()
+        .collect();
+    // Interpret a source-linked terminal が on a clone first. Do not mutate
+    // clause metadata until every standalone existential guard has passed.
+    let mut candidate_contrast = false;
+    if candidates.len() == 1
+        && bunsetsus
+            .last()
+            .is_some_and(|b| b.role == BunsetsuRole::Predicate)
+    {
+        let b = &mut candidates[0];
+        let predicate_idx = b
+            .atoms
+            .iter()
+            .find(|a| {
+                !a.is_locked && a.lemma.as_deref() == Some("いる") && a.upos == Some(Upos::Verb)
+            })
+            .and_then(|a| a.doc_tok_idx);
+        candidate_contrast = matches!(b.sconj_tail.as_deref(), None | Some("が"))
+            && b.atoms.last().is_some_and(|a| {
+                !a.is_locked
+                    && a.surface == "が"
+                    && predicate_idx.is_some()
+                    && a.head == predicate_idx
+            });
+        if candidate_contrast {
+            b.sconj_tail = Some("が".to_owned());
+        }
+    }
+    let predicate_idx = candidates
+        .first()
+        .and_then(|b| {
+            b.atoms
+                .iter()
+                .find(|a| !a.is_locked && a.lemma.as_deref() == Some("いる"))
+        })
+        .and_then(|a| a.doc_tok_idx);
+    let linked = predicate_idx
+        .map(|idx| {
+            bunsetsus
+                .iter()
+                .filter(|b| existential_location_link(b, idx))
+                .count()
+        })
+        .unwrap_or(0);
+    let ni_count = bunsetsus
+        .iter()
+        .filter(|b| b.case_particle.as_deref() == Some("に"))
+        .count();
+    let subject_count = bunsetsus
+        .iter()
+        .filter(|b| b.role == BunsetsuRole::Subj)
+        .count();
+    let animate_existential = standalone_iru_nonpast(&candidates).filter(|_| {
+        (candidates[0].sconj_tail.as_deref() != Some("が") || candidate_contrast)
+            && linked == 1
+            && ni_count == 1
+            && subject_count == 1
+            && !bunsetsus.iter().any(|b| b.role == BunsetsuRole::Obj)
+            && bunsetsus
+                .iter()
+                .filter(|b| b.role == BunsetsuRole::Subj)
+                .all(|b| matches!(b.case_particle.as_deref(), Some("が" | "は")))
+            && !bunsetsus
+                .iter()
+                .filter(|b| b.role != BunsetsuRole::Predicate)
+                .flat_map(|b| &b.atoms)
+                .any(|a| !a.is_locked && a.upos == Some(Upos::Verb))
+    });
+    let animate_contrast = animate_existential.is_some() && candidate_contrast;
+    if animate_contrast && let Some(b) = bunsetsus.last_mut() {
+        b.sconj_tail = Some("が".to_owned());
+        if b.case_particle.as_deref() == Some("が") {
+            b.case_particle = None;
+        }
+    }
+
+    let absence_predicate_idx = candidates.first().and_then(|b| {
+        b.atoms
+            .iter()
+            .find(|a| !a.is_locked && a.lemma.as_deref() == Some("ない"))
+            .and_then(|a| a.doc_tok_idx)
+    });
+    let absence_locations = absence_predicate_idx
+        .map(|idx| {
+            bunsetsus
+                .iter()
+                .filter(|b| existential_location_link(b, idx))
+                .count()
+        })
+        .unwrap_or(0);
+    let fused_pairs: Vec<usize> = bunsetsus
+        .windows(2)
+        .enumerate()
+        .filter_map(|(idx, pair)| {
+            fused_relational_location(pair, absence_predicate_idx).then_some(idx)
+        })
+        .collect();
+    let unique_absence_location =
+        (absence_locations == 1 && ni_count == 1 && fused_pairs.is_empty())
+            || (absence_locations == 0 && ni_count == 0 && fused_pairs.len() == 1);
+    let inanimate_past = bare_absence_past(&candidates)
+        && unique_absence_location
+        && subject_count == 1
+        && bunsetsus
+            .iter()
+            .filter(|b| b.role == BunsetsuRole::Subj)
+            .all(|b| b.case_particle.as_deref() == Some("が"))
+        && !bunsetsus.iter().any(|b| b.role == BunsetsuRole::Obj)
+        && !bunsetsus
+            .iter()
+            .filter(|b| b.role != BunsetsuRole::Predicate)
+            .flat_map(|b| &b.atoms)
+            .any(|a| !a.is_locked && a.upos == Some(Upos::Verb));
+    // A fused spatial adverb can leave N の outside the normal noun merge.
+    // Only join the adjacent source constituents for bare past absence.
+    if inanimate_past && let Some(&idx) = fused_pairs.first() {
+        let mut owner = bunsetsus[idx].clone();
+        let spatial = &bunsetsus[idx + 1];
+        owner.atoms.pop();
+        let owner = render_bunsetsu_np(&owner, target);
+        let stem = spatial.atoms[0].surface.strip_suffix('に').unwrap_or("");
+        let relation = translate_single_ja_term(stem, None, Some(Upos::Noun));
+        if !owner.is_empty() && !relation.is_empty() {
+            bunsetsus.remove(idx);
+            bunsetsus.remove(idx);
+            subjects.push(format!("{owner}{relation}"));
+        }
+    }
+
     for b in bunsetsus.drain(..) {
         if b.case_particle.as_deref() == Some("へ") && !is_time_or_place_bunsetsu(&b.atoms) {
             has_competing_transfer_recipient = true;
@@ -4485,6 +4759,7 @@ fn translate_clause_bunsetsus(
                 "てから" => sconj_suffix = Some("後"),
                 "から" | "ので" => sconj_prefix = Some("因為"),
                 "からといって" => sconj_prefix = Some("即便因為"),
+                "が" if animate_contrast => sconj_prefix = Some("雖然"),
                 "けれど" | "けれども" | "けど" | "のに" => sconj_suffix = Some("，但是"),
                 "だけど" => sconj_suffix = Some("，不過"),
                 "し" => sconj_suffix = Some("，而且"),
@@ -4583,21 +4858,24 @@ fn translate_clause_bunsetsus(
             BunsetsuRole::Adv => {
                 let s = render_bunsetsu_np(&b, target);
                 if !s.is_empty() {
-                    if matches!(
-                        s.as_str(),
-                        "每天"
-                            | "今天"
-                            | "明天"
-                            | "昨天"
-                            | "現在"
-                            | "早上"
-                            | "夜晚"
-                            | "今年"
-                            | "明年"
-                            | "去年"
-                            | "今後"
-                            | "久違地"
-                    ) {
+                    if (b.atoms.len() == 1
+                        && b.atoms[0].lemma.as_deref() == Some(RELATIVE_DAYPART_ATOM))
+                        || matches!(
+                            s.as_str(),
+                            "每天"
+                                | "今天"
+                                | "明天"
+                                | "昨天"
+                                | "現在"
+                                | "早上"
+                                | "夜晚"
+                                | "今年"
+                                | "明年"
+                                | "去年"
+                                | "今後"
+                                | "久違地"
+                        )
+                    {
                         temporal_others.push(s);
                     } else {
                         adverbs.push(s);
@@ -4743,8 +5021,41 @@ fn translate_clause_bunsetsus(
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
 
+    if inanimate_past {
+        pre_verb_mods.insert(0, "當時".to_owned());
+    }
+
     if is_toshitemo_clause {
         post_verb_mods.retain(|m| m != "了");
+    }
+
+    if let Some(negative) = animate_existential
+        && subj_entries.len() == 1
+        && ((iobjs.len() == 1 && obliques.is_empty()) || (obliques.len() == 1 && iobjs.is_empty()))
+    {
+        let location = if iobjs.len() == 1 {
+            iobjs.remove(0).text
+        } else {
+            obliques.remove(0).text
+        };
+        let location = location
+            .strip_prefix('給')
+            .or_else(|| location.strip_prefix('對'))
+            .or_else(|| location.strip_prefix('在'))
+            .unwrap_or(&location)
+            .to_owned();
+        let participant = subj_entries.remove(0);
+        pre_verb_mods.retain(|m| m != "不" && m != "沒有");
+        if participant.had_ga {
+            subjects.push(location);
+            objs.push(participant.text);
+            verb_core = if negative { "沒有" } else { "有" }.to_owned();
+        } else {
+            subjects.push(participant.text);
+            verb_core = if negative { "不在" } else { "在" }.to_owned();
+            objs.push(location);
+        }
+        post_verb_mods.clear();
     }
 
     // Comparative preference `[X] ほうが [好き / いい / 良い]`
@@ -6828,6 +7139,83 @@ fn apply_phrase_matches(atoms: &[Atom]) -> Vec<Atom> {
     out
 }
 
+const RELATIVE_DAYPART_ATOM: &str = "__ja_relative_daypart_atom";
+
+// Combine only an independent calendar-day/daypart modifier.  This must run
+// before adnominal folding and before the two groups enter separate buckets.
+fn compose_relative_daypart(groups: Vec<Bunsetsu>) -> Vec<Bunsetsu> {
+    let mut result = Vec::with_capacity(groups.len());
+    let mut iter = groups.into_iter().peekable();
+    while let Some(day) = iter.next() {
+        let paired = iter.peek().is_some_and(|part| {
+            let [date, no] = day.atoms.as_slice() else {
+                return false;
+            };
+            let [period] = part.atoms.as_slice() else {
+                return false;
+            };
+            !date.is_locked
+                && !no.is_locked
+                && !period.is_locked
+                && matches!(date.surface.as_str(), "今日" | "明日" | "昨日")
+                && no.surface == "の"
+                && matches!(
+                    period.surface.as_str(),
+                    "朝" | "午前" | "午後" | "昼" | "夜"
+                )
+                && date.span.end_char == no.span.start_char
+                && no.span.end_char == period.span.start_char
+                && !is_clock_atom(period)
+                && matches!(day.case_particle.as_deref(), None | Some("の"))
+                && part.case_particle.is_none()
+                && day.sconj_tail.is_none()
+                && part.sconj_tail.is_none()
+                && day.sfp_tail.is_none()
+                && part.sfp_tail.is_none()
+                && matches!(day.role, BunsetsuRole::Other | BunsetsuRole::Adv)
+                && matches!(part.role, BunsetsuRole::Other | BunsetsuRole::Adv)
+        });
+        if paired {
+            let part = iter.next().expect("peeked daypart");
+            // A following unmarked nominal may make this a modifier of that
+            // noun. Leave that ambiguous structure on the existing path.
+            let attached_nominal = iter.peek().is_some_and(|next| {
+                matches!(next.role, BunsetsuRole::Other | BunsetsuRole::Obj)
+                    && next
+                        .atoms
+                        .first()
+                        .is_some_and(|a| matches!(a.upos, Some(Upos::Noun | Upos::Propn)))
+            });
+            if attached_nominal {
+                result.push(day);
+                result.push(part);
+                continue;
+            }
+            let date = &day.atoms[0];
+            let period = &part.atoms[0];
+            let mut combined = date.clone();
+            combined.span.end_char = period.span.end_char;
+            combined.surface = format!(
+                "{}{}",
+                translate_single_ja_term(&date.surface, date.lemma.as_deref(), date.upos),
+                translate_single_ja_term(&period.surface, period.lemma.as_deref(), period.upos)
+            );
+            combined.lemma = Some(RELATIVE_DAYPART_ATOM.to_owned());
+            combined.is_locked = true;
+            result.push(Bunsetsu {
+                atoms: vec![combined],
+                role: BunsetsuRole::Adv,
+                case_particle: None,
+                sconj_tail: None,
+                sfp_tail: None,
+            });
+        } else {
+            result.push(day);
+        }
+    }
+    result
+}
+
 fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> Vec<Bunsetsu> {
     let mut bunsetsus: Vec<Bunsetsu> = Vec::new();
     let mut cur: Vec<Atom> = Vec::new();
@@ -6890,33 +7278,35 @@ fn ends_in_coord_to(b: &Bunsetsu) -> bool {
 }
 
 fn is_person_like_bunsetsu(b: &Bunsetsu) -> bool {
-    b.atoms.iter().any(|a| {
-        matches!(a.upos, Some(Upos::Pron | Upos::Propn))
-            || matches!(
-                a.surface.as_str(),
-                "友達"
-                    | "先生"
-                    | "先輩"
-                    | "人"
-                    | "彼"
-                    | "彼女"
-                    | "私"
-                    | "父"
-                    | "母"
-                    | "兄"
-                    | "姉"
-                    | "弟"
-                    | "妹"
-                    | "子供"
-                    | "学生"
-                    | "お父さん"
-                    | "お母さん"
-                    | "お兄さん"
-                    | "お姉さん"
-                    | "おじさん"
-                    | "おばさん"
-            )
-    })
+    b.atoms.iter().any(is_person_like_atom)
+}
+
+fn is_person_like_atom(a: &Atom) -> bool {
+    matches!(a.upos, Some(Upos::Pron | Upos::Propn))
+        || matches!(
+            a.surface.as_str(),
+            "友達"
+                | "先生"
+                | "先輩"
+                | "人"
+                | "彼"
+                | "彼女"
+                | "私"
+                | "父"
+                | "母"
+                | "兄"
+                | "姉"
+                | "弟"
+                | "妹"
+                | "子供"
+                | "学生"
+                | "お父さん"
+                | "お母さん"
+                | "お兄さん"
+                | "お姉さん"
+                | "おじさん"
+                | "おばさん"
+        )
 }
 
 fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
@@ -6941,7 +7331,13 @@ fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
 }
 
 fn is_prenominal_pred(b: &Bunsetsu) -> bool {
-    if b.sconj_tail.is_some() || b.sfp_tail.is_some() {
+    if b.sconj_tail.is_some()
+        || b.sfp_tail.is_some()
+        || b.atoms
+            .windows(2)
+            .any(|p| attached_demonstrative(&p[0], &p[1]).is_some())
+    {
+        // A noun carrying its own demonstrative is not a modifier of the next noun.
         return false;
     }
     let has_pred_or_det = b.role == BunsetsuRole::Predicate
@@ -6963,6 +7359,55 @@ fn is_prenominal_pred(b: &Bunsetsu) -> bool {
         .last()
         .is_some_and(|a| !a.is_locked && matches!(a.surface.as_str(), "て" | "で"));
     !has_polite_or_copula_or_te
+}
+
+/// A separately analysed demonstrative points to its adjacent noun. A standalone
+/// pronoun, an interjection or a protected phrase has no such source attachment.
+fn attached_demonstrative(det: &Atom, noun: &Atom) -> Option<char> {
+    if det.is_locked
+        || noun.is_locked
+        || det.upos != Some(Upos::Det)
+        || noun.upos != Some(Upos::Noun)
+        || det.span.end_char != noun.span.start_char
+        || det.deprel != "det"
+        || det.doc_tok_idx.is_none()
+        || noun.doc_tok_idx.is_none()
+        || det.head != noun.doc_tok_idx
+    {
+        return None;
+    }
+    match det.surface.as_str() {
+        "この" => Some('這'),
+        "その" | "あの" => Some('那'),
+        _ => None,
+    }
+}
+
+/// A demonstrative already has an attached noun here. Use complete person nouns,
+/// including occupations whose dictionary entries have no semantic tag.
+fn is_demonstrative_person_noun(noun: &Atom) -> bool {
+    is_person_like_atom(noun)
+        || matches!(
+            noun.surface.as_str(),
+            "医師"
+                | "医者"
+                | "教師"
+                | "教員"
+                | "教授"
+                | "店員"
+                | "職員"
+                | "社員"
+                | "社長"
+                | "部長"
+                | "課長"
+                | "作家"
+                | "友人"
+                | "生徒"
+        )
+        || faberline_nlp::lexicon::lookup_ja(&noun.surface).is_some_and(|hit| {
+            hit.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Person)
+                && hit.upos_candidates.as_slice() == [Upos::Noun]
+        })
 }
 
 fn is_embedded_acl_arg(b: &Bunsetsu) -> bool {
@@ -7039,6 +7484,15 @@ fn merge_adnominal_bunsetsus(
     let mut res: Vec<Bunsetsu> = Vec::with_capacity(bunsetsus.len());
 
     for mut b in bunsetsus {
+        if (is_noun_bunsetsu(&b) || ends_in_genitive_no(&b))
+            && let Some(noun) = b.atoms.first()
+            && let Some(modifier) = res.pop_if(|prev| {
+                matches!(prev.atoms.as_slice(), [det] if attached_demonstrative(det, noun).is_some())
+            })
+        {
+            // Keep the original atoms, syntactic role, and any following の or case particle.
+            b.atoms.splice(0..0, modifier.atoms);
+        }
         if is_noun_bunsetsu(&b) {
             let is_sue_ni = b.case_particle.as_deref() == Some("に")
                 && b.atoms
@@ -8054,11 +8508,11 @@ mod motion_endpoint_tests {
     fn negative_questions_keep_nonhuman_subjects() {
         assert_eq!(
             translate("このバスは駅まで行きませんか。"),
-            "這個的公車不去車站嗎。"
+            "這輛公車不去車站嗎。"
         );
         assert_eq!(
             translate("この電車は駅まで行きませんか。"),
-            "這個的電車不去車站嗎。"
+            "這輛電車不去車站嗎。"
         );
     }
 
@@ -8258,6 +8712,39 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut i = 0usize;
     while i < b.atoms.len() {
         let a = &b.atoms[i];
+        if let Some(noun) = b.atoms.get(i + 1)
+            && let Some(demonstrative) = attached_demonstrative(a, noun)
+        {
+            out.push(demonstrative);
+            // A component of a multi-token compound does not establish a classifier
+            // for the whole phrase. Render its noun atoms normally in that case.
+            if b.atoms.get(i + 2).is_some_and(|next| {
+                noun.span.end_char == next.span.start_char
+                    && (next.is_locked || matches!(next.upos, Some(Upos::Noun | Upos::Propn)))
+            }) {
+                i += 1;
+                continue;
+            }
+            let word = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
+            let classifier = match word.as_str() {
+                "書" | "小說" | "雜誌" | "字典" => "本",
+                "車" | "公車" | "電車" | "汽車" | "卡車" | "腳踏車" | "自行車" => {
+                    "輛"
+                }
+                "資料" | "文件" | "報告" | "報紙" => "份",
+                "商店" | "餐廳" | "公司" => "家",
+                "寺" | "寺廟" | "橋" => "座",
+                "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
+                _ if is_demonstrative_person_noun(noun) => "個",
+                // With no established unit or count reading, keep the deictic
+                // without guessing an amount, e.g. 這水 rather than a cup of water.
+                _ => "",
+            };
+            out.push_str(classifier);
+            out.push_str(if word == "箱" { "箱子" } else { &word });
+            i += 2;
+            continue;
+        }
         if !a.is_locked
             && (is_case_or_sfp_to_strip(&a.surface)
                 || (b.sconj_tail.as_deref() == Some(a.surface.as_str())))
@@ -9381,6 +9868,510 @@ fn lookup_curated_ja_word(s: &str) -> Option<&'static str> {
         "場" => "場所",
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod existence_rule_tests {
+    use super::*;
+    use crate::{GlossaryEntry, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+    use std::collections::BTreeMap;
+
+    fn translate(source: &str, glossary: &TranslationGlossary) -> crate::TranslatedDocument {
+        analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap()
+    }
+
+    fn atom(surface: &str, lemma: Option<&str>, upos: Upos, start: usize) -> Atom {
+        Atom {
+            span: Span {
+                start_char: start,
+                end_char: start + surface.chars().count(),
+            },
+            surface: surface.to_owned(),
+            lemma: lemma.map(str::to_owned),
+            upos: Some(upos),
+            doc_tok_idx: None,
+            head: None,
+            deprel: String::new(),
+            is_locked: false,
+        }
+    }
+
+    #[test]
+    fn demonstrative_nouns_keep_attachment_case_and_protected_text() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("私はこの雑誌を読みます。", "我讀這本雜誌。"),
+            ("私はその本を読みません。", "我不讀那本書。"),
+            ("私はあの本を読みます。", "我讀那本書。"),
+            ("私はこの本の名前を読みます。", "我讀這本書的名字。"),
+            ("私は新しい本を読みます。", "我讀新書。"),
+            ("私は甘いケーキを食べます。", "我吃甜的蛋糕。"),
+        ] {
+            let doc = translate(source, &glossary);
+            assert_eq!(doc.target_text, expected, "{source}");
+        }
+        let source = "私はその本を読む、彼は`この車`を見る。";
+        let doc = translate(source, &glossary);
+        assert!(doc.target_text.contains("那本書"));
+        let [lock] = doc.opaque_spans.as_slice() else {
+            panic!("{doc:?}")
+        };
+        let slice = |s: &str, span: Span| {
+            s.chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect::<String>()
+        };
+        assert_eq!(slice(source, lock.source_span), "`この車`");
+        assert_eq!(
+            slice(&doc.target_text, lock.target_span.unwrap()),
+            "`この車`"
+        );
+        assert_eq!(doc.target_text.matches("`この車`").count(), 1);
+
+        let glossary = TranslationGlossary {
+            objects: vec![GlossaryEntry {
+                canonical: "その本".into(),
+                surfaces: vec!["その本".into()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "藏書甲".into())]),
+                ..GlossaryEntry::default()
+            }],
+            ..TranslationGlossary::new()
+        };
+        let source = "私はその本を読みます。";
+        let doc = translate(source, &glossary);
+        let [hit] = doc.glossary_hits.as_slice() else {
+            panic!("{doc:?}")
+        };
+        assert_eq!(slice(source, hit.source_span), "その本");
+        assert_eq!(slice(&doc.target_text, hit.target_span), "藏書甲");
+        assert_eq!(doc.target_text.matches("藏書甲").count(), 1);
+    }
+
+    #[test]
+    fn demonstrative_classifiers_preserve_people_and_mass_nouns() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("その先生は来ます。", "那個老師來。"),
+            ("その先生が来ます。", "那個老師來。"),
+            ("あの先生は忙しいです。", "那個老師忙碌。"),
+            ("私はこの先生を見ます。", "我看這個老師。"),
+            ("その医師は来ます。", "那個醫師來。"),
+            ("私はその友人を見ます。", "我看那個朋友。"),
+            ("私はその後輩を見ます。", "我看那個後輩。"),
+            ("私はこの水を飲みます。", "我喝這水。"),
+            ("私はその砂糖を買います。", "我買那砂糖。"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn pointing_at_medicine_does_not_supply_a_kind_or_dosage() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("その薬は床に落ちました。", "那個藥掉落到地板了。"),
+            ("その薬を拾います。", "拾起那個藥。"),
+            ("私はこの薬を飲みます。", "我喝這個藥。"),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let explicit = translate("その薬の種類を調べます。", &glossary);
+        assert!(
+            explicit.target_text.contains("那個藥的種類"),
+            "{explicit:?}"
+        );
+    }
+
+    #[test]
+    fn demonstrative_requires_a_real_adjacent_noun_dependency() {
+        let mut det = atom("その", None, Upos::Det, 0);
+        let mut noun = atom("本", None, Upos::Noun, 2);
+        det.doc_tok_idx = Some(0);
+        noun.doc_tok_idx = Some(1);
+        det.deprel = "det".into();
+        det.head = Some(1);
+        assert_eq!(attached_demonstrative(&det, &noun), Some('那'));
+        let mut locked = noun.clone();
+        locked.is_locked = true;
+        assert_eq!(attached_demonstrative(&det, &locked), None);
+        let mut detached = noun.clone();
+        detached.span.start_char += 1;
+        assert_eq!(attached_demonstrative(&det, &detached), None);
+        let mut pronoun = det.clone();
+        pronoun.upos = Some(Upos::Pron);
+        assert_eq!(attached_demonstrative(&pronoun, &noun), None);
+        det.head = Some(2);
+        assert_eq!(attached_demonstrative(&det, &noun), None);
+    }
+
+    #[test]
+    fn relative_daypart_is_bounded_by_source_and_nominal_context() {
+        fn group(atoms: Vec<Atom>, role: BunsetsuRole, case: Option<&str>) -> Bunsetsu {
+            Bunsetsu {
+                atoms,
+                role,
+                case_particle: case.map(str::to_owned),
+                sconj_tail: None,
+                sfp_tail: None,
+            }
+        }
+        let date = group(
+            vec![
+                atom("明日", None, Upos::Noun, 0),
+                atom("の", None, Upos::Adp, 2),
+            ],
+            BunsetsuRole::Other,
+            Some("の"),
+        );
+        let afternoon = group(
+            vec![atom("午後", None, Upos::Noun, 3)],
+            BunsetsuRole::Adv,
+            None,
+        );
+        let morning = group(
+            vec![atom("朝", None, Upos::Noun, 3)],
+            BunsetsuRole::Adv,
+            None,
+        );
+        let composed = compose_relative_daypart(vec![date.clone(), afternoon.clone()]);
+        assert_eq!(composed.len(), 1);
+        assert_eq!(
+            composed[0].atoms[0].lemma.as_deref(),
+            Some(RELATIVE_DAYPART_ATOM)
+        );
+        assert_eq!(
+            composed[0].atoms[0].surface,
+            format!(
+                "{}{}",
+                translate_single_ja_term("明日", None, Some(Upos::Noun)),
+                translate_single_ja_term("午後", None, Some(Upos::Noun))
+            )
+        );
+        assert_eq!(
+            compose_relative_daypart(vec![date.clone(), morning]).len(),
+            1
+        );
+        let noun = group(
+            vec![atom("会議", None, Upos::Noun, 5)],
+            BunsetsuRole::Other,
+            None,
+        );
+        assert_eq!(
+            compose_relative_daypart(vec![date.clone(), afternoon.clone(), noun]).len(),
+            3
+        );
+        let mut locked = afternoon.clone();
+        locked.atoms[0].is_locked = true;
+        assert_eq!(
+            compose_relative_daypart(vec![date.clone(), locked]).len(),
+            2
+        );
+        let clock = group(
+            vec![atom("午後二時", Some(CLOCK_ATOM), Upos::Noun, 3)],
+            BunsetsuRole::Adv,
+            None,
+        );
+        assert_eq!(compose_relative_daypart(vec![date.clone(), clock]).len(), 2);
+        let possessive = group(
+            vec![
+                atom("私", None, Upos::Pron, 0),
+                atom("の", None, Upos::Adp, 1),
+            ],
+            BunsetsuRole::Other,
+            Some("の"),
+        );
+        assert_eq!(
+            compose_relative_daypart(vec![possessive, afternoon.clone()]).len(),
+            2
+        );
+        assert_eq!(compose_relative_daypart(vec![afternoon]).len(), 1);
+    }
+
+    #[test]
+    fn relative_daypart_stays_ordered_in_adopted_event() {
+        for (source, expected) in [
+            ("明日の朝、私は家で本を読みます。", "明天早上"),
+            ("明日の午後、私は家で本を読みます。", "明天午後"),
+        ] {
+            let result = translate(source, &TranslationGlossary::new());
+            assert!(
+                result.target_text.contains(expected),
+                "{}",
+                result.target_text
+            );
+            assert!(
+                !result.target_text.contains("明天的"),
+                "{}",
+                result.target_text
+            );
+        }
+        let text = translate(
+            "明日の朝私は公園で本を読みます。",
+            &TranslationGlossary::new(),
+        )
+        .target_text;
+        let time = text.find("明天早上").expect("combined time");
+        let place = text.find("公園").expect("place");
+        assert!(time < place, "{text}");
+    }
+
+    fn predicate(atoms: Vec<Atom>) -> Bunsetsu {
+        Bunsetsu {
+            atoms,
+            role: BunsetsuRole::Predicate,
+            case_particle: None,
+            sconj_tail: None,
+            sfp_tail: None,
+        }
+    }
+
+    #[test]
+    fn animate_nonpast_accepts_adopted_polite_forms_and_rejects_past_and_action() {
+        let base = atom("い", Some("いる"), Upos::Verb, 0);
+        let positive = predicate(vec![base.clone(), atom("ます", None, Upos::Aux, 1)]);
+        let negative = predicate(vec![
+            base.clone(),
+            atom("ませ", None, Upos::Aux, 1),
+            atom("ん", None, Upos::Aux, 3),
+        ]);
+        assert_eq!(standalone_iru_nonpast(&[positive]), Some(false));
+        assert_eq!(standalone_iru_nonpast(&[negative]), Some(true));
+        let past = predicate(vec![base.clone(), atom("ました", None, Upos::Aux, 1)]);
+        assert_eq!(standalone_iru_nonpast(&[past]), None);
+        let unknown = predicate(vec![
+            base.clone(),
+            atom("ます", None, Upos::Aux, 1),
+            atom("だけ", None, Upos::Part, 3),
+        ]);
+        assert_eq!(standalone_iru_nonpast(&[unknown]), None);
+        let mut contrast = predicate(vec![
+            base.clone(),
+            atom("ます", None, Upos::Aux, 1),
+            atom("が", None, Upos::Adp, 3),
+        ]);
+        assert_eq!(standalone_iru_nonpast(&[contrast.clone()]), None);
+        contrast.sconj_tail = Some("が".to_owned());
+        assert_eq!(standalone_iru_nonpast(&[contrast]), Some(false));
+        let action = predicate(vec![
+            atom("走っ", Some("走る"), Upos::Verb, 0),
+            atom("て", None, Upos::Sconj, 2),
+            atom("い", Some("いる"), Upos::Verb, 3),
+            atom("ます", None, Upos::Aux, 4),
+        ]);
+        assert_eq!(standalone_iru_nonpast(&[action]), None);
+    }
+
+    #[test]
+    fn location_requires_particle_and_predicate_source_link() {
+        let mut place = atom("庭", None, Upos::Noun, 0);
+        place.doc_tok_idx = Some(0);
+        place.head = Some(2);
+        place.deprel = "obl".to_owned();
+        let mut particle = atom("に", None, Upos::Adp, 1);
+        particle.head = Some(0);
+        let b = Bunsetsu {
+            atoms: vec![place, particle],
+            role: BunsetsuRole::IObj,
+            case_particle: Some("に".to_owned()),
+            sconj_tail: None,
+            sfp_tail: None,
+        };
+        assert!(existential_location_link(&b, 2));
+        assert!(!existential_location_link(&b, 3));
+        let mut clock = b.clone();
+        // normalize_clock_atoms emits CLOCK_ATOM for a recognized clock.
+        clock.atoms[0] = atom("二時", Some(CLOCK_ATOM), Upos::Noun, 0);
+        clock.atoms[0].doc_tok_idx = Some(0);
+        clock.atoms[0].head = Some(2);
+        clock.atoms[0].deprel = "obl".to_owned();
+        assert!(!existential_location_link(&clock, 2));
+    }
+
+    #[test]
+    fn fused_location_requires_unambiguous_relation_and_source_attachment() {
+        // The token structure follows the adopted jz155 source observation.
+        let mut owner = atom("財布", None, Upos::Noun, 0);
+        owner.doc_tok_idx = Some(0);
+        let mut genitive = atom("の", None, Upos::Adp, 2);
+        genitive.head = Some(0);
+        let mut spatial = atom("中に", None, Upos::Adv, 3);
+        spatial.head = Some(5);
+        let owner_b = Bunsetsu {
+            atoms: vec![owner, genitive],
+            role: BunsetsuRole::Other,
+            case_particle: Some("の".to_owned()),
+            sconj_tail: None,
+            sfp_tail: None,
+        };
+        let spatial_b = Bunsetsu {
+            atoms: vec![spatial],
+            role: BunsetsuRole::Adv,
+            case_particle: None,
+            sconj_tail: None,
+            sfp_tail: None,
+        };
+        let mut pair = vec![owner_b, spatial_b];
+        assert!(fused_relational_location(&pair, Some(5)));
+        assert!(!fused_relational_location(&pair, Some(6)));
+        for ambiguous in ["前に", "後に"] {
+            pair[1].atoms[0].surface = ambiguous.to_owned();
+            assert!(!fused_relational_location(&pair, Some(5)));
+        }
+    }
+
+    #[test]
+    fn adopted_existentials_keep_polarity_and_action_guards() {
+        let glossary = TranslationGlossary::new();
+        for (source, negative) in [("庭に猫がいます。", false), ("庭に猫がいません。", true)]
+        {
+            let text = translate(source, &glossary).target_text;
+            assert!(text.contains('貓') && text.contains('庭'), "{text}");
+            assert!(
+                if negative {
+                    text.contains("沒有")
+                } else {
+                    text.contains('有')
+                },
+                "{text}"
+            );
+            assert!(!text.contains('給'), "{text}");
+        }
+        let action = translate("棚の上に箱を置いた。", &glossary).target_text;
+        assert!(
+            action.contains('箱') && action.contains('棚') && action.contains('放'),
+            "{action}"
+        );
+        let recipient = translate("私は`QX`に手紙を書きます。", &glossary).target_text;
+        assert!(
+            recipient.contains("`QX`") && recipient.contains('給') && recipient.contains('信'),
+            "{recipient}"
+        );
+    }
+
+    #[test]
+    fn adopted_past_relations_keep_owner_entity_and_time() {
+        let glossary = TranslationGlossary::new();
+        for (source, owner, entity) in [
+            ("財布の中にお金がなかった。", "錢包", "金錢"),
+            ("棚の上に箱がなかった。", "棚", "箱"),
+        ] {
+            let text = translate(source, &glossary).target_text;
+            assert!(
+                text.contains(owner)
+                    && text.contains(entity)
+                    && text.contains("沒有")
+                    && text.contains("當時"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn adopted_glossary_and_opaque_content_stay_in_roles() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.places.push(GlossaryEntry {
+            canonical: "青葉公園".to_owned(),
+            surfaces: vec!["青葉公園".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "青葉公園".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let doc = translate("青葉公園に犬がいます。", &glossary);
+        assert_eq!(doc.glossary_hits.len(), 1);
+        assert!(
+            doc.target_text.contains("青葉公園")
+                && doc.target_text.contains('狗')
+                && doc.target_text.contains('有')
+                && !doc.target_text.contains('給'),
+            "{}",
+            doc.target_text
+        );
+        let opaque = translate("庭に`QX`がいません。", &TranslationGlossary::new());
+        assert_eq!(opaque.opaque_spans.len(), 1);
+        assert!(
+            opaque.target_text.contains("`QX`")
+                && opaque.target_text.contains("沒有")
+                && !opaque.target_text.contains('給'),
+            "{}",
+            opaque.target_text
+        );
+        let target_span = opaque.opaque_spans[0].target_span.unwrap();
+        let protected: String = opaque
+            .target_text
+            .chars()
+            .skip(target_span.start_char)
+            .take(target_span.end_char - target_span.start_char)
+            .collect();
+        assert_eq!(protected, "`QX`");
+        let mut actor = TranslationGlossary::new();
+        actor.actors.push(GlossaryEntry {
+            canonical: "青木さん".to_owned(),
+            surfaces: vec!["青木さん".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "青木".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let recipient = translate("私は青木さんに手紙を書きます。", &actor);
+        assert_eq!(recipient.glossary_hits.len(), 1);
+        assert!(
+            recipient.target_text.contains("給青木") && recipient.target_text.contains('信'),
+            "{}",
+            recipient.target_text
+        );
+    }
+
+    #[test]
+    fn adopted_opposed_clauses_keep_polarity_local() {
+        let glossary = TranslationGlossary::new();
+        for (source, first_negative) in [
+            ("庭に猫がいますが、犬は道を走りません。", false),
+            ("庭に猫がいませんが、犬は道を走ります。", true),
+        ] {
+            let text = translate(source, &glossary).target_text;
+            let clauses: Vec<&str> = text.split('，').collect();
+            assert_eq!(clauses.len(), 2, "{text}");
+            assert!(
+                clauses[0].contains("雖然") || clauses[1].contains('但'),
+                "{text}"
+            );
+            assert!(
+                clauses[0].contains('貓') && clauses[0].contains('庭'),
+                "{text}"
+            );
+            assert_eq!(clauses[0].contains("沒有"), first_negative, "{text}");
+            assert!(!clauses[0].contains('給'), "{text}");
+            if first_negative {
+                assert!(clauses[0].contains("沒有"), "{text}");
+            } else {
+                assert!(
+                    clauses[0].contains('有') || clauses[0].contains('在'),
+                    "{text}"
+                );
+            }
+            assert!(
+                clauses[1].contains('狗')
+                    && clauses[1].contains('跑')
+                    && clauses[1].contains("道路"),
+                "{text}"
+            );
+            assert_eq!(clauses[1].contains('不'), !first_negative, "{text}");
+        }
+    }
 }
 
 #[cfg(test)]

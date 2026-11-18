@@ -416,7 +416,7 @@ fn split_cjk_numeral_prefix(s: &str) -> Option<(&str, &str)> {
     }
 }
 
-fn parse_cjk_or_ascii_num(s: &str) -> Option<u32> {
+pub(super) fn parse_cjk_or_ascii_num(s: &str) -> Option<u32> {
     if s.bytes().all(|b| b.is_ascii_digit()) {
         return s.parse::<u32>().ok();
     }

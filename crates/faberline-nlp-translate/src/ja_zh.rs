@@ -6219,6 +6219,13 @@ fn translate_clause_bunsetsus(
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> (String, bool) {
+    #[derive(Clone, Copy)]
+    enum DeadlineEndpoint {
+        Calendar,
+        ClockOrDaypart,
+        Question,
+    }
+
     // Track extra bunsetsu-level metadata for `に`/`で` localization.
     #[derive(Clone)]
     struct PlacedArg {
@@ -6229,7 +6236,7 @@ fn translate_clause_bunsetsus(
         temporal_made_time: Option<String>,
         is_clock: bool,
         is_building_floor: bool,
-        deadline_uses_plain_before: bool,
+        deadline_endpoint: DeadlineEndpoint,
         deadline_has_detached_negation: bool,
         is_plain_clock_ni: bool,
         transfer_dative: bool,
@@ -6587,11 +6594,19 @@ fn translate_clause_bunsetsus(
                         temporal_made_time: temporal_made_time(&b),
                         is_clock: b.atoms.iter().any(is_clock_atom),
                         is_building_floor: b.atoms.iter().any(is_building_floor),
-                        deadline_uses_plain_before: b.atoms.iter().any(|a| {
-                            is_clock_atom(a)
-                                || !a.is_locked && is_daypart_surface(&a.surface)
-                                || deadline_time_question(a).is_some()
-                        }),
+                        deadline_endpoint: if b
+                            .atoms
+                            .iter()
+                            .any(|a| deadline_time_question(a).is_some())
+                        {
+                            DeadlineEndpoint::Question
+                        } else if b.atoms.iter().any(|a| {
+                            is_clock_atom(a) || !a.is_locked && is_daypart_surface(&a.surface)
+                        }) {
+                            DeadlineEndpoint::ClockOrDaypart
+                        } else {
+                            DeadlineEndpoint::Calendar
+                        },
                         deadline_has_detached_negation: b.role
                             == BunsetsuRole::DeadlineWithDetachedNegation,
                         is_plain_clock_ni: is_plain_clock_ni(&b),
@@ -6639,7 +6654,7 @@ fn translate_clause_bunsetsus(
                         temporal_made_time: None,
                         is_clock: false,
                         is_building_floor: b.atoms.iter().any(is_building_floor),
-                        deadline_uses_plain_before: false,
+                        deadline_endpoint: DeadlineEndpoint::Calendar,
                         deadline_has_detached_negation: false,
                         is_plain_clock_ni: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
@@ -7042,7 +7057,7 @@ fn translate_clause_bunsetsus(
                     temporal_made_time: None,
                     is_clock: false,
                     is_building_floor: false,
-                    deadline_uses_plain_before: false,
+                    deadline_endpoint: DeadlineEndpoint::Calendar,
                     deadline_has_detached_negation: false,
                     is_plain_clock_ni: false,
                     transfer_dative: false,
@@ -7653,6 +7668,10 @@ fn translate_clause_bunsetsus(
     let predicate_is_negative = inner_pre_mods
         .iter()
         .any(|m| matches!(m.as_str(), "不" | "沒有"));
+    // A direction with へ renders as 往. Keep 前 and 往 from reading as 前往.
+    let has_direction_he = obliques
+        .iter()
+        .any(|o| o.case_particle.as_deref() == Some("へ"));
     for o in obliques {
         let _ = o.is_instrument_de;
         if let Some(time) = o.temporal_made_time {
@@ -7669,16 +7688,23 @@ fn translate_clause_bunsetsus(
             if let Some((modal, additive)) =
                 explicit_deadline.or(deadline_modal.map(|m| (m, false)))
             {
-                // 明天截止前 includes the deadline day; 明天前 can mean today.
-                let cutoff = if o.deadline_uses_plain_before {
-                    "前"
+                let also = if additive { "也" } else { "" };
+                if matches!(o.deadline_endpoint, DeadlineEndpoint::Question)
+                    && matches!(modal, "可以" | "得以")
+                {
+                    // 幾點前 followed by 往 can read as the departure time (前往).
+                    parts.push(format!("最晚{}{also}{modal}", o.text));
                 } else {
-                    "截止前"
-                };
-                if additive {
-                    parts.push("也".to_owned());
+                    // 明天截止前 includes the deadline day; 明天前 can mean today.
+                    let cutoff = match o.deadline_endpoint {
+                        DeadlineEndpoint::Calendar if has_direction_he => "截止之前",
+                        DeadlineEndpoint::Calendar => "截止前",
+                        DeadlineEndpoint::ClockOrDaypart if has_direction_he => "之前",
+                        DeadlineEndpoint::ClockOrDaypart => "前",
+                        DeadlineEndpoint::Question => "之前",
+                    };
+                    parts.push(format!("{also}{modal}在{}{cutoff}", o.text));
                 }
-                parts.push(format!("{modal}在{}{cutoff}", o.text));
             } else if predicate_is_negative && !o.deadline_has_detached_negation {
                 parts.push(format!("到{}為止", o.text));
             } else {
@@ -11855,10 +11881,30 @@ mod clock_rule_tests {
                 "最晚在什麼時候給老師遞給信？",
             ),
             ("何時までに駅に着きますか。", "最晚在幾點抵達到車站？"),
-            ("何時までに手紙を書けますか。", "可以在幾點前寫信？"),
+            ("何時までに手紙を書けますか。", "最晚幾點可以寫信？"),
+            (
+                "私は六時までに駅へ行くことができます。",
+                "我可以在六點之前往車站去。",
+            ),
+            (
+                "六時までに公園へ行くことができませんか。",
+                "沒辦法在六點之前往公園去嗎？",
+            ),
+            (
+                "何時までに駅へ行くことができますか。",
+                "最晚幾點可以往車站去？",
+            ),
+            (
+                "何時までに公園へ行くことができますか。",
+                "最晚幾點可以往公園去？",
+            ),
+            (
+                "何時までに帰ることができませんでしたか。",
+                "沒能在幾點之前回去？",
+            ),
             (
                 "いつまでに手紙を書くことができますか。",
-                "可以在什麼時候前寫信？",
+                "最晚什麼時候可以寫信？",
             ),
             // The か asks whether a decision occurred. The deadline is on reading.
             (

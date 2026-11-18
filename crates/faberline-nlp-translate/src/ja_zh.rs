@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, Token, Upos};
+use faberline_nlp::lexicon::SemanticClass;
 
 use crate::conditioning::zh_pronoun_for_hint;
 use crate::lock::{LockOrigin, SpanLockTable};
@@ -2556,7 +2557,7 @@ fn translate_clause_atoms(
 
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
     let merged_atoms = apply_phrase_matches(atoms);
-    let norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms));
+    let norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
@@ -4589,9 +4590,27 @@ fn is_floor_number(surface: &str) -> bool {
         })
 }
 
+fn is_floor_facility(atom: &Atom, doc: &Document) -> bool {
+    if atom.is_locked || !matches!(atom.upos, Some(Upos::Noun | Upos::Propn)) {
+        return false;
+    }
+    let source = atom.lemma.as_deref().unwrap_or(&atom.surface);
+    // The lexicon does not tag all facilities. Room, hall and building
+    // compounds give place evidence even without a semantic tag.
+    atom.doc_tok_idx
+        .and_then(|index| doc.tokens.get(index))
+        .is_some_and(|token| token.sem_class == Some(SemanticClass::Location))
+        || is_place_location_bunsetsu(std::slice::from_ref(atom))
+        || matches!(
+            source,
+            "事務所" | "受付" | "食堂" | "台所" | "トイレ" | "玄関" | "売り場" | "店舗"
+        )
+        || (source.ends_with(['室', '館', '棟']) && !matches!(source, "王室" | "皇室"))
+}
+
 // Identify the complete floor label in the source before changing how it is
 // rendered. Keep the head of 階 and the span of the entire numeral and suffix.
-fn building_floor_start(atoms: &[Atom], end: usize) -> Option<usize> {
+fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<usize> {
     let floor = &atoms[end];
     if floor.is_locked || floor.upos != Some(Upos::Noun) {
         return None;
@@ -4662,27 +4681,10 @@ fn building_floor_start(atoms: &[Atom], end: usize) -> Option<usize> {
         return atoms[..start]
             .iter()
             .any(|subject| {
-                !subject.is_locked
-                    && subject.deprel == "nsubj"
+                subject.deprel == "nsubj"
                     && (subject.head == Some(floor_idx)
                         || shared_negative_head.is_some_and(|head| subject.head == Some(head)))
-                    && matches!(
-                        subject.surface.as_str(),
-                        "部屋"
-                            | "教室"
-                            | "会議室"
-                            | "研究室"
-                            | "事務室"
-                            | "事務所"
-                            | "受付"
-                            | "食堂"
-                            | "台所"
-                            | "浴室"
-                            | "トイレ"
-                            | "玄関"
-                            | "売り場"
-                            | "店舗"
-                    )
+                    && is_floor_facility(subject, doc)
             })
             .then_some(start);
     }
@@ -4691,38 +4693,58 @@ fn building_floor_start(atoms: &[Atom], end: usize) -> Option<usize> {
     if tail.upos != Some(Upos::Adp) || tail.head != Some(floor_idx) {
         return None;
     }
-    atoms
-        .iter()
-        .any(|predicate| {
-            !predicate.is_locked
-                && predicate.doc_tok_idx == Some(governor)
-                && predicate.upos == Some(Upos::Verb)
-                && match tail.surface.as_str() {
-                    "に" | "へ" => {
-                        matches!(
-                            predicate.lemma.as_deref().unwrap_or(&predicate.surface),
-                            "行く" | "来る" | "帰る" | "戻る" | "着く" | "向かう" | "入る"
-                        ) || (tail.surface == "に"
-                            && matches!(
-                                predicate.lemma.as_deref().unwrap_or(&predicate.surface),
-                                "ある" | "いる"
-                            ))
-                    }
-                    "で" => matches!(
-                        predicate.lemma.as_deref().unwrap_or(&predicate.surface),
-                        "待つ" | "働く" | "食べる" | "寝る" | "読む" | "会う"
-                    ),
-                    _ => false,
-                }
-        })
-        .then_some(start)
+    let predicate = atoms.iter().find(|predicate| {
+        !predicate.is_locked
+            && predicate.doc_tok_idx == Some(governor)
+            && predicate.upos == Some(Upos::Verb)
+    })?;
+    let verb = predicate.lemma.as_deref().unwrap_or(&predicate.surface);
+    let motion = matches!(
+        verb,
+        "行く" | "来る" | "帰る" | "戻る" | "着く" | "向かう" | "入る"
+    );
+    let spatial_case = tail.deprel == "case" && floor.deprel == "obl";
+    let is_spatial = match tail.surface.as_str() {
+        "に" => motion || matches!(verb, "ある" | "いる"),
+        "へ" => motion,
+        "から" => spatial_case && motion,
+        "で" => {
+            spatial_case
+                && (matches!(
+                    verb,
+                    "待つ"
+                        | "働く"
+                        | "食べる"
+                        | "寝る"
+                        | "読む"
+                        | "会う"
+                        | "学ぶ"
+                        | "勉強"
+                        | "勉強する"
+                        | "学習"
+                        | "学習する"
+                ) || atoms[..start].windows(2).any(|modifier| {
+                    let place = &modifier[0];
+                    let particle = &modifier[1];
+                    place.head == Some(floor_idx)
+                        && place.deprel == "nmod"
+                        && !particle.is_locked
+                        && particle.surface == "の"
+                        && particle.head.is_some()
+                        && particle.head == place.doc_tok_idx
+                        && is_floor_facility(place, doc)
+                }))
+        }
+        _ => false,
+    };
+    is_spatial.then_some(start)
 }
 
-fn normalize_building_floors(mut atoms: Vec<Atom>) -> Vec<Atom> {
+fn normalize_building_floors(mut atoms: Vec<Atom>, doc: &Document) -> Vec<Atom> {
     let mut end = atoms.len();
     while end > 0 {
         end -= 1;
-        let Some(start) = building_floor_start(&atoms, end) else {
+        let Some(start) = building_floor_start(&atoms, end, doc) else {
             continue;
         };
         let mut floor = atoms[end].clone();
@@ -10116,9 +10138,31 @@ mod existence_rule_tests {
     }
 
     #[test]
+    fn building_floor_uses_facility_subjects_and_spatial_roles() {
+        for (source, expected) in [
+            ("受付は二階です。", "受付在二樓。"),
+            ("保健室は二階です。", "保健室在二樓。"),
+            ("学校の図書館は二階です。", "學校的圖書館在二樓。"),
+            ("私は三階から二階に行きます。", "我從三樓去二樓。"),
+            ("私は三階で本を読みます。", "我在三樓讀書。"),
+            ("私は三階で勉強します。", "我在三樓學習。"),
+            ("学校の三階で準備します。", "在學校的三樓準備。"),
+        ] {
+            assert_eq!(
+                translate(source, &TranslationGlossary::new()).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn building_floor_leaves_compounds_names_and_locks_alone() {
         for (source, keep) in [
             ("この計画は三段階です。", "三段階"),
+            ("二階微分を計算します。", "二階微分"),
+            ("この微分は二階です。", "二階"),
+            ("二階で微分します。", "二階"),
             ("階段を上ります。", "樓梯"),
             ("階級を確認します。", "階級"),
             ("二階堂さんは来ました。", "二階堂"),

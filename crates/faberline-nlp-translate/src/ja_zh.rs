@@ -4595,8 +4595,8 @@ fn is_floor_facility(atom: &Atom, doc: &Document) -> bool {
         return false;
     }
     let source = atom.lemma.as_deref().unwrap_or(&atom.surface);
-    // The lexicon does not tag all facilities. Room, hall and building
-    // compounds give place evidence even without a semantic tag.
+    // The lexicon does not tag all facilities. Productive room, building,
+    // store and service-location compounds also give place evidence.
     atom.doc_tok_idx
         .and_then(|index| doc.tokens.get(index))
         .is_some_and(|token| token.sem_class == Some(SemanticClass::Location))
@@ -4605,7 +4605,62 @@ fn is_floor_facility(atom: &Atom, doc: &Document) -> bool {
             source,
             "事務所" | "受付" | "食堂" | "台所" | "トイレ" | "玄関" | "売り場" | "店舗"
         )
-        || (source.ends_with(['室', '館', '棟']) && !matches!(source, "王室" | "皇室"))
+        || (source.ends_with(['室', '館', '棟', '店']) && !matches!(source, "王室" | "皇室"))
+        || source.ends_with("薬局")
+        || source.ends_with("郵便局")
+}
+
+fn has_place_genitive(atoms: &[Atom], head: usize, doc: &Document) -> bool {
+    atoms.windows(2).any(|modifier| {
+        let place = &modifier[0];
+        let particle = &modifier[1];
+        place.head == Some(head)
+            && place.deprel == "nmod"
+            && !particle.is_locked
+            && particle.surface == "の"
+            && particle.head.is_some()
+            && particle.head == place.doc_tok_idx
+            && is_floor_facility(place, doc)
+    })
+}
+
+fn is_floor_service_space(atom: &Atom, atoms: &[Atom], doc: &Document) -> bool {
+    !atom.is_locked
+        && atom.upos == Some(Upos::Noun)
+        // A service counter or section can also be an abstract contact point.
+        // Require a source modifier that links it to a real place.
+        && ["窓口", "案内所", "コーナー", "カウンター"]
+            .into_iter()
+            .any(|suffix| atom.surface.ends_with(suffix))
+        && atom
+            .doc_tok_idx
+            .is_some_and(|head| has_place_genitive(atoms, head, doc))
+}
+
+fn has_floor_writing_object(atoms: &[Atom], governor: usize, doc: &Document) -> bool {
+    atoms.windows(2).any(|argument| {
+        let object = &argument[0];
+        let particle = &argument[1];
+        !object.is_locked
+            && object.upos == Some(Upos::Noun)
+            && object.head == Some(governor)
+            && object.deprel == "obj"
+            && !particle.is_locked
+            && particle.upos == Some(Upos::Adp)
+            && particle.surface == "を"
+            && particle.head.is_some()
+            && particle.head == object.doc_tok_idx
+            && object.span.end_char == particle.span.start_char
+            // With general writing verbs, an explicit physical or media
+            // object supports a venue reading. Formulae and ranks do not.
+            && (object
+                .doc_tok_idx
+                .and_then(|index| doc.tokens.get(index))
+                .is_some_and(|token| token.sem_class == Some(SemanticClass::Artifact))
+                || ["手紙", "写真", "絵", "原稿", "葉書"]
+                    .into_iter()
+                    .any(|suffix| object.surface.ends_with(suffix)))
+    })
 }
 
 // Identify the complete floor label in the source before changing how it is
@@ -4684,7 +4739,8 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
                 subject.deprel == "nsubj"
                     && (subject.head == Some(floor_idx)
                         || shared_negative_head.is_some_and(|head| subject.head == Some(head)))
-                    && is_floor_facility(subject, doc)
+                    && (is_floor_facility(subject, doc)
+                        || is_floor_service_space(subject, &atoms[..start], doc))
             })
             .then_some(start);
     }
@@ -4726,17 +4782,16 @@ fn building_floor_start(atoms: &[Atom], end: usize, doc: &Document) -> Option<us
                         | "学習する"
                         | "準備"
                         | "準備する"
-                ) || atoms[..start].windows(2).any(|modifier| {
-                    let place = &modifier[0];
-                    let particle = &modifier[1];
-                    place.head == Some(floor_idx)
-                        && place.deprel == "nmod"
-                        && !particle.is_locked
-                        && particle.surface == "の"
-                        && particle.head.is_some()
-                        && particle.head == place.doc_tok_idx
-                        && is_floor_facility(place, doc)
-                }))
+                        | "撮る"
+                        | "撮影"
+                        | "撮影する"
+                        | "録画"
+                        | "録画する"
+                        | "録音"
+                        | "録音する"
+                ) || (matches!(verb, "書く" | "描く")
+                    && has_floor_writing_object(atoms, governor, doc))
+                    || has_place_genitive(&atoms[..start], floor_idx, doc))
         }
         _ => false,
     };
@@ -10520,12 +10575,34 @@ mod existence_rule_tests {
     }
 
     #[test]
+    fn building_floor_uses_service_facilities_and_media_activities() {
+        for (source, expected) in [
+            ("病院の薬局は三階です。", "醫院的藥局在三樓。"),
+            ("薬局は三階です。", "藥局在三樓。"),
+            ("三階で写真を撮ります。", "在三樓拍攝照片。"),
+            ("三階で撮影します。", "在三樓拍攝。"),
+            ("三階で手紙を書きます。", "在三樓寫信。"),
+        ] {
+            assert_eq!(
+                translate(source, &TranslationGlossary::new()).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let source = "病院の窓口は三階です。";
+        let output = translate(source, &TranslationGlossary::new()).target_text;
+        assert!(output.contains("在三樓"), "{source}: {output}");
+    }
+
+    #[test]
     fn building_floor_leaves_compounds_names_and_locks_alone() {
         for (source, keep) in [
             ("この計画は三段階です。", "三段階"),
             ("二階微分を計算します。", "二階微分"),
             ("この微分は二階です。", "二階"),
             ("二階で微分します。", "二階"),
+            ("二階で式を書きます。", "二階"),
+            ("病院の数学は二階です。", "二階"),
             ("階段を上ります。", "樓梯"),
             ("階級を確認します。", "階級"),
             ("二階堂さんは来ました。", "二階堂"),

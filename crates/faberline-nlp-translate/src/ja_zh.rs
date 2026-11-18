@@ -103,6 +103,10 @@ enum BunsetsuRole {
         wh_question: bool,
     },
     JointCompanion,
+    ResidencePlace {
+        past_state: bool,
+        wh: bool,
+    },
     Subj,
     Obl,
     MotionPurpose,
@@ -3521,6 +3525,7 @@ fn translate_clause_atoms(
     if let Some(go) = motion_go {
         mark_motion_purpose(&mut grouped, &norm_atoms, go, doc, sentence_idx);
     }
+    mark_residence_place(&mut grouped, body);
     mark_joint_question(&mut grouped, &norm_atoms, body);
     let mut grouped = compose_relative_daypart(grouped);
     if let Some((predicate, _)) = proposal {
@@ -3647,7 +3652,7 @@ fn localize_proposal_arguments(
         return;
     };
     localize_indefinite_arguments(groups, action, source);
-    let companion = place_companion(source, predicate);
+    let companion = place_companion(source, predicate, None);
     let speaker_offers = source.iter().any(|a| {
         !a.is_locked
             && a.head == Some(predicate)
@@ -6226,6 +6231,104 @@ fn normalize_building_floors(mut atoms: Vec<Atom>, doc: &Document) -> Vec<Atom> 
     atoms
 }
 
+fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+
+    let Some(i) = source.iter().position(|a| {
+        !a.is_locked
+            && a.upos == Some(Upos::Verb)
+            && a.lemma.as_deref().unwrap_or(&a.surface) == "住む"
+    }) else {
+        return;
+    };
+    let action = &source[i];
+    let Some(id) = action.doc_tok_idx else { return };
+    let (finite, tail) = match &source[i + 1..] {
+        [te, iru, tail @ ..]
+            if action.deprel == "advcl"
+                && action.head == iru.doc_tok_idx
+                && !te.is_locked
+                && !iru.is_locked
+                && te.deprel == "mark"
+                && te.head == Some(id)
+                && matches!(te.surface.as_str(), "て" | "で")
+                && iru.upos == Some(Upos::Verb)
+                && iru.lemma.as_deref().unwrap_or(&iru.surface) == "いる"
+                && iru.deprel == "root" =>
+        {
+            (iru, tail)
+        }
+        tail if action.deprel == "root" => (action, tail),
+        _ => return,
+    };
+    if tail.iter().any(|a| {
+        a.is_locked
+            || a.head != finite.doc_tok_idx
+            || !(a.upos == Some(Upos::Aux)
+                && matches!(
+                    a.surface.as_str(),
+                    "た" | "だ" | "ます" | "まし" | "ませ" | "ん" | "でし" | "ない" | "なかっ"
+                )
+                || a.deprel == "discourse"
+                || is_punct_atom(a))
+    }) {
+        return;
+    }
+    let mut places = groups.iter().enumerate().filter_map(|(i, group)| {
+        let [.., noun, ni] = group.atoms.as_slice() else {
+            return None;
+        };
+        if noun.is_locked
+            || ni.is_locked
+            || noun.deprel != "obl"
+            || noun.head != Some(id)
+            || ni.surface != "に"
+            || ni.deprel != "case"
+            || ni.upos != Some(Upos::Adp)
+            || ni.head != noun.doc_tok_idx
+            || ni.span.start_char != noun.span.end_char
+        {
+            return None;
+        }
+        // The dictionary tags proper place names. Ordinary housing nouns do
+        // not all carry that tag. Check the head, never a place in its possessor.
+        let wh = noun.surface == "どこ";
+        let place = wh
+            || is_place_location_bunsetsu(std::slice::from_ref(noun))
+            || lookup_ja(&noun.surface)
+                .is_some_and(|e| e.sem_class == Some(SemanticClass::Location))
+            || noun.upos == Some(Upos::Noun)
+                && matches!(
+                    noun.surface.as_str(),
+                    "アパート"
+                        | "マンション"
+                        | "住宅"
+                        | "寮"
+                        | "村"
+                        | "町"
+                        | "市"
+                        | "島"
+                        | "田舎"
+                        | "都会"
+                );
+        place.then_some((i, noun.doc_tok_idx?, wh))
+    });
+    let Some((i, place, wh)) = places.next() else {
+        return;
+    };
+    if places.next().is_some() {
+        return;
+    }
+    let past_state = finite.doc_tok_idx != Some(id) && tail.iter().any(|a| a.surface == "た");
+    groups[i].role = BunsetsuRole::ResidencePlace { past_state, wh };
+    if let Some(person) = place_companion(source, id, Some(place))
+        && let Some(group) = groups.iter_mut().find(|b| matches!(b.atoms.as_slice(),
+            [.., noun, to] if noun.doc_tok_idx == Some(person) && to.surface == "と" && to.head == Some(person)))
+    {
+        group.role = BunsetsuRole::JointCompanion;
+    }
+}
+
 fn translate_clause_bunsetsus(
     mut bunsetsus: Vec<Bunsetsu>,
     source: &[Atom],
@@ -6266,6 +6369,7 @@ fn translate_clause_bunsetsus(
     let mut joint_manner = None;
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
+    let mut residence = None;
     let mut adverbs: Vec<String> = Vec::new();
     let mut iobjs: Vec<PlacedArg> = Vec::new();
     let mut objs: Vec<String> = Vec::new();
@@ -6502,6 +6606,9 @@ fn translate_clause_bunsetsus(
         }
 
         match b.role {
+            BunsetsuRole::ResidencePlace { past_state, wh } => {
+                residence = Some((render_bunsetsu_np(&b, target), past_state, wh));
+            }
             BunsetsuRole::JointManner {
                 manner,
                 invitation,
@@ -6789,6 +6896,17 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if let Some((place, past_state, wh)) = residence {
+        verb_core = format!("住在{place}");
+        pre_verb_mods.retain(|m| m != "正在");
+        if past_state {
+            pre_verb_mods.insert(0, "當時".to_owned());
+            post_verb_mods.retain(|m| m != "了");
+        }
+        if wh && sfp_suffix == Some("嗎") {
+            sfp_suffix = Some("？");
+        }
+    }
     if let Some(frame) = timed_result {
         verb_core = frame.action.to_owned();
     }
@@ -9411,7 +9529,7 @@ fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[
     // A companion can identify the joint activity without an explicit 一緒.
     let companion = action
         .doc_tok_idx
-        .and_then(|id| place_companion(original, id));
+        .and_then(|id| place_companion(original, id, None));
     let companion_group = companion.and_then(|id| {
         groups.iter().position(|group| {
             group.atoms.iter().any(|atom| atom.doc_tok_idx == Some(id))
@@ -13656,7 +13774,7 @@ fn localize_indefinite_arguments(groups: &mut Vec<Bunsetsu>, action: &Atom, sour
 
 // In 先生と図書館に the person and the place have separate case particles.
 // Two places share their direction instead (東京と大阪に).
-fn place_companion(source: &[Atom], predicate: usize) -> Option<usize> {
+fn place_companion(source: &[Atom], predicate: usize, known_place: Option<usize>) -> Option<usize> {
     use faberline_nlp::lexicon::SemanticClass;
     let mut person = None;
     let mut has_place = false;
@@ -13724,7 +13842,8 @@ fn place_companion(source: &[Atom], predicate: usize) -> Option<usize> {
             }
             after_companion = human;
         } else if matches!(marker.surface.as_str(), "へ" | "に" | "で" | "まで") {
-            let place = is_place_location_bunsetsu(std::slice::from_ref(noun))
+            let place = known_place.is_some_and(|id| noun.doc_tok_idx == Some(id))
+                || is_place_location_bunsetsu(std::slice::from_ref(noun))
                 || class == Some(SemanticClass::Location)
                 || noun.surface == "どこ"
                 || noun.upos == Some(Upos::Noun)

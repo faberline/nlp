@@ -5507,6 +5507,7 @@ fn translate_clause_bunsetsus(
         temporal_made_time: Option<String>,
         is_clock: bool,
         is_building_floor: bool,
+        is_daypart: bool,
         is_plain_clock_ni: bool,
         transfer_dative: bool,
         physical_goal_head: Option<usize>,
@@ -5829,6 +5830,10 @@ fn translate_clause_bunsetsus(
                         temporal_made_time: temporal_made_time(&b),
                         is_clock: b.atoms.iter().any(is_clock_atom),
                         is_building_floor: b.atoms.iter().any(is_building_floor),
+                        is_daypart: b
+                            .atoms
+                            .iter()
+                            .any(|a| !a.is_locked && is_daypart_surface(&a.surface)),
                         is_plain_clock_ni: is_plain_clock_ni(&b),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
@@ -5874,6 +5879,7 @@ fn translate_clause_bunsetsus(
                         temporal_made_time: None,
                         is_clock: false,
                         is_building_floor: b.atoms.iter().any(is_building_floor),
+                        is_daypart: false,
                         is_plain_clock_ni: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
@@ -6267,6 +6273,7 @@ fn translate_clause_bunsetsus(
                     temporal_made_time: None,
                     is_clock: false,
                     is_building_floor: false,
+                    is_daypart: false,
                     is_plain_clock_ni: false,
                     transfer_dative: false,
                     physical_goal_head: None,
@@ -6889,12 +6896,13 @@ fn translate_clause_bunsetsus(
             // allowed. Keep tense, mood and polarity on the original predicate.
             if let Some(modal) = deadline_modal {
                 // 明天截止前 includes the deadline day; 明天前 can mean today.
-                let cutoff = if o.is_clock { "前" } else { "截止前" };
+                let cutoff = if o.is_clock || o.is_daypart {
+                    "前"
+                } else {
+                    "截止前"
+                };
                 parts.push(format!("{modal}在{}{cutoff}", o.text));
-            } else if inner_pre_mods
-                .iter()
-                .any(|m| matches!(m.as_str(), "沒有" | "不"))
-            {
+            } else if predicate_is_negative {
                 parts.push(format!("到{}為止", o.text));
             } else {
                 parts.push(format!("最晚在{}", o.text));
@@ -9344,18 +9352,14 @@ fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
     }
     is_clock_atom(time)
         || (!time.is_locked
-            && (deadline_weekday(&time.surface).is_some()
+            && (is_daypart_surface(&time.surface)
+                || deadline_weekday(&time.surface).is_some()
                 || matches!(
                     time.surface.as_str(),
                     "今" | "昨日"
                         | "今日"
                         | "明日"
                         | "明後日"
-                        | "朝"
-                        | "昼"
-                        | "夜"
-                        | "午前"
-                        | "午後"
                         | "先週"
                         | "今週"
                         | "来週"
@@ -10709,6 +10713,26 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn daypart_deadlines_keep_the_endpoint_and_modal_scope() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        for (source, expected) in [
+            ("正午までに本を読みます。", "最晚在正午讀書。"),
+            ("夕方までに駅に帰ります。", "最晚在傍晚回到車站。"),
+            ("私は夕方までに手紙を書けません。", "我沒辦法在傍晚前寫信。"),
+            ("深夜までに手紙を書きませんでした。", "到深夜為止沒有寫信。"),
+            ("六時までに手紙を書けますか。", "可以在六點前寫信嗎？"),
+            ("六時まで本を読みます。", "讀書到六點。"),
+            ("六時までに本を読みます。", "最晚在六點讀書。"),
+            ("夕方まで本を読みます。", "讀書到傍晚。"),
+            ("六時まで手紙を書けません。", "到六點為止不能寫信。"),
+            ("夕方に本を読みます。", "傍晚讀書。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
     fn ability_scopes_over_meeting_the_deadline() {
         let glossary = TranslationGlossary::new();
         let translate = |s| public_translate(s, &glossary).target_text;
@@ -11508,7 +11532,7 @@ mod motion_endpoint_tests {
     #[test]
     fn compound_temporal_made_leaves_other_genitive_roles_unchanged() {
         for (source, expected) in [
-            ("明日の朝までに手紙を書きます。", "在明天的早上寫信。"),
+            ("明日の朝までに手紙を書きます。", "最晚在明天的早上寫信。"),
             ("私は明日の朝に手紙を書きます。", "我在明天的早上寫信。"),
             ("朝の電車まで走りました。", "連早上的電車都跑了。"),
             ("私は学校の先生まで歩いた。", "我連學校的老師都走了。"),
@@ -11526,7 +11550,7 @@ mod motion_endpoint_tests {
     fn temporal_made_leaves_deadlines_and_other_endpoints_alone() {
         assert_eq!(
             translate("私は六時までに手紙を書きます。"),
-            "我在六點寫信。"
+            "我最晚在六點寫信。"
         );
         assert_eq!(translate("私は六時に手紙を書きます。"), "我在六點寫信。");
         assert_eq!(translate("先生まで歩いた。"), "連老師都走了。");

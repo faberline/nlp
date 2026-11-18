@@ -3073,7 +3073,7 @@ fn translate_clause_atoms(
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
     let grouped = compose_relative_daypart(grouped);
-    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, doc, sentence_idx, target);
+    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, target);
     if let Some(tail) = condition_tail
         && let Some(complement) = bunsetsus.last_mut()
     {
@@ -3084,6 +3084,7 @@ fn translate_clause_atoms(
 
     translate_clause_bunsetsus(
         bunsetsus,
+        atoms,
         &raw_clause,
         conditioning,
         allow_pro_drop_inject,
@@ -5140,6 +5141,7 @@ fn fused_relational_location(pair: &[Bunsetsu], predicate_idx: Option<usize>) ->
 
 fn translate_clause_bunsetsus(
     mut bunsetsus: Vec<Bunsetsu>,
+    source: &[Atom],
     raw_clause: &str,
     conditioning: Option<&SentenceConditioning>,
     allow_pro_drop_inject: bool,
@@ -5322,7 +5324,7 @@ fn translate_clause_bunsetsus(
     let daypart_groups: Vec<_> = bunsetsus
         .iter()
         .enumerate()
-        .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus).then_some(idx))
+        .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
         if daypart_groups.contains(&idx) {
@@ -8115,8 +8117,7 @@ fn prepend_locked_atom(head: &mut Bunsetsu, text: String) {
 
 fn merge_adnominal_bunsetsus(
     bunsetsus: Vec<Bunsetsu>,
-    _doc: &Document,
-    _sentence_idx: usize,
+    source: &[Atom],
     target: TargetVariant,
 ) -> Vec<Bunsetsu> {
     let mut res: Vec<Bunsetsu> = Vec::with_capacity(bunsetsus.len());
@@ -8173,6 +8174,7 @@ fn merge_adnominal_bunsetsus(
                 acl_bunsetsus.push(pred_b);
                 let (mut inner, _) = translate_clause_bunsetsus(
                     acl_bunsetsus,
+                    source,
                     "",
                     None,
                     false,
@@ -8232,6 +8234,7 @@ fn merge_adnominal_bunsetsus(
                         acl_bunsetsus.push(mod_b);
                         let (mut inner, _) = translate_clause_bunsetsus(
                             acl_bunsetsus,
+                            source,
                             "",
                             None,
                             false,
@@ -8335,6 +8338,7 @@ fn merge_adnominal_bunsetsus(
                     acl_bunsetsus.push(pred_b);
                     let (mut inner, _) = translate_clause_bunsetsus(
                         acl_bunsetsus,
+                        source,
                         "",
                         None,
                         false,
@@ -8876,7 +8880,7 @@ fn has_verb_reading(surface: &str) -> bool {
 // 夕方に働く, 夕方にする and 夕方に戻る can share the same case relation.
 // Keep the time only when its own governor and that governor's other
 // arguments support an event-time reading.
-fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu]) -> bool {
+fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> bool {
     let [time, ni] = group.atoms.as_slice() else {
         return false;
     };
@@ -8901,12 +8905,21 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu]) -> bool {
     {
         return false;
     }
-    let atoms = || clause.iter().flat_map(|b| &b.atoms);
-    let Some(verb) =
-        atoms().find(|a| a.doc_tok_idx == Some(head) && !a.is_locked && a.upos == Some(Upos::Verb))
+    // Phrase rendering can join a lexical governor and する into one translated
+    // atom. Read its original dependency and verify its span in this clause.
+    let Some(verb) = source
+        .iter()
+        .find(|a| a.doc_tok_idx == Some(head) && !a.is_locked && a.upos == Some(Upos::Verb))
     else {
         return false;
     };
+    if !clause
+        .iter()
+        .flat_map(|b| &b.atoms)
+        .any(|a| a.span.start_char <= verb.span.start_char && verb.span.end_char <= a.span.end_char)
+    {
+        return false;
+    }
     let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
     if !has_verb_reading(lemma) || selects_time_value(lemma) {
         return false;
@@ -8919,7 +8932,7 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu]) -> bool {
     }) {
         return false;
     }
-    if atoms().any(|a| {
+    if source.iter().any(|a| {
         !a.is_locked
             && a.head == Some(head)
             && matches!(a.deprel.as_str(), "nsubj" | "obj")
@@ -8960,7 +8973,7 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu]) -> bool {
     let Some(aux_head) = verb.head.filter(|_| verb.deprel == "advcl") else {
         return false;
     };
-    let Some(aux) = atoms().find(|a| {
+    let Some(aux) = source.iter().find(|a| {
         a.doc_tok_idx == Some(aux_head)
             && !a.is_locked
             && a.upos == Some(Upos::Verb)
@@ -8974,7 +8987,7 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu]) -> bool {
         // A linked て／で + いる expresses the aspect of the lexical event.
         Some("いる") => {
             lemma != "する"
-                && atoms().any(|a| {
+                && source.iter().any(|a| {
                     !a.is_locked
                         && matches!(a.surface.as_str(), "て" | "で")
                         && a.deprel == "mark"

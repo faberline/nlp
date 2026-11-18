@@ -5507,14 +5507,14 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
-    let marked_goals = obliques
+    let mut marked_goals = obliques
         .iter()
         .chain(&iobjs)
-        .filter(|o| matches!(o.case_particle.as_deref(), Some("に" | "へ")))
-        .collect::<Vec<_>>();
+        .filter(|o| matches!(o.case_particle.as_deref(), Some("に" | "へ")));
+    let only_goal = marked_goals.next();
     let direct_negative_physical_go = negative_go_head.is_some()
-        && marked_goals.len() == 1
-        && marked_goals[0].physical_goal_head == negative_go_head
+        && only_goal.is_some_and(|o| o.physical_goal_head == negative_go_head)
+        && marked_goals.next().is_none()
         && !obliques
             .iter()
             .any(|o| o.case_particle.as_deref() == Some("まで"));
@@ -8583,6 +8583,10 @@ mod motion_endpoint_tests {
             let output = translate(source);
             assert!(output.contains("沒有去圖書館"), "{source}: {output}");
         }
+        for source in ["空港に行かなかった。", "空港へ行かなかった。"] {
+            let output = translate(source);
+            assert!(output.contains("沒有去機場"), "{source}: {output}");
+        }
         let positive = translate("図書館へ行きました。");
         assert!(positive.contains("往圖書館"), "{positive}");
         let question = translate("図書館に行きませんか。");
@@ -8633,6 +8637,35 @@ mod motion_endpoint_tests {
         assert_eq!(negative_go_place_head(&b), None);
         b.atoms[0].surface = "夕方".to_owned();
         b.atoms[0].head = Some(8);
+        assert_eq!(negative_go_place_head(&b), None);
+        b.atoms[0].surface = "空港".to_owned();
+        assert_eq!(negative_go_place_head(&b), Some(8));
+        b.atoms[0].surface = "大阪".to_owned();
+        b.atoms[0].upos = Some(Upos::Propn);
+        assert_eq!(negative_go_place_head(&b), Some(8));
+        b.atoms[0].upos = Some(Upos::Noun);
+        assert_eq!(negative_go_place_head(&b), None);
+        b.atoms[0].surface = "空港".to_owned();
+        b.atoms[0].head = Some(8);
+        b.atoms[0].doc_tok_idx = Some(4);
+        b.atoms[0].span = Span {
+            start_char: 2,
+            end_char: 4,
+        };
+        b.atoms[1].span = Span {
+            start_char: 4,
+            end_char: 5,
+        };
+        let mut modifier = atom("新宿", 0, false);
+        modifier.upos = Some(Upos::Propn);
+        modifier.head = Some(4);
+        modifier.deprel = "compound".to_owned();
+        b.atoms.insert(0, modifier);
+        assert_eq!(negative_go_place_head(&b), Some(8));
+        b.atoms[0].head = Some(7);
+        assert_eq!(negative_go_place_head(&b), None);
+        b.atoms[0].head = Some(4);
+        b.atoms[0].is_locked = true;
         assert_eq!(negative_go_place_head(&b), None);
     }
 
@@ -8711,24 +8744,49 @@ mod motion_endpoint_tests {
 }
 
 fn negative_go_place_head(b: &Bunsetsu) -> Option<usize> {
+    let (particle, content) = b.atoms.split_last()?;
     if !matches!(b.case_particle.as_deref(), Some("に" | "へ"))
+        || Some(particle.surface.as_str()) != b.case_particle.as_deref()
+        || particle.upos != Some(Upos::Adp)
         || b.atoms.iter().any(|a| a.is_locked)
     {
         return None;
     }
-    let mut content = b
-        .atoms
-        .iter()
-        .filter(|a| !matches!(a.upos, Some(Upos::Adp | Upos::Part | Upos::Punct)));
-    let noun = content.next()?;
-    if content.next().is_some() || noun.upos != Some(Upos::Noun) {
+    let noun = content.last()?;
+    if noun.span.end_char != particle.span.start_char
+        || !matches!(noun.upos, Some(Upos::Noun | Upos::Propn))
+    {
         return None;
     }
-    // Reuse the established physical endpoint classifier without changing it.
-    let mut spatial_probe = b.clone();
-    spatial_probe.case_particle = Some("まで".to_owned());
-    if !is_spatial_made_bunsetsu(&spatial_probe) {
+    let lexical = faberline_nlp::lexicon::lookup_ja(&noun.surface);
+    let compatible = lexical.as_ref().is_some_and(|entry| {
+        entry.decided_upos == noun.upos
+            && matches!(entry.decided_upos, Some(Upos::Noun | Upos::Propn))
+    });
+    let tagged_place = compatible
+        && lexical.as_ref().is_some_and(|entry| {
+            entry.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Location)
+        });
+    // 空港 is a productive, physically specific venue head. Require an exact
+    // unambiguous noun lexicon entry, never accept an unknown suffix alone.
+    let airport = compatible && noun.upos == Some(Upos::Noun) && noun.surface.ends_with("空港");
+    if !(tagged_place
+        || airport
+        || (compatible && content.len() == 1 && is_existing_spatial_head(noun)))
+    {
         return None;
+    }
+    if content.len() > 1 {
+        let head_idx = noun.doc_tok_idx?;
+        for pair in content.windows(2) {
+            if pair[0].span.end_char != pair[1].span.start_char
+                || pair[0].head != Some(head_idx)
+                || !matches!(pair[0].deprel.as_str(), "compound" | "nmod")
+                || !matches!(pair[0].upos, Some(Upos::Noun | Upos::Propn))
+            {
+                return None;
+            }
+        }
     }
     noun.head
 }
@@ -8746,29 +8804,31 @@ fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {
             !matches!(a.upos, Some(Upos::Adp | Upos::Part | Upos::Punct))
                 && !is_case_or_sfp_to_strip(&a.surface)
         })
-        .is_some_and(|a| {
-            !a.is_locked
-                && matches!(
-                    a.surface.as_str(),
-                    "部屋"
-                        | "学校"
-                        | "図書館"
-                        | "公園"
-                        | "駅"
-                        | "東京駅"
-                        | "東京"
-                        | "家"
-                        | "会社"
-                        | "病院"
-                        | "ここ"
-                        | "そこ"
-                        | "あそこ"
-                        | "ベッド"
-                        | "椅子"
-                        | "机"
-                        | "風呂"
-                )
-        })
+        .is_some_and(is_existing_spatial_head)
+}
+
+fn is_existing_spatial_head(a: &Atom) -> bool {
+    !a.is_locked
+        && matches!(
+            a.surface.as_str(),
+            "部屋"
+                | "学校"
+                | "図書館"
+                | "公園"
+                | "駅"
+                | "東京駅"
+                | "東京"
+                | "家"
+                | "会社"
+                | "病院"
+                | "ここ"
+                | "そこ"
+                | "あそこ"
+                | "ベッド"
+                | "椅子"
+                | "机"
+                | "風呂"
+        )
 }
 
 fn predicates_is_made_motion_verb(predicates: &[Bunsetsu]) -> bool {

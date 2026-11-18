@@ -1630,6 +1630,115 @@ fn is_te_form_link(base: &Atom, te: &Atom, auxiliary: &Atom) -> bool {
         && te.span.end_char == auxiliary.span.start_char
 }
 
+struct TeHelpRequest<'a> {
+    action: &'a [Atom],
+    humble: bool,
+    negative_form: bool,
+}
+
+fn te_help_request(atoms: &[Atom]) -> Option<TeHelpRequest<'_>> {
+    let (body, helper, polite, question, negative_form) = match atoms {
+        [body @ .., helper, mase, n, question] if mase.surface == "ませ" && n.surface == "ん" => {
+            (
+                body,
+                helper,
+                &atoms[body.len() + 1..atoms.len() - 1],
+                question,
+                true,
+            )
+        }
+        [body @ .., helper, masu, question] if masu.surface == "ます" => {
+            (body, helper, std::slice::from_ref(masu), question, false)
+        }
+        _ => return None,
+    };
+    let humble = match (helper.surface.as_str(), helper.lemma.as_deref()) {
+        ("いただけ", Some("いただける")) => true,
+        ("もらえ", Some("もらえる")) => false,
+        _ => return None,
+    };
+    let helper_idx = helper.doc_tok_idx?;
+    let [arguments @ .., verb, link] = body else {
+        return None;
+    };
+    let action_idx = verb.doc_tok_idx?;
+    if !is_te_form_link(verb, link, helper)
+        || helper.upos != Some(Upos::Verb)
+        || helper.deprel != "root"
+        || verb.head != Some(helper_idx)
+        || verb.deprel != "advcl"
+        || link.head != Some(action_idx)
+        || link.deprel != "mark"
+        || polite.iter().any(|atom| {
+            atom.is_locked
+                || atom.upos != Some(Upos::Aux)
+                || atom.head != Some(helper_idx)
+                || atom.deprel != "aux"
+        })
+        || question.is_locked
+        || question.surface != "か"
+        || question.upos != Some(Upos::Part)
+        || question.head != Some(helper_idx)
+        || question.deprel != "discourse"
+        || atoms[body.len()..]
+            .windows(2)
+            .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
+        // Show and lend have their own recipient. Do not turn either into
+        // an action the speaker would perform with the listener's help.
+        || matches!(verb.lemma.as_deref(), Some("見せる" | "貸す"))
+        || verb.surface.ends_with("ない")
+    {
+        return None;
+    }
+
+    // This branch supplies the implicit listener and speaker. Leave explicit
+    // participants and independently chained actions to their existing path.
+    if arguments.iter().any(|atom| {
+        if atom.is_locked {
+            return atom.deprel != "obj" || atom.head != Some(action_idx);
+        }
+        matches!(atom.upos, Some(Upos::Verb | Upos::Sconj))
+            || matches!(atom.deprel.as_str(), "nsubj" | "iobj")
+            || (atom.upos == Some(Upos::Aux)
+                && matches!(
+                    atom.surface.as_str(),
+                    "ない" | "なく" | "なかった" | "なかっ"
+                ))
+            || (atom.upos == Some(Upos::Adp)
+                && matches!(atom.surface.as_str(), "は" | "が" | "に" | "へ" | "から"))
+    }) {
+        return None;
+    }
+
+    if let Some(comma) = arguments.iter().position(is_punct_atom) {
+        let (lead, rest) = arguments.split_at(comma);
+        if !matches!(rest[0].surface.as_str(), "、" | "，" | ",")
+            || lead.is_empty()
+            || rest[1..].iter().any(is_punct_atom)
+            || !lead.iter().all(|adverb| {
+                !adverb.is_locked
+                    && adverb.upos == Some(Upos::Adv)
+                    && adverb.deprel == "advmod"
+                    && (adverb.head == Some(action_idx)
+                        || rest[1..].iter().any(|next| {
+                            next.doc_tok_idx.is_some()
+                                && adverb.head == next.doc_tok_idx
+                                && next.deprel == "advmod"
+                                && next.head == Some(action_idx)
+                        }))
+            })
+        {
+            return None;
+        }
+    }
+
+    Some(TeHelpRequest {
+        action: &body[..body.len() - 1],
+        humble,
+        negative_form,
+    })
+}
+
 /// Remove descriptive honorific wrappers before clause splitting. Keep all finite
 /// auxiliaries, source spans and locks so tense, negation and alignment stay local.
 fn normalize_keigo_atoms(atoms: &[Atom]) -> Vec<Atom> {
@@ -1867,6 +1976,19 @@ fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span)
             out.push(Segment::Punct(p, parent_span));
         }
     };
+
+    // Keep a verified whole request together. The ordinary splitter can
+    // otherwise treat its potential helper as a separate lexical action.
+    let request_atoms = core_non_punct(atoms);
+    let ending = &atoms[request_atoms.len()..];
+    if (ending.is_empty()
+        || matches!(ending, [punct] if !punct.is_locked && matches!(punct.surface.as_str(), "。" | "？" | "?")))
+        && te_help_request(request_atoms).is_some()
+    {
+        let punctuation = (!ending.is_empty()).then(|| "？".to_owned());
+        flush_clause(&mut request_atoms.to_vec(), punctuation, &mut segments);
+        return segments;
+    }
 
     while i < atoms.len() {
         let a = &atoms[i];
@@ -2986,6 +3108,13 @@ fn translate_clause_atoms(
         return (String::new(), false);
     }
 
+    if let Some(request) = te_help_request(core_non_punct(atoms)) {
+        return (
+            render_te_help_request(request, doc, sentence_idx, ctx, target),
+            false,
+        );
+    }
+
     // Fast path: bare `正直` clause opener -> `老實說`.
     let non_punct: Vec<&Atom> = atoms.iter().filter(|a| !is_punct_atom(a)).collect();
     if non_punct.len() == 1 && !non_punct[0].is_locked && non_punct[0].surface == "正直" {
@@ -3282,6 +3411,68 @@ fn try_translate_polite_request_closing(atoms: &[Atom]) -> Option<(String, bool)
         return None;
     }
     Some((format!("若能請您{body}，將不勝感激"), false))
+}
+
+fn render_te_help_request(
+    request: TeHelpRequest<'_>,
+    doc: &Document,
+    sentence_idx: usize,
+    ctx: &ClauseDiscourseCtx,
+    target: TargetVariant,
+) -> String {
+    let mut repeat = false;
+    let mut action: Vec<_> = request
+        .action
+        .iter()
+        .filter(|atom| {
+            if !atom.is_locked && atom.surface == "もう一度" && atom.deprel == "advmod" {
+                repeat = true;
+                return false;
+            }
+            !is_punct_atom(atom)
+        })
+        .cloned()
+        .collect();
+    let action_head = request.action.last().and_then(|atom| atom.doc_tok_idx);
+    if let Some(index) = action.iter().position(|atom| {
+        !atom.is_locked
+            && atom.upos == Some(Upos::Noun)
+            && atom.deprel == "obj"
+            && atom.head == action_head
+            && matches!(atom.surface.as_str(), "荷物" | "書類")
+    }) {
+        let object = &action[index];
+        let (noun, classifier) = if object.surface == "荷物" {
+            ("行李", "件")
+        } else {
+            ("文件", "份")
+        };
+        let mut localized = object.clone();
+        let mut start = index;
+        localized.surface = noun.to_owned();
+        if let Some(det_index) = index.checked_sub(1)
+            && let Some(demonstrative) = attached_demonstrative(&action[det_index], object)
+        {
+            start = det_index;
+            localized.span.start_char = action[start].span.start_char;
+            localized.surface = format!("{demonstrative}{classifier}{noun}");
+        }
+        localized.lemma = None;
+        localized.is_locked = true;
+        action.splice(start..=index, [localized]);
+    }
+    let (body, _) = translate_clause_atoms(&action, doc, sentence_idx, None, false, ctx, target);
+    let opening = match (request.humble, request.negative_form) {
+        (true, false) => "可以請您幫我",
+        (true, true) => "可以麻煩您幫我",
+        (false, false) => "可以幫我",
+        (false, true) => "可以麻煩你幫我",
+    };
+    if repeat {
+        format!("{opening}再{body}一次嗎")
+    } else {
+        format!("{opening}{body}嗎")
+    }
 }
 
 fn try_translate_tsumori_clause(
@@ -11770,6 +11961,79 @@ mod existence_rule_tests {
             deprel: String::new(),
             is_locked: false,
         }
+    }
+
+    #[test]
+    fn te_help_request_preserves_action_object_and_politeness() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "この荷物を持っていただけますか。",
+                "可以請您幫我拿著這件行李嗎？",
+            ),
+            (
+                "この荷物を持っていただけませんか。",
+                "可以麻煩您幫我拿著這件行李嗎？",
+            ),
+            ("写真を撮ってもらえますか。", "可以幫我拍攝照片嗎？"),
+            (
+                "この書類を確認していただけますか。",
+                "可以請您幫我確認這份文件嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+
+        let repeat = translate("もう一度、ゆっくり話していただけませんか。", &glossary);
+        assert!(
+            repeat.target_text.starts_with("可以麻煩您幫我再")
+                && repeat.target_text.contains("慢慢")
+                && repeat.target_text.ends_with("一次嗎？"),
+            "{}",
+            repeat.target_text
+        );
+    }
+
+    #[test]
+    fn te_help_request_leaves_other_roles_and_protected_text_intact() {
+        let glossary = TranslationGlossary::new();
+        for source in [
+            "この資料をいただけませんか。",
+            "田中さんご本人に、母のためにこの書類を確認していただけませんか。",
+            "私が内容を確認してから、窓口で控えを一部いただけますか。",
+            "写真を撮って送ってもらえますか。",
+        ] {
+            let output = translate(source, &glossary).target_text;
+            assert!(!output.contains("幫我"), "{source}: {output}");
+        }
+        for (source, ability) in [("泳げますか。", "能游泳"), ("泳げませんか。", "不能游泳")]
+        {
+            let output = translate(source, &glossary).target_text;
+            assert!(
+                output.contains(ability) && !output.contains("幫我"),
+                "{source}: {output}"
+            );
+        }
+
+        let locked = translate("この`資料A`を確認していただけませんか。", &glossary);
+        assert!(locked.target_text.starts_with("可以麻煩您幫我確認"));
+        assert!(locked.target_text.ends_with("嗎？"));
+        assert_eq!(locked.target_text.matches("`資料A`").count(), 1);
+        let [record] = locked.opaque_spans.as_slice() else {
+            panic!("expected one protected object");
+        };
+        let span = record.target_span.expect("restored object");
+        let slice: String = locked
+            .target_text
+            .chars()
+            .take(span.end_char)
+            .skip(span.start_char)
+            .collect();
+        assert_eq!(slice, "`資料A`");
     }
 
     #[test]

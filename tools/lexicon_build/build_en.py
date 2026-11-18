@@ -81,6 +81,25 @@ REVIEWED_POS_EVIDENCE: dict[str, frozenset[str]] = {
     "weftwize": frozenset(),
 }
 
+# These VarCon pairs connect different substances, not spelling variants.
+# Retain the source's variant tags while withholding the incorrect links.
+REVIEWED_BAD_COUNTERPARTS: frozenset[tuple[str, str]] = frozenset({
+    ("ceratin", "creatin"),
+    ("creatin", "ceratin"),
+    ("ceratins", "creatins"),
+    ("creatins", "ceratins"),
+})
+
+
+def remove_reviewed_bad_counterparts(
+    variants: dict[str, tuple[str, str]],
+) -> dict[str, tuple[str, str]]:
+    """Withhold only reviewed incorrect links, preserving their variant tags."""
+    return {
+        word: (variant, "-" if (word, counterpart) in REVIEWED_BAD_COUNTERPARTS else counterpart)
+        for word, (variant, counterpart) in variants.items()
+    }
+
 
 def apply_reviewed_pos_evidence(
     word: str,
@@ -674,6 +693,7 @@ def main() -> int:
         wn_dict_dir, offset_to_lex, instance_offsets
     )
     variant_map, shared_words = load_varcon(varcon_path)
+    variant_map = remove_reviewed_bad_counterparts(variant_map)
 
     # Build candidate vocabulary (Product Vocabulary Policy)
     must_keep: set[str] = set()

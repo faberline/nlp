@@ -9019,8 +9019,8 @@ ceramicist	en	1700	NOUN	NOUN	-	-	sem=person
 ceramist	en	1700	NOUN	NOUN	-	-	sem=person
 cerat	en-US	1650	-	-	-	creat	-
 cerate	en	1700	NOUN	NOUN	-	-	sem=artifact
-ceratin	en-US	1650	NOUN	NOUN	-	creatin	-
-ceratins	en-US	1650	NOUN	NOUN	ceratin	creatins	-
+ceratin	en-US	1650	NOUN	NOUN	-	-	-
+ceratins	en-US	1650	NOUN	NOUN	ceratin	-	-
 cerberus	en	1700	NOUN	NOUN	-	-	sem=person
 cercaria	en	1700	NOUN	NOUN	-	-	infl=irr
 cercariae	en	1700	NOUN	NOUN	cercaria	-	infl=irr
@@ -13041,9 +13041,9 @@ creat	en-GB	1650	-	-	-	cerat	-
 create	en	846	VERB	VERB	-	-	-
 created	en	1339	VERB	VERB	create	-	-
 creates	en	1453	VERB	VERB	create	-	-
-creatin	en-GB	1650	NOUN	NOUN	-	ceratin	-
+creatin	en-GB	1650	NOUN	NOUN	-	-	-
 creating	en	1453	VERB	VERB	create	-	-
-creatins	en-GB	1650	NOUN	NOUN	creatin	ceratins	-
+creatins	en-GB	1650	NOUN	NOUN	creatin	-	-
 creation	en	1144	NOUN	NOUN	-	-	-
 creative	en	1109	ADJ	ADJ	-	-	-
 creatively	en	1453	ADV	ADV	-	-	-

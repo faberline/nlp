@@ -34,8 +34,8 @@
     {
       "path": "lexicon/data/en.tsv",
       "entries": 66000,
-      "bytes": 2921349,
-      "sha256": "a63f63f39d3dd978456dbc63b0cc1b23fa51b9a248d7a4bee41ad5550399d150"
+      "bytes": 2921323,
+      "sha256": "e218ebd5ced802f0846bfcb68ea2d19a8205721c408818dafcd11e6280d19513"
     },
     {
       "path": "lexicon/data/ja.tsv",
@@ -147,7 +147,7 @@
     }
   ],
   "lexicon_bin_bytes": 15124422,
-  "lexicon_bin_sha256": "5948ee8f3435275958381847c1ab0e75b09a2d52ed9341ec6822d61d284d0fe0",
+  "lexicon_bin_sha256": "4fef274b8ac26d1d70ccfd8ae9a67b4c2cd958fc8f1350d9e4cda048048adc77",
   "upstream_inputs": {
     "wordnet_3_1": {
       "archive": "wn3.1.dict.tar.gz",
@@ -572,6 +572,52 @@
           "method": "No independent exact-spelling POS evidence identified; VarCon preserves the spelling pair but does not establish POS."
         }
       ]
+    }
+  ],
+  "counterpart_repair_batches": [
+    {
+      "issue": 143,
+      "base_en_sha256": "a63f63f39d3dd978456dbc63b0cc1b23fa51b9a248d7a4bee41ad5550399d150",
+      "candidate_en_sha256": "e218ebd5ced802f0846bfcb68ea2d19a8205721c408818dafcd11e6280d19513",
+      "rows_compared": 66000,
+      "changes": [
+        {
+          "surface": "ceratin",
+          "variant": "en-US",
+          "old_counterpart": "creatin",
+          "new_counterpart": "-"
+        },
+        {
+          "surface": "ceratins",
+          "variant": "en-US",
+          "old_counterpart": "creatins",
+          "new_counterpart": "-"
+        },
+        {
+          "surface": "creatin",
+          "variant": "en-GB",
+          "old_counterpart": "ceratin",
+          "new_counterpart": "-"
+        },
+        {
+          "surface": "creatins",
+          "variant": "en-GB",
+          "old_counterpart": "ceratins",
+          "new_counterpart": "-"
+        }
+      ],
+      "evidence": {
+        "wordnet_3_1_noun_synset_offsets": {
+          "ceratin": "14756651",
+          "creatin": "14849413"
+        },
+        "varcon_sha256": "75af63da46ec12d7eb14b9f1ba8d3898d484dd6872755b73c921b215875a3629",
+        "varcon_lines": [
+          3968,
+          3969
+        ]
+      },
+      "method": "The reviewed VarCon pairs link different substances. Preserve each variant and remove these four links before propagation. No upstream text was imported."
     }
   ]
 }

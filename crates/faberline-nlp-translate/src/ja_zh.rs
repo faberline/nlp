@@ -91,7 +91,7 @@ enum BunsetsuRole {
     Obl,
     MotionPurpose,
     PurposeModifier,
-    PurposePartner,
+    PurposePartner(&'static str),
     PurposeRecipient,
     Adv,
     IObj,
@@ -5185,6 +5185,12 @@ fn translate_clause_bunsetsus(
     let mut purpose = None;
     let mut purpose_partners = Vec::new();
     let mut purpose_recipients = Vec::new();
+    let wh_object = bunsetsus.iter().any(|b| {
+        b.role == BunsetsuRole::Obj
+            && matches!(b.atoms.as_slice(), [wh, wo]
+            if !wh.is_locked && !wo.is_locked && matches!(wh.surface.as_str(), "何" | "誰" | "どれ")
+            && wo.surface == "を" && wo.deprel == "case" && wo.head == wh.doc_tok_idx)
+    });
     let mut go_together = None;
     let mut to_complements: Vec<(String, bool)> = Vec::new();
     let mut predicates: Vec<Bunsetsu> = Vec::new();
@@ -5379,8 +5385,8 @@ fn translate_clause_bunsetsus(
                 go_together = Some(render_bunsetsu_np(&b, target));
             }
             BunsetsuRole::PurposeModifier => temporal_others.push(render_bunsetsu_np(&b, target)),
-            BunsetsuRole::PurposePartner => {
-                purpose_partners.push(format!("和{}", render_bunsetsu_np(&b, target)));
+            BunsetsuRole::PurposePartner(marker) => {
+                purpose_partners.push(format!("{marker}{}", render_bunsetsu_np(&b, target)));
             }
             BunsetsuRole::PurposeRecipient => {
                 purpose_recipients.push(format!("給{}", render_bunsetsu_np(&b, target)));
@@ -6375,7 +6381,9 @@ fn translate_clause_bunsetsus(
             .iter()
             .any(|m| matches!(m.as_str(), "不" | "沒有"));
     if purpose.is_some() && sfp_suffix == Some("嗎") {
-        if implicit_subject && polite_negative_question && negative_go {
+        if wh_object {
+            sfp_suffix = Some("？");
+        } else if implicit_subject && polite_negative_question && negative_go {
             if let Some(negative) = inner_pre_mods.iter_mut().find(|m| *m == "不") {
                 *negative = "要不要".to_owned();
             }
@@ -7934,7 +7942,8 @@ fn purpose_stem_lemma(stem: &Atom) -> Option<String> {
 fn recover_split_purpose_stems(atoms: &mut Vec<Atom>) {
     let mut i = 0;
     while i < atoms.len() {
-        if atoms[i].surface == "に"
+        if !atoms[i].is_locked
+            && atoms[i].surface == "に"
             && let Some((start, stem)) = split_purpose_stem(&atoms[..i], &atoms[i], &atoms[i + 1..])
         {
             atoms.splice(start..i, [stem]);
@@ -8076,7 +8085,11 @@ fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom]) {
     let Some((index, id, go, lemma)) = found else {
         return;
     };
-    let meeting = lemma == "会う";
+    let partner_marker = match lemma.as_str() {
+        "会う" => Some("和"),
+        "借りる" => Some("向"),
+        _ => None,
+    };
     let nominal_stem = groups[index].atoms[0].upos == Some(Upos::Noun);
     let direct_object = source
         .iter()
@@ -8106,8 +8119,12 @@ fn mark_motion_purpose(groups: &mut [Bunsetsu], source: &[Atom]) {
         {
             continue;
         }
-        if noun.deprel == "obl" && noun.head == Some(id) && meeting && is_person_like_atom(noun) {
-            group.role = BunsetsuRole::PurposePartner;
+        if noun.deprel == "obl"
+            && noun.head == Some(id)
+            && is_person_like_atom(noun)
+            && let Some(marker) = partner_marker
+        {
+            group.role = BunsetsuRole::PurposePartner(marker);
         } else if transfer
             && matches!(noun.deprel.as_str(), "obl" | "iobj")
             && (noun.head == Some(id) || (nominal_stem && noun.head == go))
@@ -9428,10 +9445,12 @@ mod motion_endpoint_tests {
             ("本を買いに行きます。", "去買書。"),
             ("私はパンを食べに行きます。", "我去吃麵包。"),
             ("魚を食べに行きます。", "去吃魚。"),
-            ("野菜を混ぜに行きます。", "去攪拌蔬菜。"),
+            ("材料を混ぜに行きます。", "去攪拌材料。"),
             ("窓を閉めに行きます。", "去關上窗戶。"),
             ("父を迎えに行きます。", "去迎接父親。"),
             ("私は先生に本を返しに行きます。", "我去還書給老師。"),
+            ("私は先生に本を借りに行きます。", "我去向老師借書。"),
+            ("先生に何を返しに行きますか。", "去還什麼給老師？"),
             ("先生に花を渡しに行きます。", "去遞花給老師。"),
             ("図書館に本を返しに行きます。", "去到圖書館還書。"),
             ("本を読みに行きません。", "不去讀書。"),

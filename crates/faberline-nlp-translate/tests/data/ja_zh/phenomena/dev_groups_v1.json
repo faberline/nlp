@@ -1,0 +1,225 @@
+{
+  "schema": "faberline.nlp.ja_zh.dev_phenomenon_map.v1",
+  "version": "1.0.0",
+  "source_revision": "2c89250b31dba56ac8f02cd55629bf6037d3b179",
+  "banks": [
+    {
+      "file": "nlevels_dev_v1.json",
+      "sha256": "a24d91502b3d361eec1ff2bf97381d0accbf27d7516ba2188e77b3b4e96695c0",
+      "rows": 20
+    },
+    {
+      "file": "honorific_san_dev_v1.json",
+      "sha256": "280da5014f9069994bce1f23e8cdc10c3cad3200450278c9b4e3618231134229",
+      "rows": 12
+    }
+  ],
+  "groups": [
+    {
+      "id": "habitual_action_polarity",
+      "definition": "L5-01 and L5-02 contrast a habitual morning action with its negated form. Preserve the habitual time, subject and object. Both sentences describe a habit.",
+      "members": [
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L5-01"
+        },
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L5-02"
+        }
+      ]
+    },
+    {
+      "id": "past_destination_polarity",
+      "definition": "L5-03 and L5-04 use the same motion frame and school destination. L5-03 says the past trip occurred. L5-04 negates that trip. The rows share a frame, not a completed event.",
+      "members": [
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L5-03"
+        },
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L5-04"
+        }
+      ]
+    },
+    {
+      "id": "weather_cause_and_intention",
+      "definition": "L4-01 and L4-02 share ongoing rain as the reason for studying at home. L4-02 adds an explicit intention. The two sentences share the cause and differ in intention. Both leave the actor unnamed.",
+      "members": [
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L4-01"
+        },
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L4-02"
+        }
+      ]
+    },
+    {
+      "id": "movement_origin_destination",
+      "definition": "L4-03 and L4-04 contrast walking to a station with walking from it, followed by meeting a friend. They do not state where the meeting occurs or prove that it happens during the walk.",
+      "members": [
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L4-03"
+        },
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L4-04"
+        }
+      ]
+    },
+    {
+      "id": "cause_concession_and_outcome",
+      "definition": "L3-01 says the train delay caused the person to miss the meeting start time. L3-02 treats the delay as a concession and says the person arrived before the meeting started. Both leave the arriving person unstated. Relation and outcome differ, so this pair does not isolate the connective.",
+      "members": [
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L3-01"
+        },
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L3-02"
+        }
+      ]
+    },
+    {
+      "id": "gradual_change_vs_completion",
+      "definition": "L3-03 and L3-04 contrast coughs gradually improving with a completed recovery after taking medicine. Neither states who took the medicine.",
+      "members": [
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L3-03"
+        },
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L3-04"
+        }
+      ]
+    },
+    {
+      "id": "condition_vs_concession_and_necessity",
+      "definition": "L2-01 and L2-02 contrast a condition that avoids spending meeting time on detail checks with a concession where checks remain necessary. The relation and result both differ.",
+      "members": [
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L2-01"
+        },
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L2-02"
+        }
+      ]
+    },
+    {
+      "id": "standing_procedure_vs_intention",
+      "definition": "L2-03 and L2-04 contrast an established arrangement to notify people after confirmation with the speaker's intention to notify them. The Japanese does not identify the notifier in L2-03 or the speaker in L2-04.",
+      "members": [
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L2-03"
+        },
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L2-04"
+        }
+      ]
+    },
+    {
+      "id": "inference_rejection_vs_uncertainty",
+      "definition": "L1-01 rejects the inference that a delayed review means lower workload. L1-02 says the delay leaves a lower workload uncertain. Both leave the actual workload open.",
+      "members": [
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L1-01"
+        },
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L1-02"
+        }
+      ]
+    },
+    {
+      "id": "apparent_acknowledgment_vs_addition",
+      "definition": "L1-03 contrasts an appearance of acknowledging facts with omission of the key decision process. L1-04 states that facts are acknowledged and the process is also addressed. This is not a simple positive/negative pair.",
+      "members": [
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L1-03"
+        },
+        {
+          "bank": "nlevels_dev_v1.json",
+          "id": "L1-04"
+        }
+      ]
+    },
+    {
+      "id": "personal_name_honorific_gender_neutrality",
+      "definition": "HS-01 and HS-02 use the same name and place. They change が to は and switch from present to absent. HS-03 and HS-04 use the hiragana name さくら. They change last week to next week and past to nonpast. HS-05 and HS-06 use katakana アレックス. They also change が to は, affirmative to not-yet negative, and add その and まだ. These pairs vary several features, so they are not single-feature controls. HS-12 uses the name honorific 佐藤さん and includes a teacher-title clause. HS-11 belongs to non_name_san_boundaries and uses さんま as a fish name. These are cross-group contexts, not an in-group matched pair. Do not infer gender or a unique spelling from さん.",
+      "members": [
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-01"
+        },
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-02"
+        },
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-03"
+        },
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-04"
+        },
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-05"
+        },
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-06"
+        },
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-12"
+        }
+      ]
+    },
+    {
+      "id": "explicit_gender_and_teacher_title",
+      "definition": "HS-07 states that the person is male. HS-08 states the teacher role and leaves gender unspecified. These cases use different contexts.",
+      "members": [
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-07"
+        },
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-08"
+        }
+      ]
+    },
+    {
+      "id": "non_name_san_boundaries",
+      "definition": "HS-09 preserves the kinship meaning in お母さん. HS-10 preserves the clerk role in 店員さん. HS-11 treats さんま as a fish name, not a name suffix. These rows cover distinct lexical and role boundaries. HS-12 is in personal_name_honorific_gender_neutrality and uses 佐藤さん as a name honorific. HS-11 and HS-12 are cross-group contexts, not a matched pair.",
+      "members": [
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-09"
+        },
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-10"
+        },
+        {
+          "bank": "honorific_san_dev_v1.json",
+          "id": "HS-11"
+        }
+      ]
+    }
+  ]
+}

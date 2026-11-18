@@ -12156,7 +12156,20 @@ fn place_companion(source: &[Atom], predicate: usize) -> Option<usize> {
         };
         // 私と先生が and 先生と学生を can share the second noun's case.
         // A later location does not establish a separate companion there.
-        if after_companion && human {
+        // In 先生と二人で the count describes how the two people participate.
+        let counted_manner = marker.surface == "で"
+            && noun.surface == "人"
+            && prefix.iter().any(|n| {
+                !n.is_locked
+                    && n.head == noun.doc_tok_idx
+                    && n.span.end_char == noun.span.start_char
+                    && (n.upos == Some(Upos::Num) && n.deprel == "nummod"
+                        || n.deprel == "compound"
+                            && n.surface
+                                .chars()
+                                .all(|c| matches!(c, '０'..='９' | '0'..='9')))
+            });
+        if after_companion && human && !counted_manner {
             return None;
         }
         after_companion = false;

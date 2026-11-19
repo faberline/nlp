@@ -53,6 +53,56 @@ pub(super) fn whole_nominal_lock(a: &Atom, doc: &Document) -> bool {
             .all(|w| w[0].span.end_char == w[1].span.start_char)
 }
 
+// Keep the ordinary clause split unless all of the text around a Japanese
+// list comma parses as one nominal identification. In particular, two full
+// questions each have their own copula and must keep their boundary.
+pub(super) fn join_choice_commas(
+    atoms: &mut Vec<Atom>,
+    doc: &Document,
+    sentence: usize,
+    target: TargetVariant,
+) {
+    let is_comma = |a: &Atom| !a.is_locked && matches!(a.surface.as_str(), "、" | "，");
+    if !atoms
+        .windows(2)
+        .any(|p| choice_particle(&p[0]) && is_comma(&p[1]))
+    {
+        return;
+    }
+    let mut start = 0;
+    let mut commas = Vec::new();
+    let mut drop = Vec::new();
+    for end in 0..=atoms.len() {
+        if let Some(a) = atoms.get(end) {
+            if end > start && is_comma(a) && choice_particle(&atoms[end - 1]) {
+                commas.push(a.span.start_char);
+                continue;
+            }
+            if !super::is_punct_atom(a) {
+                continue;
+            }
+        }
+        if !commas.is_empty() {
+            let joined: Vec<_> = atoms[start..end]
+                .iter()
+                .filter(|a| !is_comma(a))
+                .cloned()
+                .collect();
+            if render(&joined, doc, sentence, target).is_some() {
+                drop.append(&mut commas);
+            } else {
+                commas.clear();
+            }
+        }
+        start = end + 1;
+    }
+    atoms.retain(|a| drop.binary_search(&a.span.start_char).is_err());
+}
+
+fn choice_particle(a: &Atom) -> bool {
+    !a.is_locked && a.surface == "か" && a.upos == Some(Upos::Part) && a.deprel == "discourse"
+}
+
 pub(super) fn render(
     atoms: &[Atom],
     doc: &Document,
@@ -122,22 +172,13 @@ pub(super) fn render(
     };
     // An object or adjunct before an instrumental で and する is a different
     // construction. Every atom here must belong to the topic or its nominal complement.
-    if !topic.iter().chain(phrase).all(|a| {
+    let nominal_part = |a: &Atom| {
         matches!(
             a.upos,
             Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Num | Upos::Det)
         ) || (a.surface == "の" && a.deprel == "case")
-    }) {
-        return None;
-    }
-    let head_id = head.doc_tok_idx?;
-    if !phrase.windows(2).any(|p| {
-        p[0].deprel == "nmod"
-            && p[0].head == Some(head_id)
-            && p[1].surface == "の"
-            && p[1].deprel == "case"
-            && p[1].head == p[0].doc_tok_idx
-    }) {
+    };
+    if !topic.iter().all(nominal_part) {
         return None;
     }
     let subject = match (topic, split) {
@@ -171,21 +212,54 @@ pub(super) fn render(
         }
         _ => return None,
     };
-    // In a nominal identification, the head もの can stand for an already
-    // mentioned item. The explicit owner carries that reference in Chinese.
-    let complement = match phrase {
-        [owner @ .., no, thing] if thing.surface == "もの" && no.surface == "の" => {
-            format!("{}的", noun_phrase(owner, doc, sentence, target)?)
+    // An interior か belongs to the preceding noun. The final か, if present,
+    // was removed with the other sentence particles above.
+    if phrase.windows(2).any(|pair| {
+        choice_particle(&pair[1])
+            && (pair[0].doc_tok_idx.is_none() || pair[1].head != pair[0].doc_tok_idx)
+    }) {
+        return None;
+    }
+    let mut alternatives = Vec::new();
+    let mut has_owner = false;
+    for part in phrase.split(choice_particle) {
+        let noun = part.last()?;
+        let noun_id = noun.doc_tok_idx?;
+        if !part.iter().all(nominal_part) || matches!(noun.surface.as_str(), "こと" | "事") {
+            return None;
         }
-        _ => noun_phrase(phrase, doc, sentence, target)?,
-    };
-    let ending = if ending == "嗎"
-        && nominals.iter().any(|a| {
-            matches!(
-                a.surface.as_str(),
-                "誰" | "だれ" | "何" | "どれ" | "どの" | "どこ" | "どちら"
-            )
-        }) {
+        let owned = part.windows(2).any(|p| {
+            p[0].deprel == "nmod"
+                && p[0].head == Some(noun_id)
+                && p[1].surface == "の"
+                && p[1].deprel == "case"
+                && p[1].head == p[0].doc_tok_idx
+        });
+        if !owned && part.len() != 1 {
+            return None;
+        }
+        has_owner |= owned;
+        // In a nominal identification もの can stand for an already mentioned item.
+        let name = match part {
+            [owner @ .., no, thing] if thing.surface == "もの" && no.surface == "の" => {
+                format!("{}的", noun_phrase(owner, doc, sentence, target)?)
+            }
+            _ => noun_phrase(part, doc, sentence, target)?,
+        };
+        alternatives.push(name);
+    }
+    if !has_owner {
+        return None;
+    }
+    let asks_choice = alternatives.len() > 1 && ending == "嗎" && matches!(copula, "是" | "當時是");
+    let complement = alternatives.join(if asks_choice { "還是" } else { "或是" });
+    let asks_which = nominals.iter().any(|a| {
+        matches!(
+            a.surface.as_str(),
+            "誰" | "だれ" | "何" | "どれ" | "どの" | "どこ" | "どちら"
+        )
+    });
+    let ending = if asks_choice || ending == "嗎" && asks_which {
         ""
     } else {
         ending
@@ -209,6 +283,26 @@ mod tests {
         )
         .unwrap()
         .target_text
+    }
+
+    #[test]
+    fn possessive_copula_preserves_choices_and_marks_only_a_real_question() {
+        for (source, expected) in [
+            ("これは父の車か母の車です。", "這是父親的車或是母親的車。"),
+            (
+                "それは先生の本か学生の本ですか。",
+                "那是老師的書還是學生的書？",
+            ),
+            (
+                "これは父の車か、母の車ではありませんか。",
+                "這不是父親的車或是母親的車嗎？",
+            ),
+            ("これは父の車か、母の車です。", "這是父親的車或是母親的車。"),
+            ("これは誰の本ですか。", "這是誰的書？"),
+            ("あれは友達の本ですか。", "那是朋友的書嗎？"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
     }
 
     #[test]

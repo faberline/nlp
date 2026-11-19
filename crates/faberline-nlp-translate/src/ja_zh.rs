@@ -198,6 +198,7 @@ pub(crate) fn translate_ja_sentence(
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
+        nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target);
     }
 
     if atoms.is_empty() {

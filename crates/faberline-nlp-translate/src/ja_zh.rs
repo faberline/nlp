@@ -9652,11 +9652,16 @@ fn translate_clause_bunsetsus(
         }
         if filing_verb.is_some()
             && matches!(b.case_particle.as_deref(), Some("に" | "へ"))
-            && b.atoms.iter().any(|a| {
-                a.lemma.as_deref() == Some(application_form::OFFICE) && a.head == filing_verb
+            && let Some(recipient) = b.atoms.iter().find(|a| {
+                matches!(
+                    a.lemma.as_deref(),
+                    Some(application_form::OFFICE | application_form::SHARED_FORM_RECIPIENT)
+                ) && a.head == filing_verb
             })
         {
-            filing_office = Some(render_bunsetsu_np(&b, target));
+            let shared =
+                recipient.lemma.as_deref() == Some(application_form::SHARED_FORM_RECIPIENT);
+            filing_office = Some((render_bunsetsu_np(&b, target), shared));
             continue;
         }
         if arrival_head.is_some()
@@ -10138,8 +10143,10 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
-    if let Some(office) = filing_office {
-        verb_core = if let Some(action) = verb_core.strip_prefix('能') {
+    if let Some((office, shared)) = filing_office {
+        verb_core = if shared {
+            format!("{verb_core}給{office}")
+        } else if let Some(action) = verb_core.strip_prefix('能') {
             format!("能向{office}{action}")
         } else {
             format!("向{office}{verb_core}")
@@ -15932,6 +15939,43 @@ mod clock_rule_tests {
             ),
         ] {
             assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+    }
+
+    #[test]
+    fn a_linked_filing_can_share_the_extracted_form() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "私は講座の申込書をかばんから出して、受付に出しました。",
+                "我從包包拿出課程報名表，交給櫃檯了。",
+            ),
+            (
+                "私は入居申込書を昨日かばんから出し、今日受付に出しました。",
+                "我昨天從包包拿出入住申請表，今天交給櫃檯了。",
+            ),
+            (
+                "私は講座の申込書をかばんから出して窓口に出しませんでした。",
+                "我從包包拿出課程報名表，沒有交給窗口。",
+            ),
+            (
+                "私は講座の申込書をかばんから出して、受付に出しますか。",
+                "我從包包拿出課程報名表，交給櫃檯嗎？",
+            ),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+        for jp in [
+            "私は本と講座の申込書をかばんから出して、受付に出しました。",
+            "私は講座の申込書をかばんから出して、受付の箱から出しました。",
+            "私は講座の申込書をかばんから出して、受付に本を出しました。",
+            "私は講座の申込書をかばんから出して、父は受付に出しました。",
+            "私は入居申込書を昨日かばんから出しました。今日受付に出しました。",
+        ] {
+            assert!(
+                !public_translate(jp, &glossary).target_text.contains("交給"),
+                "{jp}"
+            );
         }
     }
 

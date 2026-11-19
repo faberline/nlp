@@ -5,6 +5,7 @@ use super::{Atom, Document, Upos, dasu_case_link, direct_quote_time, is_clock_at
 pub(super) const SUBMIT: &str = "__ja_submit_application";
 pub(super) const CAN_SUBMIT: &str = "__ja_can_submit_application";
 pub(super) const OFFICE: &str = "__ja_application_recipient";
+pub(super) const SHARED_FORM_RECIPIENT: &str = "__ja_shared_form_recipient";
 pub(super) const TIME_QUESTION: &str = "__ja_application_time_question";
 const PRESENT_RECIPIENT: &str = "__ja_located_application_recipient";
 pub(super) const PURPOSE: &str = "__ja_application_purpose";
@@ -221,6 +222,30 @@ fn physical_argument(
     doc: &Document,
     has_recipient: bool,
 ) -> bool {
+    // A glossary entry may include the container's source particle.
+    if atoms.iter().any(|a| {
+        a.is_locked
+            && (a.head == Some(verb)
+                || (a.deprel == "case"
+                    && a.head
+                        .and_then(|h| doc.syntax.iter().find(|s| s.token == h))
+                        .is_some_and(|s| s.head == Some(verb))))
+            && spelling(a, chars).strip_suffix("から").is_some_and(|name| {
+                [
+                    "かばん",
+                    "鞄",
+                    "バッグ",
+                    "箱",
+                    "封筒",
+                    "引き出し",
+                    "ポケット",
+                ]
+                .iter()
+                .any(|end| name.ends_with(end))
+            })
+    }) {
+        return true;
+    }
     atoms.windows(2).enumerate().any(|(i, pair)| {
         let [noun, case] = pair else { return false };
         if noun.head != Some(verb) || !dasu_case_link(noun, case) {
@@ -253,7 +278,7 @@ fn physical_argument(
                     .is_some()
             });
         match case.surface.as_str() {
-            "から" => !temporal,
+            "から" => !temporal && noun.upos != Some(Upos::Verb),
             "に" | "へ" => !temporal && !recipient(atoms, i + 1, verb, chars),
             _ => false,
         }
@@ -802,6 +827,92 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
     }
 }
 
+fn filing_recipient(atoms: &[Atom], verb: usize, chars: &[char]) -> Option<usize> {
+    atoms.iter().enumerate().find_map(|(i, a)| {
+        (matches!(a.surface.as_str(), "に" | "へ") && recipient(atoms, i, verb, chars))
+            .then(|| i - 1)
+    })
+}
+
+fn mark_recipient(atoms: &mut [Atom], i: usize, role: &str) {
+    let person = atoms[i].doc_tok_idx;
+    for modifier in &mut atoms[..i] {
+        if modifier.head == person && modifier.deprel == "nmod" {
+            office_name(modifier);
+        }
+    }
+    office_name(&mut atoms[i]);
+    atoms[i].lemma = Some(role.to_owned());
+}
+
+// A coordinated action can keep the preceding action's object. Both the
+// link between the verbs and the receiving argument belong to the source.
+fn mark_shared_form(
+    atoms: &mut [Atom],
+    form: usize,
+    first: usize,
+    chars: &[char],
+    doc: &Document,
+) -> Option<()> {
+    // A verbal noun such as 印刷 can govern the form while its light
+    // verb する carries the clause link.
+    let first = match atoms.get(first + 1) {
+        Some(light)
+            if !light.is_locked
+                && light.lemma.as_deref() == Some("する")
+                && atoms[first].deprel == "advcl"
+                && atoms[first].head == light.doc_tok_idx =>
+        {
+            first + 1
+        }
+        _ => first,
+    };
+    let previous = &atoms[first];
+    let after = previous.deprel == "obl"
+        && atoms.get(first + 1..first + 3).is_some_and(|p| {
+            p[0].surface == "て"
+                && p[1].surface == "から"
+                && p.iter()
+                    .all(|a| a.head == previous.doc_tok_idx && !a.is_locked)
+        });
+    if form >= first
+        || (previous.deprel != "advcl" && !after)
+        || previous.is_locked
+        || !atoms.get(first + 1).is_some_and(|link| {
+            !link.is_locked && matches!(link.surface.as_str(), "て" | "、" | ",")
+        })
+        || atoms.windows(2).any(|w| {
+            w[0].head == previous.doc_tok_idx
+                && w[1].surface == "と"
+                && dasu_case_link(&w[0], &w[1])
+        })
+    {
+        return None;
+    }
+    let next = (first + 1..atoms.len()).find(|&i| atoms[i].doc_tok_idx == previous.head)?;
+    let reading = filing_reading(&atoms[next], atoms)?;
+    let verb = atoms[next].doc_tok_idx?;
+    if atoms[form + 1..next]
+        .iter()
+        .any(|a| super::is_quote_mark(a) || matches!(a.surface.as_str(), "“" | "”" | "\""))
+        || atoms.iter().any(|a| {
+            a.head == Some(verb)
+                && (a.deprel == "obj"
+                    || (a.deprel == "nsubj" && a.span.start_char > previous.span.end_char))
+        })
+    {
+        return None;
+    }
+    let office = filing_recipient(atoms, verb, chars)?;
+    mark_filing_time(atoms, verb, chars);
+    if physical_argument(atoms, verb, chars, doc, true) {
+        return None;
+    }
+    atoms[next].lemma = Some(reading.to_owned());
+    mark_recipient(atoms, office, SHARED_FORM_RECIPIENT);
+    Some(())
+}
+
 pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
     located_recipient(atoms, chars, doc);
     for end in (0..atoms.len()).rev() {
@@ -817,29 +928,22 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
                 .get(end + 1)
                 .is_some_and(|wo| wo.surface == "を" && dasu_case_link(form, wo))
             && let Some(v) = atoms.iter().position(|a| a.doc_tok_idx == form.head)
-            && let Some(reading) = filing_reading(&atoms[v], atoms)
-            && let Some(verb) = atoms[v].doc_tok_idx
         {
-            mark_filing_time(atoms, verb, chars);
-            let office = atoms.iter().enumerate().find_map(|(i, a)| {
-                (matches!(a.surface.as_str(), "に" | "へ") && recipient(atoms, i, verb, chars))
-                    .then(|| i - 1)
-            });
-            if atoms[v].surface == "提出"
-                || ((context.is_some() || office.is_some() || covered)
-                    && !physical_argument(atoms, verb, chars, doc, office.is_some()))
+            filing = mark_shared_form(atoms, end, v, chars, doc).is_some();
+            if let Some(reading) = filing_reading(&atoms[v], atoms)
+                && let Some(verb) = atoms[v].doc_tok_idx
             {
-                atoms[v].lemma = Some(reading.to_owned());
-                filing = true;
-                if let Some(i) = office {
-                    let person = atoms[i].doc_tok_idx;
-                    for modifier in &mut atoms[..i] {
-                        if modifier.head == person && modifier.deprel == "nmod" {
-                            office_name(modifier);
-                        }
+                mark_filing_time(atoms, verb, chars);
+                let office = filing_recipient(atoms, verb, chars);
+                if atoms[v].surface == "提出"
+                    || ((context.is_some() || office.is_some() || covered)
+                        && !physical_argument(atoms, verb, chars, doc, office.is_some()))
+                {
+                    atoms[v].lemma = Some(reading.to_owned());
+                    filing = true;
+                    if let Some(i) = office {
+                        mark_recipient(atoms, i, OFFICE);
                     }
-                    office_name(&mut atoms[i]);
-                    atoms[i].lemma = Some(OFFICE.to_owned());
                 }
             }
         }

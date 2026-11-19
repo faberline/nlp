@@ -77,6 +77,58 @@ fn source_noun<'a>(atom: &'a Atom, doc: &Document, source: &[char]) -> Option<Co
     Some(Cow::Owned(noun))
 }
 
+// Localize complete compound nouns after identifying a choice of possessions.
+// Keep ordinary subjects, objects and any user-supplied labels unchanged.
+fn choice_phrase(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    target: TargetVariant,
+    source: &[char],
+) -> Option<String> {
+    if let [det, noun] = atoms
+        && let Some(original) = source_noun(noun, doc, source)
+        && let Some(deictic) = super::attached_demonstrative(det, &original)
+    {
+        let word = if original.surface == "腕時計" {
+            "手錶".to_owned()
+        } else {
+            super::translate_single_ja_term(
+                &original.surface,
+                original.lemma.as_deref(),
+                original.upos,
+            )
+        };
+        let classifier = match word.as_str() {
+            "教科書" | "課本" => "本",
+            "帽子" => "頂",
+            "手錶" => "支",
+            "證明書" => "份",
+            _ => super::demonstrative_classifier(&word, &original),
+        };
+        let text = if noun.is_locked {
+            &noun.surface
+        } else if word == "箱" {
+            "箱子"
+        } else {
+            &word
+        };
+        return Some(format!("{deictic}{classifier}{text}"));
+    }
+    if atoms.iter().any(|a| !a.is_locked && a.surface == "腕時計") {
+        let mut phrase = atoms.to_vec();
+        for noun in phrase
+            .iter_mut()
+            .filter(|a| !a.is_locked && a.surface == "腕時計")
+        {
+            noun.surface = "手錶".to_owned();
+            noun.is_locked = true;
+        }
+        return noun_phrase(&phrase, doc, sentence, target);
+    }
+    noun_phrase(atoms, doc, sentence, target)
+}
+
 // Keep the ordinary clause split unless all of the text around a Japanese
 // list comma parses as one nominal identification. In particular, two full
 // questions each have their own copula and must keep their boundary.
@@ -275,17 +327,21 @@ fn shared_owner_choices(
         {
             return None;
         }
-        names.push(format!("{}的", noun_phrase(group, doc, sentence, target)?));
+        names.push(format!(
+            "{}的",
+            choice_phrase(group, doc, sentence, target, source)?
+        ));
     }
     // A repeated topic already identifies the object. Keep a glossary item once
     // in its original order, after any protected owners.
     if item.is_locked || !same_item && item.surface != "もの" {
         let index = if item.is_locked { names.len() - 1 } else { 0 };
-        names[index].push_str(&noun_phrase(
+        names[index].push_str(&choice_phrase(
             std::slice::from_ref(item),
             doc,
             sentence,
             target,
+            source,
         )?);
     }
     Some(names)
@@ -806,6 +862,14 @@ pub(super) fn render(
     if !topic.iter().all(nominal_part) {
         return None;
     }
+    let has_choices = phrase.iter().any(choice_particle);
+    let phrase_text = |parts: &[Atom]| {
+        if has_choices {
+            choice_phrase(parts, doc, sentence, target, chars)
+        } else {
+            noun_phrase(parts, doc, sentence, target)
+        }
+    };
     let subject = match (topic, split) {
         ([], None) if !(suffix == "でした" && tail[0].upos == Some(Upos::Adp)) => String::new(),
         ([], _) => return None,
@@ -828,18 +892,7 @@ pub(super) fn render(
             let mut subject = match topic {
                 [a] if a.surface == "これ" => "這".to_owned(),
                 [a] if matches!(a.surface.as_str(), "それ" | "あれ") => "那".to_owned(),
-                [det, locked] if locked.is_locked && body.iter().any(choice_particle) => {
-                    let original = source_noun(locked, doc, chars)?;
-                    let deictic = super::attached_demonstrative(det, &original)?;
-                    let term =
-                        super::translate_single_ja_term(&original.surface, None, original.upos);
-                    format!(
-                        "{deictic}{}{}",
-                        super::demonstrative_classifier(&term, &original),
-                        locked.surface
-                    )
-                }
-                _ => noun_phrase(topic, doc, sentence, target)?,
+                _ => phrase_text(topic)?,
             };
             if nominals[i].surface == "も" {
                 subject.push('也');
@@ -878,9 +931,9 @@ pub(super) fn render(
         // In a nominal identification もの can stand for an already mentioned item.
         let name = match part {
             [owner @ .., no, thing] if thing.surface == "もの" && no.surface == "の" => {
-                format!("{}的", noun_phrase(owner, doc, sentence, target)?)
+                format!("{}的", phrase_text(owner)?)
             }
-            _ => noun_phrase(part, doc, sentence, target)?,
+            _ => phrase_text(part)?,
         };
         alternatives.push(name);
     }
@@ -1020,6 +1073,22 @@ mod tests {
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
+    }
+
+    #[test]
+    fn choice_classifiers_leave_ordinary_genitive_subjects_and_objects_unchanged() {
+        assert_eq!(
+            translate("この時計の針が止まりました。"),
+            "這手錶的針停下了。"
+        );
+        assert_eq!(
+            translate("私はこの時計の箱を買いました。"),
+            "我買了這手錶的箱。"
+        );
+        assert_eq!(
+            translate("これは父の腕時計か母の腕時計です。"),
+            "這是父親的手錶或是母親的手錶。"
+        );
     }
 
     #[test]

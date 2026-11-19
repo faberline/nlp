@@ -18133,11 +18133,9 @@ fn place_companion(source: &[Atom], predicate: usize, known_place: Option<usize>
 
 fn demonstrative_classifier(word: &str, noun: &Atom) -> &'static str {
     match word {
-        "書" | "教科書" | "課本" | "小說" | "雜誌" | "字典" => "本",
-        "帽子" => "頂",
-        "手錶" => "支",
+        "書" | "小說" | "雜誌" | "字典" => "本",
         "車" | "公車" | "電車" | "汽車" | "卡車" | "腳踏車" | "自行車" => "輛",
-        "證明書" | "資料" | "文件" | "報告" | "報紙" => "份",
+        "資料" | "文件" | "報告" | "報紙" => "份",
         "商店" | "餐廳" | "公司" => "家",
         "寺" | "寺廟" | "橋" => "座",
         "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
@@ -19036,7 +19034,6 @@ fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upo
 
 fn lookup_curated_ja_word(s: &str) -> Option<&'static str> {
     Some(match s {
-        "腕時計" => "手錶",
         // Discourse connectors & adverbs
         "しかし" | "だが" | "けれど" | "けれども" | "けど" | "ところが" => "但是",
         "だから" | "そのため" | "したがって" | "ゆえに" => "所以",

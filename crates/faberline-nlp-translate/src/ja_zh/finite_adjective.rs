@@ -1,0 +1,679 @@
+//! Taiwanese Mandarin rendering of a Japanese adjective used as a finite predicate.
+
+use super::*;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct Context {
+    question_mark: bool,
+    before_comma: bool,
+    time_head: Option<usize>,
+    coordinate: Option<Coordinate>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Coordinate {
+    First,
+    Next,
+}
+
+// The splitter gives each side of 重くて大きい its own clause. Only share
+// the subject when て links the two adjectives and neither has another head.
+fn coordinated(left: &Segment, right: &Segment) -> bool {
+    let (
+        Segment::Clause { atoms: first, .. },
+        Segment::Clause {
+            atoms: second,
+            trailing_punct,
+            ..
+        },
+    ) = (left, right)
+    else {
+        return false;
+    };
+    let [subject @ .., first_adj, te] = first.as_slice() else {
+        return false;
+    };
+    let [second_adj, tail @ ..] = second.as_slice() else {
+        return false;
+    };
+    let a = first_adj.lemma.as_deref().unwrap_or(&first_adj.surface);
+    let b = second_adj.lemma.as_deref().unwrap_or(&second_adj.surface);
+    !first_adj.is_locked
+        && !second_adj.is_locked
+        && !te.is_locked
+        && first_adj.upos == Some(Upos::Adj)
+        && second_adj.upos == Some(Upos::Adj)
+        && first_adj.surface.ends_with('く')
+        && first_adj.head == second_adj.doc_tok_idx
+        && first_adj.deprel == "advcl"
+        && second_adj.deprel == "root"
+        && te.surface == "て"
+        && te.head == first_adj.doc_tok_idx
+        && te.deprel == "mark"
+        && gradable(a)
+        && gradable(b)
+        && inflection(second_adj, tail) == Some((false, false))
+        && !matches!(trailing_punct.as_deref(), Some("?" | "？"))
+        && subject.iter().any(|n| {
+            n.deprel == "nsubj"
+                && n.head == first_adj.doc_tok_idx
+                && !uncertain_sense(a, &n.surface)
+                && !uncertain_sense(b, &n.surface)
+        })
+        && !subject.iter().any(|n| {
+            matches!(n.deprel.as_str(), "advmod" | "obl") && n.head == first_adj.doc_tok_idx
+        })
+}
+
+impl Context {
+    pub(super) fn at(segments: &[Segment], idx: usize) -> Self {
+        let question_mark = matches!(segments.get(idx), Some(Segment::Clause { trailing_punct: Some(p), .. }) if matches!(p.as_str(), "？" | "?"));
+        let time_head = match idx.checked_sub(1).and_then(|i| segments.get(i)) {
+            Some(Segment::Clause {
+                atoms,
+                trailing_punct: Some(p),
+                ..
+            }) if matches!(p.as_str(), "、" | "，") => atoms
+                .iter()
+                .find(|a| past_anchor(a, atoms) && matches!(a.deprel.as_str(), "advmod" | "obl"))
+                .and_then(|a| a.head),
+            _ => None,
+        };
+        let before_comma = matches!(segments.get(idx), Some(Segment::Clause { trailing_punct: Some(p), .. }) if matches!(p.as_str(), "、" | "，"))
+            && segments.get(idx + 1).is_some();
+        Self {
+            question_mark,
+            time_head,
+            before_comma,
+            coordinate: if segments
+                .get(idx + 1)
+                .is_some_and(|next| coordinated(&segments[idx], next))
+            {
+                Some(Coordinate::First)
+            } else if idx
+                .checked_sub(1)
+                .is_some_and(|i| coordinated(&segments[i], &segments[idx]))
+            {
+                Some(Coordinate::Next)
+            } else {
+                None
+            },
+        }
+    }
+}
+
+fn temporal(a: &Atom) -> bool {
+    !a.is_locked
+        && matches!(
+            a.surface.as_str(),
+            "昨日"
+                | "きのう"
+                | "一昨日"
+                | "先日"
+                | "先週"
+                | "昨年"
+                | "去年"
+                | "当時"
+                | "昔"
+                | "以前"
+                | "さっき"
+        )
+}
+
+// 前 can also mean a spatial position. A time quantity or 少し attached
+// to its adverbial head supplies the elapsed-time reading.
+fn past_anchor(a: &Atom, clause: &[Atom]) -> bool {
+    temporal(a)
+        || !a.is_locked
+            && a.surface == "前"
+            && a.deprel == "advmod"
+            && clause.iter().any(|amount| {
+                !amount.is_locked
+                    && amount.head == a.doc_tok_idx
+                    && matches!(
+                        amount.surface.as_str(),
+                        "少し" | "すこし" | "ちょっと" | "分" | "時間" | "日" | "週間" | "年"
+                    )
+            })
+}
+
+fn uncertain_sense(lemma: &str, subject: &str) -> bool {
+    match lemma {
+        "広い" => matches!(subject, "顔" | "心"),
+        "重い" | "軽い" => matches!(subject, "腰" | "口" | "気" | "足取り"),
+        "高い" | "低い" => !matches!(
+            subject,
+            "山" | "背"
+                | "天井"
+                | "身長"
+                | "気温"
+                | "温度"
+                | "値段"
+                | "価格"
+                | "建物"
+                | "棚"
+                | "壁"
+        ),
+        _ => false,
+    }
+}
+
+// Before a following clause, が can be tagged as a subject particle despite
+// following a complete i-adjective predicate. Keep the contrast on that clause.
+pub(super) fn concessive(source: &[Atom], ctx: &ClauseDiscourseCtx) -> Option<Vec<Atom>> {
+    let (link, body) = source.split_last()?;
+    if !ctx.adjective.before_comma
+        || link.is_locked
+        || !matches!(link.surface.as_str(), "が" | "けど" | "けれど" | "けれども")
+    {
+        return None;
+    }
+    let i = body
+        .iter()
+        .rposition(|a| !a.is_locked && a.doc_tok_idx == link.head && a.upos == Some(Upos::Adj))?;
+    let adj = &body[i];
+    let lemma = adj.lemma.as_deref().unwrap_or(&adj.surface);
+    let subject = body[..i]
+        .iter()
+        .rfind(|a| a.head == adj.doc_tok_idx && a.deprel == "nsubj")?;
+    if hue(lemma).is_none() && !gradable(lemma) || uncertain_sense(lemma, &subject.surface) {
+        return None;
+    }
+    inflection(adj, &body[i + 1..])?;
+    let mut clause = body.to_vec();
+    clause[i].deprel = "root".to_owned();
+    clause[i].head = None;
+    Some(clause)
+}
+
+// A は B ほど adjective-negative compares A with B. ほど does not express
+// an independent quantity, and the negative belongs to the comparison.
+pub(super) fn comparison(source: &[Atom], target: TargetVariant) -> Option<String> {
+    let i = source
+        .iter()
+        .position(|a| !a.is_locked && a.surface == "ほど")?;
+    let (left, right) = source.split_at(i);
+    let [hodo, adj, tail @ ..] = right else {
+        return None;
+    };
+    if adj.is_locked || adj.upos != Some(Upos::Adj) || adj.deprel != "root" {
+        return None;
+    }
+    let lemma = adj.lemma.as_deref().unwrap_or(&adj.surface);
+    let (ending, suffix) = match tail.split_last() {
+        Some((p, body))
+            if !p.is_locked && p.upos == Some(Upos::Part) && p.head == adj.doc_tok_idx =>
+        {
+            (
+                body,
+                match p.surface.as_str() {
+                    "か" => "嗎",
+                    "ね" => "呢",
+                    "よ" => "喔",
+                    _ => return None,
+                },
+            )
+        }
+        _ => (tail, ""),
+    };
+    let (past, true) = inflection(adj, ending)? else {
+        return None;
+    };
+    let case = left
+        .iter()
+        .position(|a| !a.is_locked && matches!(a.surface.as_str(), "は" | "が"))?;
+    let subj = left.get(case.checked_sub(1)?)?;
+    let other = left.last()?;
+    if subj.doc_tok_idx != left[case].head
+        || subj.head != adj.doc_tok_idx
+        || subj.deprel != "nsubj"
+        || other.doc_tok_idx != hodo.head
+        || other.deprel != "obl"
+        || other.head != adj.doc_tok_idx
+    {
+        return None;
+    }
+    let word = if let Some(c) = hue(lemma) {
+        if !has_surface_colour(subj, &left[..case], c)
+            || !has_surface_colour(other, &left[case + 1..], c)
+        {
+            return None;
+        }
+        c.to_owned()
+    } else if gradable(lemma) && !uncertain_sense(lemma, &subj.surface) {
+        translate_single_ja_term(lemma, Some(lemma), Some(Upos::Adj))
+    } else {
+        return None;
+    };
+    let nominal = |np: &[Atom]| {
+        if np.is_empty()
+            || !np.iter().all(|a| {
+                a.is_locked
+                    || matches!(
+                        a.upos,
+                        Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Det)
+                    )
+                    || a.surface == "の"
+            })
+        {
+            return None;
+        }
+        let group = Bunsetsu {
+            atoms: normalize_ja_atoms(&apply_phrase_matches(np)),
+            role: BunsetsuRole::Other,
+            case_particle: None,
+            sconj_tail: None,
+            sfp_tail: None,
+        };
+        Some(render_bunsetsu_np(&group, target))
+    };
+    Some(format!(
+        "{}{}沒有{}那麼{word}{suffix}",
+        nominal(&left[..case])?,
+        if past { "當時" } else { "" },
+        nominal(&left[case + 1..])?
+    ))
+}
+
+/// An i-adjective describes a past state with かった. Rendering that ending
+/// as resultative 了 instead asserts that the quality changed.
+fn inflection(predicate: &Atom, tail: &[Atom]) -> Option<(bool, bool)> {
+    let lexical_tail: String = tail.iter().map(|a| a.surface.as_str()).collect();
+    if tail.iter().any(|a| a.is_locked) {
+        return None;
+    }
+    let inflection = lexical_tail.strip_suffix("です").unwrap_or(&lexical_tail);
+    match inflection {
+        "" if predicate.surface.ends_with('い') => Some((false, false)),
+        "た" if predicate.surface.ends_with("かっ") => Some((true, false)),
+        "ない" | "ありません" if predicate.surface.ends_with('く') => Some((false, true)),
+        "なかった" | "ありませんでした" if predicate.surface.ends_with('く') => {
+            Some((true, true))
+        }
+        _ => None,
+    }
+}
+
+fn hue(lemma: &str) -> Option<&'static str> {
+    Some(match lemma {
+        "白い" => "白",
+        "黒い" => "黑",
+        "赤い" => "紅",
+        "青い" => "藍",
+        "黄色い" => "黃",
+        "茶色い" => "棕",
+        _ => return None,
+    })
+}
+
+fn gradable(lemma: &str) -> bool {
+    const PHYSICAL_QUALITIES: &[&str] = &[
+        "重い",
+        "軽い",
+        "長い",
+        "短い",
+        "大きい",
+        "小さい",
+        "広い",
+        "狭い",
+        "厚い",
+        "薄い",
+        "太い",
+        "細い",
+        "高い",
+        "低い",
+        "深い",
+        "浅い",
+        "硬い",
+        "柔らかい",
+        "暗い",
+        "明るい",
+        "暑い",
+        "寒い",
+        "暖かい",
+        "冷たい",
+        "熱い",
+        "涼しい",
+    ];
+    PHYSICAL_QUALITIES.contains(&lemma)
+}
+
+// Use only the head and its contiguous compound. A colour inside a dependent
+// phrase cannot supply an unrelated noun's sense, e.g. 信号の箱 vs 箱の信号.
+fn compound(atoms: &[Atom], end: usize) -> String {
+    let head = &atoms[end];
+    let start = atoms[..end]
+        .iter()
+        .rposition(|a| a.is_locked || a.deprel != "compound" || a.head != head.doc_tok_idx)
+        .map_or(0, |i| i + 1);
+    atoms[start..=end]
+        .iter()
+        .map(|a| a.surface.as_str())
+        .collect()
+}
+
+fn has_surface_colour(noun: &Atom, previous: &[Atom], colour: &str) -> bool {
+    // Character, health, ripeness and traffic indications can also use colour
+    // adjectives. Only choose a hue when the source subject supports it.
+    const VISIBLE_SURFACES: &[&str] = &[
+        "色",
+        "空",
+        "海",
+        "雲",
+        "雪",
+        "花",
+        "壁",
+        "床",
+        "屋根",
+        "門",
+        "扉",
+        "ドア",
+        "窓",
+        "車",
+        "自転車",
+        "電車",
+        "バス",
+        "トラック",
+        "船",
+        "箱",
+        "紙",
+        "布",
+        "糸",
+        "靴",
+        "服",
+        "傘",
+        "かばん",
+        "鞄",
+        "シャツ",
+        "スカート",
+        "コート",
+        "帽子",
+        "タオル",
+        "スカーフ",
+        "靴下",
+        "ペン",
+        "鉛筆",
+        "ノート",
+        "封筒",
+        "本",
+        "机",
+        "椅子",
+        "皿",
+        "カップ",
+        "ボタン",
+        "ボール",
+    ];
+    const GREEN_OR_UNRIPE: &[&str] = &["実", "葉", "果物", "信号", "信号機", "りんご", "リンゴ"];
+    if noun.is_locked || noun.upos != Some(Upos::Noun) {
+        return false;
+    }
+    let Some(end) = previous
+        .iter()
+        .position(|a| a.doc_tok_idx == noun.doc_tok_idx)
+    else {
+        return false;
+    };
+    let name = compound(previous, end);
+    if name == "色"
+        && colour == "藍"
+        && previous.iter().enumerate().any(|(i, a)| {
+            a.head == noun.doc_tok_idx
+                && a.deprel == "nmod"
+                && GREEN_OR_UNRIPE.contains(&compound(previous, i).as_str())
+        })
+    {
+        return false;
+    }
+    VISIBLE_SURFACES.contains(&name.as_str())
+        || colour != "藍" && GREEN_OR_UNRIPE.contains(&name.as_str())
+}
+
+pub(super) fn render(
+    source: &[Atom],
+    ctx: &ClauseDiscourseCtx,
+    adverbs: &mut Vec<String>,
+) -> Option<String> {
+    let body = core_non_punct(source);
+    let idx = body
+        .iter()
+        .rposition(|a| !a.is_locked && a.upos == Some(Upos::Adj))?;
+    let (before, predicate_and_tail) = body.split_at(idx);
+    let (predicate, tail) = predicate_and_tail.split_first()?;
+    let id = predicate.doc_tok_idx?;
+    if let Some(side) = ctx.adjective.coordinate {
+        let lemma = predicate.lemma.as_deref().unwrap_or(&predicate.surface);
+        let word = translate_single_ja_term(lemma, Some(lemma), Some(Upos::Adj));
+        return Some(format!(
+            "{}{word}",
+            match side {
+                Coordinate::First => "很",
+                Coordinate::Next => "也很",
+            }
+        ));
+    }
+    let aux_head = tail
+        .first()
+        .filter(|a| a.lemma.as_deref() == Some("ある") && predicate.head == a.doc_tok_idx)
+        .and_then(|a| a.doc_tok_idx);
+    let (tail, particle) = match tail.split_last() {
+        Some((p, body))
+            if !p.is_locked
+                && p.upos == Some(Upos::Part)
+                && (p.head == Some(id) || aux_head.is_some() && p.head == aux_head)
+                && matches!(p.surface.as_str(), "か" | "よ" | "ね" | "よね" | "わ") =>
+        {
+            (body, p.surface.as_str())
+        }
+        _ => (tail, ""),
+    };
+    let (past, negative) = inflection(predicate, tail)?;
+    if !(predicate.deprel == "root"
+        || ctx.inside_quote && predicate.deprel == "advcl"
+        || aux_head.is_some())
+    {
+        return None;
+    }
+    let subject = before
+        .iter()
+        .rfind(|a| a.deprel == "nsubj" && a.head == Some(id))?;
+    let lemma = predicate.lemma.as_deref().unwrap_or(&predicate.surface);
+    let colour = hue(lemma);
+    if let Some(c) = colour {
+        if !has_surface_colour(subject, before, c) {
+            return None;
+        }
+    } else if !gradable(lemma) || uncertain_sense(lemma, &subject.surface) {
+        return None;
+    }
+    let comparative = matches!(subject.surface.as_str(), "方" | "ほう")
+        || before.iter().any(|a| {
+            !a.is_locked
+                && a.surface == "より"
+                && before
+                    .iter()
+                    .any(|n| n.doc_tok_idx == a.head && n.head == Some(id))
+        });
+    let linked_adv = before
+        .iter()
+        .filter(|a| a.head == Some(id) && a.deprel == "advmod");
+    // A time or aspect adverb such as まだ does not put the hue on a scale.
+    // Keep unknown modifiers on the normal path rather than choosing a new reading.
+    let contextual = |a: &Atom| {
+        past_anchor(a, before)
+            || matches!(
+                a.surface.as_str(),
+                "まだ" | "今も" | "いつも" | "もう" | "やはり" | "やっぱり" | "今" | "今日"
+            )
+    };
+    let scale = |a: &Atom| {
+        !a.is_locked
+            && matches!(
+                a.surface.as_str(),
+                "少し"
+                    | "すこし"
+                    | "ちょっと"
+                    | "とても"
+                    | "とっても"
+                    | "ずいぶん"
+                    | "大変"
+                    | "非常に"
+                    | "かなり"
+                    | "ずっと"
+                    | "もっと"
+                    | "一番"
+                    | "いちばん"
+                    | "最も"
+                    | "あまり"
+                    | "それほど"
+                    | "特に"
+                    | "やや"
+                    | "すごく"
+                    | "たいへん"
+            )
+    };
+    if linked_adv.clone().any(|a| !contextual(a) && !scale(a)) {
+        return None;
+    }
+    let modified = linked_adv.clone().any(scale) || comparative;
+    let has_time = ctx.adjective.time_head == Some(id)
+        || before.iter().any(|a| {
+            past_anchor(a, before)
+                && (a.head == Some(id)
+                    || linked_adv
+                        .clone()
+                        .any(|modifier| a.head == modifier.doc_tok_idx))
+        });
+    let word = if let Some(c) = colour {
+        c.to_owned()
+    } else {
+        translate_single_ja_term(lemma, Some(lemma), Some(Upos::Adj))
+    };
+    if modified && negative {
+        // あまり…ない and それほど…ない each express one degree of negation.
+        let modifier = linked_adv.clone().find(|a| scale(a))?;
+        let (existing, negative_degree) = match modifier.surface.as_str() {
+            "あまり" => ("不太", "不太"),
+            "それほど" => ("那麼", "沒那麼"),
+            _ => return None,
+        };
+        if comparative || linked_adv.clone().filter(|a| scale(a)).count() != 1 {
+            return None;
+        }
+        let degree = adverbs.iter_mut().find(|s| s.as_str() == existing)?;
+        *degree = negative_degree.to_owned();
+        if past && !has_time {
+            adverbs.insert(0, "當時".to_owned());
+        }
+        return Some(word);
+    }
+    if linked_adv
+        .clone()
+        .any(|a| !a.is_locked && matches!(a.surface.as_str(), "少し" | "すこし" | "ちょっと"))
+        && let Some(amount) = adverbs.iter_mut().find(|s| s.as_str() == "一點")
+    {
+        *amount = "有點".to_owned();
+    }
+    if linked_adv
+        .clone()
+        .any(|a| !a.is_locked && a.surface == "一番")
+        && let Some(most) = adverbs.iter_mut().find(|s| s.as_str() == "一番")
+    {
+        *most = "最".to_owned();
+    }
+    if past && !has_time {
+        adverbs.insert(0, "當時".to_owned());
+    }
+    if colour.is_some() && !modified {
+        return Some(format!(
+            "{}{word}色的",
+            if negative { "不是" } else { "是" }
+        ));
+    }
+    let degree = if negative {
+        "不"
+    } else if modified || particle == "か" || ctx.adjective.question_mark {
+        ""
+    } else {
+        "很"
+    };
+    Some(format!("{degree}{word}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    fn translate(jp: &str) -> String {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        analyze_and_translate(
+            jp,
+            &options,
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap()
+        .target_text
+    }
+
+    #[test]
+    fn finite_states_keep_their_arguments_and_mood() {
+        for (jp, expected) in [
+            ("この車は白いです。", "這輛車是白色的。"),
+            ("先生の車は白いです。", "老師的車是白色的。"),
+            ("この箱は重いです。", "這個箱子很重。"),
+            ("この橋は長いです。", "這座橋很長。"),
+            ("車は白かったです。", "車當時是白色的。"),
+            ("車は白くなかったです。", "車當時不是白色的。"),
+            ("先生の車は白いですか。", "老師的車是白色的嗎？"),
+            ("その車は赤くないです。", "那輛車不是紅色的。"),
+            ("この箱は重くないです。", "這個箱子不重。"),
+            ("箱は重いですか。", "箱重嗎？"),
+            ("この車は少し赤いです。", "這輛車有點紅。"),
+            ("このかばんはとても重いです。", "這包包非常重。"),
+            ("この箱はあの箱より軽いです。", "這個箱子比那個箱子輕。"),
+            (
+                "店員は「この車は白い」と言いました。",
+                "店員說「這輛車是白色的」。",
+            ),
+            ("この箱は重くなりました。", "這個箱子變重了。"),
+            ("この箱は重そうです。", "這個箱子看起來很重。"),
+            ("この橋はあの橋ほど長くない。", "這座橋沒有那座橋那麼長。"),
+            ("車は白いが、箱は重いです。", "車是白色的，但是箱很重。"),
+            ("この箱は重くて大きいです。", "這個箱子很重，也很大。"),
+            ("当時、箱は重かった。", "當時，箱很重。"),
+            ("昨日の車は白かった。", "昨天的車當時是白色的。"),
+            ("この箱は昨日とても重かった。", "這個箱子昨天非常重。"),
+            (
+                "その車は黒くありませんでしたか。",
+                "那輛車當時不是黑色的嗎？",
+            ),
+            ("この箱は重い？", "這個箱子重？"),
+            ("この箱は一番重い。", "這個箱子最重。"),
+            ("この箱はあまり重くないです。", "這個箱子不太重。"),
+            ("この車はあまり赤くなかったです。", "這輛車當時不太紅。"),
+            ("この箱はそれほど重くないです。", "這個箱子沒那麼重。"),
+        ] {
+            assert_eq!(translate(jp), expected, "{jp}");
+        }
+        assert!(!translate("少し前、この箱は軽かった。").contains("當時"));
+    }
+
+    #[test]
+    fn a_modifier_a_cited_word_and_an_uncertain_colour_are_not_colour_assertions() {
+        for jp in [
+            "白い車が来ました。",
+            "彼の腹は黒い。",
+            "彼の顔は青い。",
+            "彼はまだ青い。",
+            "信号の色は青い。",
+            "果物の色は青い。",
+            "「白い」の意味を調べました。",
+        ] {
+            let text = translate(jp);
+            assert!(!text.contains("色的"), "{jp} -> {text}");
+        }
+    }
+}

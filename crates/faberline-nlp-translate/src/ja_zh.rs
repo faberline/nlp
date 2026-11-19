@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 mod counted_object;
+mod finite_adjective;
 mod nominal_possession;
 mod payment_potential;
 
@@ -329,7 +330,7 @@ pub(crate) fn translate_ja_sentence(
                 } else {
                     None
                 };
-                for iseg in &inner_segs {
+                for (idx, iseg) in inner_segs.iter().enumerate() {
                     if let Segment::Clause {
                         atoms: catoms,
                         trailing_punct,
@@ -357,6 +358,7 @@ pub(crate) fn translate_ja_sentence(
                                 false,
                                 &ClauseDiscourseCtx {
                                     inside_quote: true,
+                                    adjective: finite_adjective::Context::at(&inner_segs, idx),
                                     ..Default::default()
                                 },
                                 target,
@@ -404,7 +406,7 @@ pub(crate) fn translate_ja_sentence(
                 }
                 out.push(localize_open_quote(*open_q, target));
                 let inner_segs = split_atoms_into_segments(inner_atoms, doc, *span);
-                for iseg in &inner_segs {
+                for (idx, iseg) in inner_segs.iter().enumerate() {
                     if let Segment::Clause {
                         atoms: catoms,
                         trailing_punct,
@@ -419,6 +421,7 @@ pub(crate) fn translate_ja_sentence(
                             false,
                             &ClauseDiscourseCtx {
                                 inside_quote: true,
+                                adjective: finite_adjective::Context::at(&inner_segs, idx),
                                 ..Default::default()
                             },
                             target,
@@ -712,6 +715,7 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
+                    adjective: finite_adjective::Context::at(&segments, seg_idx),
                     return_trip: None,
                     inside_quote: ends_continued_quote(
                         segments.get(seg_idx + 1),
@@ -4003,6 +4007,7 @@ pub(crate) fn direct_quote_end(
 
 #[derive(Clone, Default)]
 struct ClauseDiscourseCtx {
+    adjective: finite_adjective::Context,
     return_trip: Option<ReturnTrip>,
     inside_quote: bool,
     in_nagara_follow: bool,
@@ -4584,6 +4589,28 @@ fn translate_clause_atoms(
 ) -> (String, bool) {
     if atoms.is_empty() {
         return (String::new(), false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && let Some(body) = finite_adjective::concessive(core_non_punct(atoms), ctx)
+    {
+        let (mut text, _) = translate_clause_atoms(
+            &body,
+            doc,
+            sentence_idx,
+            conditioning,
+            allow_pro_drop_inject,
+            ctx,
+            target,
+        );
+        text.push_str("，但是");
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && let Some(text) = finite_adjective::comparison(core_non_punct(atoms), target)
+    {
+        return (text, false);
     }
 
     if target == TargetVariant::ZhHant
@@ -8843,6 +8870,13 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if target == TargetVariant::ZhHant
+        && let Some(state) = finite_adjective::render(source, ctx, &mut adverbs)
+    {
+        pre_verb_mods.clear();
+        verb_core = state;
+        post_verb_mods.clear();
+    }
     if let Some(trip) = ctx.return_trip {
         verb_core = if let Some(place) = trip_destination {
             format!("{}回{}", trip.action, place)

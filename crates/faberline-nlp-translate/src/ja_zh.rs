@@ -3901,7 +3901,7 @@ fn translate_clause_atoms(
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
-        && let Some(homework) = try_translate_homework_transfer(&bunsetsus, body, target)
+        && let Some(homework) = try_translate_homework_transfer(&bunsetsus, body, doc, target)
     {
         return (homework, false);
     }
@@ -4219,11 +4219,15 @@ fn dasu_case_link(noun: &Atom, particle: &Atom) -> bool {
 fn try_translate_homework_transfer(
     bunsetsus: &[Bunsetsu],
     source: &[Atom],
+    doc: &Document,
     target: TargetVariant,
 ) -> Option<String> {
-    // Merged nominal modifiers may already contain rendered atoms. Guard
-    // protected source content separately, before inspecting those groups.
-    if source.iter().any(|atom| atom.is_locked) {
+    // Inspect the source before nominal groups render protected atoms.
+    // A normalized deadline clock can pass if it has no glossary placeholder.
+    if source.iter().any(|atom| {
+        atom.is_locked
+            && (atom.lemma.as_deref() != Some(CLOCK_ATOM) || atom.surface.contains("[[PH"))
+    }) {
         return None;
     }
     let mut predicates = bunsetsus
@@ -4231,6 +4235,17 @@ fn try_translate_homework_transfer(
         .filter(|bunsetsu| bunsetsu.role == BunsetsuRole::Predicate);
     let predicate = predicates.next()?;
     let (verb, endings) = predicate.atoms.split_first()?;
+    let head = Some(verb.doc_tok_idx?);
+    let terminal_ka = source.last().filter(|ka| {
+        !ka.is_locked
+            && ka.surface == "か"
+            && ka.upos == Some(Upos::Part)
+            && ka.deprel == "discourse"
+            && ka.head == head
+    });
+    let is_terminal_ka = |atom: &Atom| {
+        terminal_ka.is_some_and(|ka| ka.doc_tok_idx.is_some() && atom.doc_tok_idx == ka.doc_tok_idx)
+    };
     if predicates.next().is_some()
         || verb.upos != Some(Upos::Verb)
         || verb.lemma.as_deref().unwrap_or(&verb.surface) != "出す"
@@ -4249,25 +4264,44 @@ fn try_translate_homework_transfer(
                     | "ん"
                     | "でし"
                     | "でした"
-            )
+            ) || is_terminal_ka(atom)
         })
     {
         return None;
     }
-    let head = Some(verb.doc_tok_idx?);
+    let (before_verb, verb, after_verb, passive) =
+        synthesize_predicate_complex(std::slice::from_ref(predicate), true, target, None);
+    if verb != "拿出" || passive {
+        return None;
+    }
+    let negative = before_verb
+        .iter()
+        .any(|word| matches!(word.as_str(), "不" | "沒有"));
     let mut subject = None;
     let mut recipient = None;
     let mut homework = None;
     let mut adjuncts = Vec::new();
     for bunsetsu in bunsetsus {
         if bunsetsu.sconj_tail.is_some()
-            || bunsetsu.sfp_tail.is_some()
-            || (bunsetsu.role != BunsetsuRole::Obj
-                && bunsetsu.atoms.iter().any(|atom| atom.is_locked))
+            || (bunsetsu.sfp_tail.is_some() && !bunsetsu.atoms.last().is_some_and(is_terminal_ka))
         {
             return None;
         }
-        if bunsetsu.role == BunsetsuRole::Predicate || bunsetsu.role == BunsetsuRole::Punct {
+        if bunsetsu.case_particle.as_deref() == Some("までに") {
+            if deadline_governor(bunsetsu, doc) != head {
+                return None;
+            }
+            let time = render_bunsetsu_np(bunsetsu, target);
+            adjuncts.push(render_asserted_deadline(&time, negative));
+            continue;
+        }
+        if bunsetsu.role != BunsetsuRole::Obj && bunsetsu.atoms.iter().any(|atom| atom.is_locked) {
+            return None;
+        }
+        if bunsetsu.role == BunsetsuRole::Predicate
+            || bunsetsu.role == BunsetsuRole::Punct
+            || matches!(bunsetsu.atoms.as_slice(), [ka] if is_terminal_ka(ka))
+        {
             continue;
         }
         if is_event_daypart(bunsetsu, bunsetsus, source)
@@ -4320,9 +4354,9 @@ fn try_translate_homework_transfer(
         (ClassroomRole::Teacher, ClassroomRole::Student) => format!("出{homework}給{recipient}"),
         _ => return None,
     };
-    let (before_verb, verb, after_verb, passive) =
-        synthesize_predicate_complex(std::slice::from_ref(predicate), true, target, None);
-    if verb != "拿出" || passive {
+    // Keep the existing interpretation of negative nonpast questions, which
+    // can invite the listener to act.
+    if terminal_ka.is_some() && before_verb.iter().any(|word| word == "不") {
         return None;
     }
     let mut parts = vec![subject.to_owned()];
@@ -4330,6 +4364,18 @@ fn try_translate_homework_transfer(
     parts.extend(before_verb);
     parts.push(action);
     parts.extend(after_verb);
+    if terminal_ka.is_some() {
+        let deadline = bunsetsus
+            .iter()
+            .find(|group| deadline_governor(group, doc) == head)?;
+        if !deadline
+            .atoms
+            .iter()
+            .any(|atom| deadline_time_question(atom).is_some())
+        {
+            parts.push("嗎".to_owned());
+        }
+    }
     Some(join_zh_parts(&parts))
 }
 
@@ -8326,10 +8372,11 @@ fn translate_clause_bunsetsus(
                     };
                     parts.push(format!("{also}{modal}在{}{cutoff}", o.text));
                 }
-            } else if predicate_is_negative && !o.deadline_has_detached_negation {
-                parts.push(format!("到{}為止", o.text));
             } else {
-                parts.push(format!("最晚在{}", o.text));
+                parts.push(render_asserted_deadline(
+                    &o.text,
+                    predicate_is_negative && !o.deadline_has_detached_negation,
+                ));
             }
         } else if route.is_some()
             && o.case_particle.as_deref() == Some("へ")
@@ -11299,6 +11346,14 @@ fn has_detached_voice_negation(source: &[Atom], timed: usize) -> bool {
                 && a.deprel == "aux"
                 && matches!(a.lemma.as_deref().unwrap_or(&a.surface), "ない" | "ん")
         })
+}
+
+fn render_asserted_deadline(time: &str, negative: bool) -> String {
+    if negative {
+        format!("到{time}為止")
+    } else {
+        format!("最晚在{time}")
+    }
 }
 
 fn deadline_governor(group: &Bunsetsu, doc: &Document) -> Option<usize> {

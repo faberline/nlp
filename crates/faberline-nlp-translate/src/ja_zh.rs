@@ -14731,6 +14731,166 @@ fn take_adnominal_arguments(
     arguments
 }
 
+// A number after と/や may start the next noun's relative clause rather
+// than name a coordinated item. Prove the whole amount and its right noun
+// before postponing the ordinary noun coordination fold.
+fn elapsed_relative_after_coord(left: &Bunsetsu, number: &Bunsetsu, source: &[Atom]) -> bool {
+    let Some(marker) = left.atoms.last() else {
+        return false;
+    };
+    let Some(first) = number.atoms.first() else {
+        return false;
+    };
+    if marker.is_locked
+        || !matches!(marker.surface.as_str(), "と" | "や")
+        || marker.upos != Some(Upos::Adp)
+        || marker.deprel != "case"
+        || first.is_locked
+        || !(first.upos == Some(Upos::Num)
+            || first.upos == Some(Upos::Noun) && first.surface == "半時間")
+        || marker.span.end_char != first.span.start_char
+    {
+        return false;
+    }
+    let Some(left_noun) = left
+        .atoms
+        .iter()
+        .find(|a| !a.is_locked && a.doc_tok_idx.is_some() && a.doc_tok_idx == marker.head)
+    else {
+        return false;
+    };
+    let Some(start) = source.iter().position(|a| {
+        a.doc_tok_idx == first.doc_tok_idx && a.doc_tok_idx.is_some() && a.span == first.span
+    }) else {
+        return false;
+    };
+    if starts_inside_elapsed_number(source, start) {
+        return false;
+    }
+    for end in start + 1..source.len() {
+        let amount = &source[start..end];
+        let action = &source[end];
+        if amount
+            .iter()
+            .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+            || amount
+                .windows(2)
+                .any(|w| w[0].span.end_char != w[1].span.start_char)
+            || amount
+                .last()
+                .is_none_or(|a| a.span.end_char != action.span.start_char)
+        {
+            break;
+        }
+        if action.is_locked
+            || action.upos != Some(Upos::Verb)
+            || action.doc_tok_idx.is_none()
+            || !amount.iter().any(|a| a.head == action.doc_tok_idx)
+            || amount.iter().any(|a| {
+                a.head != action.doc_tok_idx
+                    && !amount.iter().any(|other| other.doc_tok_idx == a.head)
+            })
+            || elapsed_duration_surface(
+                &amount
+                    .iter()
+                    .map(|a| a.surface.as_str())
+                    .collect::<String>(),
+            )
+            .is_none()
+        {
+            continue;
+        }
+        // The following predicate must modify a source noun, with its entire
+        // progressive or finite auxiliary sequence adjacent and unlocked.
+        let noun_id = if action.deprel == "acl" {
+            action.head
+        } else if action.deprel == "advcl" {
+            source
+                .iter()
+                .find(|a| {
+                    a.doc_tok_idx == action.head
+                        && !a.is_locked
+                        && a.lemma.as_deref() == Some("いる")
+                        && a.deprel == "acl"
+                })
+                .and_then(|a| a.head)
+        } else {
+            None
+        };
+        let Some(noun_index) = (end + 1..source.len()).find(|&i| {
+            noun_id.is_some()
+                && source[i].doc_tok_idx == noun_id
+                && !source[i].is_locked
+                && matches!(source[i].upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+        }) else {
+            continue;
+        };
+        let phrase = &source[end..noun_index];
+        if phrase
+            .windows(2)
+            .any(|w| w[0].span.end_char != w[1].span.start_char)
+            || phrase
+                .last()
+                .is_none_or(|a| a.span.end_char != source[noun_index].span.start_char)
+            || phrase.iter().skip(1).any(|a| {
+                a.is_locked
+                    || !(a.upos == Some(Upos::Aux)
+                        && a.deprel == "aux"
+                        && (a.head == action.doc_tok_idx || a.head == action.head)
+                        || a.upos == Some(Upos::Sconj)
+                            && matches!(a.surface.as_str(), "て" | "で")
+                            && a.deprel == "mark"
+                            && a.head == action.doc_tok_idx
+                        || a.upos == Some(Upos::Verb)
+                            && a.lemma.as_deref() == Some("いる")
+                            && a.doc_tok_idx == action.head
+                            && a.deprel == "acl"
+                            && a.head == noun_id)
+            })
+        {
+            continue;
+        }
+        let noun = &source[noun_index];
+        let Some(case) = source.get(noun_index + 1) else {
+            continue;
+        };
+        if case.is_locked
+            || case.upos != Some(Upos::Adp)
+            || case.deprel != "case"
+            || !matches!(case.surface.as_str(), "が" | "は" | "を")
+            || case.head != noun.doc_tok_idx
+            || noun.span.end_char != case.span.start_char
+            || noun.head.is_none()
+            || left_noun.head.is_none()
+            || !matches!(noun.deprel.as_str(), "nsubj" | "obj")
+        {
+            continue;
+        }
+        let Some(matrix) = source.iter().find(|a| {
+            a.doc_tok_idx == noun.head
+                && !a.is_locked
+                && a.upos == Some(Upos::Verb)
+                && a.deprel == "root"
+        }) else {
+            continue;
+        };
+        let mut head = left_noun.head;
+        for _ in 0..source.len() {
+            if head == noun.doc_tok_idx || head == matrix.doc_tok_idx {
+                return true;
+            }
+            let Some(part) = source[start..noun_index]
+                .iter()
+                .find(|a| a.doc_tok_idx == head && !a.is_locked)
+            else {
+                break;
+            };
+            head = part.head;
+        }
+    }
+    false
+}
+
 fn merge_adnominal_bunsetsus(
     bunsetsus: Vec<Bunsetsu>,
     source: &[Atom],
@@ -14857,7 +15017,11 @@ fn merge_adnominal_bunsetsus(
                     continue;
                 }
 
-                if let Some(mut ya_b) = res.pop_if(|prev| ends_in_coord_ya(prev)) {
+                if let Some(mut ya_b) = res.pop_if(|prev| {
+                    ends_in_coord_ya(prev)
+                        && !(target == TargetVariant::ZhHant
+                            && elapsed_relative_after_coord(prev, &b, source))
+                }) {
                     ya_b.atoms.pop();
                     let ya_str = render_bunsetsu_np(&ya_b, target);
                     if !ya_str.is_empty() {
@@ -14868,6 +15032,8 @@ fn merge_adnominal_bunsetsus(
 
                 if let Some(mut to_b) = res.pop_if(|prev| {
                     ends_in_coord_to(prev)
+                        && !(target == TargetVariant::ZhHant
+                            && elapsed_relative_after_coord(prev, &b, source))
                         && !matches!(
                             b.role,
                             BunsetsuRole::ResidenceTogether | BunsetsuRole::ResidenceCount
@@ -17014,6 +17180,105 @@ mod clock_rule_tests {
         assert_eq!(
             translate("先生は二時間走った子どもを待ちました。"),
             "老師等待了跑了兩個小時的孩子。"
+        );
+    }
+
+    #[test]
+    fn coordinated_elapsed_relatives_keep_both_quantities_and_their_order() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間待っていた客が帰りました。"),
+            "已經等待了兩個小時的客回去了。"
+        );
+        assert_eq!(
+            translate("三十分話していた先生が帰りました。"),
+            "已經說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と三十分話していた先生が帰りました。"),
+            "已經等待了兩個小時的客和已經說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("三十分話していた先生と二時間待っていた客が帰りました。"),
+            "已經說了三十分鐘的老師和已經等待了兩個小時的客回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と三十分話していた客が帰りました。"),
+            "已經等待了兩個小時的客和已經說了三十分鐘的客回去了。"
+        );
+        assert_eq!(
+            translate("三十分話していた客と二時間待っていた客が帰りました。"),
+            "已經說了三十分鐘的客和已經等待了兩個小時的客回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と半時間話していた先生が帰りました。"),
+            "已經等待了兩個小時的客和已經說了半個小時的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と一時間半話していた先生が帰りました。"),
+            "已經等待了兩個小時的客和已經說了一個半小時的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と一時間十五分話していた先生が帰りました。"),
+            "已經等待了兩個小時的客和已經說了一個小時十五分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待った客と三十分話した先生が帰りました。"),
+            "等待了兩個小時的客和說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("三十分話した先生と二時間待った客が帰りました。"),
+            "說了三十分鐘的老師和等待了兩個小時的客回去了。"
+        );
+        assert_eq!(
+            translate("客と三十分話していた先生が帰りました。"),
+            "客和已經說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客や三十分話していた先生が帰りました。"),
+            "已經等待了兩個小時的客與已經說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていなかった客と三十分話していた先生が帰りました。"),
+            "沒有等待兩個小時的客和已經說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と三十分話していなかった先生が帰りました。"),
+            "已經等待了兩個小時的客和沒有說三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていなかった客と三十分話していなかった先生が帰りました。"),
+            "沒有等待兩個小時的客和沒有說三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("三十分話していなかった先生と二時間待っていなかった客が帰りました。"),
+            "沒有說三十分鐘的老師和沒有等待兩個小時的客回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていて、三十分話しました。"),
+            "時間二等待，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("二時間待っていなかった客は三十分話しました。"),
+            "沒有等待兩個小時的客說了三十分鐘。"
+        );
+        assert_eq!(translate("先生と客が帰りました。"), "老師和客回去了。");
+        assert_eq!(
+            translate("二時間待っていた客と先生が一緒に帰りました。"),
+            "已經等待了兩個小時的客和老師一起回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と一緒に帰りました。"),
+            "跟已經等待了兩個小時的客一起回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客が三十分話していた先生に会いました。"),
+            "給已經等待了兩個小時的客已經說了三十分鐘的老師見面了。"
+        );
+        assert_eq!(
+            translate("「二時間待ちました」と先生が言いました。"),
+            "「等待了兩個小時」老師說了。"
         );
     }
 

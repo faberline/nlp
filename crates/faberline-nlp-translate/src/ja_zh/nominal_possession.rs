@@ -120,6 +120,60 @@ fn links_choice(noun: &Atom, particle: &Atom) -> bool {
         && matches!(noun.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
 }
 
+// In 兄か姉の本 the first owner modifies the second and の supplies one
+// shared genitive. 図書館か学生の部屋 can instead offer two different places.
+fn shared_owner_choices(
+    phrase: &[Atom],
+    topic: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    target: TargetVariant,
+) -> Option<Vec<String>> {
+    let [owners @ .., no, item] = phrase else {
+        return None;
+    };
+    let last = owners.last()?;
+    if no.is_locked || no.surface != "の" || no.head != last.doc_tok_idx || no.deprel != "case" {
+        return None;
+    }
+    let same_item = topic
+        .last()
+        .is_some_and(|a| !a.is_locked && a.surface == item.surface);
+    let groups: Vec<_> = owners.split(choice_particle).collect();
+    if groups.len() < 2 {
+        return None;
+    }
+    let mut names = Vec::with_capacity(groups.len());
+    for (i, group) in groups.iter().enumerate() {
+        let [owner] = *group else { return None };
+        let governor = groups
+            .get(i + 1)
+            .and_then(|next| next.last())
+            .unwrap_or(item);
+        if owner.deprel != "nmod"
+            || governor.doc_tok_idx.is_none()
+            || owner.head != governor.doc_tok_idx
+            || !same_item
+                && (is_demonstrative_person_noun(item) || !is_demonstrative_person_noun(owner))
+        {
+            return None;
+        }
+        names.push(format!("{}的", noun_phrase(group, doc, sentence, target)?));
+    }
+    // A repeated topic already identifies the object. Keep a glossary item once
+    // in its original order, after any protected owners.
+    if item.is_locked || !same_item && item.surface != "もの" {
+        let index = if item.is_locked { names.len() - 1 } else { 0 };
+        names[index].push_str(&noun_phrase(
+            std::slice::from_ref(item),
+            doc,
+            sentence,
+            target,
+        )?);
+    }
+    Some(names)
+}
+
 pub(super) fn render(
     atoms: &[Atom],
     doc: &Document,
@@ -268,6 +322,8 @@ pub(super) fn render(
     if !has_owner {
         return None;
     }
+    let alternatives =
+        shared_owner_choices(phrase, topic, doc, sentence, target).unwrap_or(alternatives);
     let asks_choice = alternatives.len() > 1 && ending == "嗎" && matches!(copula, "是" | "當時是");
     let complement = alternatives.join(if asks_choice { "還是" } else { "或是" });
     let asks_which = nominals.iter().any(|a| {
@@ -305,6 +361,19 @@ mod tests {
     #[test]
     fn possessive_copula_preserves_choices_and_marks_only_a_real_question() {
         for (source, expected) in [
+            ("この本は兄か姉の本ですか。", "這本書是哥哥的還是姊姊的？"),
+            (
+                "あれは、父か母の車でしたか。",
+                "那當時是父親的車還是母親的？",
+            ),
+            (
+                "それは図書館か学生の部屋ですか。",
+                "那是圖書館還是學生的房間？",
+            ),
+            (
+                "あの人は父か母の先生ですか。",
+                "那個人是父親還是母親的老師？",
+            ),
             ("これは父の車か母の車です。", "這是父親的車或是母親的車。"),
             (
                 "それは先生の本か学生の本ですか。",

@@ -68,8 +68,13 @@ fn coordinated(left: &Segment, right: &Segment) -> bool {
 }
 
 impl Context {
-    pub(super) fn in_quote(segments: &[Segment], idx: usize, sentence: &[Atom]) -> Self {
-        let mut ctx = Self::at(segments, idx);
+    pub(super) fn in_quote(
+        segments: &[Segment],
+        idx: usize,
+        sentence: &[Atom],
+        doc: &Document,
+    ) -> Self {
+        let mut ctx = Self::at(segments, idx, doc);
         let Some(Segment::Clause { atoms, .. }) = segments.get(idx) else {
             return ctx;
         };
@@ -104,7 +109,7 @@ impl Context {
         ctx
     }
 
-    pub(super) fn at(segments: &[Segment], idx: usize) -> Self {
+    pub(super) fn at(segments: &[Segment], idx: usize, doc: &Document) -> Self {
         let question_mark = matches!(segments.get(idx), Some(Segment::Clause { trailing_punct: Some(p), .. }) if matches!(p.as_str(), "？" | "?"));
         let previous = match idx.checked_sub(1).and_then(|i| segments.get(i)) {
             Some(Segment::Clause {
@@ -117,12 +122,14 @@ impl Context {
         let preceding_until = previous.and_then(|atoms| {
             let (case, rest) = core_non_punct(atoms).split_last()?;
             let time = rest.last()?;
-            if case.surface == "まで"
-                && !case.is_locked
-                && case.head == time.doc_tok_idx
-                && time.deprel == "obl"
-                && render_temporal_made_atom(time).is_some()
+            if case.surface != "まで" || case.is_locked || render_temporal_made_atom(time).is_none()
             {
+                return None;
+            }
+            if time.lemma.as_deref() == Some(CLOCK_ATOM) {
+                return clock_case_governor(time, case, doc);
+            }
+            if case.head == time.doc_tok_idx && time.deprel == "obl" {
                 time.head
             } else {
                 None
@@ -718,6 +725,7 @@ pub(super) struct TimeInterval {
 pub(super) fn take_time_interval(
     groups: &mut Vec<Bunsetsu>,
     source: &[Atom],
+    doc: &Document,
     ctx: &Context,
 ) -> Option<TimeInterval> {
     let source = core_non_punct(source);
@@ -750,6 +758,14 @@ pub(super) fn take_time_interval(
         let [time, case] = atoms else { return None };
         if case.is_locked || case.surface != marker || case.span.start_char != time.span.end_char {
             return None;
+        }
+        // The normalized clock has no token index. Its case marker still
+        // points to the original time token within that clock's source span.
+        if time.lemma.as_deref() == Some(CLOCK_ATOM) {
+            if clock_case_governor(time, case, doc) != Some(head) {
+                return None;
+            }
+            return Some((render_temporal_made_atom(time)?, false));
         }
         let original = source.iter().find(|a| {
             a.doc_tok_idx == case.head
@@ -1103,6 +1119,34 @@ mod tests {
             assert_eq!(translate(jp), expected, "{jp}");
         }
         assert!(!translate("少し前、この箱は軽かった。").contains("當時"));
+    }
+
+    #[test]
+    fn a_clock_interval_belongs_to_the_state_inside_a_quote() {
+        for (jp, expected) in [
+            (
+                "先生は「教室は三時まで寒かったです」と言いました。",
+                "老師說「教室直到三點都很冷」。",
+            ),
+            (
+                "先生は「三時まで教室は寒かったです」と言いました。",
+                "老師說「教室直到三點都很冷」。",
+            ),
+            (
+                "先生は「三時まで、教室は寒かった」と言いました。",
+                "老師說「到三點，教室都很冷」。",
+            ),
+            (
+                "先生は「教室は午後三時半まで寒かったです」と言いました。",
+                "老師說「教室直到下午三點半都很冷」。",
+            ),
+            (
+                "店員は八時に「この部屋は六時から七時まで寒かった」と言いました。",
+                "店員在八點說「這房間從六點到七點都很冷」。",
+            ),
+        ] {
+            assert_eq!(translate(jp), expected, "{jp}");
+        }
     }
 
     #[test]

@@ -363,6 +363,7 @@ pub(crate) fn translate_ja_sentence(
                                         &inner_segs,
                                         idx,
                                         &atoms,
+                                        doc,
                                     ),
                                     ..Default::default()
                                 },
@@ -430,6 +431,7 @@ pub(crate) fn translate_ja_sentence(
                                     &inner_segs,
                                     idx,
                                     &atoms,
+                                    doc,
                                 ),
                                 ..Default::default()
                             },
@@ -724,7 +726,7 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
-                    adjective: finite_adjective::Context::at(&segments, seg_idx),
+                    adjective: finite_adjective::Context::at(&segments, seg_idx, doc),
                     return_trip: None,
                     inside_quote: ends_continued_quote(
                         segments.get(seg_idx + 1),
@@ -8222,7 +8224,7 @@ fn translate_clause_bunsetsus(
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
     let state_interval = if target == TargetVariant::ZhHant {
-        finite_adjective::take_time_interval(&mut bunsetsus, source, &ctx.adjective)
+        finite_adjective::take_time_interval(&mut bunsetsus, source, doc, &ctx.adjective)
     } else {
         None
     };

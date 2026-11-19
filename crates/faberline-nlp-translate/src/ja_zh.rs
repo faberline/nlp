@@ -95,6 +95,13 @@ enum JointManner {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResidenceForm {
+    Simple,
+    State,
+    Plan,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BunsetsuRole {
     Connector,
     JointManner {
@@ -104,10 +111,14 @@ enum BunsetsuRole {
     },
     JointCompanion,
     ResidencePlace {
-        past_state: bool,
+        form: ResidenceForm,
+        past: bool,
         wh: bool,
+        only: bool,
     },
     ResidenceDuration,
+    ResidenceManner,
+    UnresolvedResidenceArgument,
     Subj,
     Obl,
     ExplicitDeadline {
@@ -1485,21 +1496,30 @@ fn build_sentence_atoms(
                     }
                     tok_idx += 1;
                 }
-                let locked_place = lk.mandatory
-                    && matches!(
-                        lk.origin,
-                        LockOrigin::Glossary {
-                            kind: GlossaryKind::Place,
-                            ..
-                        }
-                    )
+                let whole_lock = lk.mandatory
                     && tk.span.start_char == lk.source_span.start_char
                     && doc_tok_idx
                         .is_some_and(|id| doc.tokens[id].span.end_char == lk.source_span.end_char);
                 atoms.push(Atom {
                     span: lk.source_span,
                     surface: lk.placeholder.clone(),
-                    lemma: locked_place.then(|| LOCKED_PLACE_ATOM.to_owned()),
+                    lemma: match (&lk.origin, whole_lock) {
+                        (
+                            LockOrigin::Glossary {
+                                kind: GlossaryKind::Place,
+                                ..
+                            },
+                            true,
+                        ) => Some(LOCKED_PLACE_ATOM.to_owned()),
+                        (
+                            LockOrigin::Glossary {
+                                kind: GlossaryKind::Actor,
+                                ..
+                            },
+                            true,
+                        ) => Some(LOCKED_RESIDENT_ATOM.to_owned()),
+                        _ => None,
+                    },
                     upos: Some(Upos::Propn),
                     doc_tok_idx,
                     head,
@@ -6662,7 +6682,40 @@ fn normalize_building_floors(mut atoms: Vec<Atom>, doc: &Document) -> Vec<Atom> 
 
 const LOCKED_PLACE_ATOM: &str = "__ja_locked_glossary_place";
 
-fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
+const LOCKED_RESIDENT_ATOM: &str = "__ja_locked_glossary_resident";
+
+/// A focus particle can precede or follow the case particle. Both must belong
+/// to the same noun. The focus of 妹だけが differs from that of 京都だけに.
+fn residence_case(group: &Bunsetsu) -> Option<(&Atom, &Atom, Option<&Atom>)> {
+    let (noun, case, focus) = match group.atoms.as_slice() {
+        [.., noun, focus, case] if focus.surface == "だけ" => (noun, case, Some(focus)),
+        [.., noun, case, focus]
+            if matches!(focus.surface.as_str(), "は" | "も" | "だけ")
+                && case.upos == Some(Upos::Adp) =>
+        {
+            (noun, case, Some(focus))
+        }
+        [.., noun, case] => (noun, case, None),
+        _ => return None,
+    };
+    let contiguous = focus.map_or(noun.span.end_char == case.span.start_char, |f| {
+        !f.is_locked
+            && f.head == noun.doc_tok_idx
+            && (f.surface == "だけ" && f.deprel == "discourse" || f.deprel == "case")
+            && (noun.span.end_char == f.span.start_char && f.span.end_char == case.span.start_char
+                || noun.span.end_char == case.span.start_char
+                    && case.span.end_char == f.span.start_char)
+    });
+    (contiguous
+        && !case.is_locked
+        && case.upos == Some(Upos::Adp)
+        && case.deprel == "case"
+        && noun.doc_tok_idx.is_some()
+        && case.head == noun.doc_tok_idx)
+        .then_some((noun, case, focus))
+}
+
+fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
     use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
 
     let Some(action_index) = source.iter().position(|a| {
@@ -6674,7 +6727,7 @@ fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
     };
     let action = &source[action_index];
     let Some(id) = action.doc_tok_idx else { return };
-    let (finite, tail) = match &source[action_index + 1..] {
+    let (form, finite, tail) = match &source[action_index + 1..] {
         [te, iru, tail @ ..]
             if action.deprel == "advcl"
                 && action.head == iru.doc_tok_idx
@@ -6687,9 +6740,23 @@ fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
                 && iru.lemma.as_deref().unwrap_or(&iru.surface) == "いる"
                 && iru.deprel == "root" =>
         {
-            (iru, tail)
+            (ResidenceForm::State, iru, tail)
         }
-        tail if action.deprel == "root" => (action, tail),
+        [plan, copula, tail @ ..]
+            if action.surface == "住む"
+                && action.deprel == "advcl"
+                && action.head == plan.doc_tok_idx
+                && !plan.is_locked
+                && plan.surface == "予定"
+                && plan.deprel == "root"
+                && !copula.is_locked
+                && copula.surface == "です"
+                && copula.deprel == "aux"
+                && copula.head == plan.doc_tok_idx =>
+        {
+            (ResidenceForm::Plan, plan, tail)
+        }
+        tail if action.deprel == "root" => (ResidenceForm::Simple, action, tail),
         _ => return,
     };
     if tail.iter().any(|a| {
@@ -6706,31 +6773,14 @@ fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
         return;
     }
     let mut places = groups.iter().enumerate().filter_map(|(i, group)| {
-        let (words, focused) = match group.atoms.as_slice() {
-            [words @ .., ni, focus]
-                if !focus.is_locked
-                    && matches!(focus.surface.as_str(), "は" | "も")
-                    && focus.deprel == "case"
-                    && focus.head == ni.head
-                    && ni.span.end_char == focus.span.start_char =>
-            {
-                (&group.atoms[..words.len() + 1], true)
-            }
-            words => (words, false),
-        };
-        let [.., noun, ni] = words else {
-            return None;
-        };
+        let (noun, ni, focus) = residence_case(group)?;
         let protected_place = noun.is_locked && noun.lemma.as_deref() == Some(LOCKED_PLACE_ATOM);
         if noun.is_locked && !protected_place
             || ni.is_locked
-            || !(noun.deprel == "obl" || focused && noun.deprel == "nsubj")
+            || !(noun.deprel == "obl"
+                || focus.is_some_and(|f| f.surface == "は") && noun.deprel == "nsubj")
             || noun.head != Some(id)
             || ni.surface != "に"
-            || ni.deprel != "case"
-            || ni.upos != Some(Upos::Adp)
-            || ni.head != noun.doc_tok_idx
-            || ni.span.start_char != noun.span.end_char
         {
             return None;
         }
@@ -6756,22 +6806,108 @@ fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
                         | "田舎"
                         | "都会"
                 );
-        place.then_some((i, noun.doc_tok_idx?, wh))
+        place.then_some((
+            i,
+            noun.doc_tok_idx?,
+            focus.filter(|f| f.surface == "だけ").map(|f| f.span),
+        ))
     });
-    let Some((i, place, wh)) = places.next() else {
+    let Some((i, place, only_place)) = places.next() else {
         return;
     };
     if places.next().is_some() {
         return;
     }
-    let past_state = finite.doc_tok_idx != Some(id) && tail.iter().any(|a| a.surface == "た");
-    groups[i].role = BunsetsuRole::ResidencePlace { past_state, wh };
-    if let Some(person) = place_companion(source, id, Some(place))
-        && let Some(group) = groups.iter_mut().find(|b| matches!(b.atoms.as_slice(),
-            [.., noun, to] if noun.doc_tok_idx == Some(person) && to.surface == "と" && to.head == Some(person)))
-    {
-        group.role = BunsetsuRole::JointCompanion;
+    let wh = source.windows(2).any(|w| {
+        let (word, case) = (&w[0], &w[1]);
+        !word.is_locked
+            && word.head == Some(id)
+            && matches!(word.deprel.as_str(), "nsubj" | "obl")
+            && matches!(word.surface.as_str(), "誰" | "だれ" | "どこ")
+            && !case.is_locked
+            && case.upos == Some(Upos::Adp)
+            && case.deprel == "case"
+            && case.head == word.doc_tok_idx
+            && word.span.end_char == case.span.start_char
+    });
+    groups[i].role = BunsetsuRole::ResidencePlace {
+        form,
+        past: tail.iter().any(|a| a.surface == "た"),
+        wh,
+        only: only_place.is_some(),
+    };
+    if let Some(span) = only_place {
+        groups[i].atoms.retain(|a| a.span != span);
     }
+    // A final subject marker applies to the entire coordinated noun phrase.
+    let mut coordinated = Vec::new();
+    for subject in 0..groups.len() {
+        let Some((noun, case, focus)) = residence_case(&groups[subject]) else {
+            continue;
+        };
+        if noun.head != Some(id)
+            || noun.deprel != "nsubj"
+            || !matches!(case.surface.as_str(), "は" | "が")
+        {
+            continue;
+        }
+        let only = focus.filter(|a| a.surface == "だけ").map(|a| a.span);
+        let mut first = subject;
+        while first > 0
+            && residence_case(&groups[first - 1]).is_some_and(|(noun, case, _)| {
+                noun.head == Some(id)
+                    && case.surface == "と"
+                    && case.span.end_char == groups[first].atoms[0].span.start_char
+            })
+        {
+            first -= 1;
+        }
+        coordinated.extend(first..subject);
+        if let Some(span) = only {
+            groups[subject].atoms.retain(|a| a.span != span);
+            prepend_locked_atom(&mut groups[first], "只有".to_owned());
+        }
+    }
+    let together = groups.iter().position(|g| {
+        residence_case(g).is_some_and(|(noun, case, _)| {
+            !noun.is_locked
+                && noun.surface == "一緒"
+                && noun.head == Some(id)
+                && case.surface == "に"
+        })
+    });
+    if let Some(index) = together {
+        groups[index].role = BunsetsuRole::ResidenceManner;
+    }
+    let person = place_companion(source, id, Some(place));
+    for (index, group) in groups.iter_mut().enumerate() {
+        let Some((noun, case, _)) = residence_case(group) else {
+            continue;
+        };
+        if case.surface == "で"
+            && noun.head == Some(id)
+            && noun.surface == "人"
+            && matches!(group.atoms.as_slice(), [number, _, _] if !number.is_locked
+                && number.upos == Some(Upos::Num) && number.deprel == "nummod"
+                && number.head == noun.doc_tok_idx && number.span.end_char == noun.span.start_char)
+        {
+            group.role = BunsetsuRole::ResidenceManner;
+        } else if case.surface == "と" && noun.head == Some(id) && !coordinated.contains(&index) {
+            if noun.doc_tok_idx == person
+                || noun.is_locked
+                    && (noun.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM)
+                        || noun.lemma.as_deref() != Some(LOCKED_PLACE_ATOM)
+                            && (together.is_some() || i < index))
+            {
+                group.role = BunsetsuRole::JointCompanion;
+            } else if noun.is_locked && noun.lemma.as_deref() != Some(LOCKED_PLACE_ATOM) {
+                // Opaque と before a place can mark a companion or a second place.
+                // Preserve the source particle along with the protected surface.
+                group.role = BunsetsuRole::UnresolvedResidenceArgument;
+            }
+        }
+    }
+    localize_indefinite_arguments(groups, action, source);
     // A bare number and a time unit next to 住む give a duration. 年 can be
     // analysed as a separate adverb, even when the two source words touch.
     if let [.., number, unit] = &source[..action_index]
@@ -6853,6 +6989,7 @@ fn translate_clause_bunsetsus(
     let mut joint_companions = Vec::new();
     let mut residence = None;
     let mut residence_duration = String::new();
+    let mut residence_manners = Vec::new();
     let mut adverbs: Vec<String> = Vec::new();
     let mut iobjs: Vec<PlacedArg> = Vec::new();
     let mut objs: Vec<String> = Vec::new();
@@ -7113,11 +7250,32 @@ fn translate_clause_bunsetsus(
         }
 
         match b.role {
-            BunsetsuRole::ResidencePlace { past_state, wh } => {
+            BunsetsuRole::ResidencePlace {
+                form,
+                past,
+                wh,
+                only,
+            } => {
                 if b.atoms.last().is_some_and(|a| a.surface == "も") {
                     adverbs.push("也".to_owned());
                 }
-                residence = Some((render_bunsetsu_np(&b, target), past_state, wh));
+                residence = Some((render_bunsetsu_np(&b, target), form, past, wh, only));
+            }
+            BunsetsuRole::ResidenceManner => {
+                let manner = if b.atoms[0].surface == "一緒" {
+                    "一起".to_owned()
+                } else {
+                    let number = normalize_decimal_digits(&b.atoms[0].surface);
+                    match number.as_str() {
+                        "一" | "1" => "一個人".to_owned(),
+                        "二" | "2" => "兩個人".to_owned(),
+                        other => format!("{other}個人"),
+                    }
+                };
+                residence_manners.push(manner);
+            }
+            BunsetsuRole::UnresolvedResidenceArgument => {
+                joint_companions.push(format!("{}と", render_bunsetsu_np(&b, target)));
             }
             BunsetsuRole::ResidenceDuration => {
                 for atom in &b.atoms {
@@ -7438,30 +7596,49 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
-    if let Some((place, past_state, wh)) = residence {
+    if let Some((place, form, past, wh, only)) = residence {
+        joint_companions.append(&mut residence_manners);
         verb_core = format!("住在{place}");
         pre_verb_mods.retain(|m| m != "正在");
-        if past_state || !residence_duration.is_empty() {
+        if form == ResidenceForm::Plan {
+            pre_verb_mods.insert(0, "打算".to_owned());
+        }
+        let negative = pre_verb_mods
+            .iter()
+            .any(|m| matches!(m.as_str(), "不" | "沒有"));
+        if residence_duration.is_empty() {
+            if past && (form == ResidenceForm::State || !negative) {
+                post_verb_mods.retain(|m| m != "了");
+                pre_verb_mods.insert(0, if negative { "當時" } else { "曾" }.to_owned());
+            }
+        } else {
             post_verb_mods.retain(|m| m != "了");
-            if residence_duration.is_empty() {
-                let past = if pre_verb_mods.iter().any(|m| m == "沒有") {
-                    "當時"
-                } else {
-                    "曾"
-                };
-                pre_verb_mods.insert(0, past.to_owned());
-            } else if pre_verb_mods
-                .iter()
-                .any(|m| matches!(m.as_str(), "不" | "沒有"))
-            {
+            if negative {
+                if form == ResidenceForm::State {
+                    if !past {
+                        temporal_others.push("已經".to_owned());
+                    }
+                    for m in &mut pre_verb_mods {
+                        if m == "不" {
+                            *m = "沒有".to_owned();
+                        }
+                    }
+                }
                 temporal_others.push(residence_duration);
             } else {
-                verb_core = format!(
-                    "在{place}住{}{}",
-                    if past_state { "了" } else { "" },
-                    residence_duration
-                );
+                let aspect = if past || form == ResidenceForm::State {
+                    "了"
+                } else {
+                    ""
+                };
+                if form == ResidenceForm::State && !past {
+                    pre_verb_mods.push("已經".to_owned());
+                }
+                verb_core = format!("在{place}住{aspect}{residence_duration}");
             }
+        }
+        if only {
+            pre_verb_mods.push("只".to_owned());
         }
         if wh && sfp_suffix == Some("嗎") {
             sfp_suffix = Some("？");
@@ -10690,6 +10867,7 @@ fn ends_in_coord_to(b: &Bunsetsu) -> bool {
     !matches!(
         b.role,
         BunsetsuRole::JointCompanion
+            | BunsetsuRole::UnresolvedResidenceArgument
             | BunsetsuRole::PurposeCompanion
             | BunsetsuRole::JointManner {
                 manner: JointManner::Companion,
@@ -14203,6 +14381,47 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn residence_duration_keeps_aspect_and_plans() {
+        for (source, expected) in [
+            ("京都に三年住みました。", "在京都住了三年。"),
+            ("京都に三年住んでいました。", "在京都住了三年。"),
+            ("京都に三年住んでいます。", "已經在京都住了三年。"),
+            ("京都に三年住む予定です。", "打算在京都住三年。"),
+            ("京都に三年住みます。", "在京都住三年。"),
+            ("京都に三年住んでいません。", "已經三年沒有住在京都。"),
+            ("京都と大阪に住みました。", "曾住在京都和大阪。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn residence_assigns_focus_and_questions_to_the_attached_argument() {
+        for (source, expected) in [
+            ("兄だけが京都に住んでいます。", "只有哥哥住在京都。"),
+            ("私と妹だけが東京に住んでいます。", "只有我和妹妹住在東京。"),
+            ("父だけが大阪に住んでいました。", "只有父親曾住在大阪。"),
+            ("兄は京都だけに住んでいます。", "哥哥只住在京都。"),
+            ("私は京都にだけ住んでいます。", "我只住在京都。"),
+            ("誰が京都に住んでいますか。", "誰住在京都？"),
+            ("誰と京都に住んでいますか。", "和誰住在京都？"),
+            ("誰かが京都に住んでいますか。", "某個人住在京都嗎？"),
+            ("京都に住んでいますか。", "住在京都嗎？"),
+            (
+                "私は妹と一緒に東京に住んでいます。",
+                "我和妹妹一起住在東京。",
+            ),
+            (
+                "私は京都に一緒に妹と住んでいます。",
+                "我和妹妹一起住在京都。",
+            ),
+            ("姉が一人で京都に住んでいます。", "姊姊一個人住在京都。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
     fn origin_and_recipient_cases_keep_their_relations() {
         let origin = translate("駅から歩いた。");
         assert!(origin.contains("從車站"), "{origin}");
@@ -16329,6 +16548,40 @@ mod existence_rule_tests {
             head: None,
             deprel: String::new(),
             is_locked: false,
+        }
+    }
+
+    #[test]
+    fn residence_uses_the_glossary_role_and_preserves_an_ambiguous_protected_argument() {
+        let entry = GlossaryEntry {
+            canonical: "青葉".to_owned(),
+            surfaces: vec!["青葉".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "青葉".to_owned())]),
+            ..GlossaryEntry::default()
+        };
+        let source = "私は青葉と京都に住んでいます。";
+        let mut glossary = TranslationGlossary::new();
+        glossary.actors.push(entry.clone());
+        let actor = translate(source, &glossary);
+        assert_eq!(actor.target_text, "我和青葉住在京都。");
+        assert_eq!(actor.glossary_hits.len(), 1);
+        glossary.actors.clear();
+        glossary.places.push(entry);
+        let place = translate(source, &glossary);
+        assert_eq!(place.target_text, "我住在青葉和京都。");
+        assert_eq!(place.glossary_hits.len(), 1);
+
+        let plain = TranslationGlossary::new();
+        for (jp, zh) in [
+            ("私は`Aki`と京都に住んでいます。", "我`Aki`と住在京都。"),
+            (
+                "私は`Aki`と一緒に京都に住んでいます。",
+                "我和`Aki`一起住在京都。",
+            ),
+        ] {
+            let doc = translate(jp, &plain);
+            assert_eq!(doc.target_text, zh);
+            assert_eq!(doc.target_text.matches("`Aki`").count(), 1);
         }
     }
 

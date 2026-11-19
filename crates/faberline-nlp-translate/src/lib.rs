@@ -10,6 +10,7 @@ pub mod lock;
 pub mod model;
 pub mod opaque;
 pub mod postprocess;
+mod quote_source;
 pub mod render;
 pub mod schema;
 pub mod variant;
@@ -625,6 +626,7 @@ fn plan_cross_sentence_direct_quotes(
             &raw_sent,
             options,
             compiled_glossary,
+            true,
         );
         let tokens = &tokens_by_sent[index];
         if let Some((first, mut frame)) = opening.take() {
@@ -659,6 +661,7 @@ fn plan_cross_sentence_direct_quotes(
     placements
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_sentence_locks(
     sentence_idx: usize,
     chars: &[char],
@@ -667,6 +670,7 @@ fn build_sentence_locks(
     raw_sent: &str,
     options: &TranslateOptions,
     compiled_glossary: &CompiledGlossary,
+    protect_written_quotes: bool,
 ) -> SpanLockTable {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     // Build `SpanLockTable` over inline opaques (priority 0), glossary hits (priority 1), and
@@ -688,6 +692,34 @@ fn build_sentence_locks(
                 .collect();
             blocked_for_glossary.push(ent.span);
             lock_candidates.push((0, ent.span, slice, LockOrigin::Entity, true));
+        }
+    }
+
+    if protect_written_quotes {
+        // A terminal mark within a balanced quote may split its description
+        // into the next sentence. The source lock still belongs to this one.
+        let sent = &doc.segmentation.sentences[sentence_idx];
+        let context_end = doc
+            .segmentation
+            .sentences
+            .get(sentence_idx + 1)
+            .filter(|next| {
+                next.paragraph == sent.paragraph
+                    && sent_span.end_char <= next.span.start_char
+                    && chars[sent_span.end_char..next.span.start_char]
+                        .iter()
+                        .all(|ch| matches!(ch, ' ' | '\t' | '　'))
+            })
+            .map_or(sent_span.end_char, |next| next.span.end_char);
+        for span in quote_source::written_form_quotes(chars, sent_span, context_end) {
+            if blocked_for_glossary.iter().any(|blocked| {
+                span.start_char < blocked.end_char && blocked.start_char < span.end_char
+            }) {
+                continue;
+            }
+            let source = chars[span.start_char..span.end_char].iter().collect();
+            blocked_for_glossary.push(span);
+            lock_candidates.push((0, span, source, LockOrigin::QuotedSource, true));
         }
     }
 
@@ -772,6 +804,10 @@ fn translate_single_sentence(
         };
     }
 
+    let is_ja_to_zh = seq2seq.is_none()
+        && options.target.is_zh()
+        && (sent.lang == Lang::Ja
+            || (sent.lang == Lang::Mixed && ja_zh::has_kana_no_hangul(&raw_sent)));
     let lock_table = build_sentence_locks(
         sentence_idx,
         chars,
@@ -780,6 +816,7 @@ fn translate_single_sentence(
         &raw_sent,
         options,
         compiled_glossary,
+        is_ja_to_zh,
     );
 
     // Determine routing track for this sentence.
@@ -853,10 +890,6 @@ fn translate_single_sentence(
         options.target,
     );
 
-    let is_ja_to_zh = seq2seq.is_none()
-        && options.target.is_zh()
-        && (sent.lang == Lang::Ja
-            || (sent.lang == Lang::Mixed && ja_zh::has_kana_no_hangul(&raw_sent)));
     if is_ja_to_zh {
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
@@ -1076,7 +1109,7 @@ fn finalize_sentence_outcome(
             .iter()
             .enumerate()
             .filter_map(|(i, r)| match r.origin {
-                LockOrigin::InlineOpaque(_) => Some(tracked_spans[i]),
+                LockOrigin::InlineOpaque(_) | LockOrigin::QuotedSource => Some(tracked_spans[i]),
                 _ => None,
             })
             .collect();
@@ -1089,7 +1122,7 @@ fn finalize_sentence_outcome(
             .iter()
             .enumerate()
             .filter_map(|(i, r)| match r.origin {
-                LockOrigin::InlineOpaque(_) => Some(tracked_spans[i]),
+                LockOrigin::InlineOpaque(_) | LockOrigin::QuotedSource => Some(tracked_spans[i]),
                 _ => None,
             })
             .collect();
@@ -1102,7 +1135,7 @@ fn finalize_sentence_outcome(
             .iter()
             .enumerate()
             .filter_map(|(i, r)| match r.origin {
-                LockOrigin::InlineOpaque(_) => Some(tracked_spans[i]),
+                LockOrigin::InlineOpaque(_) | LockOrigin::QuotedSource => Some(tracked_spans[i]),
                 _ => None,
             })
             .collect();
@@ -1137,7 +1170,7 @@ fn finalize_sentence_outcome(
                     target_span: final_target_span,
                 });
             }
-            LockOrigin::Entity => {}
+            LockOrigin::Entity | LockOrigin::QuotedSource => {}
         }
     }
 

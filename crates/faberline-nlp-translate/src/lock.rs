@@ -1,7 +1,7 @@
 //! Span locking (`SpanLockTable`) and placeholder conservation verification.
 //!
-//! Inline opaque spans (`code`, `formula`, `url`, `citation`, `emoji`), matched glossary entries,
-//! and formatted entities are replaced with ASCII-safe sentinel placeholders (`[[PH0]]`, `[[PH1]]`,
+//! Inline opaque spans, quoted source text, matched glossary entries and formatted entities are
+//! replaced with ASCII-safe sentinel placeholders (`[[PH0]]`, `[[PH1]]`,
 //! ...) before neural seq2seq decoding and restored deterministically afterward while recording
 //! exact target scalar offsets.
 
@@ -13,6 +13,7 @@ use crate::schema::{GlossaryKind, TranslateUnknownKind};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LockOrigin {
     InlineOpaque(OpaqueKind),
+    QuotedSource,
     Glossary {
         canonical: String,
         kind: GlossaryKind,
@@ -27,7 +28,7 @@ pub struct LockedSpan {
     pub source_span: Span,
     pub replacement: String,
     pub origin: LockOrigin,
-    /// Must be conserved verbatim in target output (always true for `InlineOpaque` and `Glossary`).
+    /// Must be conserved verbatim in target output.
     pub mandatory: bool,
 }
 
@@ -61,7 +62,7 @@ impl SpanLockTable {
     }
 
     /// Add candidate locks, resolving overlaps by `(priority, start_char, longer_first)` where
-    /// priority `0` = `InlineOpaque`, `1` = `Glossary`, `2` = `Entity`.
+    /// priority `0` = verbatim locks, `1` = `Glossary`, `2` = formatted `Entity`.
     pub fn build(mut candidates: Vec<(u8, Span, String, LockOrigin, bool)>) -> Self {
         candidates.sort_by(|a, b| {
             a.0.cmp(&b.0)
@@ -138,7 +139,7 @@ impl SpanLockTable {
     }
 
     /// Restore all `[[PHk]]` placeholders in `decoded_text`, enforcing 100% conservation of
-    /// mandatory (`InlineOpaque` and `Glossary`) spans and recording exact relative target spans
+    /// mandatory spans and recording exact relative target spans
     /// (`0..target_chars` within the returned sentence string).
     pub fn restore(&self, decoded_text: &str) -> RestoreReport {
         self.restore_with_spans(decoded_text, &mut [])

@@ -5221,10 +5221,12 @@ fn try_translate_homework_transfer(
     relative: Option<ClassroomRole>,
 ) -> Option<String> {
     // Inspect the source before nominal groups render protected atoms.
-    // A normalized clock can pass if it has no glossary placeholder.
+    // Normalized dates and clocks retain their source heads. A glossary
+    // placeholder cannot supply a time or a classroom participant.
     if source.iter().any(|atom| {
         atom.is_locked
-            && (atom.lemma.as_deref() != Some(CLOCK_ATOM) || atom.surface.contains("[[PH"))
+            && (atom.surface.contains("[[PH")
+                || (atom.lemma.as_deref() != Some(CLOCK_ATOM) && !calendar::is_date(atom)))
     }) {
         return None;
     }
@@ -5269,7 +5271,7 @@ fn try_translate_homework_transfer(
     }
     let mut deadline = None;
     let mut continuation_end = None;
-    let mut has_clock_modifier = false;
+    let mut has_time_modifier = false;
     let mut asks_event_time = false;
     let mut subject = None;
     let mut recipient = None;
@@ -5288,11 +5290,22 @@ fn try_translate_homework_transfer(
             deadline = Some((adjuncts.len(), bunsetsu));
             continue;
         }
+        if let [date, marker] = bunsetsu.atoms.as_slice()
+            && calendar::is_date(date)
+            && marker.surface == "に"
+            && dasu_case_link(date, marker)
+            && date.head == head
+        {
+            has_time_modifier = true;
+            asks_event_time |= calendar::question(date).is_some();
+            adjuncts.push(render_bunsetsu_obl(bunsetsu, target, false));
+            continue;
+        }
         if let Some((clock, marker)) = explicit_clock_case(bunsetsu) {
             if clock_case_governor(clock, marker, doc) != head {
                 return None;
             }
-            has_clock_modifier = true;
+            has_time_modifier = true;
             match marker.surface.as_str() {
                 "まで" => {
                     if continuation_end.is_some() {
@@ -5373,7 +5386,7 @@ fn try_translate_homework_transfer(
                 } else {
                     return None;
                 }
-                has_clock_modifier = true;
+                has_time_modifier = true;
             }
             ("nsubj", "は" | "が") if subject.is_none() => {
                 subject = Some(homework_relative::person(bunsetsu, source)?);
@@ -5485,7 +5498,7 @@ fn try_translate_homework_transfer(
     if terminal_ka.is_some() || desire.is_some_and(|(_, question)| question) {
         if desire.is_none()
             && deadline.is_none()
-            && !has_clock_modifier
+            && !has_time_modifier
             && !homework_relative::has_modified_person(bunsetsus, source)
         {
             return None;

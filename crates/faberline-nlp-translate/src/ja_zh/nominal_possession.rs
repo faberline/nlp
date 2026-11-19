@@ -21,6 +21,38 @@ fn noun_phrase(
     Some(render_bunsetsu_np(phrase, target))
 }
 
+// Keep a protected noun as its original placeholder. A partial token or a
+// protected clause cannot supply the syntactic head of an owned noun phrase.
+pub(super) fn whole_nominal_lock(a: &Atom, doc: &Document) -> bool {
+    if !(a.surface.starts_with("[[PH") && a.surface.ends_with("]]")) {
+        return false;
+    }
+    let Some(last) = a.doc_tok_idx else {
+        return false;
+    };
+    let first = doc
+        .tokens
+        .partition_point(|t| t.span.start_char < a.span.start_char);
+    let Some(tokens) = doc.tokens.get(first..=last) else {
+        return false;
+    };
+    tokens
+        .first()
+        .is_some_and(|t| t.span.start_char == a.span.start_char)
+        && tokens
+            .last()
+            .is_some_and(|t| t.span.end_char == a.span.end_char)
+        && tokens.iter().all(|t| {
+            matches!(
+                t.upos,
+                Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::X)
+            )
+        })
+        && tokens
+            .windows(2)
+            .all(|w| w[0].span.end_char == w[1].span.start_char)
+}
+
 pub(super) fn render(
     atoms: &[Atom],
     doc: &Document,
@@ -58,7 +90,10 @@ pub(super) fn render(
     }
     if tail.is_empty()
         || tail.len() > 7
-        || body.iter().any(|a| a.is_locked)
+        || tail.iter().any(|a| a.is_locked)
+        || nominals
+            .iter()
+            .any(|a| a.is_locked && !whole_nominal_lock(a, doc))
         || !body[head_index..]
             .windows(2)
             .all(|p| p[0].span.end_char == p[1].span.start_char)
@@ -174,6 +209,42 @@ mod tests {
         )
         .unwrap()
         .target_text
+    }
+
+    #[test]
+    fn possessive_copula_preserves_a_caller_named_object_once() {
+        let mut glossary = TranslationGlossary::new();
+        for (source, translation) in [("鍵", "銅鑰匙"), ("月灯箱", "月光信匣")] {
+            glossary.objects.push(crate::GlossaryEntry {
+                canonical: source.to_owned(),
+                surfaces: vec![source.to_owned()],
+                targets: [(TargetVariant::ZhHant, translation.to_owned())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            });
+        }
+        for (source, expected) in [
+            ("これは会社の鍵です。", "這是公司的銅鑰匙。"),
+            ("それは会社の鍵ではありません。", "那不是公司的銅鑰匙。"),
+            ("それは会社の鍵ですか。", "那是公司的銅鑰匙嗎？"),
+            ("それは会社の鍵ですか！", "那是公司的銅鑰匙嗎！"),
+            (
+                "これは学校の月灯箱ではありません。",
+                "這不是學校的月光信匣。",
+            ),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(result.target_text, expected, "{source}");
+            assert_eq!(result.glossary_hits.len(), 1);
+        }
     }
 
     #[test]

@@ -2773,7 +2773,7 @@ fn has_temporal_te_kara_tail(atoms: &[Atom]) -> bool {
 // Japanese can write a full stop after the question particle. Only replace
 // the stop belonging to this clause. A quoted or embedded か cannot change
 // the punctuation of a later clause.
-fn direct_ka_before_period(clause: &[Atom], end: &Atom) -> bool {
+fn direct_ka_before_period(clause: &[Atom], end: &Atom, doc: &Document) -> bool {
     let Some((ka, body)) = clause.split_last() else {
         return false;
     };
@@ -2785,9 +2785,17 @@ fn direct_ka_before_period(clause: &[Atom], end: &Atom) -> bool {
         && ka.span.end_char == end.span.start_char
         && ka.head.is_some()
         && body.iter().any(|a| {
-            !a.is_locked
-                && a.doc_tok_idx == ka.head
-                && (matches!(a.upos, Some(Upos::Verb | Upos::Adj)) || a.deprel == "root")
+            if a.doc_tok_idx != ka.head {
+                return false;
+            }
+            if !a.is_locked {
+                return matches!(a.upos, Some(Upos::Verb | Upos::Adj)) || a.deprel == "root";
+            }
+            a.deprel == "root"
+                && nominal_possession::whole_nominal_lock(a, doc)
+                && body
+                    .iter()
+                    .any(|cop| !cop.is_locked && cop.deprel == "cop" && cop.head == a.doc_tok_idx)
         })
 }
 
@@ -3213,7 +3221,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
                 "、" | "，" | "。" | "！" | "？" | "!" | "?" | "…" | "……"
             )
         {
-            let punctuation = if direct_ka_before_period(&current, a) {
+            let punctuation = if direct_ka_before_period(&current, a, doc) {
                 "？".to_owned()
             } else {
                 a.surface.clone()

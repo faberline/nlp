@@ -19298,6 +19298,28 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn distribution_can_omit_recipients_and_a_sender_can_name_two() {
+        assert_eq!(translate("明日は日中に本を配ります。"), "明天白天發放書。");
+        let coordinated = translate("私は日中に、姉と兄に写真とはがきを送りました。");
+        assert!(
+            coordinated.starts_with("我白天給姊姊和哥哥寄送了"),
+            "{coordinated}"
+        );
+        let documents = translate("今日は日中に資料を配ります。");
+        assert!(
+            documents.contains("白天") && documents.contains("資料"),
+            "{documents}"
+        );
+        for source in [
+            "明日は日中に協力を求めます。",
+            "政府は日中に、声明を送りました。",
+            "政府は日中両国に本を配りました。",
+        ] {
+            assert!(!translate(source).contains("白天"), "{source}");
+        }
+    }
+
+    #[test]
     fn a_restored_schedule_and_a_returning_person_keep_their_own_endpoints() {
         for (source, expected) in [
             (

@@ -99,7 +99,14 @@ fn other_goal<'a>(source: &'a [Atom], day: &Atom, verb: &Atom) -> Option<&'a Ato
         (noun.doc_tok_idx.is_some()
             && noun.doc_tok_idx != day.doc_tok_idx
             && noun.head == verb.doc_tok_idx
-            && matches!(noun.deprel.as_str(), "iobj" | "obl")
+            && (matches!(noun.deprel.as_str(), "iobj" | "obl")
+                || noun.deprel == "nsubj"
+                    && source.iter().any(|a| {
+                        a.head == noun.doc_tok_idx
+                            && a.deprel == "case"
+                            && matches!(a.surface.as_str(), "は" | "も")
+                            && a.span.start_char == case.span.end_char
+                    }))
             && !source_time_head(noun)
             && !is_daypart_surface(&noun.surface)
             && noun.surface != "日中"
@@ -109,6 +116,42 @@ fn other_goal<'a>(source: &'a [Atom], day: &Atom, verb: &Atom) -> Option<&'a Ato
             && matches!(case.surface.as_str(), "に" | "へ"))
         .then_some(case)
     })
+}
+
+// A date used as the topic supplies the day whose daytime is meant.
+// Distribution can omit the recipients, as long as the same verb has
+// an overt distributed object. A date alone cannot settle a request.
+fn dated_distribution(source: &[Atom], day_index: usize, verb: &Atom) -> bool {
+    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    if !matches!(lemma.strip_suffix("する").unwrap_or(lemma), "配る" | "配布") {
+        return false;
+    }
+    let [.., date, topic] = &source[..day_index] else {
+        return false;
+    };
+    !date.is_locked
+        && date.doc_tok_idx.is_some()
+        && date.head == verb.doc_tok_idx
+        && (matches!(
+            date.surface.as_str(),
+            "今日" | "本日" | "昨日" | "一昨日" | "明日" | "明後日" | "当日"
+        ) || super::deadline_weekday(&date.surface).is_some())
+        && !topic.is_locked
+        && matches!(topic.surface.as_str(), "は" | "も")
+        && topic.deprel == "case"
+        && topic.head == date.doc_tok_idx
+        && topic.span.end_char == source[day_index].span.start_char
+        && source.iter().any(|a| {
+            a.head == verb.doc_tok_idx
+                && a.deprel == "obj"
+                && a.doc_tok_idx.is_some()
+                && source.iter().any(|p| {
+                    !p.is_locked
+                        && p.surface == "を"
+                        && p.deprel == "case"
+                        && p.head == a.doc_tok_idx
+                })
+        })
 }
 
 // An unfilled participant or destination of these predicates can denote
@@ -264,7 +307,9 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
                 && source.iter().any(|n| {
                     !n.is_locked && n.head == Some(owner) && selects_participant(&n.surface)
                 });
-        if selects_time_value(lemma) || takes_participant && recipient.is_none() {
+        if selects_time_value(lemma)
+            || takes_participant && recipient.is_none() && !dated_distribution(source, idx, verb)
+        {
             continue;
         }
         let Some(start) = atoms
@@ -333,7 +378,15 @@ pub(super) fn join_recipient_pauses(atoms: &mut Vec<Atom>) {
         let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
         if !selects_participant(lemma.strip_suffix("する").unwrap_or(lemma))
             || atoms[split + 1..verb_index].iter().any(|a| {
-                super::is_punct_atom(a) || a.upos == Some(Upos::Verb) || a.deprel == "nsubj"
+                super::is_punct_atom(a)
+                    || a.upos == Some(Upos::Verb)
+                    || a.deprel == "nsubj"
+                        && !atoms[split + 1..verb_index].iter().any(|p| {
+                            !p.is_locked
+                                && p.deprel == "case"
+                                && p.head == a.doc_tok_idx
+                                && matches!(p.surface.as_str(), "を" | "に" | "へ")
+                        })
             })
         {
             continue;
@@ -346,10 +399,11 @@ pub(super) fn join_recipient_pauses(atoms: &mut Vec<Atom>) {
                     a.span.end_char == day.span.start_char
                         && (a.upos == Some(Upos::Num) || a.is_locked)
                 })
-                && other_goal(atoms, day, verb).is_some_and(|case| {
-                    comma.span.end_char <= case.span.start_char
-                        && case.span.end_char <= verb.span.start_char
-                })
+                && (dated_distribution(atoms, idx, verb)
+                    || other_goal(atoms, day, verb).is_some_and(|case| {
+                        comma.span.end_char <= case.span.start_char
+                            && case.span.end_char <= verb.span.start_char
+                    }))
         });
         if joins {
             atoms.remove(split);

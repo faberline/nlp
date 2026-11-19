@@ -486,9 +486,12 @@ fn describe_noun(
         };
         let (adj, rest) = content.split_first()?;
         let adjective = original_pos(adj, doc) == Some(Upos::Adj)
-            || !adj.is_locked
-                && matches!(adj.surface.as_str(), "大きな" | "小さな")
-                && adj.deprel == "det";
+            || original_pos(adj, doc) == Some(Upos::Det)
+                && adj.deprel == "det"
+                && matches!(
+                    chars.get(adj.span.start_char..adj.span.end_char),
+                    Some(['大', 'き', 'な'] | ['小', 'さ', 'な'])
+                );
         if !adjective
             || !(adj.head == head.doc_tok_idx
                 && matches!(adj.deprel.as_str(), "amod" | "acl" | "det")
@@ -1162,6 +1165,28 @@ mod tests {
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
+    }
+
+    #[test]
+    fn possessive_choice_keeps_a_glossary_size_modifier() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(crate::GlossaryEntry {
+            canonical: "大きな".into(),
+            surfaces: vec!["大きな".into()],
+            targets: [(TargetVariant::ZhHant, "大型".into())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        });
+        let product = analyze_and_translate(
+            "これは妹の大きな箱か父のですか。",
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(product.target_text, "這是妹妹的大型的箱子還是父親的？");
     }
 
     #[test]

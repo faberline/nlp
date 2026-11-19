@@ -21141,14 +21141,14 @@ mod existence_rule_tests {
         let request = "校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。";
         let quoted_statement = "『二人は各自一通ずつ書く』";
 
-        let plain = public_translate(&format!("二人は各自一通ずつ書きます。{request}"), &glossary);
+        let plain = translate(&format!("二人は各自一通ずつ書きます。{request}"), &glossary);
         assert!(
             plain
                 .target_text
                 .ends_with("可以請兩位每次各寫一封信給校長嗎？")
         );
 
-        let copied = public_translate(
+        let copied = translate(
             &format!("{quoted_statement}と紙に書き写しました。{request}"),
             &glossary,
         );

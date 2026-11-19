@@ -765,7 +765,7 @@ fn translate_single_sentence(
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
-    let written_quotes = written_quotes_by_sentence
+    let written_quotes: &[quote_source::WrittenForm] = written_quotes_by_sentence
         .get(sentence_idx)
         .map_or(&[], Vec::as_slice);
     let raw_sent: String = chars[sent_span.start_char..sent_span.end_char]

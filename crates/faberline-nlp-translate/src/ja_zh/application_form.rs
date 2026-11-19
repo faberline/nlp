@@ -904,6 +904,10 @@ pub(super) fn companion_label(
     chars: &[char],
 ) -> Option<String> {
     let end = source.iter().position(|a| a.doc_tok_idx == Some(id))?;
+    let person = person
+        || (source[end].is_locked
+            && source[end].span.end_char <= chars.len()
+            && is_person(&source[end], chars));
     let mut start = end;
     while let Some(i) = start.checked_sub(1) {
         let before = &source[i];

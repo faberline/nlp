@@ -15906,6 +15906,31 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn recipients_keep_their_own_time_and_number() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "私は入居申込書を昨日受付にいた職員に出しました。",
+                "我向昨天在櫃檯的職員交了入住申請表。",
+            ),
+            (
+                "私は入居申込書を受付に昨日いた職員に出しました。",
+                "我向昨天在櫃檯的職員交了入住申請表。",
+            ),
+            (
+                "私は入居申込書を受付にいた二人の職員に出しました。",
+                "我向當時在櫃檯的兩位職員交了入住申請表。",
+            ),
+            (
+                "私は昨日受付にいた二人の職員に入居申込書を出しました。",
+                "我向昨天在櫃檯的兩位職員交了入住申請表。",
+            ),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+    }
+
+    #[test]
     fn an_application_keeps_the_purpose_and_the_recipient_clause() {
         let glossary = TranslationGlossary::new();
         for (jp, zh) in [

@@ -489,7 +489,189 @@ fn noun_text(words: &[Atom], chars: &[char]) -> String {
     }
 }
 
-fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char]) {
+fn relative_time(
+    atoms: &[Atom],
+    end: usize,
+    predicate: &Atom,
+    doc: &Document,
+    chars: &[char],
+) -> Option<(usize, String)> {
+    let last = end.checked_sub(1)?;
+    let marker = &atoms[last];
+    let (i, case) = if matches!(marker.surface.as_str(), "に" | "から" | "まで") {
+        let i = last.checked_sub(1)?;
+        (i, marker.surface.as_str())
+    } else {
+        (last, "")
+    };
+    let time = &atoms[i];
+    // Merging 午前・九時 can drop its token id. The case particle
+    // still points to the original clock head in the source document.
+    let merged_clock = is_clock_atom(time)
+        && marker.head.is_some_and(|id| {
+            doc.tokens.get(id).is_some_and(|t| {
+                time.span.start_char <= t.span.start_char && t.span.end_char <= time.span.end_char
+            }) && doc.syntax.iter().any(|n| {
+                n.token == id
+                    && n.head == predicate.doc_tok_idx
+                    && matches!(n.deprel.as_str(), "advmod" | "obl")
+            })
+        });
+    if !merged_clock
+        && (time.head != predicate.doc_tok_idx
+            || !matches!(time.deprel.as_str(), "advmod" | "obl")
+            || (!case.is_empty() && !dasu_case_link(time, marker)))
+    {
+        return None;
+    }
+    let label = |a: &Atom| {
+        if is_clock_atom(a) {
+            return Some(a.surface.clone());
+        }
+        let source = spelling(a, chars);
+        let known = match source.as_str() {
+            "今朝" => Some("今天早上".to_owned()),
+            "今夜" | "今晩" => Some("今晚".to_owned()),
+            "昨夜" | "昨晩" => Some("昨晚".to_owned()),
+            _ => {
+                let (prefix, clock) = source
+                    .strip_prefix("午前")
+                    .map(|s| ("上午", s))
+                    .or_else(|| source.strip_prefix("午後").map(|s| ("下午", s)))
+                    .unwrap_or(("", source.as_str()));
+                clock
+                    .strip_suffix('時')
+                    .and_then(super::clock_number)
+                    .map(|hour| format!("{prefix}{}點", super::clock_hour_text(hour)))
+            }
+        };
+        if let Some(value) = known {
+            return Some(if a.is_locked && !is_clock_atom(a) {
+                a.surface.clone()
+            } else {
+                value
+            });
+        }
+        if let Some(text) = super::render_temporal_made_atom(a) {
+            return Some(text);
+        }
+        if !a.is_locked {
+            return direct_quote_time(a, doc);
+        }
+        let mut source = a.clone();
+        source.is_locked = false;
+        source.surface = spelling(a, chars);
+        source.upos = Some(Upos::Noun);
+        source.lemma = None;
+        direct_quote_time(&source, doc)
+            .or_else(|| super::render_temporal_made_atom(&source))
+            .map(|_| a.surface.clone())
+    };
+    let mut text = label(time)?;
+    let mut start = i;
+    if i >= 2
+        && atoms[i - 1].surface == "の"
+        && dasu_case_link(&atoms[i - 2], &atoms[i - 1])
+        && (atoms[i - 2].head == time.doc_tok_idx
+            || (matches!(spelling(time, chars).as_str(), "朝" | "昼" | "夜")
+                && atoms[i - 2].deprel == "nmod"
+                && atoms
+                    .get(end)
+                    .is_some_and(|place| atoms[i - 2].head == place.doc_tok_idx)))
+        && let Some(prefix) = label(&atoms[i - 2])
+    {
+        text = prefix + &text;
+        start -= 2;
+    } else if i > 0
+        && matches!(spelling(&atoms[i - 1], chars).as_str(), "午前" | "午後")
+        && (atoms[i - 1].head == time.doc_tok_idx || atoms[i - 1].head == predicate.doc_tok_idx)
+        && let Some(prefix) = label(&atoms[i - 1])
+    {
+        text = prefix + &text;
+        start -= 1;
+    }
+    match case {
+        "から" => text = format!("自{text}起"),
+        "まで" => text = format!("直到{text}"),
+        _ => {}
+    }
+    Some((start, text))
+}
+
+fn recipient_description(
+    atoms: &[Atom],
+    modified: usize,
+    chars: &[char],
+) -> (usize, usize, String) {
+    let mut i = modified;
+    let mut start = noun_start(atoms, i);
+    let counter = &atoms[i];
+    let raw_counter = spelling(counter, chars);
+    let number = i.checked_sub(1).filter(|&k| {
+        let num = &atoms[k];
+        matches!(raw_counter.as_str(), "人" | "名")
+            && num.head == counter.doc_tok_idx
+            && num.span.end_char == counter.span.start_char
+            && matches!(num.deprel.as_str(), "nummod" | "compound")
+            && crate::opaque::parse_cjk_or_ascii_num(&super::normalize_decimal_digits(&spelling(
+                num, chars,
+            )))
+            .is_some()
+    });
+    let mut count = String::new();
+    let mut unit = None;
+    if let Some(k) = number {
+        start = k;
+        if atoms[k].is_locked {
+            count = atoms[k].surface.clone();
+        } else {
+            count = super::render_joint_people(&atoms[k].surface)
+                .trim_end_matches('人')
+                .to_owned();
+        }
+        unit = Some(counter);
+    } else if counter.is_locked
+        && raw_counter.strip_suffix(['人', '名']).is_some_and(|n| {
+            crate::opaque::parse_cjk_or_ascii_num(&super::normalize_decimal_digits(n)).is_some()
+        })
+    {
+        count = counter.surface.clone();
+    }
+    let mut name = if count.is_empty() {
+        noun_text(&atoms[start..=i], chars)
+    } else {
+        String::new()
+    };
+    while atoms[i].deprel == "nmod"
+        && atoms
+            .get(i + 1)
+            .is_some_and(|no| no.surface == "の" && dasu_case_link(&atoms[i], no))
+    {
+        let Some(n) = atoms.iter().position(|a| a.doc_tok_idx == atoms[i].head) else {
+            break;
+        };
+        if n <= i + 1 || noun_start(atoms, n) != i + 2 {
+            break;
+        }
+        if !name.is_empty() {
+            name.push('的');
+        }
+        name.push_str(&noun_text(&atoms[i + 2..=n], chars));
+        i = n;
+    }
+    if let Some(unit) = unit {
+        count.push_str(if unit.is_locked {
+            &unit.surface
+        } else if name.is_empty() {
+            "人"
+        } else {
+            "位"
+        });
+    }
+    (start, i, count + &name)
+}
+
+fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
     for be_idx in (2..atoms.len()).rev() {
         let Some(be) = atoms.get(be_idx) else {
             continue;
@@ -498,31 +680,48 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char]) {
         if be.is_locked || !matches!(action, "いる" | "居る" | "来る") || be.deprel != "acl" {
             continue;
         }
-        let place = &atoms[be_idx - 2];
-        let ni = &atoms[be_idx - 1];
-        if ni.surface != "に" || !dasu_case_link(place, ni) || place.head != be.doc_tok_idx {
+        // In 待っていた職員 the location is attached to 待つ. The
+        // auxiliary いる still modifies the recipient.
+        let activity = atoms
+            .get(be_idx - 2)
+            .filter(|v| {
+                !v.is_locked
+                    && v.head == be.doc_tok_idx
+                    && v.deprel == "advcl"
+                    && atoms[be_idx - 1].surface == "て"
+                    && atoms[be_idx - 1].head == v.doc_tok_idx
+            })
+            .and_then(|v| match v.lemma.as_deref() {
+                Some("待つ") => Some((v, "等候")),
+                Some("勤める" | "働く") => Some((v, "工作")),
+                _ => None,
+            });
+        let (event, suffix) = activity.unwrap_or((be, ""));
+        let event_idx = if activity.is_some() {
+            be_idx - 2
+        } else {
+            be_idx
+        };
+        let (end_place, after) = relative_time(atoms, event_idx, event, doc, chars)
+            .unwrap_or((event_idx, String::new()));
+        if end_place < 2 {
+            continue;
+        }
+        let place = &atoms[end_place - 2];
+        let ni = &atoms[end_place - 1];
+        if !(ni.surface == "に" || (activity.is_some() && ni.surface == "で"))
+            || !dasu_case_link(place, ni)
+            || place.head != event.doc_tok_idx
+        {
             continue;
         }
         let Some(modified) = atoms.iter().position(|a| a.doc_tok_idx == be.head) else {
             continue;
         };
-        let start_person = noun_start(atoms, modified);
+        let (start_person, person_idx, role) = recipient_description(atoms, modified, chars);
         if start_person <= be_idx {
             continue;
         }
-        let modifier = &atoms[modified];
-        let person_idx = if modifier.deprel == "nmod"
-            && atoms
-                .get(modified + 1)
-                .is_some_and(|no| no.surface == "の" && dasu_case_link(modifier, no))
-            && atoms
-                .get(modified + 2)
-                .is_some_and(|person| person.doc_tok_idx == modifier.head)
-        {
-            modified + 2
-        } else {
-            modified
-        };
         let person = &atoms[person_idx];
         let Some(to) = atoms.get(person_idx + 1) else {
             continue;
@@ -561,10 +760,12 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char]) {
             (true, "なかった") => "沒來",
             _ => continue,
         };
-        let first = noun_start(atoms, be_idx - 2);
+        let place_first = noun_start(atoms, end_place - 2);
+        let (first, before) = relative_time(atoms, place_first, event, doc, chars)
+            .unwrap_or((place_first, String::new()));
         let Some(form) = (0..atoms.len()).find(|&k| {
             atoms[k].deprel == "obj"
-                && ((k < first && atoms[k].head == be.doc_tok_idx)
+                && ((k < first && atoms[k].head == event.doc_tok_idx)
                     || ((k < first || k > person_idx) && atoms[k].head == Some(outer)))
                 && atoms
                     .get(k + 1)
@@ -574,17 +775,18 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char]) {
             continue;
         };
         let mut receiver = person.clone();
-        let location = noun_text(&atoms[first..be_idx - 1], chars);
-        let mut role = noun_text(&atoms[start_person..=modified], chars);
-        if person_idx != modified {
-            role.push('的');
-            role.push_str(&noun_text(&atoms[person_idx..=person_idx], chars));
-        }
-        receiver.surface = format!("{relation}{location}的{role}");
+        let location = noun_text(&atoms[place_first..end_place - 1], chars);
+        let time = before + &after;
+        let relation = if time.is_empty() {
+            relation
+        } else {
+            relation.trim_start_matches("當時")
+        };
+        receiver.surface = format!("{time}{relation}{location}{suffix}的{role}");
         receiver.lemma = Some(PRESENT_RECIPIENT.to_owned());
         receiver.is_locked = true;
         receiver.span.start_char = atoms[first].span.start_char;
-        let inner = be.doc_tok_idx;
+        let inner = event.doc_tok_idx;
         for i in 0..first {
             if atoms[i].deprel == "nsubj"
                 && atoms[i].head == inner
@@ -601,7 +803,7 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char]) {
 }
 
 pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
-    located_recipient(atoms, chars);
+    located_recipient(atoms, chars, doc);
     for end in (0..atoms.len()).rev() {
         let Some(form) = atoms.get(end) else { continue };
         let covered = covered_purpose(form, chars);

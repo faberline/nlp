@@ -4577,12 +4577,13 @@ fn render_te_help_request(
         localized.is_locked = true;
         action.splice(start..=index, [localized]);
     }
-    if request
-        .person
-        .as_ref()
-        .is_some_and(|person| person.role == TeHelpPersonRole::Performer)
-        && let Some(verb) = action.last_mut()
+    if let Some((verb, arguments)) = action.split_last_mut()
+        && !verb.is_locked
         && verb.lemma.as_deref() == Some("描く")
+        && let Some(action_idx) = verb.doc_tok_idx
+        && arguments
+            .iter()
+            .any(|atom| atom.deprel == "obj" && atom.head == Some(action_idx))
     {
         // 畫畫 is intransitive in Mandarin. The explicit drawing object
         // licenses 畫 in this request.
@@ -16771,8 +16772,35 @@ mod existence_rule_tests {
             ),
             (
                 "二人で地図を描いていただけますか。",
-                "可以請兩人一起畫畫地圖嗎？",
+                "可以請兩人一起畫地圖嗎？",
             ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_request_draws_the_linked_object_once() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("二人で絵を描いてもらえますか。", "可以請兩人一起畫畫嗎？"),
+            ("絵を描いてもらえますか。", "可以幫我畫畫嗎？"),
+            ("子供の絵を描いてもらえますか。", "可以幫我畫孩子的畫嗎？"),
+            (
+                "もう一度絵を描いていただけませんか。",
+                "可以麻煩您幫我再畫畫一次嗎？",
+            ),
+            (
+                "二人で`原圖`を描いてもらえますか。",
+                "可以請兩人一起畫`原圖`嗎？",
+            ),
+            ("描いてもらえますか。", "可以幫我畫畫嗎？"),
+            ("二人で描いてもらえますか。", "可以請兩人一起畫畫嗎？"),
+            ("絵を撮ってもらえますか。", "可以幫我拍攝畫嗎？"),
         ] {
             assert_eq!(
                 translate(source, &glossary).target_text,

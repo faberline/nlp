@@ -591,7 +591,10 @@ fn attributive_at(
         .count();
     let n = i + aux + 1;
     let noun = atoms.get(n)?;
-    if aux == 0 || noun.doc_tok_idx != Some(adj.head?) || noun.upos != Some(Upos::Noun) {
+    if aux == 0
+        || noun.doc_tok_idx != Some(adj.head?)
+        || nominal_possession::original_pos(noun, doc) != Some(Upos::Noun)
+    {
         return None;
     }
     let (past, negative) = inflection(adj, &atoms[i + 1..n])?;
@@ -631,40 +634,44 @@ fn attributive_at(
     } else {
         String::new()
     };
-    let (prefix_len, time) = match &atoms[..start] {
-        [.., t, p]
-            if !p.is_locked
-                && p.head == t.doc_tok_idx
-                && p.deprel == "case"
-                && t.head == Some(id)
-                && matches!(t.deprel.as_str(), "obl" | "nsubj" | "advmod")
-                && matches!(p.surface.as_str(), "まで" | "は" | "に") =>
+    let linked_time = |t: &Atom, p: &Atom| {
+        if p.is_locked
+            || p.head != t.doc_tok_idx
+            || p.deprel != "case"
+            || t.head != Some(id)
+            || !matches!(t.deprel.as_str(), "obl" | "nsubj" | "advmod")
         {
-            let label = render_temporal_made_atom(t).or_else(|| {
-                temporal(t)
-                    .then(|| translate_single_ja_term(&t.surface, t.lemma.as_deref(), t.upos))
-            });
-            let label = label.map(|label| {
-                if p.surface == "まで" {
-                    format!("直到{label}都")
-                } else {
-                    label
-                }
-            });
-            (2, label)
+            return None;
         }
-        [.., t] if t.head == Some(id) && temporal(t) => (
-            1,
-            Some(translate_single_ja_term(
-                &t.surface,
-                t.lemma.as_deref(),
-                t.upos,
-            )),
-        ),
-        _ => (0, None),
+        render_temporal_made_atom(t).or_else(|| {
+            temporal(t).then(|| translate_single_ja_term(&t.surface, t.lemma.as_deref(), t.upos))
+        })
     };
-    if let Some(text) = time {
-        start -= prefix_len;
+    let time = match &atoms[..start] {
+        [.., from, kara, to, made] if kara.surface == "から" && made.surface == "まで" => {
+            linked_time(from, kara)
+                .zip(linked_time(to, made))
+                .map(|(a, b)| (4, format!("從{a}到{b}都")))
+        }
+        [.., t, p] if matches!(p.surface.as_str(), "まで" | "は" | "に") => linked_time(t, p)
+            .map(|label| {
+                (
+                    2,
+                    if p.surface == "まで" {
+                        format!("直到{label}都")
+                    } else {
+                        label
+                    },
+                )
+            }),
+        [.., t] if t.head == Some(id) && temporal(t) => Some((
+            1,
+            translate_single_ja_term(&t.surface, t.lemma.as_deref(), t.upos),
+        )),
+        _ => None,
+    };
+    if let Some((len, text)) = time {
+        start -= len;
         when = text;
     }
     // A separate comparison, subject (e.g. 屋根が白かった車), or other
@@ -1237,6 +1244,37 @@ mod tests {
             ("車は白かったです。", "車當時是白色的。"),
         ] {
             assert_eq!(translate(jp), expected, "{jp}");
+        }
+    }
+
+    #[test]
+    fn a_whole_noun_lock_preserves_its_own_adjective() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(crate::GlossaryEntry {
+            canonical: "車".into(),
+            surfaces: vec!["車".into()],
+            targets: [(TargetVariant::ZhHant, "轎車甲".into())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        });
+        for (source, expected) in [
+            ("白かった車を見ました。", "看了當時是白色的轎車甲。"),
+            ("白くなかった車を見ました。", "看了當時不是白色的轎車甲。"),
+            (
+                "昨日から今日まで白かった車を見ました。",
+                "看了從昨天到今天都是白色的轎車甲。",
+            ),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(result.target_text, expected, "{source}");
         }
     }
 

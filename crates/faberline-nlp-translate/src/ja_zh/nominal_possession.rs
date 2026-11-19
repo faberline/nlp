@@ -100,7 +100,7 @@ fn owner_atom(a: &Atom, doc: &Document) -> bool {
 
 const MODIFIED_NOUN: &str = "__ja_possession_modified_noun";
 
-fn original_pos(atom: &Atom, doc: &Document) -> Option<Upos> {
+pub(super) fn original_pos(atom: &Atom, doc: &Document) -> Option<Upos> {
     if !atom.is_locked {
         return atom.upos;
     }

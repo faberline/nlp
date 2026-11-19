@@ -77,7 +77,8 @@ impl Context {
             .iter()
             .rfind(|a| {
                 !a.is_locked
-                    && a.upos == Some(Upos::Adj)
+                    && (a.upos == Some(Upos::Adj)
+                        || a.upos == Some(Upos::Verb) && a.lemma.as_deref() == Some("ある"))
                     && a.deprel == "advcl"
                     && a.head.is_some()
                     && !atoms.iter().any(|inside| inside.doc_tok_idx == a.head)
@@ -234,8 +235,13 @@ pub(super) fn concessive(source: &[Atom], ctx: &ClauseDiscourseCtx) -> Option<Ve
     }
     let i = body
         .iter()
-        .rposition(|a| !a.is_locked && a.doc_tok_idx == link.head && a.upos == Some(Upos::Adj))?;
+        .rposition(|a| !a.is_locked && a.upos == Some(Upos::Adj))?;
     let adj = &body[i];
+    let auxiliary = polite_auxiliary(adj, &body[i + 1..]);
+    let governor = auxiliary.unwrap_or(adj);
+    if governor.doc_tok_idx.is_none() || governor.doc_tok_idx != link.head {
+        return None;
+    }
     let lemma = adj.lemma.as_deref().unwrap_or(&adj.surface);
     let subject = body[..i]
         .iter()
@@ -256,8 +262,9 @@ pub(super) fn concessive(source: &[Atom], ctx: &ClauseDiscourseCtx) -> Option<Ve
     }
     inflection(adj, &body[i + 1..])?;
     let mut clause = body.to_vec();
-    clause[i].deprel = "root".to_owned();
-    clause[i].head = None;
+    let root_index = i + usize::from(auxiliary.is_some());
+    clause[root_index].deprel = "root".to_owned();
+    clause[root_index].head = None;
     Some(clause)
 }
 
@@ -275,13 +282,14 @@ pub(super) fn comparison(
     let [marker, adj, tail @ ..] = right else {
         return None;
     };
-    if adj.is_locked || adj.upos != Some(Upos::Adj) || adj.deprel != "root" {
+    let governor = polite_auxiliary(adj, tail).unwrap_or(adj);
+    if adj.is_locked || adj.upos != Some(Upos::Adj) || governor.deprel != "root" {
         return None;
     }
     let lemma = adj.lemma.as_deref().unwrap_or(&adj.surface);
     let (ending, suffix) = match tail.split_last() {
         Some((p, body))
-            if !p.is_locked && p.upos == Some(Upos::Part) && p.head == adj.doc_tok_idx =>
+            if !p.is_locked && p.upos == Some(Upos::Part) && p.head == governor.doc_tok_idx =>
         {
             (
                 body,
@@ -359,6 +367,19 @@ pub(super) fn comparison(
         format!("沒有{reference}那麼")
     };
     Some(format!("{subject}{time}{relation}{word}{suffix}"))
+}
+
+// The arguments and degree adverb attach to 白く; あり hosts the polite
+// negation, tense, and sentence particle in 白くありませんでしたか.
+fn polite_auxiliary<'a>(adjective: &Atom, tail: &'a [Atom]) -> Option<&'a Atom> {
+    tail.first().filter(|a| {
+        !a.is_locked
+            && a.upos == Some(Upos::Verb)
+            && a.lemma.as_deref() == Some("ある")
+            && adjective.surface.ends_with('く')
+            && a.doc_tok_idx.is_some()
+            && adjective.head == a.doc_tok_idx
+    })
 }
 
 /// An i-adjective describes a past state with かった. Rendering that ending
@@ -700,15 +721,18 @@ pub(super) fn take_time_interval(
     ctx: &Context,
 ) -> Option<TimeInterval> {
     let source = core_non_punct(source);
-    let i = source.iter().rposition(|a| {
-        !a.is_locked
-            && a.upos == Some(Upos::Adj)
-            && (a.deprel == "root"
-                || ctx.reported_predicate.is_some() && a.doc_tok_idx == ctx.reported_predicate)
-    })?;
+    let i = source
+        .iter()
+        .rposition(|a| !a.is_locked && a.upos == Some(Upos::Adj))?;
     let (predicate, tail) = source[i..].split_first()?;
+    let governor = polite_auxiliary(predicate, tail).unwrap_or(predicate);
+    if governor.deprel != "root"
+        && (ctx.reported_predicate.is_none() || governor.doc_tok_idx != ctx.reported_predicate)
+    {
+        return None;
+    }
     let ending = match tail {
-        [body @ .., a] if a.upos == Some(Upos::Part) && a.head == predicate.doc_tok_idx => body,
+        [body @ .., a] if a.upos == Some(Upos::Part) && a.head == governor.doc_tok_idx => body,
         a => a,
     };
     inflection(predicate, ending)?;
@@ -827,10 +851,7 @@ pub(super) fn render(
             }
         ));
     }
-    let aux_head = tail
-        .first()
-        .filter(|a| a.lemma.as_deref() == Some("ある") && predicate.head == a.doc_tok_idx)
-        .and_then(|a| a.doc_tok_idx);
+    let aux_head = polite_auxiliary(predicate, tail).and_then(|a| a.doc_tok_idx);
     let (tail, particle) = match tail.split_last() {
         Some((p, body))
             if !p.is_locked
@@ -1104,6 +1125,31 @@ mod tests {
             ),
             ("部屋は夜まで寒いですか。", "房間直到晚上都冷嗎？"),
             ("車は何時まで白かったですか。", "車到幾點為止都是白色的？"),
+            (
+                "先生の車は先週まで白くありませんでした。",
+                "老師的車直到上週都不是白色的。",
+            ),
+            (
+                "部屋は昨日まであまり寒くありませんでした。",
+                "房間直到昨天都不太冷。",
+            ),
+            (
+                "昨日まで部屋はあまり寒くありませんでした。",
+                "房間直到昨天都不太冷。",
+            ),
+            (
+                "部屋は昨日まであまり寒くなかった。",
+                "房間直到昨天都不太冷。",
+            ),
+            (
+                "朝から晩までこの部屋は寒くありませんでした。",
+                "這房間從早上到晚上都不冷。",
+            ),
+            ("箱は昼まで重くありませんでしたか。", "箱直到中午都不重嗎？"),
+            (
+                "部屋は昨日まで寒くありませんでしたが、今日は寒いです。",
+                "房間直到昨天都不冷，但是今天很冷。",
+            ),
             (
                 "先生は「この部屋は夜まで寒かった」と言いました。",
                 "老師說「這房間直到晚上都很冷」。",

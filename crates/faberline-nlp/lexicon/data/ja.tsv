@@ -51157,7 +51157,7 @@
 支払	ja	1011	NOUN	NOUN	-	-	-
 支払いする	ja	780	VERB	VERB	-	付款	infl=sahen
 支払う	ja	1205	VERB	VERB	-	結帳	infl=godan_wa;src=first_party_mit
-支払える	ja	1164	VERB	VERB	-	-	infl=ichidan
+支払える	ja	1164	VERB	VERB	-	能付款	infl=ichidan;src=first_party_mit
 支払る	ja	1183	VERB	VERB	-	-	infl=ichidan
 支持	ja	686	-	NOUN|VERB	-	支持	-
 支援	ja	762	-	NOUN|VERB	-	支援	-

@@ -7,7 +7,9 @@
 
 use std::collections::HashMap;
 
+mod copular_time;
 mod counted_object;
+mod finite_adjective;
 mod homework_desire;
 mod nominal_possession;
 mod payment_potential;
@@ -331,7 +333,7 @@ pub(crate) fn translate_ja_sentence(
                 } else {
                     None
                 };
-                for iseg in &inner_segs {
+                for (idx, iseg) in inner_segs.iter().enumerate() {
                     if let Segment::Clause {
                         atoms: catoms,
                         trailing_punct,
@@ -360,6 +362,12 @@ pub(crate) fn translate_ja_sentence(
                                 &ClauseDiscourseCtx {
                                     source_chars: chars,
                                     inside_quote: true,
+                                    adjective: finite_adjective::Context::in_quote(
+                                        &inner_segs,
+                                        idx,
+                                        &atoms,
+                                        doc,
+                                    ),
                                     ..Default::default()
                                 },
                                 target,
@@ -407,7 +415,7 @@ pub(crate) fn translate_ja_sentence(
                 }
                 out.push(localize_open_quote(*open_q, target));
                 let inner_segs = split_atoms_into_segments(inner_atoms, doc, *span);
-                for iseg in &inner_segs {
+                for (idx, iseg) in inner_segs.iter().enumerate() {
                     if let Segment::Clause {
                         atoms: catoms,
                         trailing_punct,
@@ -423,6 +431,12 @@ pub(crate) fn translate_ja_sentence(
                             &ClauseDiscourseCtx {
                                 source_chars: chars,
                                 inside_quote: true,
+                                adjective: finite_adjective::Context::in_quote(
+                                    &inner_segs,
+                                    idx,
+                                    &atoms,
+                                    doc,
+                                ),
                                 ..Default::default()
                             },
                             target,
@@ -716,6 +730,7 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
+                    adjective: finite_adjective::Context::at(&segments, seg_idx, doc),
                     source_chars: chars,
                     return_trip: None,
                     inside_quote: ends_continued_quote(
@@ -1626,7 +1641,8 @@ fn normalized_sentence_atoms(
     let atoms = build_sentence_atoms(sentence_idx, chars, doc, tokens, locks);
     let atoms = normalize_keigo_atoms(&atoms);
     let atoms = normalize_glossary_clocks(&atoms, chars, locks);
-    let atoms = normalize_clock_atoms(&atoms);
+    let mut atoms = normalize_clock_atoms(&atoms);
+    copular_time::mark_questions(&mut atoms, chars, locks);
     preserve_clock_adjacent_locks(&atoms, doc, sentence_idx)
 }
 
@@ -2829,6 +2845,22 @@ fn direct_ka_before_period(clause: &[Atom], end: &Atom, doc: &Document) -> bool 
         && ka.span.end_char == end.span.start_char
         && ka.head.is_some()
         && body.iter().any(|a| {
+            // Normalizing 五時 can hide the original root token of 五時までですか.
+            if a.lemma.as_deref() == Some(CLOCK_ATOM)
+                && let Some(head) = ka.head.and_then(|idx| doc.tokens.get(idx))
+                && a.span.start_char <= head.span.start_char
+                && head.span.end_char <= a.span.end_char
+                && body.windows(2).any(|p| {
+                    !p[0].is_locked
+                        && p[0].surface == "まで"
+                        && p[0].head == ka.head
+                        && !p[1].is_locked
+                        && p[1].deprel == "cop"
+                        && p[1].head == ka.head
+                })
+            {
+                return true;
+            }
             if a.doc_tok_idx != ka.head {
                 return false;
             }
@@ -4014,6 +4046,7 @@ pub(crate) fn direct_quote_end(
 
 #[derive(Clone, Default)]
 struct ClauseDiscourseCtx<'a> {
+    adjective: finite_adjective::Context,
     source_chars: &'a [char],
     return_trip: Option<ReturnTrip>,
     inside_quote: bool,
@@ -4599,6 +4632,34 @@ fn translate_clause_atoms(
     }
 
     if target == TargetVariant::ZhHant
+        && let Some(text) = copular_time::render(core_non_punct(atoms), doc, sentence_idx, target)
+    {
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && let Some(body) = finite_adjective::concessive(core_non_punct(atoms), ctx)
+    {
+        let (mut text, _) = translate_clause_atoms(
+            &body,
+            doc,
+            sentence_idx,
+            conditioning,
+            allow_pro_drop_inject,
+            ctx,
+            target,
+        );
+        text.push_str("，但是");
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && let Some(text) = finite_adjective::comparison(core_non_punct(atoms), ctx, target)
+    {
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
         && let Some(text) = payment_potential::render(core_non_punct(atoms), target, false)
     {
         return (text, false);
@@ -4790,6 +4851,9 @@ fn translate_clause_atoms(
     mark_residence_place(&mut grouped, body);
     mark_joint_question(&mut grouped, &norm_atoms, body);
     let mut grouped = compose_relative_daypart(grouped);
+    if target == TargetVariant::ZhHant {
+        finite_adjective::fold_reported_modifier(&mut grouped, body, target);
+    }
     if let Some((predicate, _)) = proposal {
         localize_proposal_arguments(&mut grouped, predicate, body, target);
     }
@@ -8260,6 +8324,14 @@ fn translate_clause_bunsetsus(
     let mut subjects: Vec<String> = Vec::new();
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
+    let state_interval = if target == TargetVariant::ZhHant {
+        finite_adjective::take_time_interval(&mut bunsetsus, source, doc, &ctx.adjective)
+    } else {
+        None
+    };
+    if let Some(interval) = &state_interval {
+        temporal_others.push(interval.text.clone());
+    }
     let mut joint_manner = None;
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
@@ -8972,6 +9044,20 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if target == TargetVariant::ZhHant
+        && let Some(state) = finite_adjective::render(
+            source,
+            &predicates,
+            ctx,
+            &mut adverbs,
+            &mut temporal_others,
+            state_interval.as_ref(),
+        )
+    {
+        pre_verb_mods.clear();
+        verb_core = state;
+        post_verb_mods.clear();
+    }
     if let Some(trip) = ctx.return_trip {
         verb_core = if let Some(place) = trip_destination {
             format!("{}回{}", trip.action, place)
@@ -9832,6 +9918,13 @@ fn translate_clause_bunsetsus(
             .flat_map(|b| &b.atoms)
             .all(|a| !a.is_locked)
         && inner_pre_mods.iter().any(|m| m == "不");
+    if state_interval
+        .as_ref()
+        .is_some_and(|interval| interval.question)
+        && sfp_suffix == Some("嗎")
+    {
+        sfp_suffix = Some("？");
+    }
     let negative_go = verb_core == "去"
         && inner_pre_mods
             .iter()
@@ -12718,7 +12811,11 @@ fn merge_adnominal_bunsetsus(
                     continue;
                 }
 
-                if let Some(pred_b) = res.pop_if(|prev| is_prenominal_pred(prev)) {
+                if let Some(pred_b) = res.pop_if(|prev| {
+                    is_prenominal_pred(prev)
+                        || target == TargetVariant::ZhHant
+                            && finite_adjective::voiced_past_modifier(prev, &b, source)
+                }) {
                     let has_verb = pred_b
                         .atoms
                         .iter()

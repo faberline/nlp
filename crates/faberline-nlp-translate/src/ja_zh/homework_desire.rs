@@ -64,6 +64,46 @@ pub(super) fn modal(tail: &[Atom]) -> Option<&'static str> {
     })
 }
 
+/// A topic's own V-たいと思っている expresses that person's intention.
+/// An explicit thinker or an inner が-subject keeps the report reading.
+pub(super) fn is_participants_intention(source: &[Atom], thought: &Atom, tail: &[Atom]) -> bool {
+    let [.., transfer, want] = source else {
+        return false;
+    };
+    let [te, ongoing, polite @ ..] = tail else {
+        return false;
+    };
+    let Some(transfer_id) = transfer.doc_tok_idx else {
+        return false;
+    };
+    if thought.is_locked
+        || source
+            .iter()
+            .chain(tail)
+            .any(|a| a.surface.contains("[[PH"))
+        || transfer.lemma.as_deref() != Some("出す")
+        || transfer.head != thought.doc_tok_idx
+        || thought.lemma.as_deref() != Some("思う")
+        || want.surface != "たい"
+        || want.head != Some(transfer_id)
+        || te.surface != "て"
+        || te.head != thought.doc_tok_idx
+        || ongoing.lemma.as_deref() != Some("いる")
+        || thought.head != ongoing.doc_tok_idx
+        || !(polite.is_empty() || matches!(polite, [a] if a.surface == "ます"))
+        || !source
+            .iter()
+            .any(|a| a.surface == "宿題" && a.deprel == "obj" && a.head == Some(transfer_id))
+    {
+        return false;
+    }
+    let mut subjects = source.windows(2).filter(|pair| pair[0].deprel == "nsubj");
+    matches!(subjects.next(), Some([person, topic]) if topic.surface == "は"
+        && super::dasu_case_link(person, topic) && person.head == Some(transfer_id)
+        && super::classroom_role(&[], person).is_some())
+        && subjects.next().is_none()
+}
+
 pub(super) fn render(
     source: &[Atom],
     normalized: &[Atom],

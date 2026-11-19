@@ -7277,6 +7277,12 @@ fn try_translate_cognitive_matrix(
     if inner_zh.is_empty() {
         return None;
     }
+    if target == TargetVariant::ZhHant
+        && !has_tekkiri
+        && homework_desire::is_participants_intention(pre_to, v_atom, tail)
+    {
+        return Some((inner_zh, false));
+    }
     let has_overt_subj = inner_atoms
         .iter()
         .any(|a| !a.is_locked && matches!(a.surface.as_str(), "が" | "は"));

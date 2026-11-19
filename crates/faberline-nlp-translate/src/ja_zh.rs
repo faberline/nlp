@@ -1938,6 +1938,7 @@ struct TeHelpLetterCount {
     object: usize,
     span: std::ops::Range<usize>,
     numeral: String,
+    modifier: Option<&'static str>,
     per_writer: bool,
 }
 
@@ -2144,18 +2145,36 @@ fn te_help_letter_count(
         fused_number.to_owned()
     };
     let numeral = normalize_decimal_digits(&numeral);
-    let after_counter = counter_index + 1;
-    let per_writer = arguments.get(after_counter).is_some_and(|each| {
-        !each.is_locked
-            && each.surface == "ずつ"
-            && each.upos == Some(Upos::Part)
-            && each.deprel == "discourse"
-            && each.head == Some(counter_id)
-            && counter.span.end_char == each.span.start_char
+    let additional = start.checked_sub(1).is_some_and(|index| {
+        let more = &arguments[index];
+        !more.is_locked
+            && more.surface == "もう"
+            && more.upos == Some(Upos::Adv)
+            && more.deprel == "advmod"
+            && more.head == Some(action_idx)
+            && more.span.end_char == arguments[start].span.start_char
     });
-    let span = start..after_counter + usize::from(per_writer);
-    if (per_writer && !can_distribute_to_writers)
-        || te_help_has_following_focus(arguments, span.end)
+    start -= usize::from(additional);
+    let after_counter = counter_index + 1;
+    let qualifier = arguments.get(after_counter).filter(|word| {
+        !word.is_locked
+            && matches!(word.surface.as_str(), "ずつ" | "だけ")
+            && word.upos == Some(Upos::Part)
+            && word.deprel == "discourse"
+            && word.head == Some(counter_id)
+            && counter.span.end_char == word.span.start_char
+    });
+    let qualifier_text = qualifier.map(|word| word.surface.as_str());
+    let modifier = match (additional, qualifier_text) {
+        (true, Some("ずつ")) => Some("再各"),
+        (false, Some("ずつ")) => Some("各"),
+        (true, Some("だけ")) => Some("只再"),
+        (false, Some("だけ")) => Some("只"),
+        (true, _) => Some("再"),
+        (false, _) => None,
+    };
+    let span = start..after_counter + usize::from(qualifier.is_some());
+    if te_help_has_following_focus(arguments, span.end)
         || arguments.iter().enumerate().any(|(index, atom)| {
             !span.contains(&index)
                 && atom.head.is_some()
@@ -2170,7 +2189,8 @@ fn te_help_letter_count(
         object,
         span,
         numeral,
-        per_writer,
+        modifier,
+        per_writer: qualifier_text == Some("ずつ") && can_distribute_to_writers,
     })
 }
 
@@ -5782,8 +5802,10 @@ fn render_te_help_request(
             }
             if let Some(count) = &request.letter_count {
                 if count.span.contains(&index) {
-                    return (count.per_writer && index == count.span.start)
-                        .then(|| linked_adverb(count.span.start, count.span.end, "各"));
+                    return count
+                        .modifier
+                        .filter(|_| index == count.span.start)
+                        .map(|surface| linked_adverb(count.span.start, count.span.end, surface));
                 }
                 if index == count.object {
                     let mut object = atom.clone();
@@ -20103,6 +20125,44 @@ mod existence_rule_tests {
             (
                 "校長宛ての手紙を二十通書いていただけますか。",
                 "可以請您寫二十封信給校長嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_counter_applies_the_quantity_qualifier() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "手紙をもう一通書いていただけますか。",
+                "可以請您幫我再寫一封信嗎？",
+            ),
+            (
+                "手紙を二通ずつ書いていただけますか。",
+                "可以請您幫我各寫兩封信嗎？",
+            ),
+            (
+                "手紙を二通だけ書いていただけますか。",
+                "可以請您幫我只寫兩封信嗎？",
+            ),
+            (
+                "手紙をもう二通だけ書いていただけませんか。",
+                "可以麻煩您幫我只再寫兩封信嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙をもう一通ずつ書いていただけますか。",
+                "可以請兩位老師再各寫一封信給校長嗎？",
+            ),
+            ("もう手紙を一通書きました。", "已經一通寫了信。"),
+            (
+                "もう一度手紙を書いていただけますか。",
+                "可以請您幫我再寫信一次嗎？",
             ),
         ] {
             assert_eq!(

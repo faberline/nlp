@@ -472,6 +472,35 @@ fn compound(atoms: &[Atom], end: usize) -> String {
 fn has_surface_colour(noun: &Atom, previous: &[Atom], colour: &str) -> bool {
     // Character, health, ripeness and traffic indications can also use colour
     // adjectives. Only choose a hue when the source subject supports it.
+    if noun.is_locked || noun.upos != Some(Upos::Noun) {
+        return false;
+    }
+    let Some(end) = previous
+        .iter()
+        .position(|a| a.doc_tok_idx == noun.doc_tok_idx)
+    else {
+        return false;
+    };
+    let name = compound(previous, end);
+    if name == "色"
+        && colour == "藍"
+        && previous.iter().enumerate().any(|(i, a)| {
+            a.head == noun.doc_tok_idx
+                && a.deprel == "nmod"
+                && green_or_unripe(&compound(previous, i))
+        })
+    {
+        return false;
+    }
+    literal_colour(&name, colour)
+}
+
+fn green_or_unripe(name: &str) -> bool {
+    const GREEN_OR_UNRIPE: &[&str] = &["実", "葉", "果物", "信号", "信号機", "りんご", "リンゴ"];
+    GREEN_OR_UNRIPE.contains(&name)
+}
+
+fn literal_colour(name: &str, colour: &str) -> bool {
     const VISIBLE_SURFACES: &[&str] = &[
         "色",
         "空",
@@ -520,29 +549,152 @@ fn has_surface_colour(noun: &Atom, previous: &[Atom], colour: &str) -> bool {
         "ボタン",
         "ボール",
     ];
-    const GREEN_OR_UNRIPE: &[&str] = &["実", "葉", "果物", "信号", "信号機", "りんご", "リンゴ"];
-    if noun.is_locked || noun.upos != Some(Upos::Noun) {
-        return false;
+    VISIBLE_SURFACES.contains(&name) || colour != "藍" && green_or_unripe(name)
+}
+
+// Bind an inflected adjective and its own auxiliaries to the exact noun that
+// it modifies. Leave the original clause source available to the matrix verb.
+pub(super) fn bind_attributives<'a>(
+    atoms: &'a [Atom],
+    doc: &Document,
+    chars: &[char],
+) -> std::borrow::Cow<'a, [Atom]> {
+    let mut result = std::borrow::Cow::Borrowed(atoms);
+    let mut next_phrase = atoms.len();
+    for (i, adj) in atoms.iter().enumerate().rev() {
+        if adj.is_locked || adj.upos != Some(Upos::Adj) || adj.deprel != "amod" {
+            continue;
+        }
+        if let Some((range, noun)) = attributive_at(atoms, i, doc, chars)
+            && *range.end() < next_phrase
+        {
+            next_phrase = *range.start();
+            result.to_mut().splice(range, [noun]);
+        }
     }
-    let Some(end) = previous
+    result
+}
+
+fn attributive_at(
+    atoms: &[Atom],
+    i: usize,
+    doc: &Document,
+    chars: &[char],
+) -> Option<(std::ops::RangeInclusive<usize>, Atom)> {
+    let adj = &atoms[i];
+    let id = adj.doc_tok_idx?;
+    let aux = atoms[i + 1..]
         .iter()
-        .position(|a| a.doc_tok_idx == noun.doc_tok_idx)
-    else {
-        return false;
-    };
-    let name = compound(previous, end);
-    if name == "色"
-        && colour == "藍"
-        && previous.iter().enumerate().any(|(i, a)| {
-            a.head == noun.doc_tok_idx
-                && a.deprel == "nmod"
-                && GREEN_OR_UNRIPE.contains(&compound(previous, i).as_str())
+        .take_while(|a| {
+            !a.is_locked && a.upos == Some(Upos::Aux) && a.deprel == "aux" && a.head == Some(id)
         })
-    {
-        return false;
+        .count();
+    let n = i + aux + 1;
+    let noun = atoms.get(n)?;
+    if aux == 0 || noun.doc_tok_idx != Some(adj.head?) || noun.upos != Some(Upos::Noun) {
+        return None;
     }
-    VISIBLE_SURFACES.contains(&name.as_str())
-        || colour != "藍" && GREEN_OR_UNRIPE.contains(&name.as_str())
+    let (past, negative) = inflection(adj, &atoms[i + 1..n])?;
+    let lemma = adj.lemma.as_deref()?;
+    let raw: String = chars
+        .get(noun.span.start_char..noun.span.end_char)?
+        .iter()
+        .collect();
+    if let Some(colour) = hue(lemma) {
+        if !literal_colour(&raw, colour) {
+            return None;
+        }
+    } else if !(gradable(lemma) || matches!(lemma, "新しい" | "古い" | "安い"))
+        || uncertain_sense(lemma, &raw)
+    {
+        return None;
+    }
+
+    let mut start = i;
+    if let [.., degree] = &atoms[..i]
+        && degree.deprel == "advmod"
+        && degree.head == Some(id)
+        && !degree.is_locked
+        && matches!(
+            degree.surface.as_str(),
+            "とても" | "すごく" | "非常に" | "かなり" | "あまり" | "それほど"
+        )
+    {
+        if negative != matches!(degree.surface.as_str(), "あまり" | "それほど") {
+            return None;
+        }
+        start -= 1;
+    }
+    let description_start = start;
+    let mut when = if past {
+        "當時".to_owned()
+    } else {
+        String::new()
+    };
+    let (prefix_len, time) = match &atoms[..start] {
+        [.., t, p]
+            if !p.is_locked
+                && p.head == t.doc_tok_idx
+                && p.deprel == "case"
+                && t.head == Some(id)
+                && matches!(t.deprel.as_str(), "obl" | "nsubj" | "advmod")
+                && matches!(p.surface.as_str(), "まで" | "は" | "に") =>
+        {
+            let label = render_temporal_made_atom(t).or_else(|| {
+                temporal(t)
+                    .then(|| translate_single_ja_term(&t.surface, t.lemma.as_deref(), t.upos))
+            });
+            let label = label.map(|label| {
+                if p.surface == "まで" {
+                    format!("直到{label}都")
+                } else {
+                    label
+                }
+            });
+            (2, label)
+        }
+        [.., t] if t.head == Some(id) && temporal(t) => (
+            1,
+            Some(translate_single_ja_term(
+                &t.surface,
+                t.lemma.as_deref(),
+                t.upos,
+            )),
+        ),
+        _ => (0, None),
+    };
+    if let Some(text) = time {
+        start -= prefix_len;
+        when = text;
+    }
+    // A separate comparison, subject (e.g. 屋根が白かった車), or other
+    // adverb can describe a part of the noun or change the degree of the
+    // property. Do not move that predicate onto the whole noun.
+    if atoms[..start].iter().any(|a| {
+        a.head == Some(id)
+            && (matches!(a.deprel.as_str(), "advmod" | "obl")
+                || a.deprel == "nsubj"
+                    && atoms
+                        .iter()
+                        .any(|p| p.head == a.doc_tok_idx && p.surface == "が"))
+    }) {
+        return None;
+    }
+    let mut phrase = Vec::new();
+    if let [.., det] = &atoms[..start]
+        && det.upos == Some(Upos::Det)
+        && det.deprel == "det"
+        && det.head == noun.doc_tok_idx
+        && !det.is_locked
+        && matches!(det.surface.as_str(), "この" | "その" | "あの" | "どの")
+    {
+        start -= 1;
+        phrase.push(det.clone());
+    }
+    phrase.extend_from_slice(&atoms[description_start..=n]);
+    let mut noun = nominal_possession::modified_noun(&phrase, doc, chars, Some(&when))?.pop()?;
+    noun.span.start_char = atoms[start].span.start_char;
+    Some((start..=n, noun))
 }
 
 // The past of a lexical verb such as 運ぶ is 運んだ. Here だ is a verbal
@@ -1062,6 +1214,30 @@ mod tests {
         )
         .unwrap()
         .target_text
+    }
+
+    #[test]
+    fn inflected_modifiers_keep_state_inside_their_noun_phrase() {
+        for (jp, expected) in [
+            ("白かった車を見ました。", "看了當時是白色的車。"),
+            ("白くない車を見ました。", "看了不是白色的車。"),
+            ("白くなかった車を見ました。", "看了當時不是白色的車。"),
+            ("重くなかった箱を運びました。", "搬運了當時不重的箱子。"),
+            ("その白かった車を見ましたか。", "看了那輛當時是白色的車嗎？"),
+            (
+                "昨日まで白かった車を見ました。",
+                "看了直到昨天都是白色的車。",
+            ),
+            ("白かった車は青いです。", "當時是白色的車是藍色的。"),
+            (
+                "父は「白かった車を見た」と言いました。",
+                "父親說「看了當時是白色的車」。",
+            ),
+            ("白くなった車を見ました。", "看了變白的車。"),
+            ("車は白かったです。", "車當時是白色的。"),
+        ] {
+            assert_eq!(translate(jp), expected, "{jp}");
+        }
     }
 
     #[test]

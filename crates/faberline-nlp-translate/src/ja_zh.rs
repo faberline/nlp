@@ -4813,7 +4813,13 @@ fn translate_clause_atoms(
     });
     let body = trip_source.as_deref().unwrap_or(body);
     let counted = counted_object::bind(body);
-    let merged_atoms = apply_phrase_matches(counted.as_deref().unwrap_or(body));
+    let phrases = counted.as_deref().unwrap_or(body);
+    let attributed = if target == TargetVariant::ZhHant {
+        finite_adjective::bind_attributives(phrases, doc, ctx.source_chars)
+    } else {
+        std::borrow::Cow::Borrowed(phrases)
+    };
+    let merged_atoms = apply_phrase_matches(&attributed);
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);

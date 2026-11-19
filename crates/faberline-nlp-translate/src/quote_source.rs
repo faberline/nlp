@@ -175,7 +175,7 @@ fn protect_sibling_forms(
 
         // Terminal marks inside the operands can split the analysis sentences,
         // but the operands still belong to this one balanced quotation scope.
-        let first = if index > first_for_count && counts_each_form(after) {
+        let first = if index > first_for_count && checks_each_form_length(after) {
             first_for_count
         } else if index > first_for_comparison {
             let before = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
@@ -197,7 +197,7 @@ fn protect_sibling_forms(
     }
 }
 
-fn counts_each_form(after: &[char]) -> bool {
+fn checks_each_form_length(after: &[char]) -> bool {
     let Some(rest) = after.strip_prefix(&['の']) else {
         return false;
     };
@@ -205,7 +205,12 @@ fn counts_each_form(after: &[char]) -> bool {
         strip_prefix(skip_space(rest), count)
             .and_then(|rest| skip_space(rest).strip_prefix(&['を']))
             .and_then(|rest| strip_prefix(skip_space(rest), "それぞれ"))
-            .is_some_and(|rest| strip_prefix(skip_space(rest), "数え").is_some())
+            .is_some_and(|rest| {
+                let rest = skip_space(rest);
+                ["数え", "調べ"]
+                    .iter()
+                    .any(|action| strip_prefix(rest, action).is_some())
+            })
     })
 }
 
@@ -668,6 +673,14 @@ mod tests {
                 "「ドイツ！」、「行く？」、「払える！」の文字数をそれぞれ数えました。",
                 &["「ドイツ！」", "「行く？」", "「払える！」"],
             ),
+            (
+                "「ドイツ！」、「行く？」の字数をそれぞれ調べました。",
+                &["「ドイツ！」", "「行く？」"],
+            ),
+            (
+                "「行く？」と、「ドイツ！」の文字数をそれぞれ調べました。",
+                &["「行く？」", "「ドイツ！」"],
+            ),
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -722,6 +735,10 @@ mod tests {
             (
                 "先生は『「A!ドイツ？B」と、「行く？」の文字数をそれぞれ数えなさい』と言いました。",
                 ["「A!ドイツ？B」", "「行く？」"],
+            ),
+            (
+                "先生は『「駅！」、「行く？」の字数をそれぞれ調べてください』と言いました。",
+                ["「駅！」", "「行く？」"],
             ),
         ] {
             let translated = analyze_and_translate(

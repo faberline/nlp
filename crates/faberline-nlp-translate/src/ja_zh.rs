@@ -873,7 +873,7 @@ pub(crate) fn translate_ja_sentence(
                     let inside_habitual_action = target == TargetVariant::ZhHant
                         && matches!(p, "、" | "，")
                         && matches!(segments.get(seg_idx + 1), Some(Segment::Clause { atoms: following, .. })
-                            if calendar::continues_habitual_action(trimmed_atoms, following));
+                            if calendar::continues_habitual_action(trimmed_atoms, following, chars));
                     if !(suppress_cleft_comma
                         || inside_habitual_action
                         || (rendered.ends_with('？') && matches!(p, "。" | "？" | "?"))
@@ -15321,6 +15321,40 @@ mod clock_rule_tests {
                 public_translate(source, &glossary).target_text,
                 expected,
                 "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn habitual_time_preserves_a_boundary_hidden_by_a_glossary_entry() {
+        for (source, term, replacement, prefix) in [
+            (
+                "母は毎朝、『ありがとう』と言います。",
+                "『ありがとう』",
+                "『謝謝您』",
+                "母親每天早上，",
+            ),
+            (
+                "私は毎晩、水、お茶、牛乳を買います。",
+                "水、お茶、",
+                "飲品甲和",
+                "我每晚，",
+            ),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: [(TargetVariant::ZhHant, replacement.to_owned())].into(),
+                ..Default::default()
+            });
+            let result = public_translate(source, &glossary);
+            assert!(!result.glossary_hits.is_empty());
+            assert!(result.target_text.contains(replacement));
+            assert!(
+                result.target_text.starts_with(prefix),
+                "{}",
+                result.target_text
             );
         }
     }

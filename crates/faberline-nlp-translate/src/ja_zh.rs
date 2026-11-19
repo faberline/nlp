@@ -5241,6 +5241,21 @@ fn try_translate_homework_transfer(
             return None;
         }
         match (noun.deprel.as_str(), marker.surface.as_str()) {
+            ("obl", "から" | "まで")
+                if desire.is_some()
+                    && modifiers.is_empty()
+                    && is_daypart_surface(&noun.surface) =>
+            {
+                let time = render_daypart_np(bunsetsu, target);
+                if marker.surface == "から" {
+                    adjuncts.push(format!("從{time}起"));
+                } else if continuation_end.is_none() {
+                    continuation_end = Some((adjuncts.len(), time));
+                } else {
+                    return None;
+                }
+                has_clock_modifier = true;
+            }
             ("nsubj", "は" | "が") if subject.is_none() => {
                 subject = Some(classroom_role(modifiers, noun)?);
             }
@@ -5287,6 +5302,7 @@ fn try_translate_homework_transfer(
         return None;
     }
     let mut continuation_tail = None;
+    let mut desire_prefix = desire.map(|(modal, _)| modal);
     if let Some((position, group)) = deadline {
         if continuation_end.is_some() {
             return None;
@@ -5306,7 +5322,12 @@ fn try_translate_homework_transfer(
         adjuncts.insert(position, cutoff);
     } else {
         if let Some((position, time)) = continuation_end {
-            if before_verb
+            if let Some(past) = desire_prefix.and_then(|word| word.strip_suffix("不想")) {
+                desire_prefix = (!past.is_empty()).then_some(past);
+                adjuncts.insert(position, format!("直到{time}都不想"));
+            } else if desire_prefix.is_some() {
+                continuation_tail = Some(format!("，一直到{time}"));
+            } else if before_verb
                 .iter()
                 .any(|word| matches!(word.as_str(), "不" | "沒有"))
             {
@@ -5318,7 +5339,7 @@ fn try_translate_homework_transfer(
         adjuncts.extend(before_verb);
     }
     let mut parts = vec![subject.to_owned()];
-    if let Some((modal, _)) = desire {
+    if let Some(modal) = desire_prefix {
         parts.push(modal.to_owned());
     }
     parts.extend(adjuncts);

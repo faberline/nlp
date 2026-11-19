@@ -7,6 +7,7 @@ pub(super) struct Context {
     question_mark: bool,
     before_comma: bool,
     time_head: Option<usize>,
+    preceding_until: Option<usize>,
     coordinate: Option<Coordinate>,
 }
 
@@ -68,22 +69,44 @@ fn coordinated(left: &Segment, right: &Segment) -> bool {
 impl Context {
     pub(super) fn at(segments: &[Segment], idx: usize) -> Self {
         let question_mark = matches!(segments.get(idx), Some(Segment::Clause { trailing_punct: Some(p), .. }) if matches!(p.as_str(), "？" | "?"));
-        let time_head = match idx.checked_sub(1).and_then(|i| segments.get(i)) {
+        let previous = match idx.checked_sub(1).and_then(|i| segments.get(i)) {
             Some(Segment::Clause {
                 atoms,
                 trailing_punct: Some(p),
                 ..
-            }) if matches!(p.as_str(), "、" | "，") => atoms
-                .iter()
-                .find(|a| past_anchor(a, atoms) && matches!(a.deprel.as_str(), "advmod" | "obl"))
-                .and_then(|a| a.head),
+            }) if matches!(p.as_str(), "、" | "，") => Some(atoms.as_slice()),
             _ => None,
         };
+        let preceding_until = previous.and_then(|atoms| {
+            let (case, rest) = core_non_punct(atoms).split_last()?;
+            let time = rest.last()?;
+            if case.surface == "まで"
+                && !case.is_locked
+                && case.head == time.doc_tok_idx
+                && time.deprel == "obl"
+                && render_temporal_made_atom(time).is_some()
+            {
+                time.head
+            } else {
+                None
+            }
+        });
+        let time_head = preceding_until.or_else(|| {
+            previous.and_then(|atoms| {
+                atoms
+                    .iter()
+                    .find(|a| {
+                        past_anchor(a, atoms) && matches!(a.deprel.as_str(), "advmod" | "obl")
+                    })
+                    .and_then(|a| a.head)
+            })
+        });
         let before_comma = matches!(segments.get(idx), Some(Segment::Clause { trailing_punct: Some(p), .. }) if matches!(p.as_str(), "、" | "，"))
             && segments.get(idx + 1).is_some();
         Self {
             question_mark,
             time_head,
+            preceding_until,
             before_comma,
             coordinate: if segments
                 .get(idx + 1)
@@ -293,7 +316,10 @@ fn inflection(predicate: &Atom, tail: &[Atom]) -> Option<(bool, bool)> {
     if tail.iter().any(|a| a.is_locked) {
         return None;
     }
-    let inflection = lexical_tail.strip_suffix("です").unwrap_or(&lexical_tail);
+    let inflection = lexical_tail
+        .strip_suffix("のです")
+        .or_else(|| lexical_tail.strip_suffix("です"))
+        .unwrap_or(&lexical_tail);
     match inflection {
         "" if predicate.surface.ends_with('い') => Some((false, false)),
         "た" if predicate.surface.ends_with("かっ") => Some((true, false)),
@@ -607,12 +633,113 @@ fn reported_modifier(source: &[Atom], target: TargetVariant) -> Option<(usize, &
     ))
 }
 
+pub(super) struct TimeInterval {
+    head: usize,
+    pub(super) text: String,
+    pub(super) question: bool,
+}
+
+// A bare まで after a time bounds the whole state. Keep any paired から
+// on the same predicate. An endpoint belonging to a relative verb, a place,
+// or a までに deadline cannot supply this interval.
+pub(super) fn take_time_interval(
+    groups: &mut Vec<Bunsetsu>,
+    source: &[Atom],
+) -> Option<TimeInterval> {
+    let source = core_non_punct(source);
+    let i = source
+        .iter()
+        .position(|a| !a.is_locked && a.upos == Some(Upos::Adj) && a.deprel == "root")?;
+    let (predicate, tail) = source[i..].split_first()?;
+    let ending = match tail {
+        [body @ .., a] if a.upos == Some(Upos::Part) && a.head == predicate.doc_tok_idx => body,
+        a => a,
+    };
+    inflection(predicate, ending)?;
+    let head = predicate.doc_tok_idx?;
+    if !groups.iter().any(|g| {
+        g.role == BunsetsuRole::Predicate && g.atoms.iter().any(|a| a.doc_tok_idx == Some(head))
+    }) {
+        return None;
+    }
+    let endpoint = |g: &Bunsetsu, marker: &str| -> Option<(String, bool)> {
+        let atoms = match g.atoms.as_slice() {
+            [body @ .., topic] if topic.surface == "は" && !topic.is_locked => body,
+            a => a,
+        };
+        let [time, case] = atoms else { return None };
+        if case.is_locked || case.surface != marker || case.span.start_char != time.span.end_char {
+            return None;
+        }
+        let original = source.iter().find(|a| {
+            a.doc_tok_idx == case.head
+                && a.head == Some(head)
+                && matches!(a.deprel.as_str(), "obl" | "nsubj")
+        })?;
+        if original.is_locked {
+            return None;
+        }
+        if let Some(wh) = deadline_time_question(original) {
+            return Some((wh.to_owned(), true));
+        }
+        let label = match original.surface.as_str() {
+            "夜" | "晩" => "晚上".to_owned(),
+            "春" | "夏" | "秋" | "冬" => translate_single_ja_term(
+                &original.surface,
+                original.lemma.as_deref(),
+                original.upos,
+            ),
+            _ => render_temporal_made_atom(time)?,
+        };
+        Some((label, false))
+    };
+    let mut ends = groups
+        .iter()
+        .enumerate()
+        .filter_map(|(i, g)| endpoint(g, "まで").map(|v| (i, v)));
+    let (end, (text, mut question)) = ends.next()?;
+    if ends.next().is_some() {
+        return None;
+    }
+    let mut starts = groups
+        .iter()
+        .enumerate()
+        .filter_map(|(i, g)| endpoint(g, "から").map(|v| (i, v)));
+    let start = starts.next();
+    if starts.next().is_some() {
+        return None;
+    }
+    let text = match start {
+        Some((i, (from, wh))) if i < end => {
+            question |= wh;
+            groups.remove(end);
+            groups.remove(i);
+            format!("從{from}到{text}都")
+        }
+        Some(_) => return None,
+        None => {
+            groups.remove(end);
+            if question {
+                format!("到{text}為止都")
+            } else {
+                format!("直到{text}都")
+            }
+        }
+    };
+    Some(TimeInterval {
+        head,
+        text,
+        question,
+    })
+}
+
 pub(super) fn render(
     source: &[Atom],
     predicates: &[Bunsetsu],
     ctx: &ClauseDiscourseCtx,
     adverbs: &mut Vec<String>,
     times: &mut Vec<String>,
+    interval: Option<&TimeInterval>,
 ) -> Option<String> {
     let body = core_non_punct(source);
     let idx = body
@@ -668,17 +795,24 @@ pub(super) fn render(
     }
     let subject = before
         .iter()
-        .rfind(|a| a.deprel == "nsubj" && a.head == Some(id))?;
+        .rfind(|a| a.deprel == "nsubj" && a.head == Some(id));
+    let previous_range = ctx.adjective.preceding_until == Some(id);
+    let bounded = previous_range || interval.is_some_and(|period| period.head == id);
+    if subject.is_none() && !bounded {
+        return None;
+    }
     let lemma = predicate.lemma.as_deref().unwrap_or(&predicate.surface);
     let colour = hue(lemma);
     if let Some(c) = colour {
-        if !has_surface_colour(subject, before, c) {
+        if !has_surface_colour(subject?, before, c) {
             return None;
         }
-    } else if !gradable(lemma) || uncertain_sense(lemma, &subject.surface) {
+    } else if !(gradable(lemma) || bounded && matches!(lemma, "強い" | "弱い" | "忙しい"))
+        || uncertain_sense(lemma, subject.map_or("", |s| s.surface.as_str()))
+    {
         return None;
     }
-    let comparative = matches!(subject.surface.as_str(), "方" | "ほう")
+    let comparative = subject.is_some_and(|s| matches!(s.surface.as_str(), "方" | "ほう"))
         || before.iter().any(|a| {
             !a.is_locked
                 && a.surface == "より"
@@ -731,7 +865,8 @@ pub(super) fn render(
     if !comparative && before.iter().any(|a| !a.is_locked && a.surface == "より") {
         return None;
     }
-    let has_time = ctx.adjective.time_head == Some(id)
+    let has_time = bounded
+        || ctx.adjective.time_head == Some(id)
         || before.iter().any(|a| {
             past_anchor(a, before)
                 && (a.head == Some(id)
@@ -757,6 +892,9 @@ pub(super) fn render(
         }
         let degree = adverbs.iter_mut().find(|s| s.as_str() == existing)?;
         *degree = negative_degree.to_owned();
+        if previous_range {
+            times.push("都".to_owned());
+        }
         if past && !has_time {
             times.push("當時".to_owned());
         }
@@ -775,6 +913,9 @@ pub(super) fn render(
         && let Some(most) = adverbs.iter_mut().find(|s| s.as_str() == "一番")
     {
         *most = "最".to_owned();
+    }
+    if previous_range {
+        times.push("都".to_owned());
     }
     if comparative
         && matches!(before, [.., marker, degree] if !marker.is_locked && marker.surface == "より"
@@ -877,6 +1018,48 @@ mod tests {
             assert_eq!(translate(jp), expected, "{jp}");
         }
         assert!(!translate("少し前、この箱は軽かった。").contains("當時"));
+    }
+
+    #[test]
+    fn a_time_interval_precedes_the_state_it_modifies() {
+        for (jp, expected) in [
+            ("昨日は夕方まで暑かったです。", "昨天直到傍晚都很熱。"),
+            ("部屋は夜まで寒かったです。", "房間直到晚上都很冷。"),
+            (
+                "先生の車は昨日まで白かったです。",
+                "老師的車直到昨天都是白色的。",
+            ),
+            (
+                "朝から夕方までとても暑かったです。",
+                "從早上到傍晚都非常熱。",
+            ),
+            ("夜まで部屋は寒くなかったです。", "房間直到晚上都不冷。"),
+            (
+                "母の車は昨日まで少し赤かったです。",
+                "母親的車直到昨天都有點紅。",
+            ),
+            ("部屋は夜まで寒いですか。", "房間直到晚上都冷嗎？"),
+            ("車は何時まで白かったですか。", "車到幾點為止都是白色的？"),
+            (
+                "今週の金曜日まで、その車は赤かったです。",
+                "到這週五，那輛車都是紅色的。",
+            ),
+            (
+                "この箱は昨日まであまり重くなかった。",
+                "這個箱子直到昨天都不太重。",
+            ),
+            (
+                "母は朝から晩まで忙しかったです。",
+                "母親從早上到晚上都很忙碌。",
+            ),
+            ("風は昨日まで強かったです。", "風直到昨天都很強。"),
+            (
+                "この箱は昨日まであの箱よりずっと重かった。",
+                "這個箱子直到昨天都比那個箱子重得多。",
+            ),
+        ] {
+            assert_eq!(translate(jp), expected, "{jp}");
+        }
     }
 
     #[test]

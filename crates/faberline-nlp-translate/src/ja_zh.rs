@@ -8209,6 +8209,14 @@ fn translate_clause_bunsetsus(
     let mut subjects: Vec<String> = Vec::new();
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
+    let state_interval = if target == TargetVariant::ZhHant {
+        finite_adjective::take_time_interval(&mut bunsetsus, source)
+    } else {
+        None
+    };
+    if let Some(interval) = &state_interval {
+        temporal_others.push(interval.text.clone());
+    }
     let mut joint_manner = None;
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
@@ -8874,8 +8882,14 @@ fn translate_clause_bunsetsus(
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
     if target == TargetVariant::ZhHant
-        && let Some(state) =
-            finite_adjective::render(source, &predicates, ctx, &mut adverbs, &mut temporal_others)
+        && let Some(state) = finite_adjective::render(
+            source,
+            &predicates,
+            ctx,
+            &mut adverbs,
+            &mut temporal_others,
+            state_interval.as_ref(),
+        )
     {
         pre_verb_mods.clear();
         verb_core = state;
@@ -9737,6 +9751,13 @@ fn translate_clause_bunsetsus(
             .flat_map(|b| &b.atoms)
             .all(|a| !a.is_locked)
         && inner_pre_mods.iter().any(|m| m == "不");
+    if state_interval
+        .as_ref()
+        .is_some_and(|interval| interval.question)
+        && sfp_suffix == Some("嗎")
+    {
+        sfp_suffix = Some("？");
+    }
     let negative_go = verb_core == "去"
         && inner_pre_mods
             .iter()

@@ -17,6 +17,38 @@ pub(super) fn is_place(noun: &Atom) -> bool {
             }))
 }
 
+// In 夕方に古い店に戻る the analyzer can attach the time to 古い. Age
+// identifies the place here. A temporary property such as 暗い may itself
+// hold only at the named time.
+pub(super) fn time_before_place_modifier(time: &Atom, source: &[Atom]) -> bool {
+    let Some(adjective) = source.iter().find(|a| {
+        a.doc_tok_idx.is_some()
+            && a.doc_tok_idx == time.head
+            && !a.is_locked
+            && a.deprel == "amod"
+            && a.upos == Some(Upos::Adj)
+            && matches!(a.surface.as_str(), "古い" | "新しい")
+    }) else {
+        return false;
+    };
+    let Some(place) = source.iter().find(|a| {
+        a.doc_tok_idx.is_some()
+            && a.doc_tok_idx == adjective.head
+            && a.deprel == "obl"
+            && is_place(a)
+    }) else {
+        return false;
+    };
+    source.iter().any(|a| {
+        a.doc_tok_idx.is_some()
+            && a.doc_tok_idx == place.head
+            && !a.is_locked
+            && a.lemma.as_deref() == Some("戻る")
+    }) && source
+        .iter()
+        .any(|case| linked_joint_case(place, case) && matches!(case.surface.as_str(), "に" | "へ"))
+}
+
 fn schedule_noun(noun: &Atom, source: &[Atom]) -> bool {
     !noun.is_locked
         && (matches!(

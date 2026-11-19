@@ -13967,6 +13967,9 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
     {
         return false;
     }
+    if return_endpoint::time_before_place_modifier(time, source) {
+        return true;
+    }
     // Phrase rendering can join a lexical governor and する into one translated
     // atom. Read its original dependency and verify its span in this clause.
     let Some(verb) = source
@@ -14946,6 +14949,19 @@ mod motion_endpoint_tests {
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
+    }
+
+    #[test]
+    fn a_time_before_an_age_description_stays_with_the_return() {
+        assert_eq!(
+            translate("父は夕方に古い店に戻りました。"),
+            "父親傍晚回到舊的商店了。"
+        );
+        assert_eq!(
+            translate("母は正午に新しい家に戻りました。"),
+            "母親正午回到新家了。"
+        );
+        assert!(!translate("妹は夜に暗い道に戻りました。").contains("妹妹夜晚回到"));
     }
 
     #[test]

@@ -1482,10 +1482,21 @@ fn build_sentence_atoms(
                     }
                     tok_idx += 1;
                 }
+                let locked_place = lk.mandatory
+                    && matches!(
+                        lk.origin,
+                        LockOrigin::Glossary {
+                            kind: GlossaryKind::Place,
+                            ..
+                        }
+                    )
+                    && tk.span.start_char == lk.source_span.start_char
+                    && doc_tok_idx
+                        .is_some_and(|id| doc.tokens[id].span.end_char == lk.source_span.end_char);
                 atoms.push(Atom {
                     span: lk.source_span,
                     surface: lk.placeholder.clone(),
-                    lemma: None,
+                    lemma: locked_place.then(|| LOCKED_PLACE_ATOM.to_owned()),
                     upos: Some(Upos::Propn),
                     doc_tok_idx,
                     head,
@@ -6646,6 +6657,8 @@ fn normalize_building_floors(mut atoms: Vec<Atom>, doc: &Document) -> Vec<Atom> 
     atoms
 }
 
+const LOCKED_PLACE_ATOM: &str = "__ja_locked_glossary_place";
+
 fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
     use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
 
@@ -6705,7 +6718,8 @@ fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
         let [.., noun, ni] = words else {
             return None;
         };
-        if noun.is_locked
+        let protected_place = noun.is_locked && noun.lemma.as_deref() == Some(LOCKED_PLACE_ATOM);
+        if noun.is_locked && !protected_place
             || ni.is_locked
             || !(noun.deprel == "obl" || focused && noun.deprel == "nsubj")
             || noun.head != Some(id)
@@ -6721,6 +6735,7 @@ fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
         // not all carry that tag. Check the head, never a place in its possessor.
         let wh = noun.surface == "どこ";
         let place = wh
+            || protected_place
             || is_place_location_bunsetsu(std::slice::from_ref(noun))
             || lookup_ja(&noun.surface)
                 .is_some_and(|e| e.sem_class == Some(SemanticClass::Location))
@@ -16312,6 +16327,29 @@ mod existence_rule_tests {
             deprel: String::new(),
             is_locked: false,
         }
+    }
+
+    #[test]
+    fn residence_preserves_a_glossary_place_once() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.places.push(GlossaryEntry {
+            canonical: "青葉町".to_owned(),
+            surfaces: vec!["青葉町".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "青葉鎮".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let doc = translate("私は青葉町に住んでいます。", &glossary);
+        assert_eq!(doc.target_text, "我住在青葉鎮。");
+        assert_eq!(doc.glossary_hits.len(), 1);
+        let span = doc.glossary_hits[0].target_span;
+        assert_eq!(
+            doc.target_text
+                .chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect::<String>(),
+            "青葉鎮"
+        );
     }
 
     #[test]

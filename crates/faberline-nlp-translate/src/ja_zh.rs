@@ -1000,9 +1000,13 @@ fn normalize_decimal_digits(text: &str) -> String {
 }
 
 fn clock_number(text: &str) -> Option<u32> {
+    bounded_clock_number(text, 24)
+}
+
+fn bounded_clock_number(text: &str, maximum: u32) -> Option<u32> {
     let normalized = normalize_decimal_digits(text);
     if normalized.chars().all(|ch| ch.is_ascii_digit()) {
-        return normalized.parse::<u32>().ok().filter(|&n| n <= 24);
+        return normalized.parse::<u32>().ok().filter(|&n| n <= maximum);
     }
     fn digit(s: &str) -> Option<u32> {
         match s {
@@ -1028,9 +1032,10 @@ fn clock_number(text: &str) -> Option<u32> {
         if tens == 0 || ones == 0 && !normalized.ends_with('十') {
             return None;
         }
-        return (tens * 10 + ones <= 24).then_some(tens * 10 + ones);
+        let number = tens * 10 + ones;
+        return (number <= maximum).then_some(number);
     }
-    digit(&normalized)
+    digit(&normalized).filter(|&n| n <= maximum)
 }
 
 fn clock_hour_text(hour: u32) -> String {
@@ -15279,6 +15284,10 @@ mod motion_endpoint_tests {
             (
                 "時計の針が戻った時刻を聞きました。時計の針は昨日六時に戻りました。",
                 "聽了手錶的針回來的時刻。手錶的針昨天在六點回來了。",
+            ),
+            (
+                "時計の秒針は正午に五秒だけ戻りました。",
+                "手錶的秒針五秒只回來到正午了。",
             ),
             (
                 "看護師は正午に針を箱に戻しました。",

@@ -1,7 +1,7 @@
 //! Distinguish a restored time setting from a physical destination of 戻る.
 use super::{
-    Atom, Bunsetsu, BunsetsuRole, Document, Span, TargetVariant, Upos, clock_case_governor,
-    clock_number, explicit_clock_case, is_building_floor, is_daypart_surface,
+    Atom, Bunsetsu, BunsetsuRole, Document, Span, TargetVariant, Upos, bounded_clock_number,
+    clock_case_governor, clock_number, explicit_clock_case, is_building_floor, is_daypart_surface,
     is_existing_spatial_head, is_motion_actor, is_plain_clock_ni, is_time_setting,
     linked_joint_case, predicates_has_passive, render_bunsetsu_np, setting_time_label,
 };
@@ -102,9 +102,7 @@ fn dial_hour(label: &str) -> Option<u32> {
     (1..=12).contains(&hour).then_some(hour)
 }
 
-fn dial_second(source: &[Atom], unit: usize) -> Option<(usize, u32)> {
-    use crate::opaque::parse_cjk_or_ascii_num;
-
+fn second_count(source: &[Atom], unit: usize) -> Option<(usize, u32)> {
     let mark = &source[unit];
     let suffix = mark.surface.strip_suffix('秒')?;
     let head = mark.doc_tok_idx?;
@@ -118,7 +116,7 @@ fn dial_second(source: &[Atom], unit: usize) -> Option<(usize, u32)> {
             || !number
                 .head
                 .is_some_and(|token| token == head || Some(token) == next.doc_tok_idx)
-            || parse_cjk_or_ascii_num(&number.surface).is_none()
+            || bounded_clock_number(&number.surface, u32::MAX).is_none()
         {
             break;
         }
@@ -129,8 +127,7 @@ fn dial_second(source: &[Atom], unit: usize) -> Option<(usize, u32)> {
         .map(|atom| atom.surface.as_str())
         .chain(std::iter::once(suffix))
         .collect();
-    let second = parse_cjk_or_ascii_num(&number)?;
-    (second < 60).then_some((first, second))
+    Some((first, bounded_clock_number(&number, u32::MAX)?))
 }
 
 fn stated_dial_position(
@@ -194,7 +191,7 @@ fn stated_dial_position(
     } else if modifier.surface == "元" {
         (at - 2, "原位".to_owned())
     } else if second_hand && modifier.surface.ends_with('秒') {
-        let (begin, second) = dial_second(source, at - 2)?;
+        let (begin, second) = second_count(source, at - 2).filter(|&(_, value)| value < 60)?;
         (begin, format!("{second}秒的位置"))
     } else if modifier.surface == "時" {
         let last = prefix.len().checked_sub(1)?;
@@ -420,6 +417,17 @@ pub(super) fn clock_hand_return(
                             .is_some_and(|token| contains_span(span, token.span))
                 })
         }) {
+            return None;
+        }
+        if second_hand
+            && source.iter().enumerate().any(|(index, amount)| {
+                !amount.is_locked
+                    && amount.head == Some(head)
+                    && matches!(amount.deprel.as_str(), "obl" | "advmod")
+                    && second_count(source, index).is_some()
+            })
+        {
+            // A standalone count describes the return, outside any dial position.
             return None;
         }
         let label = setting_time_label(value, target);

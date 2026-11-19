@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Apply first-party MIT Japanese -> Taiwan zh-Hant content glosses (A2) to ja.tsv.
+"""Apply reviewed Japanese -> Taiwan zh-Hant glosses to ja.tsv.
 
 Reads:
   - crates/faberline-nlp/lexicon/data/ja.tsv
   - tools/lexicon_build/data/first_party_mit_ja_zh.tsv
+  - tools/lexicon_build/data/a4_first_party_mit_ja_zh.tsv
+  - tools/lexicon_build/data/cldr_territory_ja_zh_hant.tsv
 
 Strict A2 rules:
   1. Preserve ja.tsv UTF-8 byte row ordering `(c[0].encode("utf-8"), c[1].encode("utf-8"))`
@@ -30,6 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 JA_TSV = REPO_ROOT / "crates" / "faberline-nlp" / "lexicon" / "data" / "ja.tsv"
 GLOSS_TSV = Path(__file__).resolve().parent / "data" / "first_party_mit_ja_zh.tsv"
 A4_GLOSS_TSV = Path(__file__).resolve().parent / "data" / "a4_first_party_mit_ja_zh.tsv"
+CLDR_TERRITORY_TSV = Path(__file__).resolve().parent / "data" / "cldr_territory_ja_zh_hant.tsv"
 
 # Match every field of the previously shipped A4 rows before replacing their glosses.
 REVIEWED_A4_GLOSS_REPLACEMENTS = {
@@ -71,6 +74,37 @@ def merge_meta(existing_meta: str, infl: str, src_tag: str = "src=first_party_mi
     if src_tag not in parts:
         parts.append(src_tag)
     return ";".join(parts) if parts else "-"
+
+
+def apply_cldr_territory_glosses(by_surface: dict[str, list[list[str]]]) -> int:
+    updated = 0
+    source = "src=cldr_territory"
+    with CLDR_TERRITORY_TSV.open(encoding="utf-8") as table:
+        for line_no, line in enumerate(table, 1):
+            raw = line.rstrip("\n")
+            if not raw or raw.startswith("#"):
+                continue
+            _code, surface, counterpart = raw.split("\t")
+            matches = [
+                row
+                for row in by_surface.get(surface, [])
+                if row[1] == "ja"
+                and row[3:5] == ["PROPN", "PROPN"]
+                and "sem=location" in row[7].split(";")
+            ]
+            context = f"{CLDR_TERRITORY_TSV}:{line_no}: {surface}"
+            if len(matches) != 1:
+                raise ValueError(f"{context}: expected one existing Japanese location entry")
+            (row,) = matches
+            tagged = merge_meta(row[7], "-", source)
+            if row[6] == counterpart and row[7] == tagged:
+                continue
+            if row[6] != "-" or any(part.startswith("src=") for part in row[7].split(";")):
+                raise ValueError(f"{context}: would replace an existing gloss or source")
+            row[6] = counterpart
+            row[7] = tagged
+            updated += 1
+    return updated
 
 
 def main() -> int:
@@ -167,6 +201,8 @@ def main() -> int:
                         r[7] = merge_meta(r[7], "-")
                         a4_updated += 1
         updated_count += a4_updated
+
+    updated_count += apply_cldr_territory_glosses(by_surface)
 
     # Preserve exact UTF-8 byte row order matching apply_a1_lexemes.py / build_ja.py.
     rows.sort(key=lambda c: (c[0].encode("utf-8"), c[1].encode("utf-8")))

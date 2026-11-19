@@ -24409,7 +24409,7 @@
 ドア	ja	530	NOUN	NOUN	-	門	src=first_party_mit
 ドアン	ja	682	PROPN	PROPN	-	-	sem=person
 ドイ	ja	770	PROPN	PROPN	-	-	sem=organization
-ドイツ	ja	355	PROPN	PROPN	-	-	sem=location
+ドイツ	ja	355	PROPN	PROPN	-	德國	sem=location;src=cldr_territory
 ドイツテレコム	ja	782	PROPN	PROPN	-	-	sem=organization
 ドイツマルク	ja	533	NOUN	NOUN	-	-	-
 ドイツ語	ja	594	NOUN	NOUN	-	-	-

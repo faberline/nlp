@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+mod copular_time;
 mod counted_object;
 mod finite_adjective;
 mod homework_desire;
@@ -1635,7 +1636,8 @@ fn normalized_sentence_atoms(
     let atoms = build_sentence_atoms(sentence_idx, chars, doc, tokens, locks);
     let atoms = normalize_keigo_atoms(&atoms);
     let atoms = normalize_glossary_clocks(&atoms, chars, locks);
-    let atoms = normalize_clock_atoms(&atoms);
+    let mut atoms = normalize_clock_atoms(&atoms);
+    copular_time::mark_questions(&mut atoms, chars, locks);
     preserve_clock_adjacent_locks(&atoms, doc, sentence_idx)
 }
 
@@ -2838,6 +2840,22 @@ fn direct_ka_before_period(clause: &[Atom], end: &Atom, doc: &Document) -> bool 
         && ka.span.end_char == end.span.start_char
         && ka.head.is_some()
         && body.iter().any(|a| {
+            // Normalizing 五時 can hide the original root token of 五時までですか.
+            if a.lemma.as_deref() == Some(CLOCK_ATOM)
+                && let Some(head) = ka.head.and_then(|idx| doc.tokens.get(idx))
+                && a.span.start_char <= head.span.start_char
+                && head.span.end_char <= a.span.end_char
+                && body.windows(2).any(|p| {
+                    !p[0].is_locked
+                        && p[0].surface == "まで"
+                        && p[0].head == ka.head
+                        && !p[1].is_locked
+                        && p[1].deprel == "cop"
+                        && p[1].head == ka.head
+                })
+            {
+                return true;
+            }
             if a.doc_tok_idx != ka.head {
                 return false;
             }
@@ -4606,6 +4624,12 @@ fn translate_clause_atoms(
 ) -> (String, bool) {
     if atoms.is_empty() {
         return (String::new(), false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && let Some(text) = copular_time::render(core_non_punct(atoms), doc, sentence_idx, target)
+    {
+        return (text, false);
     }
 
     if target == TargetVariant::ZhHant

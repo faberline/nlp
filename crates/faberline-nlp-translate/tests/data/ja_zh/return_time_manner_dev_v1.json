@@ -1,0 +1,325 @@
+{
+  "schema": "faberline.nlp.ja_zh.return_time_manner_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "48d327975fd06cdcd37546e0c41fdf930c325db9",
+  "source_tree": "3d5e0a2978fc8c4201a639c23263f4b46a2fd6ae",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "reused_existing_controls": [
+    {
+      "file": "time_point_goal_dev_v1.json",
+      "sha256": "0cc4a863261ec39a69621f80402190e1bbf3d89176a9f5a2b381c134c8d55fc6",
+      "ids": [
+        "TPG-N5-01",
+        "TPG-N5-02"
+      ]
+    },
+    {
+      "file": "honorific_san_dev_v1.json",
+      "sha256": "280da5014f9069994bce1f23e8cdc10c3cad3200450278c9b4e3618231134229",
+      "ids": [
+        "HS-09"
+      ]
+    },
+    {
+      "file": "nlevels_dev_v1.json",
+      "sha256": "a24d91502b3d361eec1ff2bf97381d0accbf27d7516ba2188e77b3b4e96695c0",
+      "ids": [
+        "L4-03",
+        "L4-04"
+      ]
+    },
+    {
+      "file": "nlevels_expansion_dev_v1.json",
+      "sha256": "22d0753fd384ae5f07a118c6417c53b213cc66c1637a8369b8c0315e69ab4fcc",
+      "ids": [
+        "N4X-02"
+      ]
+    }
+  ],
+  "reused_standing_controls": [],
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "RTM-01",
+      "level_approx": "N4",
+      "jp": "父は夕方に駅から家まで歩いて帰りました。",
+      "zh_hant": "爸爸傍晚從車站走路回家了。",
+      "allowed_variants": [
+        "爸爸傍晚從車站步行回家了。",
+        "傍晚，爸爸從車站一路走回家。"
+      ],
+      "semantic_checks": [
+        "爸爸是移動的人。傍晚是返程發生的時段。",
+        "爸爸從車站出發，走路回到家；步行是返程的方式。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指定傍晚的鐘點、車站名稱或步行多久。"
+      ],
+      "control": {
+        "kind": "return_on_foot",
+        "contrast_ids": [
+          "RTM-02",
+          "RTM-03"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "RTM-02",
+      "level_approx": "N4",
+      "jp": "妹は昼過ぎに走って校庭へ戻りました。",
+      "zh_hant": "妹妹中午過後跑回了操場。",
+      "allowed_variants": [
+        "剛過中午，妹妹跑回操場了。",
+        "妹妹在中午過後跑回學校的操場。"
+      ],
+      "semantic_checks": [
+        "妹妹是返回的人。中午過後是返回發生的時段。",
+        "妹妹跑回學校的操場，跑步是返回的方式。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指定鐘點、起點或返回的原因。"
+      ],
+      "control": {
+        "kind": "return_running",
+        "contrast_ids": [
+          "RTM-01",
+          "RTM-03"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "RTM-03",
+      "level_approx": "N4",
+      "jp": "妹は昼過ぎまで校庭で走りました。",
+      "zh_hant": "妹妹在操場跑步，跑到中午過後。",
+      "allowed_variants": [
+        "妹妹在操場跑步，一直跑到中午過後。",
+        "妹妹在學校操場上一直跑到中午過後。"
+      ],
+      "semantic_checks": [
+        "妹妹在操場跑步，操場是運動地點。",
+        "中午過後是跑步持續到的時間界線。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有交代何時開始跑，也沒有返回動作或返回目的地。"
+      ],
+      "control": {
+        "kind": "duration_at_location",
+        "contrast_ids": [
+          "RTM-02"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "RTM-04",
+      "level_approx": "N4",
+      "jp": "時計の針を一時から正午に戻しました。",
+      "zh_hant": "把時鐘的指針從一點撥回了中午十二點。",
+      "allowed_variants": [
+        "把時鐘指針從一點調回了正午。",
+        "把時鐘的指針從一點調回中午十二點。"
+      ],
+      "semantic_checks": [
+        "指針原本指向一點，後來被撥回中午十二點。",
+        "兩個時間都屬於讀數，不是撥指針的動作時間。"
+      ],
+      "semantic_unknowns": [
+        "原文未指明調鐘人或實際操作時間。"
+      ],
+      "control": {
+        "kind": "clock_reading_target",
+        "contrast_ids": [
+          "RTM-05"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "RTM-05",
+      "level_approx": "N3",
+      "jp": "ラジオ番組の放送時間を夜から夕方に戻しました。",
+      "zh_hant": "廣播節目的播出時間從晚上改回了傍晚。",
+      "allowed_variants": [
+        "把廣播節目的播出時段從晚上調回了傍晚。",
+        "廣播節目的播放時間從晚上改回傍晚了。"
+      ],
+      "semantic_checks": [
+        "廣播節目原先在晚上播出，播出時段改回傍晚。",
+        "晚上與傍晚是排程原值及新值。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有規定頻率、節目名稱、操作人或操作時間。"
+      ],
+      "control": {
+        "kind": "broadcast_slot_target",
+        "contrast_ids": [
+          "RTM-04"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

@@ -23,9 +23,8 @@ pub(super) fn local_motion(verb: &Atom, clause: &[Bunsetsu], source: &[Atom]) ->
     let Some(head) = verb.doc_tok_idx else {
         return false;
     };
-    if !matches!(verb.deprel.as_str(), "root" | "acl" | "advcl" | "obl") {
-        return false;
-    }
+    // In 戻りましたが the analyzer can attach the finite return to the next
+    // verb as nsubj. Its own arguments still belong to the local predicate.
     let mut predicates = clause.iter().filter(|b| b.role == BunsetsuRole::Predicate);
     let Some(local) = predicates.next() else {
         return false;

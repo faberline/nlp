@@ -15038,6 +15038,36 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn a_return_linked_by_ga_keeps_its_own_time_and_polarity() {
+        for (source, first, second) in [
+            (
+                "客は正午に店に戻りましたが、本は買いませんでした。",
+                "客正午回到商店了",
+                "書沒有買",
+            ),
+            (
+                "客は正午に店に戻りませんでしたが、夕方に本を買いました。",
+                "客正午沒有回到商店",
+                "傍晚買了書",
+            ),
+            (
+                "客は店に戻りましたが、正午に本を買いませんでした。",
+                "客回到商店了",
+                "正午沒有買書",
+            ),
+            (
+                "番組の放送時間は夕方に戻りましたが、客は夜に店に戻りました。",
+                "廣播時間恢復到傍晚了",
+                "客夜晚回到商店了",
+            ),
+        ] {
+            let text = translate(source);
+            let (before, after) = text.split_once('，').expect("two linked clauses");
+            assert!(before.contains(first) && after.contains(second), "{text}");
+        }
+    }
+
+    #[test]
     fn a_time_before_an_age_description_stays_with_the_return() {
         assert_eq!(
             translate("父は夕方に古い店に戻りました。"),

@@ -8,6 +8,7 @@ pub(crate) use dates::DateContext;
 pub(super) use quantities::bind_relative_contrast;
 
 const DATE: &str = "__ja_calendar_day";
+const DAY_DURATION: &str = "__ja_day_duration";
 const DATE_LIST: &str = "__ja_calendar_dates";
 const INDIVIDUALS: &str = "__ja_one_person_at_a_time";
 pub(super) fn individual_arrivals(atom: &Atom) -> bool {
@@ -158,8 +159,237 @@ pub(super) fn is_interval(atom: &Atom) -> bool {
     atom.lemma.as_deref() == Some(INTERVAL)
 }
 
+pub(super) fn is_day_duration(atom: &Atom) -> bool {
+    atom.lemma.as_deref() == Some(DAY_DURATION)
+}
+
+fn counted_days(source: &[Atom]) -> Option<String> {
+    let spelling = source
+        .iter()
+        .map(|a| a.surface.as_str())
+        .collect::<String>();
+    super::elapsed_duration_surface(&spelling)
+}
+
+// A focus marker immediately after a duration limits that amount. しか
+// contributes "only" together with the negative ending of its own verb.
+pub(super) fn take_focused_days(
+    groups: &mut Vec<super::Bunsetsu>,
+    source: &[Atom],
+) -> Option<(String, usize, bool)> {
+    for args in source.windows(2) {
+        let [unit, marker] = args else {
+            continue;
+        };
+        if unit.is_locked
+            || unit.surface != "日間"
+            || unit.doc_tok_idx.is_none()
+            || marker.is_locked
+            || marker.head != unit.doc_tok_idx
+            || unit.span.end_char != marker.span.start_char
+        {
+            continue;
+        }
+        let shika = match (marker.surface.as_str(), marker.deprel.as_str()) {
+            ("だけ", "discourse") => false,
+            ("しか", "case") => true,
+            _ => continue,
+        };
+        let owner = unit.head?;
+        let predicate = groups.iter().find(|g| {
+            g.role == super::BunsetsuRole::Predicate
+                && g.atoms.iter().any(|a| {
+                    !a.is_locked
+                        && (a.doc_tok_idx == Some(owner)
+                            || source.iter().any(|word| {
+                                word.doc_tok_idx == Some(owner)
+                                    && word.head == a.doc_tok_idx
+                                    && a.lemma.as_deref() == Some("する")
+                            }))
+                })
+        });
+        let Some(predicate) = predicate else { continue };
+        let negative = predicate.atoms.iter().any(|a| {
+            !a.is_locked
+                && (matches!(a.lemma.as_deref(), Some("ない" | "ぬ")) || a.surface == "ませ")
+        });
+        if shika && !negative {
+            continue;
+        }
+        let Some(day) = groups
+            .iter()
+            .flat_map(|g| &g.atoms)
+            .find(|a| is_day_duration(a) && a.doc_tok_idx == unit.doc_tok_idx)
+        else {
+            continue;
+        };
+        let amount = day.surface.clone();
+        let span = day.span;
+        if !groups
+            .iter()
+            .flat_map(|g| &g.atoms)
+            .any(|a| a.span == marker.span && !a.is_locked)
+        {
+            continue;
+        }
+        for g in groups.iter_mut() {
+            g.atoms.retain(|a| a.span != span && a.span != marker.span);
+        }
+        groups.retain(|g| !g.atoms.is_empty());
+        return Some((amount, owner, shika));
+    }
+    None
+}
+
+// A counted 日間 can attach to an intervening noun or share its governor
+// with a verbal noun. Use the original dependencies even across glossary spans.
+pub(super) fn bind_day_arguments(atoms: &mut Vec<Atom>, doc: &super::Document) {
+    for idx in (1..atoms.len()).rev() {
+        let day = &atoms[idx];
+        if day.is_locked || day.surface != "日間" || day.doc_tok_idx.is_none() {
+            continue;
+        }
+        // The number and 日間 may share the head of a following noun phrase.
+        let shared = is_numeral(&atoms[idx - 1])
+            && atoms[idx - 1].deprel == "nummod"
+            && atoms[idx - 1].span.end_char == day.span.start_char
+            && atoms[idx - 1].head == day.head;
+        let count_start = if shared {
+            idx - 1
+        } else if let Some((start, _)) = number_before(atoms, idx) {
+            start
+        } else {
+            continue;
+        };
+        if counted_days(&atoms[count_start..=idx]).is_none() {
+            continue;
+        }
+        if let [word, verb, ..] = &atoms[idx + 1..]
+            && !word.is_locked
+            && !verb.is_locked
+            && word.deprel == "compound"
+            && verb.lemma.as_deref().unwrap_or(&verb.surface) == "する"
+            && word.head == verb.doc_tok_idx
+            && day.head == verb.doc_tok_idx
+            && word.span.end_char == verb.span.start_char
+        {
+            if shared {
+                atoms[idx - 1].head = atoms[idx].doc_tok_idx;
+            }
+            atoms[idx].deprel = "obl".to_owned();
+            continue;
+        }
+        let is_comma = |a: &Atom| !a.is_locked && matches!(a.surface.as_str(), "、" | "，" | ",");
+        let pause = atoms.get(idx + 1).is_some_and(is_comma);
+        let start = idx + 1 + usize::from(pause);
+        let Some(case_pos) = atoms[start..]
+            .iter()
+            .position(|a| {
+                a.upos == Some(Upos::Verb)
+                    || super::is_punct_atom(a)
+                    || matches!(a.surface.as_str(), "を" | "で")
+            })
+            .map(|offset| start + offset)
+        else {
+            continue;
+        };
+        let case = &atoms[case_pos];
+        let Some(action) = atoms.get(case_pos + 1) else {
+            continue;
+        };
+        let (Some(owner), Some(object)) = (action.doc_tok_idx, case.head) else {
+            continue;
+        };
+        // With 「父は、二日間、家で休んだ」 both commas enclose a modifier
+        // of the subject's own verb. A plain fronted interval keeps its pause.
+        let topic_pause = matches!(&atoms[..count_start], [.., topic, comma]
+            if pause && is_comma(comma) && !topic.is_locked && topic.surface == "は"
+                && topic.deprel == "case" && doc.syntax.iter().any(|s|
+                    Some(s.token) == topic.head && s.deprel == "nsubj" && s.head == Some(owner)));
+        let relation = match case.surface.as_str() {
+            "を" => "obj",
+            "で" if topic_pause => "obl",
+            _ => continue,
+        };
+        if case.is_locked
+            || case_pos == start
+            || case.deprel != "case"
+            || action.is_locked
+            || action.upos != Some(Upos::Verb)
+            || !doc
+                .syntax
+                .iter()
+                .any(|s| s.token == object && s.deprel == relation && s.head == Some(owner))
+        {
+            continue;
+        }
+        let phrase = |s: &faberline_nlp::doc::SyntaxToken| {
+            s.span.start_char >= atoms[start].span.start_char
+                && s.span.end_char <= case.span.end_char
+        };
+        let owns = |mut index: usize| {
+            for _ in 0..=case.span.end_char - atoms[start].span.start_char {
+                if index == object {
+                    return true;
+                }
+                let Some(s) = doc.syntax.iter().find(|s| s.token == index && phrase(s)) else {
+                    return false;
+                };
+                if !matches!(
+                    s.deprel.as_str(),
+                    "nmod" | "compound" | "amod" | "det" | "nummod" | "case"
+                ) {
+                    return false;
+                }
+                let Some(parent) = s.head else { return false };
+                index = parent;
+            }
+            false
+        };
+        if !(day.head == Some(owner) || day.head.is_some_and(owns))
+            || !doc
+                .syntax
+                .iter()
+                .filter(|s| phrase(s))
+                .all(|s| owns(s.token))
+        {
+            continue;
+        }
+        if shared {
+            atoms[idx - 1].head = atoms[idx].doc_tok_idx;
+        }
+        atoms[idx].head = Some(owner);
+        atoms[idx].deprel = "obl".to_owned();
+        if pause {
+            atoms.remove(idx + 1);
+        }
+        if topic_pause {
+            atoms.remove(count_start - 1);
+        }
+    }
+}
+
 pub(super) fn asks_interval(atom: &Atom) -> bool {
     is_interval(atom) && atom.surface == "每隔幾天"
+}
+
+// 開催する may be a single verb, or a verbal noun joined to a separate する.
+pub(super) fn is_held_event(source: &[Atom], owner: usize) -> bool {
+    let Some(index) = source
+        .iter()
+        .position(|a| !a.is_locked && a.doc_tok_idx == Some(owner))
+    else {
+        return false;
+    };
+    let verb = &source[index];
+    (verb.upos == Some(Upos::Verb)
+        && matches!(
+            verb.lemma.as_deref().unwrap_or(&verb.surface),
+            "開催する" | "開催"
+        ))
+        || (verb.lemma.as_deref().unwrap_or(&verb.surface) == "する"
+            && matches!(&source[..index], [.., noun] if !noun.is_locked && noun.surface == "開催"
+                && noun.head == Some(owner) && noun.span.end_char == verb.span.start_char))
 }
 
 pub(super) fn count_modifier(atom: &Atom) -> Option<&'static str> {
@@ -761,8 +991,18 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, contrasts_recurrence: bool) {
         end -= 1;
         if let Some((start, text)) = expression(atoms, end, contrasts_recurrence) {
             let mut day = atoms[end].clone();
-            day.lemma = (day.surface == "日").then(|| DATE.to_owned());
-            day.surface = text;
+            let duration = (day.surface == "日間")
+                .then(|| counted_days(&atoms[start..=end]))
+                .flatten();
+            day.lemma = Some(
+                if duration.is_some() {
+                    DAY_DURATION
+                } else {
+                    DATE
+                }
+                .to_owned(),
+            );
+            day.surface = duration.unwrap_or(text);
             day.is_locked = true;
             day.span.start_char = atoms[start].span.start_char;
             atoms.splice(start..=end, [day]);

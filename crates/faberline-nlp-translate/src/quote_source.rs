@@ -173,9 +173,13 @@ fn protect_sibling_forms(
                 .any(|label| strip_suffix(before, label).is_some());
         }
 
-        // Terminal marks inside the operands can split the analysis sentences,
-        // but the operands still belong to this one balanced quotation scope.
-        let first = if index > first_for_count && checks_each_form_length(after) {
+        // The count noun applies to the whole list within this quotation scope,
+        // even if terminal marks inside the operands split the analysis sentences.
+        let first = if index > first_for_count
+            && after
+                .strip_prefix(&['の'])
+                .is_some_and(names_character_count)
+        {
             first_for_count
         } else if index > first_for_comparison {
             let before = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
@@ -197,21 +201,11 @@ fn protect_sibling_forms(
     }
 }
 
-fn checks_each_form_length(after: &[char]) -> bool {
-    let Some(rest) = after.strip_prefix(&['の']) else {
-        return false;
-    };
-    ["文字数", "字数"].iter().any(|count| {
-        strip_prefix(skip_space(rest), count)
-            .and_then(|rest| skip_space(rest).strip_prefix(&['を']))
-            .and_then(|rest| strip_prefix(skip_space(rest), "それぞれ"))
-            .is_some_and(|rest| {
-                let rest = skip_space(rest);
-                ["数え", "調べ"]
-                    .iter()
-                    .any(|action| strip_prefix(rest, action).is_some())
-            })
-    })
+fn names_character_count(chars: &[char]) -> bool {
+    let chars = skip_space(chars);
+    ["文字数", "字数"]
+        .iter()
+        .any(|name| strip_prefix(chars, name).is_some_and(noun_boundary))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -326,32 +320,33 @@ fn compares_written_forms(after: &[char]) -> bool {
 
 fn describes_written_form(after: &[char]) -> bool {
     let after = skip_space(after);
+    if let Some(object) = after.strip_prefix(&['を']) {
+        return after_character_count(object)
+            .and_then(|rest| rest.strip_prefix(&['で']))
+            .is_some_and(|rest| {
+                let rest = skip_space(rest);
+                ["書く", "書き", "書い", "書か", "書け", "書こ"]
+                    .iter()
+                    .any(|verb| strip_prefix(rest, verb).is_some())
+            });
+    }
     if let Some(topic) = after.strip_prefix(&['は']) {
         // A count asserted about the quoted text is evidence of a literal use.
         // A location followed by は alone is also a normal topic.
-        let rest = skip_space(topic);
-        let rest = ["カタカナ", "片仮名", "ひらがな", "平仮名", "漢字"]
-            .iter()
-            .find_map(|script| strip_prefix(rest, script))
-            .unwrap_or(rest);
-        let number = skip_space(rest);
-        let rest = without_count(number);
-        return rest.len() < number.len()
-            && strip_prefix(rest, "文字").is_some_and(|tail| {
-                let tail = skip_space(tail);
-                ["です", "でした", "である", "だった", "だ"]
-                    .iter()
-                    .any(|copula| {
-                        strip_prefix(tail, copula).is_some_and(|end| {
-                            matches!(
-                                skip_space(end).first(),
-                                None | Some(
-                                    '。' | '！' | '？' | 'か' | 'ね' | 'よ' | 'と' | '」' | '』'
-                                )
+        return after_character_count(topic).is_some_and(|tail| {
+            ["です", "でした", "である", "だった", "だ"]
+                .iter()
+                .any(|copula| {
+                    strip_prefix(tail, copula).is_some_and(|end| {
+                        matches!(
+                            skip_space(end).first(),
+                            None | Some(
+                                '。' | '！' | '？' | 'か' | 'ね' | 'よ' | 'と' | '」' | '』'
                             )
-                        })
+                        )
                     })
-            });
+                })
+        });
     }
 
     if let Some(note) = strip_prefix(after, "と書いてある") {
@@ -359,11 +354,7 @@ fn describes_written_form(after: &[char]) -> bool {
         return ["メモの", "紙の", "札の", "カードの"]
             .iter()
             .find_map(|medium| strip_prefix(note, medium))
-            .is_some_and(|rest| {
-                ["文字数", "字数"]
-                    .iter()
-                    .any(|head| strip_prefix(skip_space(rest), head).is_some_and(noun_boundary))
-            });
+            .is_some_and(names_character_count);
     }
 
     let nominal = if let Some(nominal) = strip_prefix(after, "という") {
@@ -381,6 +372,19 @@ fn describes_written_form(after: &[char]) -> bool {
     FORM_NAMES
         .iter()
         .any(|form| strip_prefix(nominal, form).is_some_and(noun_boundary))
+}
+
+fn after_character_count(chars: &[char]) -> Option<&[char]> {
+    let chars = skip_space(chars);
+    let number = ["カタカナ", "片仮名", "ひらがな", "平仮名", "漢字"]
+        .iter()
+        .find_map(|script| strip_prefix(chars, script))
+        .map_or(chars, skip_space);
+    let tail = without_count(number);
+    if tail.len() == number.len() {
+        return None;
+    }
+    strip_prefix(tail, "文字").map(skip_space)
 }
 
 fn strip_prefix<'a>(mut chars: &'a [char], prefix: &str) -> Option<&'a [char]> {
@@ -475,6 +479,8 @@ mod tests {
             "私は「ドイツ」の最後の文字を消しました。",
             "『ドイツ』はカタカナ三文字です。",
             "「ドイツ」の表記をノートに書きました。",
+            "彼は「ドイツ」を三文字で書きました。",
+            "彼は「ドイツ」をカタカナ３文字で書いた。",
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -495,6 +501,15 @@ mod tests {
         for (source, preserved) in [
             ("出身国を聞かれて、「ドイツです」と答えました。", false),
             ("私は「ドイツ」という国を地図で見ました。", false),
+            ("彼は「ドイツ」を三秒で書きました。", false),
+            (
+                "彼は「ドイツ」を書き、その隣に三文字の番号を添えました。",
+                false,
+            ),
+            (
+                "「ドイツ！」と答えてから、「来て？」の字数を調べました。",
+                false,
+            ),
             (
                 "私は「ドイツ」という三文字を丸で囲み、「ドイツへ行きます」と言いました。",
                 true,
@@ -680,6 +695,22 @@ mod tests {
             (
                 "「行く？」と、「ドイツ！」の文字数をそれぞれ調べました。",
                 &["「行く？」", "「ドイツ！」"],
+            ),
+            (
+                "「ドイツ！」と「来て？」の字数を調べました。",
+                &["「ドイツ！」", "「来て？」"],
+            ),
+            (
+                "「来て？」と「ドイツ！」の文字数を数えてください。",
+                &["「来て？」", "「ドイツ！」"],
+            ),
+            (
+                "「ドイツ！」と「来て？」の字数は違います。",
+                &["「ドイツ！」", "「来て？」"],
+            ),
+            (
+                "「猫！」、「犬？」の字数を調べました。",
+                &["「猫！」", "「犬？」"],
             ),
         ] {
             let translated = analyze_and_translate(

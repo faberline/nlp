@@ -175,21 +175,13 @@ fn protect_sibling_forms(
     tokens: &[Token],
     protected: &mut Vec<Span>,
 ) {
-    let mut first_for_count = 0;
+    let mut first_in_list = 0;
     let mut first_for_comparison = 0;
     let mut labelled = false;
     for (index, quote) in quotes.iter().enumerate() {
         let opening = quote.start_char - 1;
         let before = &chars[scope.start_char..opening];
         let after = skip_space(&chars[quote.end_char + 1..scope.end_char]);
-        let measures_form = measures_written_form(after);
-        if measures_form
-            || describes_written_form(after)
-            || acts_on_written_form(before, after)
-            || copies_written_form(after, scope.end_char, tokens)
-        {
-            protected.push(protection_span(*quote, nested));
-        }
         let join = index.checked_sub(1).and_then(|prev| {
             let after_close = quotes[prev].end_char + 1;
             quote_join(&chars[after_close..opening])
@@ -199,30 +191,41 @@ fn protect_sibling_forms(
         } else {
             first_for_comparison = index;
             if join.is_none() {
-                first_for_count = index;
+                first_in_list = index;
             }
             let before = trim_space_end(before);
             labelled = FORM_LABELS
                 .iter()
                 .any(|label| strip_suffix(before, label).is_some());
         }
+        let measures_form = measures_written_form(after);
+        let shared_copy_object = index > first_in_list && after.starts_with(&['を']);
+        let copies_form = copies_written_form(after, scope.end_char, tokens, shared_copy_object);
+        if measures_form
+            || copies_form
+            || describes_written_form(after)
+            || acts_on_written_form(before, after)
+        {
+            protected.push(protection_span(*quote, nested));
+        }
 
-        // The count noun applies to the whole list within this quotation scope,
-        // even if terminal marks inside the operands split the analysis sentences.
-        let first = if index > first_for_count && measures_form {
-            first_for_count
-        } else if index > first_for_comparison {
-            let before = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
-            let count = index - first_for_comparison + 1;
-            if !compares_written_forms(after)
-                && !compares_apposed_forms(before, after, count, labelled)
-            {
+        // The final operand can carry the count phrase or the copying predicate for the
+        // list. Terminal marks inside the quotes do not end the list.
+        let first =
+            if index > first_in_list && (measures_form || (shared_copy_object && copies_form)) {
+                first_in_list
+            } else if index > first_for_comparison {
+                let before = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
+                let count = index - first_for_comparison + 1;
+                if !compares_written_forms(after)
+                    && !compares_apposed_forms(before, after, count, labelled)
+                {
+                    continue;
+                }
+                first_for_comparison
+            } else {
                 continue;
-            }
-            first_for_comparison
-        } else {
-            continue;
-        };
+            };
         protected.extend(
             quotes[first..=index]
                 .iter()
@@ -427,7 +430,12 @@ fn acts_on_written_form(before: &[char], after: &[char]) -> bool {
         .is_some_and(|&ch| is_count_character(ch))
 }
 
-fn copies_written_form(after: &[char], scope_end: usize, tokens: &[Token]) -> bool {
+fn copies_written_form(
+    after: &[char],
+    scope_end: usize,
+    tokens: &[Token],
+    shared_object: bool,
+) -> bool {
     let next = if let Some(word) = strip_prefix(after, "という") {
         after_word_name(word).and_then(|operand| operand.strip_prefix(&['を']))
     } else {
@@ -468,13 +476,16 @@ fn copies_written_form(after: &[char], scope_end: usize, tokens: &[Token]) -> bo
                     return false;
                 }
                 let tail = &destination[index + 1..];
-                starts_copying(tail)
-                    || (after_copying_manner(tail).is_some_and(starts_copying)
-                        && copy_destination_without_predicate(
-                            tokens,
-                            destination_start,
-                            destination_start + index,
-                        ))
+                let immediate_copy = starts_copying(tail);
+                if immediate_copy && !shared_object {
+                    return true;
+                }
+                (immediate_copy || after_copying_manner(tail).is_some_and(starts_copying))
+                    && copy_destination_without_predicate(
+                        tokens,
+                        destination_start,
+                        destination_start + index,
+                    )
             })
 }
 
@@ -1075,6 +1086,26 @@ mod tests {
             (
                 "『入居申込書』と紙に一字ずつ書き写しました。",
                 &["『入居申込書』", "紙"],
+            ),
+            (
+                "『ドイツ』と『入居申込書』を紙に書き写しました。",
+                &["『ドイツ』", "『入居申込書』", "紙"],
+            ),
+            (
+                "紙に『入居申込書』と『ドイツ』を書き写しました。",
+                &["『入居申込書』", "『ドイツ』", "紙"],
+            ),
+            (
+                "『来て！』と『待って？』をノートにそのまま書き写しました。",
+                &["『来て！』", "『待って？』", "筆記本"],
+            ),
+            (
+                "『ドイツ』、『来て！』と『入居申込書』を紙に転記しました。",
+                &["『ドイツ』", "『来て！』", "『入居申込書』"],
+            ),
+            (
+                "父は『ドイツ』と言い、私は『入居申込書』を紙に書き写しました。",
+                &["『德國』", "『入居申込書』", "紙"],
             ),
             (
                 "私は四時に「七月八日の午後二時には」とノートにそのまま書き写しました。",

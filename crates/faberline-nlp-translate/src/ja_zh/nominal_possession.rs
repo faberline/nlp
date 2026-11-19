@@ -53,11 +53,226 @@ pub(super) fn whole_nominal_lock(a: &Atom, doc: &Document) -> bool {
             .all(|w| w[0].span.end_char == w[1].span.start_char)
 }
 
+// The analyzer can split ものでは into も + ので + は. In that position ので
+// is part of the copula, while a later ので may still introduce a reason.
+pub(super) fn contains_copular_node(atoms: &[Atom], at: usize, doc: &Document) -> bool {
+    let node = &atoms[at];
+    if node.surface != "ので" || node.is_locked || node.deprel != "mark" {
+        return false;
+    }
+    let before = &atoms[..at];
+    let owner = match before {
+        [.., owner, no, mo]
+            if !no.is_locked
+                && no.surface == "の"
+                && no.head == owner.doc_tok_idx
+                && !mo.is_locked
+                && mo.surface == "も"
+                && mo.head == owner.doc_tok_idx =>
+        {
+            owner
+        }
+        [.., owner] => owner,
+        _ => return false,
+    };
+    if !owner_atom(owner, doc) || owner.doc_tok_idx != node.head {
+        return false;
+    }
+    match &atoms[at + 1..] {
+        [wa, neg, ..] => {
+            !wa.is_locked
+                && !neg.is_locked
+                && ((wa.surface == "は"
+                    && matches!(
+                        neg.surface.as_str(),
+                        "ない" | "なかっ" | "あり" | "なく" | "ある" | "あっ"
+                    ))
+                    || (wa.surface == "し" && neg.surface == "た"))
+        }
+        _ => false,
+    }
+}
+
+fn owner_atom(a: &Atom, doc: &Document) -> bool {
+    matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+        && (!a.is_locked || whole_nominal_lock(a, doc))
+}
+
+fn elliptical_owner(
+    words: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    target: TargetVariant,
+) -> Option<String> {
+    if let Some(i) = words
+        .iter()
+        .position(|a| !a.is_locked && a.surface == "と" && a.deprel == "case")
+    {
+        let left = words.get(i.checked_sub(1)?)?;
+        let right = words.last()?;
+        if words[i].head != left.doc_tok_idx
+            || !(left.head == right.doc_tok_idx || left.head == right.head)
+        {
+            return None;
+        }
+        return Some(format!(
+            "{}和{}",
+            elliptical_owner(&words[..i], doc, sentence, target)?,
+            elliptical_owner(&words[i + 1..], doc, sentence, target)?
+        ));
+    }
+    // The polite suffix さん does not supply the owner's gender.
+    if let [.., name, honorific] = words
+        && !honorific.is_locked
+        && honorific.surface == "さん"
+        && name.upos == Some(Upos::Propn)
+        && name.head == honorific.doc_tok_idx
+        && name.span.end_char == honorific.span.start_char
+    {
+        return noun_phrase(&words[..words.len() - 1], doc, sentence, target);
+    }
+    noun_phrase(words, doc, sentence, target)
+}
+
+fn render_ellipsis(
+    body: &[Atom],
+    ending: &str,
+    doc: &Document,
+    sentence: usize,
+    target: TargetVariant,
+    chars: &[char],
+) -> Option<String> {
+    let at = body.windows(2).rposition(|p| {
+        owner_atom(&p[0], doc)
+            && !p[1].is_locked
+            && p[1].head == p[0].doc_tok_idx
+            && matches!(
+                (p[1].surface.as_str(), p[1].deprel.as_str()),
+                ("の", "case") | ("ので", "mark")
+            )
+    })?;
+    let suffix = &body[at + 1..];
+    if suffix.iter().any(|a| a.is_locked)
+        || !body[at..]
+            .windows(2)
+            .all(|p| p[0].span.end_char == p[1].span.start_char)
+    {
+        return None;
+    }
+    let text: String = suffix.iter().map(|a| a.surface.as_str()).collect();
+    let tail = text
+        .strip_prefix("のもの")
+        .or_else(|| text.strip_prefix('の'))?;
+    // In 母のか、妹のか分かりません each か belongs to an embedded choice.
+    if tail.is_empty() && ending == "嗎" && body[at].deprel == "nmod" {
+        return None;
+    }
+    let copula = match tail {
+        "" | "だ" | "です" | "ではある" | "ではあります" => "是",
+        "でした" | "だった" | "ではあった" | "ではありました" => "當時是",
+        "ではなく"
+        | "じゃなく"
+        | "じゃない"
+        | "ではない"
+        | "じゃないです"
+        | "ではないです"
+        | "じゃありません"
+        | "ではありません" => "不是",
+        "じゃなかった"
+        | "ではなかった"
+        | "じゃなかったです"
+        | "ではなかったです"
+        | "じゃありませんでした"
+        | "ではありませんでした" => "當時不是",
+        _ => return None,
+    };
+    let prefix = &body[..=at];
+    let topic_case = prefix.iter().position(|a| {
+        !a.is_locked && a.deprel == "case" && matches!(a.surface.as_str(), "は" | "が" | "も")
+    });
+    let (topic, owner_phrase) = if let Some(i) = topic_case {
+        let topic = &prefix[..i];
+        let head = topic.last()?;
+        if head.doc_tok_idx != prefix[i].head || head.deprel != "nsubj" {
+            return None;
+        }
+        (topic, &prefix[i + 1..])
+    } else {
+        if tail.is_empty() {
+            return None;
+        }
+        (&[][..], prefix)
+    };
+    if !topic.iter().chain(owner_phrase).all(|a| {
+        owner_atom(a, doc)
+            || !a.is_locked
+                && (matches!(a.upos, Some(Upos::Det | Upos::Num))
+                    || matches!(a.surface.as_str(), "の" | "と") && a.deprel == "case")
+    }) {
+        return None;
+    }
+    let mut subject = match topic {
+        [] => String::new(),
+        [a] if a.surface == "これ" => "這".to_owned(),
+        [a] if matches!(a.surface.as_str(), "それ" | "あれ") => "那".to_owned(),
+        [det, noun]
+            if !det.is_locked
+                && det.head == noun.doc_tok_idx
+                && (noun.surface == "鍵" || noun.is_locked && whole_nominal_lock(noun, doc))
+                && matches!(det.surface.as_str(), "この" | "その" | "あの") =>
+        {
+            let mut source = noun.clone();
+            source.surface = chars
+                .get(noun.span.start_char..noun.span.end_char)?
+                .iter()
+                .collect();
+            source.is_locked = false;
+            source.upos = doc.tokens.get(noun.doc_tok_idx?)?.upos;
+            let word = super::translate_single_ja_term(&source.surface, None, source.upos);
+            let classifier = if word == "鑰匙" {
+                "把"
+            } else {
+                super::demonstrative_classifier(&word, &source)
+            };
+            format!(
+                "{}{classifier}{}",
+                if det.surface == "この" {
+                    "這"
+                } else {
+                    "那"
+                },
+                if noun.is_locked { &noun.surface } else { &word }
+            )
+        }
+        _ => noun_phrase(topic, doc, sentence, target)?,
+    };
+    if topic_case.is_some_and(|i| prefix[i].surface == "も") {
+        subject.push('也');
+    }
+    let owner_text = elliptical_owner(owner_phrase, doc, sentence, target)?;
+    let wh = prefix.iter().any(|a| {
+        let raw = if a.is_locked {
+            chars
+                .get(a.span.start_char..a.span.end_char)
+                .map(|s| s.iter().collect::<String>())
+        } else {
+            None
+        };
+        matches!(
+            raw.as_deref().unwrap_or(&a.surface),
+            "誰" | "だれ" | "どなた" | "何" | "どれ" | "どの" | "どこ" | "どちら"
+        )
+    });
+    let ending = if wh && ending == "嗎" { "" } else { ending };
+    Some(format!("{subject}{copula}{owner_text}的{ending}"))
+}
+
 pub(super) fn render(
     atoms: &[Atom],
     doc: &Document,
     sentence: usize,
     target: TargetVariant,
+    chars: &[char],
 ) -> Option<String> {
     let (body, ending) = match atoms {
         [body @ .., yo, ne]
@@ -79,6 +294,41 @@ pub(super) fn render(
         }
         _ => (atoms, ""),
     };
+    if let [predicate @ .., cause] = body
+        && !cause.is_locked
+        && matches!(cause.surface.as_str(), "ので" | "から")
+        && cause.deprel == "mark"
+        && predicate.iter().any(|a| {
+            a.doc_tok_idx == cause.head
+                && matches!(a.upos, Some(Upos::Verb | Upos::Adj | Upos::Aux))
+        })
+        && let Some(text) = render_ellipsis(predicate, "", doc, sentence, target, chars)
+    {
+        return Some(format!("因為{text}"));
+    }
+    if let [predicate @ .., conjunction] = body
+        && !conjunction.is_locked
+        && matches!(
+            conjunction.surface.as_str(),
+            "が" | "けど" | "けれど" | "けれども"
+        )
+        && matches!(conjunction.deprel.as_str(), "case" | "mark")
+        && predicate.iter().any(|a| a.doc_tok_idx == conjunction.head)
+        && let Some(text) = render_ellipsis(predicate, "", doc, sentence, target, chars)
+    {
+        return Some(format!("雖然{text}"));
+    }
+    if let Some(i) = body
+        .iter()
+        .position(|a| !a.is_locked && a.surface == "なく")
+        && let Some(left) = render_ellipsis(&body[..=i], "", doc, sentence, target, chars)
+        && let Some(right) = render_ellipsis(&body[i + 1..], ending, doc, sentence, target, chars)
+    {
+        return Some(format!("{left}，而{right}"));
+    }
+    if let Some(text) = render_ellipsis(body, ending, doc, sentence, target, chars) {
+        return Some(text);
+    }
     let head_index = body
         .iter()
         .rposition(|a| matches!(a.upos, Some(Upos::Noun | Upos::Propn)))?;

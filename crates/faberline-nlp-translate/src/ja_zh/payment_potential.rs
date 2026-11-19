@@ -28,7 +28,43 @@ pub(super) fn word_mention(
         return false;
     }
     if marker.surface == "を" {
-        return dictionary_lookup(word, rest, previous);
+        // A word may be named immediately before the opening quotation mark.
+        let named_word = matches!(previous, Some(Segment::Clause { atoms, trailing_punct: None, .. })
+            if atoms.last().is_some_and(|label| !label.is_locked
+                && label.head == word.doc_tok_idx
+                && label.span.end_char + 1 == word.span.start_char
+                && matches!(label.surface.as_str(), "単語" | "語" | "言葉" | "用語" | "動詞" | "表現")));
+        let writing = rest.iter().find(|a| a.upos == Some(Upos::Verb));
+        return named_word
+            || writing.is_some_and(|verb| {
+                !verb.is_locked
+                    && word.head == verb.doc_tok_idx
+                    && matches!(
+                        verb.lemma.as_deref().unwrap_or(&verb.surface),
+                        "書く" | "書き写す" | "書き取る" | "転記する" | "写す"
+                    )
+            })
+            || dictionary_lookup(word, rest, previous);
+    }
+    if marker.surface == "に" {
+        return rest.windows(3).any(|triple| {
+            let [line, case, draw] = triple else {
+                return false;
+            };
+            !line.is_locked
+                && !case.is_locked
+                && !draw.is_locked
+                && matches!(line.surface.as_str(), "線" | "下線" | "傍線")
+                && line.deprel == "obj"
+                && case.surface == "を"
+                && case.head == line.doc_tok_idx
+                && line.head == draw.doc_tok_idx
+                && word.head == draw.doc_tok_idx
+                && draw.lemma.as_deref() == Some("引く")
+        });
+    }
+    if marker.surface == "の" && written_form(rest) {
+        return true;
     }
     let rest = match (marker.surface.as_str(), rest) {
         ("という", [no, topic, tail @ ..])
@@ -81,6 +117,41 @@ pub(super) fn word_mention(
         }
         _ => false,
     }
+}
+
+// Orthographic labels may span several tokens. 送り仮名, for example, starts
+// with what the morphological analysis sees as the verb stem 送り.
+fn written_form(atoms: &[Atom]) -> bool {
+    let forms = [
+        "文字",
+        "漢字",
+        "仮名",
+        "送り仮名",
+        "読み仮名",
+        "振り仮名",
+        "ふりがな",
+        "ひらがな",
+        "カタカナ",
+        "綴り",
+        "つづり",
+        "書き方",
+        "字体",
+        "字形",
+    ];
+    let mut text = String::new();
+    for (i, atom) in atoms.iter().take(4).enumerate() {
+        if atom.is_locked || (i > 0 && atoms[i - 1].span.end_char != atom.span.start_char) {
+            return false;
+        }
+        text.push_str(&atom.surface);
+        if forms.contains(&text.as_str()) {
+            return true;
+        }
+        if !forms.iter().any(|form| form.starts_with(&text)) {
+            return false;
+        }
+    }
+    false
 }
 
 fn dictionary_lookup(word: &Atom, after_object: &[Atom], previous: Option<&Segment>) -> bool {
@@ -635,6 +706,57 @@ mod tests {
             "彼は「支払える」と言いました。",
         ] {
             assert!(translate(jp).contains(&format!("「{gloss}」")), "{jp}");
+        }
+    }
+
+    #[test]
+    fn written_forms_and_reported_answers_use_different_quotation_rules() {
+        use super::super::{
+            Segment, SpanLockTable, normalized_sentence_atoms, split_atoms_into_segments,
+        };
+        use faberline_nlp::doc::{Options, analyze_document};
+
+        for (jp, expected) in [
+            ("日本語の単語「支払える」をノートに書きました。", true),
+            ("黒板の「支払える」に下線を引きました。", true),
+            ("「支払える」の文字を一つずつ読みました。", true),
+            ("私は「支払える」を辞書で引きました。", true),
+            ("編集者は「支払える」の送り仮名を確認しました。", true),
+            ("「支払える」という返事をもらいました。", false),
+            ("彼は紙に「支払える」と書いて返事をしました。", false),
+            ("「支払える」を聞いて安心しました。", false),
+        ] {
+            let doc = analyze_document(
+                jp,
+                &Options {
+                    enrich_morphology: true,
+                    cpu_syntax: true,
+                    ..Default::default()
+                },
+            );
+            let chars = jp.chars().collect::<Vec<_>>();
+            let tokens = doc.tokens.iter().collect::<Vec<_>>();
+            let locks = SpanLockTable::build(Vec::new());
+            let atoms = normalized_sentence_atoms(0, &chars, &doc, &tokens, &locks);
+            let segments =
+                split_atoms_into_segments(&atoms, &doc, doc.segmentation.sentences[0].span);
+            let (i, inner) = segments
+                .iter()
+                .enumerate()
+                .find_map(|(i, s)| match s {
+                    Segment::Quote { inner_atoms, .. } => Some((i, inner_atoms)),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                super::word_mention(
+                    inner,
+                    i.checked_sub(1).and_then(|n| segments.get(n)),
+                    segments.get(i + 1)
+                ),
+                expected,
+                "{jp}"
+            );
         }
     }
 }

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 mod counted_object;
 mod nominal_possession;
+mod payment_potential;
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
@@ -315,6 +316,19 @@ pub(crate) fn translate_ja_sentence(
                 let close_zh = localize_close_quote(*close_q, target);
                 out.push(open_zh);
                 let inner_segs = split_atoms_into_segments(inner_atoms, doc, *span);
+                let after_quote = &segments[seg_idx + 1..];
+                let adjacent = if target == TargetVariant::ZhHant && after_quote.is_empty() {
+                    payment_potential::adjacent_report(
+                        inner_atoms,
+                        *span,
+                        doc,
+                        sentence_idx,
+                        chars,
+                        lock_table,
+                    )
+                } else {
+                    None
+                };
                 for iseg in &inner_segs {
                     if let Segment::Clause {
                         atoms: catoms,
@@ -322,19 +336,33 @@ pub(crate) fn translate_ja_sentence(
                         ..
                     } = iseg
                     {
-                        let rendered = translate_clause_atoms(
-                            catoms,
-                            doc,
-                            sentence_idx,
-                            None,
-                            false,
-                            &ClauseDiscourseCtx {
-                                inside_quote: true,
-                                ..Default::default()
-                            },
-                            target,
-                        )
-                        .0;
+                        let quoted = (target == TargetVariant::ZhHant)
+                            .then(|| {
+                                payment_potential::quoted_clause(
+                                    inner_atoms,
+                                    catoms,
+                                    seg_idx.checked_sub(1).and_then(|i| segments.get(i)),
+                                    adjacent.as_deref().unwrap_or(after_quote),
+                                    chars,
+                                    target,
+                                )
+                            })
+                            .flatten();
+                        let rendered = quoted.unwrap_or_else(|| {
+                            translate_clause_atoms(
+                                catoms,
+                                doc,
+                                sentence_idx,
+                                None,
+                                false,
+                                &ClauseDiscourseCtx {
+                                    inside_quote: true,
+                                    ..Default::default()
+                                },
+                                target,
+                            )
+                            .0
+                        });
                         out.push_str(&rendered);
                         if let Some(p) = trailing_punct {
                             out.push_str(&localize_punct(p));
@@ -342,6 +370,12 @@ pub(crate) fn translate_ja_sentence(
                     } else if let Segment::Punct(p, _) = iseg {
                         out.push_str(&localize_punct(p));
                     }
+                }
+                if moved_report.is_some()
+                    && out.ends_with('嗎')
+                    && payment_potential::ends_in_question(inner_atoms)
+                {
+                    out.push('？');
                 }
                 emit_quote_close(
                     &mut out,
@@ -3767,6 +3801,15 @@ fn local_direct_quote(
     if inner_atoms.iter().any(is_quote_mark) {
         return None;
     }
+    if let Some(prefix) = payment_potential::reported_question(
+        &segments[..quote_index],
+        inner_atoms,
+        report,
+        doc,
+        locks,
+    ) {
+        return Some((prefix, *span, quote_index));
+    }
     let (after, verb) = direct_quote_report_parts(report)?;
     let mut roles = DirectQuoteRoles::default();
     for before in &segments[..quote_index] {
@@ -4543,6 +4586,12 @@ fn translate_clause_atoms(
         return (String::new(), false);
     }
 
+    if target == TargetVariant::ZhHant
+        && let Some(text) = payment_potential::render(core_non_punct(atoms), target, false)
+    {
+        return (text, false);
+    }
+
     if let Some(request) = te_help_request(core_non_punct(atoms), doc)
         && let Some(rendered) = render_te_help_request(request, doc, sentence_idx, ctx, target)
     {
@@ -4693,6 +4742,9 @@ fn translate_clause_atoms(
     let counted = counted_object::bind(body);
     let merged_atoms = apply_phrase_matches(counted.as_deref().unwrap_or(body));
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
+    if target == TargetVariant::ZhHant {
+        payment_potential::localize_money_verb(&mut norm_atoms, body, target);
+    }
     recover_route_predicate(&mut norm_atoms, body);
     let motion_go = motion_purpose_governor(&norm_atoms, ctx.inside_quote);
     if let Some(go) = motion_go {

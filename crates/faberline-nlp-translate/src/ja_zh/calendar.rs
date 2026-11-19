@@ -1,6 +1,7 @@
 //! Bind a calendar day to its case particles before noun-phrase grouping.
 mod dates;
 mod quantities;
+pub(super) mod report;
 use super::{Atom, Upos, normalize_decimal_digits, selects_time_value};
 use crate::opaque::parse_cjk_or_ascii_num;
 pub(crate) use dates::DateContext;
@@ -52,6 +53,10 @@ pub(super) fn arrival_noun(b: &super::Bunsetsu, target: super::TargetVariant) ->
 }
 const REPETITIONS: &str = "__ja_day_repetitions";
 const ONLY_REPETITIONS: &str = "__ja_day_only_repetitions";
+
+pub(super) fn is_habit(atom: &Atom) -> bool {
+    atom.lemma.as_deref() == Some(quantities::HABIT)
+}
 
 pub(super) fn is_interval(atom: &Atom) -> bool {
     atom.lemma.as_deref() == Some(INTERVAL)
@@ -577,6 +582,22 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, contrasts_recurrence: bool) {
             }) = day_interval(atoms, idx)
         {
             atoms.splice(start..idx + 2, [atom]);
+        }
+    }
+    // The resolved count already supplies 各 for a coordinated date list.
+    let mut i = 0;
+    while i < atoms.len() {
+        let each = &atoms[i];
+        if !each.is_locked
+            && each.surface == "それぞれ"
+            && each.deprel == "advmod"
+            && atoms.iter().any(|a| {
+                a.head == each.head && matches!(a.lemma.as_deref(), Some(EACH_COUNT | EACH_SUBJECT))
+            })
+        {
+            atoms.remove(i);
+        } else {
+            i += 1;
         }
     }
     // Voiced だ after an adnominal verb (読んだ) is the past auxiliary た.

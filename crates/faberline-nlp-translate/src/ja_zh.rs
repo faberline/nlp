@@ -218,11 +218,23 @@ pub(crate) fn translate_ja_sentence(
         .map(|(i, c)| (i, c.span))
         .collect();
 
+    let report = (target == TargetVariant::ZhHant && direct_quote.is_none())
+        .then(|| calendar::report::take(&mut atoms, doc, lock_table))
+        .flatten();
+
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
     let segments = split_atoms_into_segments(&atoms, doc, sent_span);
 
     let mut out = String::new();
     let mut seg_target_spans: Vec<(Span, Span)> = Vec::with_capacity(segments.len());
+    if let Some(report) = report {
+        out.push_str(&report.text);
+        let target_span = Span {
+            start_char: 0,
+            end_char: out.chars().count(),
+        };
+        seg_target_spans.extend(report.spans.into_iter().map(|span| (span, target_span)));
+    }
     let mut is_first_non_quote_clause = true;
     let mut prev_was_quote = false;
     let mut emitted_pre_quote_verb = false;
@@ -3161,6 +3173,14 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
 
     while i < atoms.len() {
         let a = &atoms[i];
+        if a.upos == Some(Upos::Num)
+            && atoms
+                .get(i + 1)
+                .is_some_and(|day| !day.is_locked && day.surface == "日")
+            && calendar::contrasts_recurrence(&current)
+        {
+            flush_clause(&mut current, None, &mut segments);
+        }
         if !a.is_locked && matches!(a.surface.as_str(), "「" | "『") {
             flush_clause(&mut current, None, &mut segments);
             let open_q = a.surface.chars().next().unwrap_or('「');
@@ -8376,7 +8396,7 @@ fn translate_clause_bunsetsus(
                 adverbs.push(atom.surface.clone());
                 continue;
             }
-            if calendar::is_interval(atom) {
+            if calendar::is_interval(atom) || calendar::is_habit(atom) {
                 temporal_others.push(atom.surface.clone());
                 continue;
             }
@@ -12398,13 +12418,22 @@ fn take_adnominal_arguments(
     let mut deadlines: Vec<_> = remaining
         .extract_if(.., |arg| {
             deadline_governor(arg, doc)
-                .or_else(|| {
-                    let [a] = arg.atoms.as_slice() else {
-                        return None;
-                    };
-                    (calendar::is_interval(a) || calendar::count_modifier(a).is_some())
-                        .then_some(a.head)
-                        .flatten()
+                .or_else(|| match arg.atoms.as_slice() {
+                    [a] if calendar::is_interval(a)
+                        || calendar::count_modifier(a).is_some()
+                        || calendar::individual_arrivals(a) =>
+                    {
+                        a.head
+                    }
+                    [date, marker @ ..]
+                        if calendar::is_date(date)
+                            && marker.iter().all(|m| {
+                                !m.is_locked && m.deprel == "case" && m.head == date.doc_tok_idx
+                            }) =>
+                    {
+                        date.head
+                    }
+                    _ => None,
                 })
                 .is_some_and(|head| {
                     predicate
@@ -14617,6 +14646,80 @@ mod clock_rule_tests {
                 output.target_text
             );
         }
+    }
+
+    #[test]
+    fn counted_arrivals_modify_the_relative_noun_and_keep_the_matrix_subject() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "六月二日と三日に一人ずつ学生が来る教室を先生が選びました。",
+                "老師選擇了在六月二日和三日各來一位學生的教室。",
+            ),
+            (
+                "七月三日と五日に二人ずつ患者が来る病院を見学しました。",
+                "參觀了在七月三日和五日各來兩位患者的醫院。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来ました。",
+                "在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と三日にそれぞれ一冊ずつ本を読んだ学生が来ました。",
+                "在六月二日和三日各讀了一本書的學生來了。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn reported_calendar_events_keep_the_speaker_separate_from_their_subject() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "六月二日と三日に一人ずつ学生が来たと先生が答えました。",
+                "老師回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "先生は六月二日と三日に一人ずつ学生が来たと答えました。",
+                "老師回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "毎日ではなく、三日に一冊ずつ本を借りたと先生が答えました。",
+                "老師回答，不是每天，而是每三天借用了一本書。",
+            ),
+            (
+                "学生は、毎日ではなく二日に一冊だけ本を読んだと答えました。",
+                "學生回答，不是每天，而是每兩天只讀了一本書。",
+            ),
+            (
+                "二日に一冊ずつ本を借りたと先生は答えませんでした。",
+                "老師沒有回答說每兩天借用了一本書。",
+            ),
+            (
+                "二日に一冊ずつ本を借りたと先生が答えましたか。",
+                "老師是否回答說每兩天借用了一本書？",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let conditional = public_translate(
+            "六月二日と三日に一人ずつ学生が来ると先生が喜びました。",
+            &glossary,
+        );
+        assert!(
+            conditional.target_text.starts_with("當")
+                && conditional.target_text.ends_with("老師高興了。")
+        );
     }
 
     #[test]

@@ -182,7 +182,7 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
     if people {
         // An indefinite participant of 来る arrives at each interval. Keep
         // the person count with that participant rather than counting trips.
-        if verb.lemma.as_deref() != Some("来る") {
+        if verb.lemma.as_deref().unwrap_or(&verb.surface) != "来る" {
             return;
         }
         let mut subjects = atoms

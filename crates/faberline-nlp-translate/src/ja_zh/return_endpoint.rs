@@ -1,9 +1,10 @@
 //! Distinguish a restored time setting from a physical destination of 戻る.
 use super::{
     Atom, Bunsetsu, BunsetsuRole, Document, Span, TargetVariant, Upos, bounded_clock_number,
-    clock_case_governor, clock_number, explicit_clock_case, is_building_floor, is_daypart_surface,
-    is_existing_spatial_head, is_motion_actor, is_plain_clock_ni, is_time_setting,
-    linked_joint_case, predicates_has_passive, render_bunsetsu_np, setting_time_label,
+    clock_case_governor, clock_number, deadline_weekday, explicit_clock_case, is_building_floor,
+    is_daypart_surface, is_existing_spatial_head, is_motion_actor, is_plain_clock_ni,
+    is_time_setting, linked_joint_case, predicates_has_passive, render_bunsetsu_np,
+    setting_time_label,
 };
 
 pub(super) struct ClockHandReturn {
@@ -128,6 +129,40 @@ fn second_count(source: &[Atom], unit: usize) -> Option<(usize, u32)> {
         .chain(std::iter::once(suffix))
         .collect();
     Some((first, bounded_clock_number(&number, u32::MAX)?))
+}
+
+fn is_clock_time_qualifier(time: &Atom) -> bool {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+
+    let word = time.surface.as_str();
+    is_daypart_surface(word)
+        || word
+            .strip_suffix(['前', '後'])
+            .is_some_and(is_daypart_surface)
+        || word
+            .strip_prefix(['今', '昨', '明', '翌', '毎'])
+            .is_some_and(|part| matches!(part, "朝" | "晩" | "夕" | "夜"))
+        || word
+            .strip_prefix(['前', '先', '今', '昨', '来', '翌', '毎'])
+            .is_some_and(|period| matches!(period, "週" | "月" | "年"))
+        || deadline_weekday(word).is_some()
+        || matches!(
+            word,
+            "一昨日"
+                | "昨日"
+                | "今日"
+                | "明日"
+                | "明後日"
+                | "本日"
+                | "当日"
+                | "前日"
+                | "翌日"
+                | "先日"
+                | "毎日"
+                | "いつも"
+                | "普段"
+        )
+        || lookup_ja(word).is_some_and(|entry| entry.sem_class == Some(SemanticClass::Time))
 }
 
 fn stated_dial_position(
@@ -387,28 +422,12 @@ pub(super) fn clock_hand_return(
             start_char: value.atoms.first()?.span.start_char,
             end_char: value.atoms.last()?.span.end_char,
         };
-        // A date or frequency can qualify the clock time of the return.
+        // A date, daypart or frequency can qualify the clock time of the return.
         // Preserve that reading when there is no stated dial position.
         if source.iter().any(|time| {
             !time.is_locked
                 && matches!(time.deprel.as_str(), "advmod" | "obl")
-                && matches!(
-                    time.surface.as_str(),
-                    "一昨日"
-                        | "昨日"
-                        | "今日"
-                        | "明日"
-                        | "明後日"
-                        | "当日"
-                        | "毎朝"
-                        | "毎晩"
-                        | "毎日"
-                        | "毎週"
-                        | "毎月"
-                        | "毎年"
-                        | "いつも"
-                        | "普段"
-                )
+                && matches!(time.upos, Some(Upos::Adv | Upos::Noun))
                 && time.head.is_some_and(|token| {
                     token == head
                         || doc
@@ -416,6 +435,7 @@ pub(super) fn clock_hand_return(
                             .get(token)
                             .is_some_and(|token| contains_span(span, token.span))
                 })
+                && is_clock_time_qualifier(time)
         }) {
             return None;
         }

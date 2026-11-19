@@ -1831,9 +1831,7 @@ fn elapsed_quoted_question_report(inner: &[Atom], following: &Segment) -> bool {
 
 fn elapsed_question_finite(inner: &[Atom]) -> Option<&Atom> {
     let inner = core_non_punct(inner);
-    let Some(question) = inner.last() else {
-        return None;
-    };
+    let question = inner.last()?;
     if question.is_locked
         || question.surface != "か"
         || question.upos != Some(Upos::Part)
@@ -1841,9 +1839,7 @@ fn elapsed_question_finite(inner: &[Atom]) -> Option<&Atom> {
     {
         return None;
     }
-    let Some(finite) = inner.iter().find(|a| a.doc_tok_idx == question.head) else {
-        return None;
-    };
+    let finite = inner.iter().find(|a| a.doc_tok_idx == question.head)?;
     if finite.is_locked || finite.lemma.as_deref() != Some("ある") {
         return None;
     }

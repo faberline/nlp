@@ -1946,6 +1946,7 @@ struct TeHelpLetterAddressee<'a> {
 struct TeHelpLetterQuantity<'a> {
     object: usize,
     span: std::ops::Range<usize>,
+    recipient_pause: Option<usize>,
     numeral: String,
     additional: bool,
     total: bool,
@@ -1961,6 +1962,7 @@ enum TeHelpLetterDistribution<'a> {
 struct TeHelpLetterCount {
     object: usize,
     span: std::ops::Range<usize>,
+    recipient_pause: Option<usize>,
     numeral: String,
     modifier: Option<&'static str>,
     per_writer: bool,
@@ -2327,28 +2329,55 @@ fn te_help_letter_quantity<'a>(
                 }
                 _ => false,
             };
-        let before_recipient = direct_addressee.is_some_and(|address| {
-            if index < object + 2
-                || atom.deprel != "nmod"
-                || address.counted_person.is_none()
-                || atom.head != address.counted_person
-            {
-                return false;
-            }
-            let last = arguments
-                .get(index + 1)
-                .filter(|word| linked_letter_quantity_qualifier(atom, word))
-                .map_or(index, |_| index + 1);
-            last + 1 == address.start
-                && arguments[last].span.end_char == arguments[address.start].span.start_char
-        });
+        let after_quantity = index
+            + 1
+            + usize::from(
+                arguments
+                    .get(index + 1)
+                    .is_some_and(|word| linked_letter_quantity_qualifier(atom, word)),
+            );
+        let recipient_start = direct_addressee
+            .filter(|address| {
+                index >= object + 2
+                    && address.counted_person.is_some()
+                    && (after_object
+                        || (atom.deprel == "nmod" && atom.head == address.counted_person))
+            })
+            .and_then(|address| {
+                // Only a pause between the linked count and recipient belongs here.
+                let quantity_end = arguments[after_quantity - 1].span.end_char;
+                let recipient_begin = arguments[address.start].span.start_char;
+                let adjacent = match address.start.checked_sub(after_quantity) {
+                    Some(0) => quantity_end == recipient_begin,
+                    Some(1) => {
+                        let comma = &arguments[after_quantity];
+                        !comma.is_locked
+                            && comma.deprel == "punct"
+                            && matches!(comma.surface.as_str(), "、" | "，" | ",")
+                            && quantity_end == comma.span.start_char
+                            && comma.span.end_char == recipient_begin
+                    }
+                    _ => false,
+                };
+                adjacent.then_some(address.start)
+            });
+        let recipient_pause = recipient_start
+            .filter(|&start| start > after_quantity)
+            .map(|_| after_quantity);
         (!atom.is_locked
             && atom.upos == Some(Upos::Noun)
-            && (after_object || before_object || before_recipient)
+            && (after_object || before_object || recipient_start.is_some())
             && (prefix.is_empty() || is_japanese_numeral(prefix)))
-        .then_some((index, atom, prefix, before_recipient))
+        .then_some((
+            index,
+            atom,
+            prefix,
+            !after_object && recipient_start.is_some(),
+            recipient_pause,
+        ))
     });
-    let (counter_index, counter, fused_number, scoped_to_recipient_group) = counters.next()?;
+    let (counter_index, counter, fused_number, scoped_to_recipient_group, recipient_pause) =
+        counters.next()?;
     let counter_id = counter.doc_tok_idx?;
     if counters.next().is_some() {
         return None;
@@ -2423,13 +2452,16 @@ fn te_help_letter_quantity<'a>(
         .get(after_counter)
         .filter(|word| linked_letter_quantity_qualifier(counter, word));
     let distributed = qualifier.is_some_and(|word| word.surface == "ずつ");
-    if (total && distributed) || (scoped_to_recipient_group && !distributed && !total) {
+    if (total && distributed)
+        || ((scoped_to_recipient_group || recipient_pause.is_some()) && !distributed && !total)
+    {
         return None;
     }
     let span = start..after_counter + usize::from(qualifier.is_some());
     Some(TeHelpLetterQuantity {
         object,
         span,
+        recipient_pause,
         numeral,
         additional,
         total,
@@ -2459,6 +2491,7 @@ fn te_help_letter_count(
     let TeHelpLetterQuantity {
         object,
         span,
+        recipient_pause,
         numeral,
         additional,
         total,
@@ -2607,6 +2640,7 @@ fn te_help_letter_count(
     Some(TeHelpLetterCount {
         object,
         span,
+        recipient_pause,
         numeral,
         modifier,
         per_writer: qualifier_text == Some("ずつ") && can_distribute_to_writers && !periodic_joint,
@@ -3492,12 +3526,18 @@ fn te_help_request<'a>(
         .filter(|(_, atom)| is_punct_atom(atom))
     {
         let lead = &arguments[lead_start..comma];
+        // The quantity parser already verified the letter and its object particle.
+        let letter_object = letter_count
+            .as_ref()
+            .filter(|count| count.recipient_pause == Some(comma) && count.object >= lead_start)
+            .map(|count| count.object);
         if !matches!(separator.surface.as_str(), "、" | "，" | ",")
             || lead.is_empty()
             || (lead_start > 0 && letter_addressee.is_none())
             || !lead.iter().enumerate().all(|(offset, adverb)| {
                 let index = lead_start + offset;
                 is_modifier(index)
+                    || letter_object.is_some_and(|object| index == object || index == object + 1)
                     || (letter_role.is_some()
                         && person
                             .as_ref()
@@ -21121,6 +21161,14 @@ mod existence_rule_tests {
             (
                 "手紙を一通ずつ二人の受取人に書いていただけますか。",
                 "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "手紙を一通ずつ、二人の受取人に書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "手紙を合計二通、二人の受取人に書いていただけますか。",
+                "可以請您總共寫兩封信給兩位收件人嗎？",
             ),
             (
                 "手紙を二通ずつ三人の受取人に書いていただけますか。",

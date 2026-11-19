@@ -6818,6 +6818,8 @@ fn translate_clause_bunsetsus(
     let mut subjects: Vec<String> = Vec::new();
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
+    let mut event_counts = Vec::new();
+    let mut count_only = false;
     let mut joint_manner = None;
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
@@ -6996,14 +6998,12 @@ fn translate_clause_bunsetsus(
             && bunsetsus.iter().any(|group| {
                 group.atoms.iter().any(|time| {
                     time.head == ka.head
-                        && match group.case_particle.as_deref() {
-                            Some("までに") => {
-                                deadline_time_question(time).is_some()
-                                    || calendar::is_question(time)
-                            }
-                            Some("に") => calendar::is_question(time),
-                            _ => false,
-                        }
+                        && (calendar::asks_interval(time)
+                            || match group.case_particle.as_deref() {
+                                Some("までに") => deadline_time_question(time).is_some(),
+                                Some("に") => calendar::question(time).is_some(),
+                                _ => false,
+                            })
                 })
             })
     });
@@ -7026,6 +7026,17 @@ fn translate_clause_bunsetsus(
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if let [atom] = b.atoms.as_slice() {
+            if calendar::is_interval(atom) {
+                temporal_others.push(atom.surface.clone());
+                continue;
+            }
+            if let Some(only) = calendar::repetitions(atom) {
+                count_only |= only;
+                event_counts.push(atom.surface.clone());
+                continue;
+            }
+        }
         if timed_result.is_some_and(|f| f.object == idx) {
             affected_object = Some(render_bunsetsu_np(&b, target));
             continue;
@@ -7188,7 +7199,11 @@ fn translate_clause_bunsetsus(
                             .iter()
                             .any(|a| is_clock_atom(a) || calendar::is_date(a)),
                         is_building_floor: b.atoms.iter().any(is_building_floor),
-                        deadline_endpoint: if b.atoms.iter().any(calendar::is_question) {
+                        deadline_endpoint: if b
+                            .atoms
+                            .iter()
+                            .any(|a| calendar::question(a).is_some())
+                        {
                             DeadlineEndpoint::Question { calendar: true }
                         } else if b.atoms.iter().any(|a| deadline_time_question(a).is_some()) {
                             DeadlineEndpoint::Question { calendar: false }
@@ -8379,6 +8394,9 @@ fn translate_clause_bunsetsus(
         }
     }
     parts.extend(cause_prefixes);
+    if count_only {
+        parts.push("只".to_owned());
+    }
     if ctx.in_concessive_follow
         && !manner_adverbs.iter().any(|x| x == "都")
         && !inner_pre_mods.iter().any(|x| x == "都")
@@ -8486,6 +8504,7 @@ fn translate_clause_bunsetsus(
         parts.push(action);
     }
     parts.extend(transfer_recipient);
+    parts.extend(event_counts);
     parts.extend(objs);
     parts.extend(purpose_recipients);
     parts.extend(route_endpoints);
@@ -11195,7 +11214,10 @@ fn deadline_weekday(surface: &str) -> Option<&'static str> {
 }
 
 // A time question can fill the endpoint slot just like a specified date or clock.
-fn deadline_time_question(atom: &Atom) -> Option<&'static str> {
+fn deadline_time_question(atom: &Atom) -> Option<&str> {
+    if let Some(day) = calendar::question(atom) {
+        return Some(day);
+    }
     if atom.is_locked
         || atom.upos != Some(Upos::Pron)
         || !matches!(atom.deprel.as_str(), "obl" | "iobj")
@@ -12820,6 +12842,37 @@ mod clock_rule_tests {
                 "何曜日までに駅に着くことを決めましたか。",
                 "決定了最晚星期幾抵達到車站嗎？",
             ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn calendar_days_with_a_count_distinguish_a_rate_from_one_dated_event() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "毎日ではなく、二日に一度だけ薬を飲みます。",
+                "不是每天，而是每兩天只喝一次藥。",
+            ),
+            ("三日に一回だけ走ります。", "每三天只跑一次。"),
+            ("一日に三回薬を飲みました。", "每天喝了三次藥。"),
+            ("何日に一度だけ駅へ行きますか。", "每隔幾天往車站只去一次？"),
+            ("二日に一度だけ駅へ行きますか。", "每兩天往車站只去一次嗎？"),
+            ("二日に一度、郵便局へ行きます。", "每兩天一次，往郵局去。"),
+            (
+                "六月二日に一度だけ手紙を書きました。",
+                "在六月二日只寫了一次信。",
+            ),
+            (
+                "五月の二日に一度だけ駅へ行きます。",
+                "在五月的二號往車站只去一次。",
+            ),
+            ("二日間、家で休みました。", "兩天，在家休息了。"),
         ] {
             assert_eq!(
                 public_translate(source, &glossary).target_text,
@@ -15248,7 +15301,7 @@ fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool)
                 format!("用{core}")
             }
         }
-        Some("に") if b.atoms.iter().any(calendar::is_question) => core,
+        Some("に") if b.atoms.iter().any(|a| calendar::question(a).is_some()) => core,
         Some("に") | Some("で") => {
             if core.starts_with('在')
                 || (core.starts_with("[[PH") && b.atoms.iter().any(is_clock_atom))

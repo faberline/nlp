@@ -3,13 +3,33 @@ use super::{Atom, Upos, normalize_decimal_digits, selects_time_value};
 use crate::opaque::parse_cjk_or_ascii_num;
 
 const DATE: &str = "__ja_calendar_day";
+const INTERVAL: &str = "__ja_day_interval";
+const REPETITIONS: &str = "__ja_day_repetitions";
+const ONLY_REPETITIONS: &str = "__ja_day_only_repetitions";
+
+pub(super) fn is_interval(atom: &Atom) -> bool {
+    atom.lemma.as_deref() == Some(INTERVAL)
+}
+
+pub(super) fn asks_interval(atom: &Atom) -> bool {
+    is_interval(atom) && atom.surface == "每隔幾天"
+}
+
+pub(super) fn repetitions(atom: &Atom) -> Option<bool> {
+    match atom.lemma.as_deref()? {
+        REPETITIONS => Some(false),
+        ONLY_REPETITIONS => Some(true),
+        _ => None,
+    }
+}
 
 pub(super) fn is_date(atom: &Atom) -> bool {
     atom.lemma.as_deref() == Some(DATE)
 }
 
-pub(super) fn is_question(atom: &Atom) -> bool {
-    is_date(atom) && matches!(atom.surface.as_str(), "幾號" | "星期幾")
+pub(super) fn question(atom: &Atom) -> Option<&str> {
+    (is_date(atom) && (atom.surface.ends_with("幾號") || atom.surface == "星期幾"))
+        .then_some(atom.surface.as_str())
 }
 
 fn is_numeral(atom: &Atom) -> bool {
@@ -72,6 +92,15 @@ fn month_before(atoms: &[Atom], start: usize, day: &Atom) -> Option<(usize, Stri
         return None;
     }
     let number = month.surface.strip_suffix('月')?;
+    if matches!(
+        month.surface.as_str(),
+        "今月" | "先月" | "来月" | "毎月" | "翌月" | "前月" | "同月" | "当月"
+    ) {
+        return Some((
+            i,
+            super::translate_single_ja_term(&month.surface, month.lemma.as_deref(), month.upos),
+        ));
+    }
     let (start, number) = if number.is_empty() {
         let n = i.checked_sub(1)?;
         let num = &atoms[n];
@@ -97,6 +126,183 @@ fn linked_case(case: &Atom, day: &Atom, adjacent_to: &Atom, surface: &str) -> bo
         && day.doc_tok_idx.is_some()
         && case.head == day.doc_tok_idx
         && case.span.start_char == adjacent_to.span.end_char
+}
+
+fn adjacent_count(atoms: &[Atom], case_idx: usize) -> Option<(usize, &str)> {
+    let case = &atoms[case_idx];
+    let first_idx = case_idx + 1;
+    let first = atoms.get(first_idx)?;
+    if first.is_locked || first.span.start_char != case.span.end_char {
+        return None;
+    }
+    if let Some(amount) = first.surface.strip_suffix(['度', '回'])
+        && calendar_number(amount).is_some()
+    {
+        Some((first_idx, amount))
+    } else if let Some(unit) = atoms.get(first_idx + 1)
+        && is_numeral(first)
+        && calendar_number(&first.surface).is_some()
+        && !unit.is_locked
+        && first.span.end_char == unit.span.start_char
+        && matches!(unit.surface.as_str(), "度" | "回")
+        && (first.head == unit.doc_tok_idx || first.head == unit.head)
+    {
+        Some((first_idx + 1, first.surface.as_str()))
+    } else {
+        None
+    }
+}
+
+// Count the event in [day に] [number 回/度 (だけ)]. A case-marked argument
+// can intervene in the dependency tree: 一度 can modify 薬 which modifies 飲む.
+fn bind_repetitions(atoms: &mut Vec<Atom>, end: usize) {
+    let day = &atoms[end];
+    let Some(case) = atoms.get(end + 1) else {
+        return;
+    };
+    if day.is_locked
+        || day.surface != "日"
+        || day.upos != Some(Upos::Noun)
+        || !matches!(day.deprel.as_str(), "obl" | "iobj")
+        || !linked_case(case, day, day, "に")
+    {
+        return;
+    }
+    let Some(day_head) = day.head else { return };
+    let Some((unit_idx, amount)) = adjacent_count(atoms, end + 1) else {
+        return;
+    };
+    let first_idx = end + 2;
+    let first = &atoms[first_idx];
+    let unit = &atoms[unit_idx];
+    let Some(unit_head) = unit.head else { return };
+    let next = atoms.get(unit_idx + 1);
+    let focused = next.is_some_and(|a| {
+        !a.is_locked
+            && a.surface == "だけ"
+            && a.upos == Some(Upos::Part)
+            && a.deprel == "discourse"
+            && a.head == unit.doc_tok_idx
+            && a.span.start_char == unit.span.end_char
+    });
+    // の makes a nominal rate, and も takes scope over the negative event.
+    if !focused
+        && next.is_some_and(|a| !a.is_locked && matches!(a.upos, Some(Upos::Adp | Upos::Part)))
+    {
+        return;
+    }
+    let fragment = atoms[unit_idx + 1 + usize::from(focused)..].is_empty()
+        && !atoms.iter().any(|a| a.upos == Some(Upos::Verb));
+    if !fragment
+        && unit_head != day_head
+        && !(matches!(unit.deprel.as_str(), "nmod" | "compound")
+            && atoms.iter().any(|a| {
+                !a.is_locked
+                    && a.doc_tok_idx == Some(unit_head)
+                    && a.head == Some(day_head)
+                    && matches!(a.upos, Some(Upos::Noun | Upos::Propn))
+            }))
+    {
+        return;
+    }
+    // Keep the interval, the count and the event inside their clause.
+    let root_event = atoms.iter().any(|a| {
+        !a.is_locked
+            && a.doc_tok_idx == Some(day_head)
+            && a.upos == Some(Upos::Verb)
+            && a.deprel == "root"
+    });
+    if !root_event && !fragment {
+        return;
+    }
+    let Some(prev_idx) = end.checked_sub(1) else {
+        return;
+    };
+    let prev = &atoms[prev_idx];
+    let (start, days) = if prev.surface == "何"
+        && !prev.is_locked
+        && prev.upos == Some(Upos::Pron)
+        && prev.deprel == "compound"
+        && prev.head == day.doc_tok_idx
+        && prev.span.end_char == day.span.start_char
+    {
+        (prev_idx, "幾".to_owned())
+    } else if let Some((start, raw)) = number_before(atoms, end) {
+        let Some(n) = calendar_number(&raw) else {
+            return;
+        };
+        if n == 0 {
+            return;
+        }
+        (
+            start,
+            if raw == "二" {
+                "兩".to_owned()
+            } else {
+                normalize_decimal_digits(&raw)
+            },
+        )
+    } else {
+        return;
+    };
+    if matches!(&atoms[..start], [.., opaque] if opaque.is_locked && opaque.span.end_char == atoms[start].span.start_char)
+        || matches!(&atoms[..start], [.., opaque, no] if opaque.is_locked && no.surface == "の" && no.head == opaque.doc_tok_idx)
+    {
+        return;
+    }
+    let dated = month_before(atoms, start, day).is_some()
+        || matches!(&atoms[..start], [.., month, no] if !month.is_locked &&
+            month.surface.ends_with('月') && month.head == day.doc_tok_idx && linked_case(no, month, month, "の"));
+    let mut repeat = unit.clone();
+    repeat.surface = format!(
+        "{}次",
+        if amount == "二" {
+            "兩".to_owned()
+        } else {
+            normalize_decimal_digits(amount)
+        }
+    );
+    repeat.span.start_char = first.span.start_char;
+    repeat.span.end_char = if focused {
+        atoms[unit_idx + 1].span.end_char
+    } else {
+        unit.span.end_char
+    };
+    repeat.lemma = Some(
+        if focused {
+            ONLY_REPETITIONS
+        } else {
+            REPETITIONS
+        }
+        .to_owned(),
+    );
+    repeat.head = Some(day_head);
+    repeat.is_locked = true;
+    let mut interval = day.clone();
+    interval.span.start_char = atoms[start].span.start_char;
+    interval.span.end_char = case.span.end_char;
+    interval.lemma = Some(INTERVAL.to_owned());
+    interval.is_locked = true;
+    interval.surface = match days.as_str() {
+        "幾" => "每隔幾天".to_owned(),
+        "一" | "1" => "每天".to_owned(),
+        _ => format!("每{days}天"),
+    };
+    if fragment {
+        if !dated {
+            interval.span.end_char = repeat.span.end_char;
+            if focused {
+                interval.surface.push('僅');
+            }
+            interval.surface.push_str(&repeat.surface);
+            atoms.splice(start..=unit_idx + usize::from(focused), [interval]);
+        }
+        return;
+    }
+    atoms.splice(first_idx..=unit_idx + usize::from(focused), [repeat]);
+    if !dated {
+        atoms.splice(start..=end + 1, [interval]);
+    }
 }
 
 // A year that modifies this month belongs inside the same date phrase.
@@ -173,15 +379,16 @@ fn expression(atoms: &[Atom], end: usize) -> Option<(usize, String)> {
     }
     // Counted repetitions turn 何日 into an interval: 何日に一回, 何日に三度.
     let frequency = !deadline
-        && atoms[end + 2..].iter().any(|a| {
-            a.head == verb.doc_tok_idx
-                && !a.is_locked
-                && ["回", "度"].iter().any(|suffix| {
-                    a.surface
-                        .strip_suffix(suffix)
-                        .is_some_and(|n| n.is_empty() || calendar_number(n).is_some())
-                })
-        });
+        && (adjacent_count(atoms, end + 1).is_some()
+            || atoms[end + 2..].iter().any(|a| {
+                a.head == verb.doc_tok_idx
+                    && !a.is_locked
+                    && ["回", "度"].iter().any(|suffix| {
+                        a.surface
+                            .strip_suffix(suffix)
+                            .is_some_and(|n| n.is_empty() || calendar_number(n).is_some())
+                    })
+            }));
     let linked_modifier = |a: &Atom, next: &Atom| {
         !a.is_locked
             && a.deprel == "compound"
@@ -200,6 +407,12 @@ fn expression(atoms: &[Atom], end: usize) -> Option<(usize, String)> {
         && atoms[q].upos == Some(Upos::Pron)
         && linked_modifier(&atoms[q], &atoms[q + 1])
     {
+        if text == "幾號"
+            && let Some((start, month)) = month_before(atoms, q, day)
+        {
+            let (start, month) = dated_month(atoms, start, month)?;
+            return Some((start, format!("{month}{text}")));
+        }
         return (!(text == "幾號" && frequency)).then(|| (q, text.to_owned()));
     }
     let (start, n) = number_before(atoms, end)?;
@@ -220,6 +433,13 @@ fn expression(atoms: &[Atom], end: usize) -> Option<(usize, String)> {
 }
 
 pub(super) fn normalize(atoms: &mut Vec<Atom>) {
+    // Work from the right: binding a count can collapse both the counted
+    // phrase and its day interval. Start the date pass with the resulting spans.
+    for idx in (0..atoms.len()).rev() {
+        if atoms.get(idx).is_some_and(|a| a.surface == "日") {
+            bind_repetitions(atoms, idx);
+        }
+    }
     let mut end = atoms.len();
     while end > 0 {
         end -= 1;

@@ -92,21 +92,24 @@ pub(super) fn meeting_verb(source: &[Atom], day: &Atom) -> Option<(super::Span, 
 
 // A separate destination or addressee for this verb leaves 日中 free to
 // modify the event. A participant of another predicate cannot do so.
-fn other_goal<'a>(source: &'a [Atom], day: &Atom, verb: &Atom) -> Option<&'a Atom> {
+fn other_goal<'a>(source: &'a [Atom], day: &Atom, verb: &Atom, day_also: bool) -> Option<&'a Atom> {
     source.windows(2).find_map(|pair| {
         let noun = &pair[0];
         let case = &pair[1];
+        let focus = source.iter().find(|a| {
+            !a.is_locked
+                && a.head == noun.doc_tok_idx
+                && a.deprel == "case"
+                && matches!(a.surface.as_str(), "は" | "も")
+                && a.span.start_char == case.span.end_char
+        });
         (noun.doc_tok_idx.is_some()
             && noun.doc_tok_idx != day.doc_tok_idx
             && noun.head == verb.doc_tok_idx
             && (matches!(noun.deprel.as_str(), "iobj" | "obl")
-                || noun.deprel == "nsubj"
-                    && source.iter().any(|a| {
-                        a.head == noun.doc_tok_idx
-                            && a.deprel == "case"
-                            && matches!(a.surface.as_str(), "は" | "も")
-                            && a.span.start_char == case.span.end_char
-                    }))
+                || noun.deprel == "nsubj" && focus.is_some())
+            // 日中にも…米国にも can coordinate two political recipients.
+            && !(day_also && focus.is_some_and(|p| p.surface == "も"))
             && !source_time_head(noun)
             && !is_daypart_surface(&noun.surface)
             && noun.surface != "日中"
@@ -292,7 +295,7 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
         }
         let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
         let stem = lemma.strip_suffix("する").unwrap_or(lemma);
-        let recipient = other_goal(source, word, verb);
+        let recipient = other_goal(source, word, verb, also);
         // A market can be opened to two countries. A shop opening for the
         // day and a meeting being held instead have an event-time modifier.
         let takes_participant = selects_participant(stem)
@@ -393,14 +396,17 @@ pub(super) fn join_recipient_pauses(atoms: &mut Vec<Atom>) {
         }
         let joins = (split.saturating_sub(3)..split).any(|idx| {
             let day = &atoms[idx];
-            form(day, &atoms[idx + 1], atoms.get(idx + 2))
-                .is_some_and(|(end, head, _)| end == comma.span.start_char && head == owner)
+            let Some((end, head, also)) = form(day, &atoms[idx + 1], atoms.get(idx + 2)) else {
+                return false;
+            };
+            end == comma.span.start_char
+                && head == owner
                 && !atoms[..idx].last().is_some_and(|a| {
                     a.span.end_char == day.span.start_char
                         && (a.upos == Some(Upos::Num) || a.is_locked)
                 })
                 && (dated_distribution(atoms, idx, verb)
-                    || other_goal(atoms, day, verb).is_some_and(|case| {
+                    || other_goal(atoms, day, verb, also).is_some_and(|case| {
                         comma.span.end_char <= case.span.start_char
                             && case.span.end_char <= verb.span.start_char
                     }))

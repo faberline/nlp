@@ -572,7 +572,56 @@ pub(super) fn bind_attributives<'a>(
             result.to_mut().splice(range, [noun]);
         }
     }
+    if let std::borrow::Cow::Owned(bound) = &mut result
+        && atoms
+            .iter()
+            .any(|a| !a.is_locked && a.deprel == "case" && a.surface == "と")
+    {
+        restore_list_noun_roles(bound, atoms, doc, chars);
+    }
     result
+}
+
+pub(super) const ATTRIBUTIVE_PERSON: &str = "__ja_attributive_person";
+
+// A glossary placeholder is provisionally tagged PROPN. Before deciding
+// whether と joins things or introduces a companion, consult the actual noun.
+// The protected text is still used verbatim, including in the second item.
+fn restore_list_noun_roles(bound: &mut [Atom], source: &[Atom], doc: &Document, chars: &[char]) {
+    for term in bound.iter_mut().filter(|t| t.is_locked) {
+        let Some(id) = term.doc_tok_idx else { continue };
+        if !source.iter().any(|p| {
+            !p.is_locked
+                && p.head == Some(id)
+                && p.deprel == "case"
+                && matches!(p.surface.as_str(), "と" | "を")
+        }) {
+            continue;
+        }
+        let Some(noun) = source.iter().find(|a| a.doc_tok_idx == Some(id)) else {
+            continue;
+        };
+        let Some(token) = doc
+            .tokens
+            .get(id)
+            .filter(|t| t.span == noun.span && t.upos == Some(Upos::Noun))
+        else {
+            continue;
+        };
+        let Some(raw) = chars.get(token.span.start_char..token.span.end_char) else {
+            continue;
+        };
+        let mut original = noun.clone();
+        original.surface = raw.iter().collect();
+        original.upos = token.upos;
+        let person = token.sem_class == Some(SemanticClass::Person)
+            || original.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM)
+            || is_demonstrative_person_noun(&original);
+        term.upos = token.upos;
+        if person && (term.lemma.is_none() || term.span != noun.span) {
+            term.lemma = Some(ATTRIBUTIVE_PERSON.to_owned());
+        }
+    }
 }
 
 fn attributive_at(
@@ -727,13 +776,16 @@ fn separate_modified_argument(
     let Some(id) = earlier.doc_tok_idx else {
         return false;
     };
+    if case.surface == "と" {
+        return matches!(
+            nominal_possession::original_pos(earlier, doc),
+            Some(Upos::Noun | Upos::Propn | Upos::Pron)
+        );
+    }
     if !atoms[..at].iter().any(|modifier| {
         modifier.head == Some(id) && matches!(modifier.deprel.as_str(), "amod" | "acl")
     }) {
         return false;
-    }
-    if case.surface == "と" {
-        return true;
     }
     if noun.deprel != "obj" {
         return false;
@@ -1356,6 +1408,10 @@ mod tests {
                 "看了當時很重的箱子與當時很輕的箱子。",
             ),
             (
+                "小さかった子供と赤かった傘を買いました。",
+                "跟當時很小的孩子買了當時是紅色的傘。",
+            ),
+            (
                 "父は「白かった車と黒かった車を見た」と言いました。",
                 "父親說「看了當時是白色的車和當時是黑色的車」。",
             ),
@@ -1387,6 +1443,22 @@ mod tests {
         });
         for (source, expected) in [
             ("白かった車を見ました。", "看了當時是白色的轎車甲。"),
+            (
+                "白くなかった車と赤かった傘を買いました。",
+                "買了當時不是白色的轎車甲和當時是紅色的傘。",
+            ),
+            (
+                "赤かった傘と白くなかった車を買いました。",
+                "買了當時是紅色的傘和當時不是白色的轎車甲。",
+            ),
+            (
+                "友達と白かった車を見ました。",
+                "跟朋友看了當時是白色的轎車甲。",
+            ),
+            (
+                "白くなった車と赤かった傘を買いました。",
+                "買了變白的轎車甲和當時是紅色的傘。",
+            ),
             (
                 "白かった車と黒くなかった車を見ました。",
                 "看了當時是白色的轎車甲和當時不是黑色的轎車甲。",

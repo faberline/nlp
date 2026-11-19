@@ -12478,6 +12478,11 @@ fn is_person_like_bunsetsu(b: &Bunsetsu) -> bool {
 
 fn is_person_like_atom(a: &Atom) -> bool {
     matches!(a.upos, Some(Upos::Pron | Upos::Propn))
+        || a.is_locked
+            && matches!(
+                a.lemma.as_deref(),
+                Some(finite_adjective::ATTRIBUTIVE_PERSON | LOCKED_RESIDENT_ATOM)
+            )
         || matches!(
             a.surface.as_str(),
             "友達"

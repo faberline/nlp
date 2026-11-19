@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 mod counted_object;
 mod payment_potential;
+mod return_endpoint;
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
@@ -2928,7 +2929,7 @@ fn return_goal(group: &Bunsetsu, returning: usize) -> bool {
         && (physical_goal_head(group) == Some(returning)
             || case.surface == "へ" || is_spatial_made_bunsetsu(group)
             || is_place_location_bunsetsu(&group.atoms)
-            || matches!(noun.surface.as_str(), "店" | "岸" | "島" | "庭")))
+            || return_endpoint::is_place(noun)))
 }
 
 // Keep each return argument's source role before adjacent nouns are folded.
@@ -4776,6 +4777,7 @@ fn translate_clause_atoms(
     let (mut text, subject_only) = translate_clause_bunsetsus(
         bunsetsus,
         trip_source.as_deref().unwrap_or(atoms),
+        doc,
         &raw_clause,
         conditioning,
         allow_pro_drop_inject,
@@ -8117,9 +8119,11 @@ fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn translate_clause_bunsetsus(
     mut bunsetsus: Vec<Bunsetsu>,
     source: &[Atom],
+    doc: &Document,
     raw_clause: &str,
     conditioning: Option<&SentenceConditioning>,
     allow_pro_drop_inject: bool,
@@ -8363,6 +8367,11 @@ fn translate_clause_bunsetsus(
     };
     // Resolve time and result roles while the other arguments of the predicate are available.
     let timed_result = timed_result_frame(&bunsetsus, source);
+    let endpoint = if ctx.return_trip.is_none() {
+        return_endpoint::resolve(&bunsetsus, &candidates, source, doc, target)
+    } else {
+        None
+    };
     let mut trip_destination = None;
     let returning = ctx.return_trip.map(|trip| trip.returning).or_else(|| {
         if !bunsetsus
@@ -8395,6 +8404,15 @@ fn translate_clause_bunsetsus(
             && let Some(label) = trip_relative_daypart(&b, source, trip.returning)
         {
             temporal_others.push(label);
+            continue;
+        }
+        if endpoint.as_ref().is_some_and(|(index, _)| *index == idx) {
+            if b.atoms
+                .iter()
+                .any(|a| !a.is_locked && a.surface == "も" && a.deprel == "case")
+            {
+                adverbs.push("也".to_owned());
+            }
             continue;
         }
         if returning.is_some_and(|root| return_goal(&b, root)) {
@@ -8833,6 +8851,8 @@ fn translate_clause_bunsetsus(
         } else {
             format!("{}{verb_core}", trip.action)
         };
+    } else if let Some((_, action)) = endpoint {
+        verb_core = action;
     } else if let Some(place) = trip_destination {
         verb_core = format!("回到{place}");
     }
@@ -12452,6 +12472,7 @@ fn merge_adnominal_bunsetsus(
                 let (mut inner, _) = translate_clause_bunsetsus(
                     acl_bunsetsus,
                     source,
+                    doc,
                     "",
                     None,
                     false,
@@ -12503,6 +12524,7 @@ fn merge_adnominal_bunsetsus(
                         let (mut inner, _) = translate_clause_bunsetsus(
                             acl_bunsetsus,
                             source,
+                            doc,
                             "",
                             None,
                             false,
@@ -12606,6 +12628,7 @@ fn merge_adnominal_bunsetsus(
                     let (mut inner, _) = translate_clause_bunsetsus(
                         acl_bunsetsus,
                         source,
+                        doc,
                         "",
                         None,
                         false,
@@ -13879,7 +13902,6 @@ fn is_time_setting(a: &Atom, source: &[Atom]) -> bool {
 // mover or the thing restored. An independent location or a human subject
 // supports actual movement. An unrelated subject's modifier is insufficient.
 fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool {
-    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
     let spatial_path = clause.iter().any(|b| {
         matches!(
             b.case_particle.as_deref(),
@@ -13889,8 +13911,7 @@ fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool
                 && a.head == Some(head)
                 && a.deprel == "obl"
                 && (is_place_location_bunsetsu(std::slice::from_ref(a))
-                    || lookup_ja(&a.surface)
-                        .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Location)))
+                    || return_endpoint::is_place(a))
         })
     });
     if spatial_path {
@@ -13998,7 +14019,10 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
     // and 移る / 動く can move a scheduled value.
     if matches!(lemma, "戻る" | "移る" | "動く") && !has_motion_reading(clause, source, head)
     {
-        return false;
+        let has_other_result = lemma == "戻る" && return_endpoint::has_original_value(source, head);
+        if !has_other_result {
+            return false;
+        }
     }
     // A replacement can take both an affected object and the new value,
     // as in Xを夕方に書き換える. Ordinary observation or writing has no
@@ -14860,11 +14884,65 @@ mod motion_endpoint_tests {
             ("私は夕方に先生に電話します。", "我傍晚給老師打電話。"),
             ("夕方に散歩します。", "傍晚散步。"),
             ("会議が夕方に始まります。", "會議傍晚開始。"),
-            ("私は夕方に家に戻りました。", "我傍晚回來到家了。"),
+            ("私は夕方に家に戻りました。", "我傍晚回到家了。"),
             ("私は夕方を待ちます。", "我等待傍晚。"),
             ("夕方から図書館で勉強します。", "從傍晚在圖書館學習。"),
             ("私は先生に手紙を書きます。", "我給老師寫信。"),
             ("私は`夕方`に帰ります。", "我回到`夕方`。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn a_restored_schedule_and_a_returning_person_keep_their_own_endpoints() {
+        for (source, expected) in [
+            (
+                "番組の放送時間は夕方に戻りました。",
+                "番組的廣播時間恢復到傍晚了。",
+            ),
+            (
+                "バスの出発時間が朝から夕方に戻りました。",
+                "公車的出發時間從早上恢復到傍晚了。",
+            ),
+            (
+                "会議の開始時刻が午後三時に戻りました。",
+                "會議的開始時刻恢復到下午三點了。",
+            ),
+            (
+                "番組の放送時間は夕方には戻りませんでした。",
+                "番組的廣播時間沒有恢復到傍晚。",
+            ),
+            (
+                "番組の放送時間が夕方に元に戻りました。",
+                "番組的廣播時間傍晚恢復原狀了。",
+            ),
+            (
+                "放送時間が夜から元の時刻に戻りました。",
+                "廣播時間從夜晚恢復到原本的時刻了。",
+            ),
+            ("客は正午に店に戻りました。", "客正午回到商店了。"),
+            ("客は正午に店には戻りませんでした。", "客正午沒有回到商店。"),
+            ("妹は公園へも戻りました。", "妹妹也回到公園了。"),
+            (
+                "家族は朝に公園から店へ戻りました。",
+                "家人早上從公園回到商店了。",
+            ),
+            (
+                "彼の時計は夕方に店に戻りました。",
+                "他的手錶傍晚回到商店了。",
+            ),
+            (
+                "放送時間の担当者は夕方に店に戻りました。",
+                "廣播時間的擔當者傍晚回到商店了。",
+            ),
+            (
+                "番組の放送時間が夕方に戻って、客は夜に店に戻りました。",
+                "番組的廣播時間恢復到傍晚，客夜晚回到商店了。",
+            ),
+            ("店に戻った客が本を買いました。", "回到商店的客買了書。"),
+            ("私は正午に店に本を戻しました。", "我正午把書放回商店了。"),
+            ("母は先生に本を返しました。", "母親給老師還給了書。"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
@@ -14921,7 +14999,7 @@ mod motion_endpoint_tests {
                 "午後一時の時計を一時間戻すと、針が正午に戻りました。",
                 "針回來到正午",
             ),
-            ("夜の放送枠が夕方に戻りました。", "回來到傍晚"),
+            ("夜の放送枠が夕方に戻りました。", "恢復到傍晚"),
         ] {
             let text = translate(source);
             assert!(text.contains(endpoint), "{source}: {text}");
@@ -15038,7 +15116,7 @@ mod motion_endpoint_tests {
             ("父は古い家へ走って戻りました。", "父親跑回舊的家了。"),
             (
                 "今朝早く走って今夜家に戻りました。",
-                "今朝早早地跑，今夜回來到家了。",
+                "今朝早早地跑，今夜回到家了。",
             ),
         ] {
             assert_eq!(translate(source), expected, "{source}");

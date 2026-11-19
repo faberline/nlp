@@ -1,5 +1,5 @@
 use faberline_nlp::Span;
-use faberline_nlp::doc::Segmentation;
+use faberline_nlp::doc::{Segmentation, Token, Upos};
 
 const FORM_NAMES: &[&str] = &[
     "文字数",
@@ -64,11 +64,12 @@ pub(crate) struct WrittenForm {
 pub(crate) fn plan_written_form_quotes(
     chars: &[char],
     segmentation: &Segmentation,
+    tokens: &[Token],
 ) -> Vec<Vec<WrittenForm>> {
     let mut by_sentence = vec![Vec::new(); segmentation.sentences.len()];
     let sentences = &segmentation.sentences;
     for paragraph in &segmentation.paragraphs {
-        let mut quotes = written_form_quotes(chars, paragraph.span);
+        let mut quotes = written_form_quotes(chars, paragraph.span, tokens);
         quotes.sort_unstable_by_key(|span| (span.start_char, std::cmp::Reverse(span.end_char)));
         let mut last_end = paragraph.span.start_char;
         for quote in quotes {
@@ -106,7 +107,7 @@ struct OpenQuote {
     first_protection: usize,
 }
 
-fn written_form_quotes(chars: &[char], paragraph: Span) -> Vec<Span> {
+fn written_form_quotes(chars: &[char], paragraph: Span, tokens: &[Token]) -> Vec<Span> {
     let mut openings = Vec::new();
     let mut protected = Vec::new();
     let mut top_level = Vec::new();
@@ -137,7 +138,7 @@ fn written_form_quotes(chars: &[char], paragraph: Span) -> Vec<Span> {
                     start_char: frame.start + 1,
                     end_char: at,
                 };
-                protect_sibling_forms(chars, inner, &frame.children, true, &mut protected);
+                protect_sibling_forms(chars, inner, &frame.children, true, tokens, &mut protected);
                 if let Some(parent) = openings.last_mut() {
                     parent.children.push(inner);
                 } else {
@@ -150,7 +151,7 @@ fn written_form_quotes(chars: &[char], paragraph: Span) -> Vec<Span> {
     if let Some(unclosed) = openings.first() {
         protected.truncate(unclosed.first_protection);
     }
-    protect_sibling_forms(chars, paragraph, &top_level, false, &mut protected);
+    protect_sibling_forms(chars, paragraph, &top_level, false, tokens, &mut protected);
     protected
 }
 
@@ -171,6 +172,7 @@ fn protect_sibling_forms(
     scope: Span,
     quotes: &[Span],
     nested: bool,
+    tokens: &[Token],
     protected: &mut Vec<Span>,
 ) {
     let mut first_for_count = 0;
@@ -184,7 +186,7 @@ fn protect_sibling_forms(
         if measures_form
             || describes_written_form(after)
             || acts_on_written_form(before, after)
-            || copies_written_form(after)
+            || copies_written_form(after, scope.end_char, tokens)
         {
             protected.push(protection_span(*quote, nested));
         }
@@ -425,7 +427,7 @@ fn acts_on_written_form(before: &[char], after: &[char]) -> bool {
         .is_some_and(|&ch| is_count_character(ch))
 }
 
-fn copies_written_form(after: &[char]) -> bool {
+fn copies_written_form(after: &[char], scope_end: usize, tokens: &[Token]) -> bool {
     let next = if let Some(word) = strip_prefix(after, "という") {
         after_word_name(word).and_then(|operand| operand.strip_prefix(&['を']))
     } else {
@@ -436,7 +438,9 @@ fn copies_written_form(after: &[char]) -> bool {
     let Some(destination) = next.map(after_clause_comma) else {
         return false;
     };
+    let destination_start = scope_end - destination.len();
     starts_copying(destination)
+        || after_copying_manner(destination).is_some_and(starts_copying)
         || destination
             .iter()
             .take_while(|&&ch| {
@@ -460,8 +464,34 @@ fn copies_written_form(after: &[char]) -> bool {
             })
             .enumerate()
             .any(|(index, &ch)| {
-                ch == 'に' && index > 0 && starts_copying(&destination[index + 1..])
+                if ch != 'に' || index == 0 {
+                    return false;
+                }
+                let tail = &destination[index + 1..];
+                starts_copying(tail)
+                    || (after_copying_manner(tail).is_some_and(starts_copying)
+                        && copy_destination_without_predicate(
+                            tokens,
+                            destination_start,
+                            destination_start + index,
+                        ))
             })
+}
+
+fn after_copying_manner(chars: &[char]) -> Option<&[char]> {
+    let chars = skip_space(chars);
+    strip_prefix(chars, "そのまま")
+        .or_else(|| after_character_count(chars).and_then(|tail| strip_prefix(tail, "ずつ")))
+}
+
+fn copy_destination_without_predicate(tokens: &[Token], start: usize, end: usize) -> bool {
+    // A clause such as 「…」と言った後で紙に can contain a destination for a later verb.
+    // Its earlier verb still governs the quotation.
+    !tokens.iter().any(|token| {
+        token.span.start_char >= start
+            && token.span.end_char <= end
+            && matches!(token.upos, Some(Upos::Verb | Upos::Aux | Upos::Sconj))
+    })
 }
 
 fn starts_copying(chars: &[char]) -> bool {
@@ -1042,10 +1072,31 @@ mod tests {
                 "『入居申込書』と紙に書き写しました。",
                 &["『入居申込書』", "紙"],
             ),
+            (
+                "『入居申込書』と紙に一字ずつ書き写しました。",
+                &["『入居申込書』", "紙"],
+            ),
+            (
+                "私は四時に「七月八日の午後二時には」とノートにそのまま書き写しました。",
+                &["四點", "「七月八日の午後二時には」", "筆記本"],
+            ),
+            (
+                "『入居申込書』という語を紙にそのまま書き写しました。",
+                &["『入居申込書』", "紙"],
+            ),
+            ("「申込書」とそのまま書き写しました。", &["「申込書」"]),
             ("入居申込書を受け取りました。", &["入住申請表"]),
             (
                 "係員は「入居申込書は机の上です」と言いました。",
                 &["入住申請表", "說"],
+            ),
+            (
+                "窓口で『入居申込書』と担当者にそのまま伝えました。",
+                &["入住申請表"],
+            ),
+            (
+                "『入居申込書』と言った後で紙にそのまま書き写しました。",
+                &["入住申請表", "紙"],
             ),
             (
                 "4月2日に、申込書に『来て！』と書き写しました。",
@@ -1477,6 +1528,7 @@ mod tests {
                     start_char: 0,
                     end_char: chars.len(),
                 },
+                &[],
             );
             let protected: Vec<String> = spans
                 .into_iter()

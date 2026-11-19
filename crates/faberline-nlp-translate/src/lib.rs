@@ -229,7 +229,7 @@ pub fn translate_document(
     }
 
     let written_quotes = if options.target.is_zh() && seq2seq.is_none() {
-        quote_source::plan_written_form_quotes(&chars, &doc.segmentation)
+        quote_source::plan_written_form_quotes(&chars, &doc.segmentation, &doc.tokens)
     } else {
         Vec::new()
     };

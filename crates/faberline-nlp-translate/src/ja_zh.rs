@@ -21148,16 +21148,18 @@ mod existence_rule_tests {
                 .ends_with("可以請兩位每次各寫一封信給校長嗎？")
         );
 
-        let copied = translate(
-            &format!("{quoted_statement}と紙に書き写しました。{request}"),
-            &glossary,
-        );
-        assert!(copied.target_text.starts_with(quoted_statement));
-        assert!(
-            copied
-                .target_text
-                .ends_with("可以請兩位每次一起寫一封信給校長嗎？")
-        );
+        for copied_statement in [
+            format!("{quoted_statement}と紙に書き写しました。"),
+            format!("紙に{quoted_statement}とそのまま書き写しました。"),
+        ] {
+            let copied = translate(&format!("{copied_statement}{request}"), &glossary);
+            assert!(copied.target_text.contains(quoted_statement));
+            assert!(
+                copied
+                    .target_text
+                    .ends_with("可以請兩位每次一起寫一封信給校長嗎？")
+            );
+        }
     }
 
     #[test]

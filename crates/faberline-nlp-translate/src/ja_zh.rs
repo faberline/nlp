@@ -5158,9 +5158,9 @@ struct ClauseDiscourseCtx<'a> {
     prior_letter_distribution: Option<PriorLetterDistribution>,
 }
 
-// The segmenter has already separated two explicitly voiced subjects. Prove
-// the terminal て belongs to the first action and that action reaches the
-// second clause's root; auxiliaries and quotative segments do not qualify.
+// The segmenter has already separated the two clauses. Prove the terminal て
+// belongs to the first action and that action reaches the second clause's root.
+// Without both explicit subjects, the second action also needs its own amount.
 fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
     if first
         .iter()
@@ -5229,10 +5229,25 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
     }
     let left = subjects(first);
     let right = subjects(next);
-    if left.len() != 1
-        || right.len() != 1
-        || !(left[0].head == Some(action_id) || reaches_root(left[0].head))
-        || !reaches_root(right[0].head)
+    let reaches_first = |head: Option<usize>| {
+        head == Some(action_id)
+            || first.iter().any(|part| {
+                part.doc_tok_idx == head
+                    && part.upos == Some(Upos::Adj)
+                    && part.deprel == "advcl"
+                    && part.head == Some(action_id)
+            })
+            || reaches_root(head)
+    };
+    if left.len() > 1
+        || right.len() > 1
+        || left
+            .first()
+            .is_some_and(|subject| !reaches_first(subject.head))
+        || right
+            .first()
+            .is_some_and(|subject| !reaches_root(subject.head))
+        || (left.is_empty() || right.is_empty()) && !elapsed_owned_by(next, root_id)
     {
         return None;
     }
@@ -17515,8 +17530,50 @@ mod clock_rule_tests {
             "我時間二等待，おき了。"
         );
         assert_eq!(
+            translate("私は二時間待ってあげました。"),
+            "我時間二幫忙等待了。"
+        );
+        assert_eq!(
+            translate("私は二時間待って、帰りました。"),
+            "我時間二等待，回去了。"
+        );
+        assert_eq!(
             translate("「二時間待って」と先生は言いました。"),
             "「時間二等待」老師說了。"
+        );
+    }
+
+    #[test]
+    fn elapsed_te_clause_keeps_amount_with_shared_or_implicit_subject() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("私は二時間待って、三十分話しました。"),
+            "我等待兩個小時，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("私は二時間待ち、三十分話しました。"),
+            "我等待兩個小時，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("私は三十分話して、二時間待ちました。"),
+            "我說三十分鐘，等待了兩個小時。"
+        );
+        assert_eq!(
+            translate("二時間待って、三十分話しました。"),
+            "等待兩個小時，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("私は二時間待って三十分話しました。"),
+            "我等待兩個小時，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("二時間待って三十分話しました。"),
+            "等待兩個小時，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("父は一時間歩いて、三時間泳ぎました。"),
+            "父親走一個小時，游泳了三個小時。"
         );
     }
 

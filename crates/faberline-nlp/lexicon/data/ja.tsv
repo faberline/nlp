@@ -57623,6 +57623,7 @@
 申込む	ja	1161	VERB	VERB	-	申請	infl=godan_ma;src=first_party_mit
 申込める	ja	1162	VERB	VERB	-	-	infl=ichidan
 申込る	ja	1196	VERB	VERB	-	-	infl=ichidan
+申込書	ja	1035	NOUN	NOUN	-	申請表	src=first_party_mit
 申述べる	ja	1162	VERB	VERB	-	-	infl=ichidan
 申述る	ja	1162	VERB	VERB	-	-	infl=ichidan
 申送る	ja	1162	VERB	VERB	-	-	infl=godan_ra

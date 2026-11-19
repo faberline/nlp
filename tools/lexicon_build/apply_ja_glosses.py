@@ -17,7 +17,7 @@ Strict A2 rules:
      (a) Step 4 Keigo verbs (`拝見する`)
      (b) 4-kana reduplicated ABAB / mimetic adverbs (`ざあざあ`, `ざわざわ`, `くたくた`,
          `にゃあにゃあ`, `ちゅんちゅん`, `ねばねば`, `ぽっちゃり`, `さらっと`, `しーん`).
-     (c) The NOUN entries `かばん`, `みかん`, and `店長`.
+     (c) The NOUN entries `かばん`, `みかん`, `店長`, and `申込書`.
 """
 
 from __future__ import annotations
@@ -44,6 +44,7 @@ ALLOWED_INSERT_SURFACES = {
     "かばん",
     "みかん",
     "店長",
+    "申込書",
     # Step 4 Keigo verb missing from ja.tsv
     "拝見する",
     # Closed 4-kana reduplicated ABAB / mimetic adverbs missing from ja.tsv

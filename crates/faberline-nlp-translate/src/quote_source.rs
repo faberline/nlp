@@ -482,7 +482,21 @@ fn measures_written_form(after: &[char]) -> bool {
             "なの",
         ]
         .iter()
-        .any(|predicate| strip_prefix(tail, predicate).is_some_and(character_count_is_question))
+        .any(|predicate| {
+            strip_prefix(tail, predicate).is_some_and(|question| {
+                let question = skip_space(question);
+                let particle = question.strip_prefix(&['の']).map_or(question, skip_space);
+                // The measure predicate already makes か the question marker.
+                // It does not depend on an enclosing verb or that verb's arguments.
+                matches!(question.first(), Some('？' | '?'))
+                    || particle.strip_prefix(&['か']).is_some_and(|after| {
+                        // Keep から, かぎり and かもしれない outside this reading.
+                        !["ら", "ぎり", "限り", "もしれ"]
+                            .iter()
+                            .any(|continuation| strip_prefix(after, continuation).is_some())
+                    })
+            })
+        })
 }
 
 fn character_count_is_question(after: &[char]) -> bool {
@@ -500,7 +514,7 @@ fn character_count_is_question(after: &[char]) -> bool {
     ) {
         return true;
     }
-    // In an embedded question, a local checking or asking verb distinguishes
+    // Without a measure predicate, a local checking or asking verb distinguishes
     // the question marker か from the indefinite amount in 何文字か.
     let after = after.strip_prefix(&['を']).map_or(after, skip_space);
     ["調べ", "確かめ", "確認", "尋ね", "聞い", "聞く", "聞き"]
@@ -698,6 +712,14 @@ mod tests {
                 "ドイツで「行く」という単語が何文字かを確認しました。",
                 "「行く」",
             ),
+            (
+                "ドイツで「来て」という語が何文字あるのか調べました。",
+                "「来て」",
+            ),
+            (
+                "ドイツで「来て」という語が何文字あるか先生に尋ねました。",
+                "「来て」",
+            ),
         ] {
             let result = analyze_and_translate(
                 source,
@@ -723,6 +745,26 @@ mod tests {
         .unwrap();
         assert!(!result.target_text.contains("ドイツ"), "{source}");
         assert_eq!(result.target_text.matches("德國").count(), 2, "{source}");
+    }
+
+    #[test]
+    fn a_glossary_only_replaces_the_country_outside_the_measured_word() {
+        let mut glossary = glossary();
+        glossary.places[0]
+            .targets
+            .insert(TargetVariant::ZhHant, "柏林代號".to_owned());
+        let source = "ドイツで「ドイツ」という単語が何文字あるか忘れました。";
+        let result = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(result.target_text.matches("「ドイツ」").count(), 1);
+        assert_eq!(result.target_text.matches("柏林代號").count(), 1);
+        assert_eq!(result.glossary_hits.len(), 1);
     }
 
     #[test]
@@ -819,6 +861,10 @@ mod tests {
                 "先生は『「行く」という単語は何文字ですか』と聞きました。",
                 "「行く」",
             ),
+            (
+                "先生は『「来て！」という語が何文字あるか教えて』と言いました。",
+                "「来て！」",
+            ),
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -868,6 +914,18 @@ mod tests {
                 "「どいつ」",
             ),
             ("「来て」には何字ありますか。", "「来て」"),
+            (
+                "「ドイツ」という単語が何文字あるか忘れました。",
+                "「ドイツ」",
+            ),
+            (
+                "「ドイツ」という単語が何文字あるか聞きました。",
+                "「ドイツ」",
+            ),
+            (
+                "「ドイツ」という単語が何文字あるのか知っています。",
+                "「ドイツ」",
+            ),
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -884,6 +942,20 @@ mod tests {
                 translated.target_text,
             );
             assert!(translated.glossary_hits.is_empty(), "{source}");
+        }
+    }
+
+    #[test]
+    fn an_indefinite_quantity_or_causal_particle_is_not_a_count_question() {
+        for suffix in [
+            "という語が何文字かを書きました。",
+            "という語が何文字かの例文を示しました。",
+            "という語が何文字ですから書きました。",
+            "という語が何文字あるかぎり残します。",
+            "という語が何文字あるかもしれません。",
+        ] {
+            let chars: Vec<_> = suffix.chars().collect();
+            assert!(!super::measures_written_form(&chars), "{suffix}");
         }
     }
 

@@ -2243,20 +2243,35 @@ fn te_help_letter_count(
             && linked_letter_case(name, case)
     });
     let signature = signatures.next().map(|(index, _)| index..index + 2);
-    let recurring_period = start
-        .checked_sub(1)
-        .map(|index| &arguments[index])
-        .filter(|period| {
-            !period.is_locked
-                && period.surface.strip_prefix('毎').is_some_and(|unit| {
-                    matches!(unit, "日" | "週" | "月" | "年" | "朝" | "晩" | "回" | "度")
-                })
-                && period.upos == Some(Upos::Adv)
-                && period.deprel == "advmod"
-                && period.head == Some(action_idx)
-                && period.span.end_char == arguments[start].span.start_char
-        });
-    let occurrence_rate = te_help_letter_occurrence_rate(arguments, start, action_idx);
+    let mut recurring_periods = arguments.iter().filter(|period| {
+        !period.is_locked
+            && period.surface.strip_prefix('毎').is_some_and(|unit| {
+                matches!(
+                    unit,
+                    "日" | "週" | "月" | "年" | "朝" | "晩" | "時" | "回" | "度"
+                )
+            })
+            && period.upos == Some(Upos::Adv)
+            && period.deprel == "advmod"
+            && period.head == Some(action_idx)
+    });
+    let recurring_period = recurring_periods.next();
+    let mut occurrence_rates = arguments
+        .iter()
+        .enumerate()
+        .filter(|(_, atom)| atom.surface == "につき")
+        .filter_map(|(index, _)| te_help_letter_occurrence_rate(arguments, index + 1, action_idx));
+    let occurrence_rate = occurrence_rates.next();
+    // A count must have a single cadence. Keep multiple possible cadence
+    // scopes on the ordinary path when the sentence also has a joint writer.
+    if qualifier_text == Some("ずつ")
+        && (joint_manner || signature.is_some())
+        && ((recurring_period.is_some() && occurrence_rate.is_some())
+            || recurring_periods.next().is_some()
+            || occurrence_rates.next().is_some())
+    {
+        return None;
+    }
     let writer_each = if qualifier_text == Some("ずつ") && can_distribute_to_writers {
         arguments.iter().position(|atom| {
             !atom.is_locked
@@ -20381,6 +20396,14 @@ mod existence_rule_tests {
             (
                 "校長宛ての手紙を二人で連名で１回につき二通ずつ書いていただけますか。",
                 "可以請兩位每次聯名寫兩封信給校長嗎？",
+            ),
+            (
+                "毎週、校長宛ての手紙を二人で一通ずつ書いていただけますか。",
+                "可以請兩位每週一起寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を毎回二人で連名で一通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫一封信給校長嗎？",
             ),
         ] {
             assert_eq!(

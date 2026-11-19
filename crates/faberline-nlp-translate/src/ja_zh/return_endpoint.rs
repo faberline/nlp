@@ -305,15 +305,30 @@ fn reading_at_return(
             (rest, trailing_punct.as_deref())
         };
     let pointing = returning.head?;
-    if matches!(end_punct, Some("？" | "?"))
-        || returning.deprel != "advcl"
-        || !rest.iter().any(|atom| {
-            !atom.is_locked
-                && atom.doc_tok_idx == Some(pointing)
-                && atom.upos == Some(Upos::Verb)
-                && atom.lemma.as_deref() == Some("指す")
-        })
-    {
+    let indicator = rest.iter().position(|atom| {
+        !atom.is_locked
+            && atom.doc_tok_idx == Some(pointing)
+            && atom.upos == Some(Upos::Verb)
+            && atom.lemma.as_deref() == Some("指す")
+    })?;
+    if matches!(end_punct, Some("？" | "?")) || returning.deprel != "advcl" {
+        return None;
+    }
+    // Treat the reading as a fact only when its verb is asserted. The
+    // progressive can carry negation on いる instead of 指す.
+    if rest[indicator + 1..].iter().any(|atom| {
+        let word = atom.lemma.as_deref().unwrap_or(&atom.surface);
+        matches!(word, "ない" | "ぬ" | "ず" | "ん")
+            && matches!(atom.deprel.as_str(), "aux" | "advmod")
+            || atom.surface == "か" && atom.deprel == "discourse"
+            || matches!(atom.surface.as_str(), "なら" | "たら" | "ば")
+                && atom.upos == Some(Upos::Sconj)
+            || matches!(
+                atom.surface.as_str(),
+                "だろ" | "だろう" | "でしょ" | "でしょう"
+            )
+            || atom.upos == Some(Upos::Verb) && !matches!(word, "いる" | "おる")
+    }) {
         return None;
     }
     let mut subjects = rest.iter().filter(|atom| atom.deprel == "nsubj");
@@ -330,15 +345,7 @@ fn reading_at_return(
         marker.surface == "を" && dial_case_governor(noun, marker, "obj", doc) == Some(pointing)
     });
     let (index, _) = readings.next()?;
-    if readings.next().is_some()
-        || rest.iter().any(|atom| {
-            matches!(
-                atom.lemma.as_deref().unwrap_or(&atom.surface),
-                "ない" | "ぬ" | "ず"
-            ) && matches!(atom.deprel.as_str(), "aux" | "advmod")
-                || atom.surface == "か" && atom.deprel == "discourse"
-        })
-    {
+    if readings.next().is_some() {
         return None;
     }
     let (first, hour) = indicated_hour(rest, index, doc)?;

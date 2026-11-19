@@ -28,6 +28,51 @@ fn regular_rate(surface: &str) -> bool {
     )
 }
 
+// A Japanese pause after the frequency can fall inside a single predicate.
+// Keep a fronted time or a new subject separate from the following clause.
+pub(super) fn continues_habitual_action(
+    prefix: &[Atom],
+    following: &[Atom],
+    chars: &[char],
+) -> bool {
+    let Some((rate, before)) = prefix.split_last() else {
+        return false;
+    };
+    let Some(governor) = rate.head else {
+        return false;
+    };
+    let subject_of_action = |atom: &Atom| atom.deprel == "nsubj" && atom.head == Some(governor);
+    if rate.is_locked
+        || rate.deprel != "advmod"
+        || !regular_rate(&rate.surface)
+        || !before.iter().any(subject_of_action)
+        || following.iter().any(subject_of_action)
+    {
+        return false;
+    }
+    let Some(action) = following
+        .iter()
+        .position(|a| a.doc_tok_idx == Some(governor))
+    else {
+        return false;
+    };
+    let verb = &following[action];
+    if verb.upos != Some(Upos::Verb) || !matches!(verb.deprel.as_str(), "root" | "advcl" | "conj") {
+        return false;
+    }
+    // A caller can lock a whole quotation or list into one atom. Its original
+    // delimiters still separate the time from the reporting or list predicate.
+    !following[..action].iter().any(|a| {
+        a.is_locked
+            && chars[a.span.start_char..a.span.end_char].iter().any(|c| {
+                matches!(
+                    c,
+                    '「' | '」' | '『' | '』' | '、' | '，' | '。' | '！' | '？' | '!' | '?' | '…'
+                )
+            })
+    })
+}
+
 pub(super) fn contrasts_recurrence(atoms: &[Atom]) -> bool {
     let core = super::core_non_punct(atoms);
     matches!(core, [rate, ..] if matches!(core.len(),3|4) && !rate.is_locked &&

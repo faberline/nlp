@@ -5817,6 +5817,13 @@ fn translate_clause_atoms(
     let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
     mark_return_arguments(&mut grouped, original_body, doc);
     for group in &mut grouped {
+        if group
+            .atoms
+            .iter()
+            .any(|a| a.lemma.as_deref() == Some(application_form::LOCKED_MANNER))
+        {
+            group.role = BunsetsuRole::Adv;
+        }
         if deadline_governor(group, doc).is_some_and(|head| has_detached_voice_negation(body, head))
         {
             group.role = BunsetsuRole::DeadlineWithDetachedNegation;
@@ -9658,6 +9665,7 @@ fn translate_clause_bunsetsus(
         })
         .and_then(|a| a.doc_tok_idx);
     let mut filing_office = None;
+    let mut focused_filing_manner = None;
     let filing_together = filing_verb.and_then(|verb| application_form::together(source, verb));
     let mut affected_object = None;
     let mut result_value = None;
@@ -9668,6 +9676,24 @@ fn translate_clause_bunsetsus(
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        let protected_manner = b.atoms.iter().find(|a| {
+            a.lemma.as_deref() == Some(application_form::LOCKED_MANNER) && a.head == filing_verb
+        });
+        let focused_manner = |id: Option<usize>| {
+            source
+                .iter()
+                .any(|a| a.head == id && a.surface == "は" && a.deprel == "case")
+        };
+        if let Some(manner) = protected_manner {
+            if focused_manner(manner.doc_tok_idx)
+                || ctx.source_chars.get(manner.span.end_char.saturating_sub(1)) == Some(&'は')
+            {
+                focused_filing_manner = Some(manner.surface.clone());
+            } else {
+                adverbs.push(manner.surface.clone());
+            }
+            continue;
+        }
         if let Some((manner, companion)) = filing_together {
             if b.atoms.iter().any(|a| a.doc_tok_idx == Some(manner)) {
                 let label = companion.and_then(|(id, person)| {
@@ -9680,7 +9706,12 @@ fn translate_clause_bunsetsus(
                         ctx.source_chars,
                     )
                 });
-                adverbs.push(label.unwrap_or_else(|| "一起".to_owned()));
+                let label = label.unwrap_or_else(|| "一起".to_owned());
+                if focused_manner(Some(manner)) {
+                    focused_filing_manner = Some(label);
+                } else {
+                    adverbs.push(label);
+                }
                 continue;
             }
             if let Some((id, _)) = companion
@@ -11383,6 +11414,7 @@ fn translate_clause_bunsetsus(
             }
         }
     }
+    parts.extend(focused_filing_manner);
     parts.extend(joint_companions);
     parts.extend(joint_participants);
     if joint_manner.is_some() {
@@ -16050,6 +16082,14 @@ mod clock_rule_tests {
                 "姊姊從包包拿出入住申請表，今天和母親一起交給窗口了。",
             ),
             (
+                "私は封筒から講座の申込書を出して、姉と一緒には窓口に出しませんでした。",
+                "我從封筒拿出課程報名表，沒有和姊姊一起交給窗口。",
+            ),
+            (
+                "私はかばんから入居申込書を出して、写真と一緒には管理会社には出しませんでした。",
+                "我從包包拿出入住申請表，沒有連同照片交給管理公司。",
+            ),
+            (
                 "私は青いかばんから講座の申込書を出して、さっき事務室にいた先生には出しませんでした。",
                 "我從藍的包包拿出課程報名表，沒有交給剛才在事務室的老師。",
             ),
@@ -16186,6 +16226,16 @@ mod clock_rule_tests {
     fn protected_application_names_still_have_a_source_and_destination() {
         for (jp, key, expected) in [
             ("講座の申込書を出す。", "講座の申込書", "交指定值。"),
+            (
+                "姉は入居申込書をかばんから出し、今日は母と一緒に窓口に出しました。",
+                "母と一緒に",
+                "姊姊從包包拿出入住申請表，今天指定值交給窗口了。",
+            ),
+            (
+                "私は封筒から講座の申込書を出して、姉と一緒には窓口に出しませんでした。",
+                "姉と一緒には",
+                "我從封筒拿出課程報名表，沒有指定值交給窗口。",
+            ),
             (
                 "窓口に日本語講座の申込書を出す。",
                 "日本語講座",

@@ -8,6 +8,7 @@ pub(super) const OFFICE: &str = "__ja_application_recipient";
 pub(super) const SHARED_FORM_RECIPIENT: &str = "__ja_shared_form_recipient";
 pub(super) const TIME_QUESTION: &str = "__ja_application_time_question";
 pub(super) const CONTRAST: &str = "__ja_application_contrast";
+pub(super) const LOCKED_MANNER: &str = "__ja_application_locked_manner";
 const PRESENT_RECIPIENT: &str = "__ja_located_application_recipient";
 pub(super) const PURPOSE: &str = "__ja_application_purpose";
 pub(super) const RENT: &str = "__ja_rent_home";
@@ -1039,6 +1040,69 @@ fn mark_form_contrasts(atoms: &mut [Atom], chars: &[char]) {
     }
 }
 
+// A glossary can put Nと一緒に in one token. The parser may attach it
+// as a relative verb to the recipient, or use it as the new subject.
+fn bind_locked_manner(atoms: &mut [Atom], action: usize, chars: &[char]) {
+    for i in 0..atoms.len() {
+        let manner = &atoms[i];
+        if !manner.is_locked || !manner.surface.starts_with("[[PH") {
+            continue;
+        }
+        let raw = spelling(manner, chars);
+        let source = raw.strip_suffix('は').unwrap_or(&raw);
+        if !source
+            .strip_suffix("と一緒に")
+            .is_some_and(|s| !s.is_empty())
+        {
+            continue;
+        }
+        let parent = manner.head;
+        let recipient = atoms
+            .iter()
+            .position(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == parent);
+        let verb = if manner.deprel == "acl" {
+            recipient.and_then(|r| atoms[r].head)
+        } else {
+            parent
+        };
+        let Some(v) = verb else { continue };
+        let Some(next) = (i + 1..atoms.len()).find(|&k| atoms[k].doc_tok_idx == Some(v)) else {
+            continue;
+        };
+        let Some(office) = filing_recipient(atoms, v, chars) else {
+            continue;
+        };
+        if filing_reading(&atoms[next], atoms).is_none()
+            || (manner.deprel == "acl" && Some(office) != recipient)
+            || atoms[action.min(i)..next].iter().any(super::is_quote_mark)
+        {
+            continue;
+        }
+        let adjunct = manner.doc_tok_idx;
+        if action != next
+            && (action >= i
+                || atoms[action].head != adjunct
+                || !linked_clause(atoms, action)
+                || atoms.iter().any(|a| a.head == Some(v) && a.deprel == "obj"))
+        {
+            continue;
+        }
+        let previous = atoms[action].doc_tok_idx;
+        for a in &mut atoms[..i] {
+            if a.head == adjunct
+                && (a.doc_tok_idx == previous
+                    || matches!(a.deprel.as_str(), "nsubj" | "advmod" | "obl"))
+            {
+                a.head = Some(v);
+            }
+        }
+        atoms[i].head = Some(v);
+        atoms[i].deprel = "advmod".to_owned();
+        atoms[i].upos = Some(Upos::Adv);
+        atoms[i].lemma = Some(LOCKED_MANNER.to_owned());
+    }
+}
+
 fn mark_shared_form(
     atoms: &mut [Atom],
     form: usize,
@@ -1110,9 +1174,11 @@ fn mark_shared_form(
     }
     // A new subject cancels the shared object. A time topicalized with は
     // can receive the same subject tag without introducing another actor.
+    let manner = together(atoms, verb).map(|(id, _)| id);
     let mut times = Vec::new();
     for (i, a) in atoms.iter().enumerate().filter(|(i, a)| {
         *i != office
+            && a.doc_tok_idx != manner
             && a.head == Some(verb)
             && a.deprel == "nsubj"
             && a.span.start_char > previous.span.end_char
@@ -1156,6 +1222,7 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
                 .is_some_and(|wo| wo.surface == "を" && dasu_case_link(form, wo))
             && let Some(v) = atoms.iter().position(|a| a.doc_tok_idx == form.head)
         {
+            bind_locked_manner(atoms, v, chars);
             filing = mark_shared_form(atoms, end, v, chars, doc).is_some();
             if let Some(reading) = filing_reading(&atoms[v], atoms)
                 && let Some(verb) = atoms[v].doc_tok_idx

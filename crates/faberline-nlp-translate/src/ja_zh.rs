@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+mod calendar;
 mod counted_object;
 
 use faberline_nlp::Span;
@@ -3875,6 +3876,7 @@ fn translate_clause_atoms(
     let counted = counted_object::bind(body);
     let merged_atoms = apply_phrase_matches(counted.as_deref().unwrap_or(body));
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
+    calendar::normalize(&mut norm_atoms);
     recover_route_predicate(&mut norm_atoms, body);
     let motion_go = motion_purpose_governor(&norm_atoms, ctx.inside_quote);
     if let Some(go) = motion_go {
@@ -6783,7 +6785,7 @@ fn translate_clause_bunsetsus(
     enum DeadlineEndpoint {
         Calendar,
         ClockOrDaypart,
-        Question,
+        Question { calendar: bool },
     }
 
     // Track extra bunsetsu-level metadata for `に`/`で` localization.
@@ -6794,11 +6796,11 @@ fn translate_clause_bunsetsus(
         is_instrument_de: bool,
         is_spatial_made: bool,
         temporal_made_time: Option<String>,
-        is_clock: bool,
+        is_event_time: bool,
         is_building_floor: bool,
         deadline_endpoint: DeadlineEndpoint,
         deadline_has_detached_negation: bool,
-        is_plain_clock_ni: bool,
+        is_event_time_ni: bool,
         transfer_dative: bool,
         physical_goal_head: Option<usize>,
     }
@@ -6985,18 +6987,24 @@ fn translate_clause_bunsetsus(
         }
     }
 
-    let asks_deadline_time = source.last().is_some_and(|ka| {
+    let asks_event_time = source.last().is_some_and(|ka| {
         !ka.is_locked
             && ka.surface == "か"
             && ka.upos == Some(Upos::Part)
             && ka.deprel == "discourse"
             && ka.head.is_some()
             && bunsetsus.iter().any(|group| {
-                group.case_particle.as_deref() == Some("までに")
-                    && group
-                        .atoms
-                        .iter()
-                        .any(|time| time.head == ka.head && deadline_time_question(time).is_some())
+                group.atoms.iter().any(|time| {
+                    time.head == ka.head
+                        && match group.case_particle.as_deref() {
+                            Some("までに") => {
+                                deadline_time_question(time).is_some()
+                                    || calendar::is_question(time)
+                            }
+                            Some("に") => calendar::is_question(time),
+                            _ => false,
+                        }
+                })
             })
     });
     let explicit_deadline = bunsetsus.iter().find_map(|b| match b.role {
@@ -7068,7 +7076,7 @@ fn translate_clause_bunsetsus(
         }
         if let Some(sfp) = b.sfp_tail.as_deref() {
             sfp_suffix = match sfp {
-                "か" if asks_deadline_time => None,
+                "か" if asks_event_time => None,
                 "か" | "かな" => Some("嗎"),
                 "よ" => Some("喔"),
                 "ね" | "よね" => Some("呢"),
@@ -7175,14 +7183,15 @@ fn translate_clause_bunsetsus(
                         is_instrument_de: is_inst,
                         is_spatial_made: is_spatial_made_bunsetsu(&b),
                         temporal_made_time: temporal_made_time(&b),
-                        is_clock: b.atoms.iter().any(is_clock_atom),
-                        is_building_floor: b.atoms.iter().any(is_building_floor),
-                        deadline_endpoint: if b
+                        is_event_time: b
                             .atoms
                             .iter()
-                            .any(|a| deadline_time_question(a).is_some())
-                        {
-                            DeadlineEndpoint::Question
+                            .any(|a| is_clock_atom(a) || calendar::is_date(a)),
+                        is_building_floor: b.atoms.iter().any(is_building_floor),
+                        deadline_endpoint: if b.atoms.iter().any(calendar::is_question) {
+                            DeadlineEndpoint::Question { calendar: true }
+                        } else if b.atoms.iter().any(|a| deadline_time_question(a).is_some()) {
+                            DeadlineEndpoint::Question { calendar: false }
                         } else if b.atoms.iter().any(|a| {
                             is_clock_atom(a) || !a.is_locked && is_daypart_surface(&a.surface)
                         }) {
@@ -7192,7 +7201,9 @@ fn translate_clause_bunsetsus(
                         },
                         deadline_has_detached_negation: b.role
                             == BunsetsuRole::DeadlineWithDetachedNegation,
-                        is_plain_clock_ni: is_plain_clock_ni(&b),
+                        is_event_time_ni: is_plain_clock_ni(&b)
+                            || (b.case_particle.as_deref() == Some("に")
+                                && b.atoms.iter().any(calendar::is_date)),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
@@ -7235,11 +7246,11 @@ fn translate_clause_bunsetsus(
                         is_instrument_de: false,
                         is_spatial_made: false,
                         temporal_made_time: None,
-                        is_clock: false,
+                        is_event_time: false,
                         is_building_floor: b.atoms.iter().any(is_building_floor),
                         deadline_endpoint: DeadlineEndpoint::Calendar,
                         deadline_has_detached_negation: false,
-                        is_plain_clock_ni: false,
+                        is_event_time_ni: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
@@ -7638,11 +7649,11 @@ fn translate_clause_bunsetsus(
                     is_instrument_de: false,
                     is_spatial_made: false,
                     temporal_made_time: None,
-                    is_clock: false,
+                    is_event_time: false,
                     is_building_floor: false,
                     deadline_endpoint: DeadlineEndpoint::Calendar,
                     deadline_has_detached_negation: false,
-                    is_plain_clock_ni: false,
+                    is_event_time_ni: false,
                     transfer_dative: false,
                     physical_goal_head: None,
                 });
@@ -7802,7 +7813,7 @@ fn translate_clause_bunsetsus(
 
         let mut kept_obls = Vec::new();
         for o in obliques.drain(..) {
-            if o.case_particle.as_deref() == Some("に") && !o.is_clock {
+            if o.case_particle.as_deref() == Some("に") && !o.is_event_time {
                 let raw_np = o
                     .text
                     .strip_prefix('在')
@@ -7860,9 +7871,10 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
-    let mut marked_goals = obliques.iter().chain(&iobjs).filter(|o| {
-        matches!(o.case_particle.as_deref(), Some("に" | "へ")) && !o.is_plain_clock_ni
-    });
+    let mut marked_goals = obliques
+        .iter()
+        .chain(&iobjs)
+        .filter(|o| matches!(o.case_particle.as_deref(), Some("に" | "へ")) && !o.is_event_time_ni);
     let only_goal = marked_goals.next();
     let direct_negative_physical_go = negative_go_head.is_some()
         && only_goal.is_some_and(|o| o.physical_goal_head == negative_go_head)
@@ -7886,7 +7898,7 @@ fn translate_clause_bunsetsus(
     if is_goal_verb {
         let mut kept_obls = Vec::new();
         for o in obliques.drain(..) {
-            if o.case_particle.as_deref() == Some("に") && !o.is_clock {
+            if o.case_particle.as_deref() == Some("に") && !o.is_event_time {
                 let raw_np = o
                     .text
                     .strip_prefix('在')
@@ -8310,7 +8322,7 @@ fn translate_clause_bunsetsus(
                 explicit_deadline.or(deadline_modal.map(|m| (m, false)))
             {
                 let also = if additive { "也" } else { "" };
-                if matches!(o.deadline_endpoint, DeadlineEndpoint::Question)
+                if matches!(o.deadline_endpoint, DeadlineEndpoint::Question { .. })
                     && matches!(modal, "可以" | "得以")
                 {
                     // 幾點前 followed by 往 can read as the departure time (前往).
@@ -8322,12 +8334,17 @@ fn translate_clause_bunsetsus(
                         DeadlineEndpoint::Calendar => "截止前",
                         DeadlineEndpoint::ClockOrDaypart if has_direction_he => "之前",
                         DeadlineEndpoint::ClockOrDaypart => "前",
-                        DeadlineEndpoint::Question => "之前",
+                        DeadlineEndpoint::Question { .. } => "之前",
                     };
                     parts.push(format!("{also}{modal}在{}{cutoff}", o.text));
                 }
             } else if predicate_is_negative && !o.deadline_has_detached_negation {
                 parts.push(format!("到{}為止", o.text));
+            } else if matches!(
+                o.deadline_endpoint,
+                DeadlineEndpoint::Question { calendar: true }
+            ) {
+                parts.push(format!("最晚{}", o.text));
             } else {
                 parts.push(format!("最晚在{}", o.text));
             }
@@ -11236,6 +11253,7 @@ fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
         }
     });
     is_clock_atom(time)
+        || calendar::is_date(time)
         || deadline_time_question(time).is_some()
         || (!time.is_locked
             && (time.upos == Some(Upos::Noun)
@@ -11841,7 +11859,9 @@ fn is_payment_medium(method: &Atom, modifier: Option<&Atom>) -> bool {
 }
 
 fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
-    atoms.iter().any(is_clock_atom)
+    atoms
+        .iter()
+        .any(|a| is_clock_atom(a) || calendar::is_date(a))
         || is_place_location_bunsetsu(atoms)
         || atoms.iter().any(|a| {
             matches!(
@@ -12769,6 +12789,63 @@ mod clock_rule_tests {
             "{output}"
         );
         assert!(!output.contains("到下午兩點"), "{output}");
+    }
+
+    #[test]
+    fn calendar_days_preserve_deadlines_instants_and_question_scope() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("何日までに本を読みますか。", "最晚幾號讀書？"),
+            ("何曜日に本を読みますか。", "星期幾讀書？"),
+            ("五月五日までに本を読みますか。", "最晚在五月五日讀書嗎？"),
+            (
+                "十二月二十五日に本を読みますか。",
+                "在十二月二十五日讀書嗎？",
+            ),
+            ("５月２５日に本を読みます。", "在5月25日讀書。"),
+            ("五日間、毎日本を読みます。", "五天，每天讀書。"),
+            (
+                "二〇二四年四月一日に入社した。",
+                "在二〇二四年四月一日進入公司了。",
+            ),
+            (
+                "私は四月五日に駅に行きませんでした。",
+                "我在四月五日沒有去車站。",
+            ),
+            (
+                "四月五日までに手紙を書きませんでした。",
+                "到四月五日為止沒有寫信。",
+            ),
+            (
+                "何曜日までに駅に着くことを決めましたか。",
+                "決定了最晚星期幾抵達到車站嗎？",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn duration_and_selected_values_do_not_become_calendar_dates() {
+        let glossary = TranslationGlossary::new();
+        for source in [
+            "何日に一回走りますか。",
+            "二日に一回走ります。",
+            "一日に三人来ます。",
+            "何日で本を読みますか。",
+            "五日後に行きます。",
+            "彼は何日に設定しましたか。",
+        ] {
+            let text = public_translate(source, &glossary).target_text;
+            assert!(
+                !text.contains('號') && !text.contains("最晚"),
+                "{source}: {text}"
+            );
+        }
     }
 
     #[test]
@@ -15171,6 +15248,7 @@ fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool)
                 format!("用{core}")
             }
         }
+        Some("に") if b.atoms.iter().any(calendar::is_question) => core,
         Some("に") | Some("で") => {
             if core.starts_with('在')
                 || (core.starts_with("[[PH") && b.atoms.iter().any(is_clock_atom))

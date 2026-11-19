@@ -14736,10 +14736,59 @@ fn take_adnominal_arguments(
     arguments
 }
 
+fn both_genitive_matrix(noun: &Atom, case: &Atom, source: &[Atom]) -> Option<usize> {
+    if noun.is_locked
+        || noun.deprel != "nmod"
+        || noun.doc_tok_idx.is_none()
+        || case.is_locked
+        || case.surface != "の"
+        || case.upos != Some(Upos::Adp)
+        || case.deprel != "case"
+        || case.head != noun.doc_tok_idx
+        || noun.span.end_char != case.span.start_char
+    {
+        return None;
+    }
+    let index = source.iter().position(|a| {
+        a.doc_tok_idx == case.doc_tok_idx && a.doc_tok_idx.is_some() && a.span == case.span
+    })?;
+    let both = source.get(index + 1)?;
+    let object = source.get(index + 2)?;
+    if both.is_locked
+        || both.surface != "両方"
+        || both.upos != Some(Upos::Noun)
+        || both.deprel != "obj"
+        || both.doc_tok_idx.is_none()
+        || noun.head != both.doc_tok_idx
+        || case.span.end_char != both.span.start_char
+        || object.is_locked
+        || object.surface != "を"
+        || object.upos != Some(Upos::Adp)
+        || object.deprel != "case"
+        || object.head != both.doc_tok_idx
+        || both.span.end_char != object.span.start_char
+    {
+        return None;
+    }
+    let matrix = source.iter().find(|a| {
+        !a.is_locked
+            && a.doc_tok_idx == both.head
+            && a.doc_tok_idx.is_some()
+            && a.upos == Some(Upos::Verb)
+            && a.deprel == "root"
+    })?;
+    matrix.doc_tok_idx
+}
+
 // A number after と/や may start the next noun's relative clause rather
 // than name a coordinated item. Prove the whole amount and its right noun
 // before postponing the ordinary noun coordination fold.
-fn elapsed_relative_after_coord(left: &Bunsetsu, number: &Bunsetsu, source: &[Atom]) -> bool {
+fn elapsed_relative_after_coord(
+    left: &Bunsetsu,
+    number: &Bunsetsu,
+    source: &[Atom],
+    expected_noun: Option<usize>,
+) -> bool {
     let Some(marker) = left.atoms.last() else {
         return false;
     };
@@ -14856,32 +14905,43 @@ fn elapsed_relative_after_coord(left: &Bunsetsu, number: &Bunsetsu, source: &[At
             continue;
         }
         let noun = &source[noun_index];
+        if expected_noun.is_some_and(|id| noun.doc_tok_idx != Some(id)) {
+            continue;
+        }
         let Some(case) = source.get(noun_index + 1) else {
             continue;
         };
         if case.is_locked
             || case.upos != Some(Upos::Adp)
             || case.deprel != "case"
-            || !matches!(case.surface.as_str(), "が" | "は" | "を")
             || case.head != noun.doc_tok_idx
             || noun.span.end_char != case.span.start_char
             || noun.head.is_none()
             || left_noun.head.is_none()
-            || !matches!(noun.deprel.as_str(), "nsubj" | "obj")
         {
             continue;
         }
-        let Some(matrix) = source.iter().find(|a| {
-            a.doc_tok_idx == noun.head
-                && !a.is_locked
-                && a.upos == Some(Upos::Verb)
-                && a.deprel == "root"
-        }) else {
+        let matrix_id = if matches!(case.surface.as_str(), "が" | "は" | "を")
+            && matches!(noun.deprel.as_str(), "nsubj" | "obj")
+        {
+            source
+                .iter()
+                .find(|a| {
+                    a.doc_tok_idx == noun.head
+                        && !a.is_locked
+                        && a.upos == Some(Upos::Verb)
+                        && a.deprel == "root"
+                })
+                .and_then(|a| a.doc_tok_idx)
+        } else {
+            both_genitive_matrix(noun, case, source)
+        };
+        let Some(matrix_id) = matrix_id else {
             continue;
         };
         let mut head = left_noun.head;
         for _ in 0..source.len() {
-            if head == noun.doc_tok_idx || head == matrix.doc_tok_idx {
+            if head == noun.doc_tok_idx || head == Some(matrix_id) {
                 return true;
             }
             let Some(part) = source[start..noun_index]
@@ -14894,6 +14954,53 @@ fn elapsed_relative_after_coord(left: &Bunsetsu, number: &Bunsetsu, source: &[At
         }
     }
     false
+}
+
+// Let the right genitive noun finish its elapsed modifier before the normal
+// の両方を fold. Require the same proven left coordination as the number gate.
+fn coordinated_elapsed_both_genitive(
+    remaining: &[Bunsetsu],
+    noun_group: &Bunsetsu,
+    source: &[Atom],
+) -> bool {
+    let Some(case) = noun_group.atoms.last() else {
+        return false;
+    };
+    let Some(noun) = noun_group
+        .atoms
+        .iter()
+        .find(|a| !a.is_locked && a.doc_tok_idx.is_some() && a.doc_tok_idx == case.head)
+    else {
+        return false;
+    };
+    if both_genitive_matrix(noun, case, source).is_none() {
+        return false;
+    }
+    let Some(predicate) = remaining.last() else {
+        return false;
+    };
+    let owner = progressive_acl_action(predicate)
+        .filter(|(_, iru)| iru.head == noun.doc_tok_idx)
+        .and_then(|(action, _)| action.doc_tok_idx)
+        .or_else(|| {
+            predicate
+                .atoms
+                .iter()
+                .find(|a| {
+                    !a.is_locked
+                        && a.upos == Some(Upos::Verb)
+                        && a.deprel == "acl"
+                        && a.head == noun.doc_tok_idx
+                })
+                .and_then(|a| a.doc_tok_idx)
+        });
+    if !owner.is_some_and(|id| elapsed_owned_by(source, id)) {
+        return false;
+    }
+    remaining.windows(2).any(|pair| {
+        (ends_in_coord_to(&pair[0]) || ends_in_coord_ya(&pair[0]))
+            && elapsed_relative_after_coord(&pair[0], &pair[1], source, noun.doc_tok_idx)
+    })
 }
 
 fn merge_adnominal_bunsetsus(
@@ -14914,7 +15021,11 @@ fn merge_adnominal_bunsetsus(
             // Keep the original atoms, syntactic role, and any following の or case particle.
             b.atoms.splice(0..0, modifier.atoms);
         }
-        if is_noun_bunsetsu(&b) {
+        if is_noun_bunsetsu(&b)
+            || target == TargetVariant::ZhHant
+                && ends_in_genitive_no(&b)
+                && coordinated_elapsed_both_genitive(&res, &b, source)
+        {
             let is_sue_ni = b.case_particle.as_deref() == Some("に")
                 && b.atoms
                     .first()
@@ -15025,7 +15136,7 @@ fn merge_adnominal_bunsetsus(
                 if let Some(mut ya_b) = res.pop_if(|prev| {
                     ends_in_coord_ya(prev)
                         && !(target == TargetVariant::ZhHant
-                            && elapsed_relative_after_coord(prev, &b, source))
+                            && elapsed_relative_after_coord(prev, &b, source, None))
                 }) {
                     ya_b.atoms.pop();
                     let ya_str = render_bunsetsu_np(&ya_b, target);
@@ -15038,7 +15149,7 @@ fn merge_adnominal_bunsetsus(
                 if let Some(mut to_b) = res.pop_if(|prev| {
                     ends_in_coord_to(prev)
                         && !(target == TargetVariant::ZhHant
-                            && elapsed_relative_after_coord(prev, &b, source))
+                            && elapsed_relative_after_coord(prev, &b, source, None))
                         && !matches!(
                             b.role,
                             BunsetsuRole::ResidenceTogether | BunsetsuRole::ResidenceCount
@@ -17284,6 +17395,48 @@ mod clock_rule_tests {
         assert_eq!(
             translate("「二時間待ちました」と先生が言いました。"),
             "「等待了兩個小時」老師說了。"
+        );
+    }
+
+    #[test]
+    fn coordinated_elapsed_modifiers_stay_inside_the_both_object() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        let first = translate("母は三十分話していた先生と二時間待っていた客の両方を見ました。");
+        assert!(
+            first.starts_with("母親")
+                && first.contains('看')
+                && first.contains("已經說了三十分鐘的老師和已經等待了兩個小時的客")
+                && first.contains("的兩方"),
+            "{first}"
+        );
+        let reversed = translate("母は二時間待っていた客と三十分話していた先生の両方を見ました。");
+        assert!(
+            reversed.starts_with("母親")
+                && reversed.contains('看')
+                && reversed.contains("已經等待了兩個小時的客和已經說了三十分鐘的老師")
+                && reversed.contains("的兩方"),
+            "{reversed}"
+        );
+        let negative =
+            translate("母は二時間待っていなかった客と三十分話していなかった先生の両方を見ました。");
+        assert!(
+            negative.contains("沒有等待兩個小時的客和沒有說三十分鐘的老師")
+                && negative.contains("的兩方"),
+            "{negative}"
+        );
+        assert_eq!(
+            translate("母は客と先生の両方を見ました。"),
+            "母親看了客和老師的兩方。"
+        );
+        assert_eq!(
+            translate("母は先生と客の両方を見ました。"),
+            "母親跟老師看了客的兩方。"
+        );
+        assert_eq!(translate("母は客の写真を見ました。"), "母親看了客的照片。");
+        assert_eq!(
+            translate("二時間待っていた客と三十分話していた先生が帰りました。"),
+            "已經等待了兩個小時的客和已經說了三十分鐘的老師回去了。"
         );
     }
 

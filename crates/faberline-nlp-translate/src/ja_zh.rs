@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 mod counted_object;
+mod nominal_possession;
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
@@ -4637,6 +4638,13 @@ fn translate_clause_atoms(
 
     if let Some(res) = try_translate_kagiranai(atoms, doc, sentence_idx, ctx, target) {
         return res;
+    }
+
+    if target == TargetVariant::ZhHant
+        && let Some(text) =
+            nominal_possession::render(core_non_punct(atoms), doc, sentence_idx, target)
+    {
+        return (text, false);
     }
 
     let proposal = polite_volitional(atoms);

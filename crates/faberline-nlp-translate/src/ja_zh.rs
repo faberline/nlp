@@ -10153,8 +10153,12 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
-    if let Some(action) = daylight_meeting
+    if let Some((span, action)) = daylight_meeting
         && matches!(verb_core.as_str(), "開" | "舉辦")
+        && predicates
+            .iter()
+            .flat_map(|g| &g.atoms)
+            .any(|a| a.span.start_char <= span.start_char && span.end_char <= a.span.end_char)
     {
         verb_core = action.to_owned();
     }
@@ -15864,6 +15868,37 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn daylight_respects_the_extent_and_role_of_a_glossary_entry() {
+        for (source, term, actor, expected_daylight) in [
+            ("父は日中にも本を読みました。", "日中", false, false),
+            ("父は日中に本を読みました。", "日中に", false, false),
+            ("日中に先生に手紙を送りました。", "先生", true, true),
+            ("係員は日中に机の上を片付けました。", "机の上", false, true),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            let entries = if actor {
+                &mut glossary.actors
+            } else {
+                &mut glossary.domain_terms
+            };
+            entries.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "山海".to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            let rendered = public_translate(source, &glossary);
+            assert_eq!(rendered.glossary_hits.len(), 1, "{source}");
+            assert_eq!(rendered.target_text.matches("山海").count(), 1, "{source}");
+            assert_eq!(
+                rendered.target_text.contains("白天"),
+                expected_daylight,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn clock_is_not_a_motion_destination() {
         let output =
             public_translate("午後二時に教室に行きます。", &TranslationGlossary::new()).target_text;
@@ -16963,6 +16998,11 @@ mod motion_endpoint_tests {
             ("市は日中に会議を開催しました。", "市白天召開了會議。"),
             ("日中に説明会を開きます。", "白天舉辦說明會。"),
             ("日中に先生に手紙を送りました。", "白天給老師寄送了信。"),
+            ("日中に先生へ手紙を送りました。", "白天給老師寄送了信。"),
+            (
+                "日中に働いた先生は夜に本を読みました。",
+                "白天工作的老師夜晚讀了書。",
+            ),
             (
                 "母は日中に先生に手紙を送り、父は夜に働きました。",
                 "母親白天給老師寄送信，父親夜晚工作了。",
@@ -16978,6 +17018,8 @@ mod motion_endpoint_tests {
             "母は日中に手紙を送り、父は夜に先生に会いました。",
             "一日中に起きた変化を調べます。",
             "父は`日中`に本を読みました。",
+            "私は日中に本を読まれました。",
+            "政府は日中にも米国にも書簡を送りました。",
         ] {
             assert!(!translate(source).contains("白天"), "{source}");
         }

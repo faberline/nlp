@@ -3,6 +3,7 @@ use super::{
     Atom, DATE, DATE_LIST, Upos, adjacent_count, calendar_number, is_numeral, linked_case,
     month_text, normalize_decimal_digits,
 };
+use crate::lock::{LockOrigin, SpanLockTable};
 use faberline_nlp::doc::Document;
 
 struct NumberedDay {
@@ -235,7 +236,12 @@ fn protected_date(atoms: &[Atom], start: usize, chars: &[char]) -> Option<(usize
     None
 }
 
-fn bind_detached_dates(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
+fn bind_detached_dates(
+    atoms: &mut Vec<Atom>,
+    chars: &[char],
+    doc: &Document,
+    locks: &SpanLockTable,
+) {
     let mut i = 0;
     while i < atoms.len() {
         let start = i;
@@ -283,6 +289,23 @@ fn bind_detached_dates(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
             if following
                 .iter()
                 .any(|a| a.doc_tok_idx == Some(head) && a.upos == Some(Upos::Verb))
+            {
+                return Some(head);
+            }
+            // The written form can hide a verb that already licenses this date
+            // in the source analysis. Keep the date without opening the lock.
+            if let Some(verb) = doc
+                .tokens
+                .get(head)
+                .filter(|token| token.upos == Some(Upos::Verb))
+                && following.iter().any(|atom| {
+                    atom.is_locked
+                        && atom.span.start_char <= verb.span.start_char
+                        && verb.span.end_char <= atom.span.end_char
+                        && locks.locks.iter().any(|lock| {
+                            lock.source_span == atom.span && lock.origin == LockOrigin::QuotedSource
+                        })
+                })
             {
                 return Some(head);
             }
@@ -413,7 +436,7 @@ impl DateContext {
         index: usize,
         chars: &[char],
         doc: &Document,
-        locks: &crate::ja_zh::SpanLockTable,
+        locks: &SpanLockTable,
     ) {
         let previous = self.single.take();
         if let Some((last, value, text)) = previous
@@ -463,7 +486,7 @@ impl DateContext {
             }
         }
         bind_month_dates(atoms);
-        bind_detached_dates(atoms, chars, doc);
+        bind_detached_dates(atoms, chars, doc, locks);
         for start in 0..atoms.len() {
             let Some(day) = day_at(atoms, start).filter(|d| d.month.is_some()) else {
                 continue;

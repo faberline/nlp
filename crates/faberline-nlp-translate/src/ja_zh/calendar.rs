@@ -30,6 +30,75 @@ fn regular_rate(surface: &str) -> bool {
     )
 }
 
+// A Japanese pause after the frequency can fall inside a single predicate.
+// Keep a fronted time or a new subject separate from the following clause.
+pub(super) fn continues_habitual_action(
+    prefix: &[Atom],
+    following: &[Atom],
+    chars: &[char],
+) -> bool {
+    let Some((rate, before)) = prefix.split_last() else {
+        return false;
+    };
+    let Some(governor) = rate.head else {
+        return false;
+    };
+    let subject_of_action = |atom: &Atom| atom.deprel == "nsubj" && atom.head == Some(governor);
+    if rate.is_locked
+        || rate.deprel != "advmod"
+        || !regular_rate(&rate.surface)
+        || !before.iter().any(subject_of_action)
+        || following.iter().any(subject_of_action)
+    {
+        return false;
+    }
+    let Some(action) = following
+        .iter()
+        .position(|a| a.doc_tok_idx == Some(governor))
+    else {
+        return false;
+    };
+    let verb = &following[action];
+    if verb.upos != Some(Upos::Verb) || !matches!(verb.deprel.as_str(), "root" | "advcl" | "conj") {
+        return false;
+    }
+    // Inspect source characters even when a glossary covers the delimiters or
+    // tokenization omits them. Skip only the original pause after the time.
+    let Some(between) = chars.get(rate.span.end_char..verb.span.start_char) else {
+        return false;
+    };
+    let Some(pause) = between.iter().position(|c| !c.is_whitespace()) else {
+        return false;
+    };
+    if !matches!(between[pause], '、' | '，') {
+        return false;
+    }
+    !between[pause + 1..].iter().enumerate().any(|(offset, c)| {
+        let index = pause + 1 + offset;
+        match c {
+            '「' | '」' | '『' | '』' | '"' | '＂' | '“' | '”' | '‘' | '、' | '，' | '。'
+            | '！' | '？' | '!' | '?' | '…' => true,
+            '\'' | '’' => {
+                !(between
+                    .get(index - 1)
+                    .is_some_and(char::is_ascii_alphanumeric)
+                    && between
+                        .get(index + 1)
+                        .is_some_and(char::is_ascii_alphanumeric))
+            }
+            ',' => {
+                !(between[index - 1].is_ascii_digit()
+                    && between[index + 1..]
+                        .iter()
+                        .take_while(|c| c.is_ascii_digit())
+                        .count()
+                        == 3)
+            }
+            _ => false,
+        }
+    })
+}
+
 pub(super) fn contrasts_recurrence(atoms: &[Atom]) -> bool {
     let core = super::core_non_punct(atoms);
     matches!(core, [rate, ..] if matches!(core.len(),3|4) && !rate.is_locked &&

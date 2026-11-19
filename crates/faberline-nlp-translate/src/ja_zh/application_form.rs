@@ -7,6 +7,7 @@ pub(super) const CAN_SUBMIT: &str = "__ja_can_submit_application";
 pub(super) const OFFICE: &str = "__ja_application_recipient";
 pub(super) const SHARED_FORM_RECIPIENT: &str = "__ja_shared_form_recipient";
 pub(super) const TIME_QUESTION: &str = "__ja_application_time_question";
+pub(super) const CONTRAST: &str = "__ja_application_contrast";
 const PRESENT_RECIPIENT: &str = "__ja_located_application_recipient";
 pub(super) const PURPOSE: &str = "__ja_application_purpose";
 pub(super) const RENT: &str = "__ja_rent_home";
@@ -524,7 +525,7 @@ fn relative_time(
 ) -> Option<(usize, String)> {
     let last = end.checked_sub(1)?;
     let marker = &atoms[last];
-    let (i, case) = if matches!(marker.surface.as_str(), "に" | "から" | "まで") {
+    let (i, case) = if matches!(marker.surface.as_str(), "に" | "から" | "まで" | "は") {
         let i = last.checked_sub(1)?;
         (i, marker.surface.as_str())
     } else {
@@ -545,7 +546,8 @@ fn relative_time(
         });
     if !merged_clock
         && (time.head != predicate.doc_tok_idx
-            || !matches!(time.deprel.as_str(), "advmod" | "obl")
+            || !(matches!(time.deprel.as_str(), "advmod" | "obl")
+                || (case == "は" && time.deprel == "nsubj"))
             || (!case.is_empty() && !dasu_case_link(time, marker)))
     {
         return None;
@@ -559,6 +561,14 @@ fn relative_time(
             "今朝" => Some("今天早上".to_owned()),
             "今夜" | "今晩" => Some("今晚".to_owned()),
             "昨夜" | "昨晩" => Some("昨晚".to_owned()),
+            _ if case == "は"
+                && source
+                    .strip_suffix('日')
+                    .and_then(crate::opaque::parse_cjk_or_ascii_num)
+                    .is_some_and(|day| (1..=31).contains(&day)) =>
+            {
+                Some(source.clone())
+            }
             _ => {
                 let (prefix, clock) = source
                     .strip_prefix("午前")
@@ -582,16 +592,25 @@ fn relative_time(
             return Some(text);
         }
         if !a.is_locked {
-            return direct_quote_time(a, doc);
+            return direct_quote_time(a, doc).or_else(|| {
+                // An adverb attached to いる modifies the person's presence.
+                (a.upos == Some(Upos::Adv) && a.deprel == "advmod").then(|| {
+                    super::translate_single_ja_term(&a.surface, a.lemma.as_deref(), a.upos)
+                })
+            });
         }
         let mut source = a.clone();
         source.is_locked = false;
         source.surface = spelling(a, chars);
         source.upos = Some(Upos::Noun);
         source.lemma = None;
-        direct_quote_time(&source, doc)
-            .or_else(|| super::render_temporal_made_atom(&source))
-            .map(|_| a.surface.clone())
+        let adverb = a.deprel == "advmod"
+            && faberline_nlp::lexicon::lookup_ja(&source.surface)
+                .is_some_and(|h| h.upos_candidates.contains(&Upos::Adv));
+        (adverb
+            || direct_quote_time(&source, doc).is_some()
+            || super::render_temporal_made_atom(&source).is_some())
+        .then(|| a.surface.clone())
     };
     let mut text = label(time)?;
     let mut start = i;
@@ -809,9 +828,7 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
             let action = &atoms[v];
             action.deprel == "advcl"
                 && (action.head == event.doc_tok_idx || action.head == Some(outer))
-                && atoms
-                    .get(v + 1)
-                    .is_some_and(|a| matches!(a.surface.as_str(), "て" | "、" | ","))
+                && linked_clause(atoms, v)
                 && (0..v).any(|k| {
                     atoms[k].deprel == "obj"
                         && atoms[k].head == action.doc_tok_idx
@@ -963,6 +980,65 @@ fn mark_recipient(atoms: &mut [Atom], i: usize, role: &str) {
 
 // A coordinated action can keep the preceding action's object. Both the
 // link between the verbs and the receiving argument belong to the source.
+fn contrast_link(atoms: &[Atom], verb: usize) -> Option<usize> {
+    let action = &atoms[verb];
+    let id = action.doc_tok_idx?;
+    if action.is_locked || action.upos != Some(Upos::Verb) {
+        return None;
+    }
+    let link = (verb + 1..atoms.len()).find(|&i| {
+        let a = &atoms[i];
+        a.is_locked || a.head != Some(id) || a.deprel != "aux" || a.upos != Some(Upos::Aux)
+    })?;
+    let mark = &atoms[link];
+    (!mark.is_locked
+        && mark.head == Some(id)
+        && ((mark.surface == "が" && matches!(mark.deprel.as_str(), "case" | "mark"))
+            || (matches!(mark.surface.as_str(), "けれど" | "けれども" | "けど")
+                && mark.deprel == "mark")))
+        .then_some(link)
+}
+
+fn linked_clause(atoms: &[Atom], verb: usize) -> bool {
+    atoms
+        .get(verb + 1)
+        .is_some_and(|a| !a.is_locked && matches!(a.surface.as_str(), "て" | "、" | ","))
+        || contrast_link(atoms, verb).is_some()
+}
+
+fn mark_form_contrasts(atoms: &mut [Atom], chars: &[char]) {
+    for i in 0..atoms.len() {
+        let form = &atoms[i];
+        if form.deprel != "obj"
+            || !atoms
+                .get(i + 1)
+                .is_some_and(|a| a.surface == "を" && dasu_case_link(form, a))
+            || (form_start(atoms, i, chars).is_none() && !covered_purpose(form, chars))
+        {
+            continue;
+        }
+        let Some(v) = (i + 1..atoms.len()).find(|&k| atoms[k].doc_tok_idx == form.head) else {
+            continue;
+        };
+        let Some(link) = contrast_link(atoms, v) else {
+            continue;
+        };
+        // が after this finite action attaches to the verb. が on a
+        // noun is the subject marker and keeps its original analysis.
+        if atoms[link].surface == "が"
+            && matches!(atoms[v].deprel.as_str(), "nsubj" | "advcl")
+            && atoms[link + 1..]
+                .iter()
+                .any(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == atoms[v].head)
+        {
+            atoms[v].deprel = "advcl".to_owned();
+            atoms[link].upos = Some(Upos::Sconj);
+            atoms[link].deprel = "mark".to_owned();
+            atoms[link].lemma = Some(CONTRAST.to_owned());
+        }
+    }
+}
+
 fn mark_shared_form(
     atoms: &mut [Atom],
     form: usize,
@@ -994,9 +1070,7 @@ fn mark_shared_form(
     if form >= first
         || (previous.deprel != "advcl" && !after)
         || previous.is_locked
-        || !atoms.get(first + 1).is_some_and(|link| {
-            !link.is_locked && matches!(link.surface.as_str(), "て" | "、" | ",")
-        })
+        || !linked_clause(atoms, first)
         || atoms.windows(2).any(|w| {
             w[0].head == previous.doc_tok_idx
                 && w[1].surface == "と"
@@ -1028,19 +1102,37 @@ fn mark_shared_form(
     if atoms[form + 1..next]
         .iter()
         .any(|a| super::is_quote_mark(a) || matches!(a.surface.as_str(), "“" | "”" | "\""))
-        || atoms.iter().any(|a| {
-            a.head == Some(verb)
-                && (a.deprel == "obj"
-                    || (a.deprel == "nsubj"
-                        && a.doc_tok_idx != atoms[office].doc_tok_idx
-                        && a.span.start_char > previous.span.end_char))
-        })
+        || atoms
+            .iter()
+            .any(|a| a.head == Some(verb) && a.deprel == "obj")
     {
         return None;
+    }
+    // A new subject cancels the shared object. A time topicalized with は
+    // can receive the same subject tag without introducing another actor.
+    let mut times = Vec::new();
+    for (i, a) in atoms.iter().enumerate().filter(|(i, a)| {
+        *i != office
+            && a.head == Some(verb)
+            && a.deprel == "nsubj"
+            && a.span.start_char > previous.span.end_char
+    }) {
+        let wa = atoms.get(i + 1)?;
+        if wa.surface != "は" || !dasu_case_link(a, wa) {
+            return None;
+        }
+        let (start, time) = relative_time(atoms, i + 2, &atoms[next], doc, chars)?;
+        if start == i && !a.is_locked {
+            times.push((i, time));
+        }
     }
     mark_filing_time(atoms, verb, chars);
     if physical_argument(atoms, verb, chars, doc, true) {
         return None;
+    }
+    for (i, time) in times {
+        atoms[i].surface = time;
+        atoms[i].is_locked = true;
     }
     atoms[next].lemma = Some(reading.to_owned());
     mark_recipient(atoms, office, SHARED_FORM_RECIPIENT);
@@ -1048,6 +1140,7 @@ fn mark_shared_form(
 }
 
 pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
+    mark_form_contrasts(atoms, chars);
     located_recipient(atoms, chars, doc);
     for end in (0..atoms.len()).rev() {
         let Some(form) = atoms.get(end) else { continue };

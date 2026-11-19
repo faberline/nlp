@@ -403,7 +403,13 @@ pub(crate) fn translate_ja_sentence(
                             .0
                         });
                         out.push_str(&rendered);
-                        if let Some(p) = trailing_punct {
+                        if let Some(p) = trailing_punct
+                            && !(matches!(p.as_str(), "、" | "," | "，")
+                                && rendered.ends_with("，但是")
+                                && catoms.last().is_some_and(|a| {
+                                    a.lemma.as_deref() == Some(application_form::CONTRAST)
+                                }))
+                        {
                             out.push_str(&localize_punct(p));
                         }
                     } else if let Segment::Punct(p, _) = iseg {
@@ -662,6 +668,7 @@ pub(crate) fn translate_ja_sentence(
                     && trimmed_atoms.last().is_some_and(|a| {
                         !a.is_locked
                             && (is_clause_split_sconj(&a.surface)
+                                || a.lemma.as_deref() == Some(application_form::CONTRAST)
                                 || matches!(a.surface.as_str(), "と" | "でも" | "としても"))
                     });
 
@@ -4327,12 +4334,15 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
             && !is_source_kara
             && !nominal_possession::contains_copular_node(atoms, i, doc)
             && (is_clause_split_sconj(&a.surface)
+                || a.lemma.as_deref() == Some(application_form::CONTRAST)
                 || (a.surface == "し" && a.upos == Some(Upos::Sconj))
                 || (a.surface == "だけど" && current.len() >= 2))
             && i + 1 < atoms.len()
             && !is_punct_atom(&atoms[i + 1])
         {
-            flush_clause(&mut current, Some("，".to_owned()), &mut segments);
+            let punctuation =
+                (a.lemma.as_deref() != Some(application_form::CONTRAST)).then(|| "，".to_owned());
+            flush_clause(&mut current, punctuation, &mut segments);
             i += 1;
             continue;
         }
@@ -9823,6 +9833,13 @@ fn translate_clause_bunsetsus(
                 "から" | "ので" => sconj_prefix = Some("因為"),
                 "からといって" => sconj_prefix = Some("即便因為"),
                 "が" if animate_contrast => sconj_prefix = Some("雖然"),
+                "が" if b
+                    .atoms
+                    .last()
+                    .is_some_and(|a| a.lemma.as_deref() == Some(application_form::CONTRAST)) =>
+                {
+                    sconj_suffix = Some("，但是")
+                }
                 "けれど" | "けれども" | "けど" | "のに" => sconj_suffix = Some("，但是"),
                 "だけど" => sconj_suffix = Some("，不過"),
                 "し" => sconj_suffix = Some("，而且"),
@@ -16024,6 +16041,18 @@ mod clock_rule_tests {
     fn a_linked_filing_can_share_the_extracted_form() {
         let glossary = TranslationGlossary::new();
         for (jp, zh) in [
+            (
+                "私はかばんから入居申込書を出しましたが、管理会社には出しませんでした。",
+                "我從包包拿出了入住申請表，但是沒有交給管理公司。",
+            ),
+            (
+                "姉は入居申込書をかばんから出し、今日は母と一緒に窓口に出しました。",
+                "姊姊從包包拿出入住申請表，今天和母親一起交給窗口了。",
+            ),
+            (
+                "私は青いかばんから講座の申込書を出して、さっき事務室にいた先生には出しませんでした。",
+                "我從藍的包包拿出課程報名表，沒有交給剛才在事務室的老師。",
+            ),
             (
                 "父はかばんから入居申込書を出し、今日受付にいる二人の職員に出しました。",
                 "父親從包包拿出入住申請表，交給今天在櫃檯的兩位職員了。",

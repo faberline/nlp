@@ -3332,6 +3332,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
             && !is_temo_eval
             && !is_kagon_sconj
             && !is_source_kara
+            && !nominal_possession::contains_copular_node(atoms, i, doc)
             && (is_clause_split_sconj(&a.surface)
                 || (a.surface == "し" && a.upos == Some(Upos::Sconj))
                 || (a.surface == "だけど" && current.len() >= 2))
@@ -17351,8 +17352,7 @@ fn demonstrative_classifier(word: &str, noun: &Atom) -> &'static str {
         "寺" | "寺廟" | "橋" => "座",
         "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
         _ if is_demonstrative_person_noun(noun) => "個",
-        // With no established unit or count reading, keep the deictic
-        // without guessing an amount, e.g. 這水 rather than a cup of water.
+        // Keep a deictic without adding an unsupported unit (e.g. 這水).
         _ => "",
     }
 }

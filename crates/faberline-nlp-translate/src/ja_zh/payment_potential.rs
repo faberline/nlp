@@ -51,11 +51,25 @@ pub(super) fn word_mention(
     let Some(label) = rest.first().filter(|a| !a.is_locked) else {
         return false;
     };
+    if marker.surface == "の"
+        && label.deprel == "compound"
+        && let Some(head) = rest.get(1)
+        && !head.is_locked
+        && head.doc_tok_idx.is_some()
+        && head.doc_tok_idx == label.head
+        && label.span.end_char == head.span.start_char
+        && matches!(
+            (label.surface.as_str(), head.surface.as_str()),
+            ("用", "例") | ("品", "詞") | ("活", "用")
+        )
+    {
+        return true;
+    }
     match label.surface.as_str() {
         "動詞" | "名詞" | "形容詞" | "語" | "単語" | "言葉" | "用語" | "表現" => {
             true
         }
-        "発音" | "意味" | "表記" | "読み方" | "読み" | "品詞" | "活用" => {
+        "発音" | "意味" | "表記" | "読み方" | "読み" | "品詞" | "活用" | "用例" => {
             marker.surface != "という"
         }
         "言い"
@@ -483,8 +497,10 @@ pub(super) fn render(source: &[Atom], target: TargetVariant) -> Option<String> {
     let modal = match joined(tail).as_str() {
         "" | "ます" => "能",
         "ない" | "ません" => "不能",
-        "た" | "ました" => "當時能",
-        "なかった" | "ませんでした" => "當時不能",
+        // The past inflection supplies no lexical time adverb. An explicit
+        // date or time belongs to its own argument (possibly before a comma).
+        "た" | "ました" => "有辦法",
+        "なかった" | "ませんでした" => "沒能",
         _ => return None,
     };
     let explicit_payment = verb.lemma.as_deref().unwrap_or(&verb.surface) == "支払える";
@@ -552,7 +568,9 @@ mod tests {
     fn case_marked_object_selects_the_sense_and_keeps_polarity() {
         for (jp, expected) in [
             ("母は今月の家賃が払えません。", "母親不能付這個月的房租。"),
-            ("入場料を払えましたか。", "當時能付入場費嗎？"),
+            ("入場料を払えましたか。", "有辦法付入場費嗎？"),
+            ("当時、家賃を払えました。", "當時，有辦法付房租。"),
+            ("昨日はカードで支払えませんでした。", "昨天沒能用卡片付款。"),
             ("弟は姉に家賃を払えます。", "弟弟能付房租給姊姊。"),
             ("帽子の埃を払えます。", "能掃掉帽子的灰塵。"),
             ("机のほこりを払えません。", "不能掃掉書桌的灰塵。"),
@@ -605,6 +623,7 @@ mod tests {
             "「支払える」を辞書で調べます。",
             "辞書で「支払える」を調べました。",
             "「支払える」を辞典で引きました。",
+            "「支払える」の用例を二つ探しました。",
             "「支払える」とはどういう意味ですか。",
         ] {
             assert!(translate(jp).contains("「支払える」"), "{jp}");

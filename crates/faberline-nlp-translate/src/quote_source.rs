@@ -475,9 +475,11 @@ fn copies_written_form(
                 if ch != 'に' || index == 0 {
                     return false;
                 }
-                let tail = &destination[index + 1..];
+                let after_particle = skip_space(&destination[index + 1..]);
+                let has_comma = after_particle.first() == Some(&'、');
+                let tail = after_clause_comma(after_particle);
                 let immediate_copy = starts_copying(tail);
-                if immediate_copy && !shared_object {
+                if immediate_copy && !shared_object && !has_comma {
                     return true;
                 }
                 (immediate_copy || after_copying_manner(tail).is_some_and(starts_copying))
@@ -1112,6 +1114,26 @@ mod tests {
                 &["四點", "「七月八日の午後二時には」", "筆記本"],
             ),
             (
+                "私は四時に「入居申込書」とノートに、書き写しました。",
+                &["四點", "「入居申込書」", "筆記本"],
+            ),
+            (
+                "私は四時に「入居申込書」とノートに、そのまま書き写しました。",
+                &["四點", "「入居申込書」", "筆記本"],
+            ),
+            (
+                "『ドイツ』と『入居申込書』を紙に、書き写しました。",
+                &["『ドイツ』", "『入居申込書』", "紙"],
+            ),
+            (
+                "『ドイツ』と『入居申込書』を紙に、そのまま書き写しました。",
+                &["『ドイツ』", "『入居申込書』", "紙"],
+            ),
+            (
+                "紙に、『ドイツ』と『入居申込書』を書き写しました。",
+                &["『ドイツ』", "『入居申込書』", "紙"],
+            ),
+            (
                 "『入居申込書』という語を紙にそのまま書き写しました。",
                 &["『入居申込書』", "紙"],
             ),
@@ -1128,6 +1150,10 @@ mod tests {
             (
                 "『入居申込書』と言った後で紙にそのまま書き写しました。",
                 &["入住申請表", "紙"],
+            ),
+            (
+                "父は「入居申込書」と言った後でノートに、そのまま書き写しました。",
+                &["入住申請表", "筆記本"],
             ),
             (
                 "4月2日に、申込書に『来て！』と書き写しました。",

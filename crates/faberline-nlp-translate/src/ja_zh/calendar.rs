@@ -256,7 +256,11 @@ fn day_interval(atoms: &[Atom], end: usize) -> Option<DayInterval> {
     } else {
         return None;
     };
-    if matches!(&atoms[..start], [.., opaque] if opaque.is_locked && opaque.lemma.as_deref()!=Some(quantities::HABIT) && opaque.span.end_char == atoms[start].span.start_char)
+    // A coordinated argument can hide its month in a protected phrase.
+    // Only the positively recognized date list may supply a calendar date.
+    if matches!(&atoms[..start], [.., left, join] if !join.is_locked && matches!(join.surface.as_str(),"と"|"や")
+        && (left.is_locked || left.surface=="日") && join.head==left.doc_tok_idx)
+        || matches!(&atoms[..start], [.., opaque] if opaque.is_locked && opaque.lemma.as_deref()!=Some(quantities::HABIT) && opaque.span.end_char == atoms[start].span.start_char)
         || matches!(&atoms[..start], [.., opaque, no] if opaque.is_locked && no.surface == "の" && no.head == opaque.doc_tok_idx)
     {
         return None;
@@ -468,6 +472,9 @@ fn expression(atoms: &[Atom], end: usize, contrasts_recurrence: bool) -> Option<
         && only.span.start_char == locked.span.end_char);
     let frequency = !deadline
         && (contrasts_recurrence
+            || atoms
+                .iter()
+                .any(|a| a.lemma.as_deref() == Some(quantities::HABIT) && a.head == day.head)
             || opaque_focus
             || quantities::has_measure(atoms, end)
             || adjacent_count(atoms, end + 1).is_some()
@@ -570,6 +577,26 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, contrasts_recurrence: bool) {
             }) = day_interval(atoms, idx)
         {
             atoms.splice(start..idx + 2, [atom]);
+        }
+    }
+    // Voiced だ after an adnominal verb (読んだ) is the past auxiliary た.
+    // The generic noun modifier renderer otherwise treats it as a copula.
+    for i in 1..atoms.len() {
+        let verb = &atoms[i - 1];
+        let past = &atoms[i];
+        if !past.is_locked
+            && past.surface == "だ"
+            && past.upos == Some(Upos::Aux)
+            && past.deprel == "aux"
+            && past.head == verb.doc_tok_idx
+            && !verb.is_locked
+            && verb.upos == Some(Upos::Verb)
+            && verb.deprel == "acl"
+            && atoms[..i - 1].iter().any(|a| {
+                (is_interval(a) || count_modifier(a).is_some()) && a.head == verb.doc_tok_idx
+            })
+        {
+            atoms[i].surface = "た".to_owned();
         }
     }
     let mut end = atoms.len();

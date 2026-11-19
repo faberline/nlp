@@ -14625,6 +14625,14 @@ mod clock_rule_tests {
             .target_text,
             "不是每天，而是每兩天只還給了一本書的學生來了。"
         );
+        assert_eq!(
+            public_translate(
+                "毎日ではなく、三日に二冊だけ本を読んだ学生が来ました。",
+                &glossary
+            )
+            .target_text,
+            "不是每天，而是每三天只讀了兩本書的學生來了。"
+        );
         let ambiguous = public_translate("三日に一杯コーヒーを飲みます。", &glossary);
         assert!(
             !ambiguous.target_text.contains("每三天") && !ambiguous.target_text.contains("三號")
@@ -14657,6 +14665,9 @@ mod clock_rule_tests {
         let locked = public_translate(jp, &glossary);
         assert_eq!(locked.target_text.matches("特別日").count(), 1);
         assert!(!locked.target_text.contains("六月二日"));
+        let coordinated = public_translate("六月二日と三日に一人ずつ学生が来ました。", &glossary);
+        assert_eq!(coordinated.target_text.matches("特別日").count(), 1);
+        assert!(!coordinated.target_text.contains("每三天"));
     }
 
     #[test]

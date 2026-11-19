@@ -1,9 +1,11 @@
 //! Bind a calendar day to its case particles before noun-phrase grouping.
+mod dated_clock;
 mod dates;
 mod quantities;
 pub(super) mod report;
 use super::{Atom, Upos, normalize_decimal_digits, selects_time_value};
 use crate::opaque::parse_cjk_or_ascii_num;
+pub(super) use dated_clock::QUESTION as CLOCK_QUESTION;
 pub(crate) use dates::DateContext;
 pub(super) use quantities::bind_relative_contrast;
 
@@ -108,7 +110,8 @@ pub(super) fn is_date(atom: &Atom) -> bool {
 }
 
 pub(super) fn question(atom: &Atom) -> Option<&str> {
-    (is_date(atom) && (atom.surface.ends_with("幾號") || atom.surface == "星期幾"))
+    (atom.lemma.as_deref() == Some(CLOCK_QUESTION)
+        || is_date(atom) && (atom.surface.ends_with("幾號") || atom.surface == "星期幾"))
         .then_some(atom.surface.as_str())
 }
 

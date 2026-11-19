@@ -413,6 +413,7 @@ impl DateContext {
         index: usize,
         chars: &[char],
         doc: &Document,
+        locks: &crate::ja_zh::SpanLockTable,
     ) {
         let previous = self.single.take();
         if let Some((last, value, text)) = previous
@@ -445,6 +446,7 @@ impl DateContext {
             bind(atoms, 0, day.end, text, DATE);
         }
         bind_friend_recipient(atoms);
+        super::dated_clock::normalize(atoms, chars, doc, locks);
         for a in atoms.iter_mut().filter(|a| a.is_locked) {
             let Some(raw) = chars.get(a.span.start_char..a.span.end_char) else {
                 continue;

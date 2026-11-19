@@ -8382,8 +8382,17 @@ fn translate_clause_bunsetsus(
         None
     };
     // Resolve time and result roles while the other arguments of the predicate are available.
-    let timed_result = timed_result_frame(&bunsetsus, source);
-    let endpoint = if ctx.return_trip.is_none() {
+    let hand_return = if ctx.return_trip.is_none() && target == TargetVariant::ZhHant {
+        return_endpoint::clock_hand_return(&bunsetsus, &candidates, source, doc, target)
+    } else {
+        None
+    };
+    let timed_result = if hand_return.is_none() {
+        timed_result_frame(&bunsetsus, source)
+    } else {
+        None
+    };
+    let endpoint = if ctx.return_trip.is_none() && hand_return.is_none() {
         return_endpoint::resolve(&bunsetsus, &candidates, source, doc, target)
     } else {
         None
@@ -8422,6 +8431,24 @@ fn translate_clause_bunsetsus(
             temporal_others.push(label);
             continue;
         }
+        if let Some(frame) = &hand_return {
+            if b.atoms
+                .iter()
+                .all(|atom| return_endpoint::contains_span(frame.dial, atom.span))
+            {
+                if b.atoms
+                    .iter()
+                    .any(|a| !a.is_locked && a.surface == "も" && a.deprel == "case")
+                {
+                    adverbs.push("也".to_owned());
+                }
+                continue;
+            }
+            if frame.object == Some(idx) {
+                affected_object = Some(render_bunsetsu_np(&b, target));
+                continue;
+            }
+        }
         if endpoint.as_ref().is_some_and(|(index, _)| *index == idx) {
             if b.atoms
                 .iter()
@@ -8455,6 +8482,9 @@ fn translate_clause_bunsetsus(
         }
         if daypart_groups.contains(&idx)
             || timed_result.is_some_and(|f| f.time == SettingTime::At(idx))
+            || hand_return
+                .as_ref()
+                .is_some_and(|frame| frame.event_time == Some(idx))
         {
             if matches!(b.atoms.as_slice(), [_, _, focus] if !focus.is_locked && focus.surface == "も")
             {
@@ -8871,6 +8901,8 @@ fn translate_clause_bunsetsus(
         } else {
             format!("{}{verb_core}", trip.action)
         };
+    } else if let Some(frame) = hand_return {
+        verb_core = frame.action;
     } else if let Some((_, action)) = endpoint {
         verb_core = action;
     } else if let Some(place) = trip_destination {
@@ -15121,6 +15153,50 @@ mod motion_endpoint_tests {
                 && transfer.contains("遞給"),
             "{transfer}"
         );
+    }
+
+    #[test]
+    fn clock_hand_returns_distinguish_the_dial_position_from_the_event_time() {
+        for (source, expected) in [
+            ("時計の長針が十二の位置に戻りました。", "長針回到12的位置"),
+            ("時計の長針は十二時に戻りました。", "長針回到十二點鐘的位置"),
+            ("時計の針が正午に元の位置に戻りました。", "正午回到原位"),
+            (
+                "正午に時計の針が六時の位置に戻りました。",
+                "正午回到6點鐘的位置",
+            ),
+            (
+                "私は正午に時計の針を六時の位置に戻しました。",
+                "正午把手錶的針撥回6點鐘的位置",
+            ),
+            (
+                "時計の針は十二時の位置には戻りませんでした。",
+                "沒有回到12點鐘的位置",
+            ),
+            ("時計の針は六時に戻りましたか。", "回到六點鐘的位置了嗎"),
+            ("時計の針は十二の位置に戻る予定です。", "預定回到12的位置"),
+        ] {
+            let text = translate(source);
+            assert!(text.contains(expected), "{source}: {text}");
+        }
+        for (source, expected) in [
+            (
+                "看護師は正午に針を箱に戻しました。",
+                "看護師正午把針放回箱子裡了。",
+            ),
+            ("彼は学校で針を箱に戻しました。", "他在學校給箱放回了針。"),
+            (
+                "時計の針を持った客は正午に店に戻りました。",
+                "拿著了手錶的針的客正午回到商店了。",
+            ),
+            ("放送時間は夕方に戻りました。", "廣播時間恢復到傍晚了。"),
+            (
+                "時計の針は正午に`元の位置`に戻りました。",
+                "手錶的針回來到正午到`元の位置`了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
     }
 
     #[test]

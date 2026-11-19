@@ -1905,6 +1905,7 @@ struct TeHelpRequest<'a> {
     person: Option<TeHelpPerson<'a>>,
     letter_addressee: Option<TeHelpLetterAddressee<'a>>,
     letter_writers: Option<(TeHelpPerson<'a>, &'a str)>,
+    letter_count: Option<TeHelpLetterCount>,
     manner: Option<TeHelpManner<'a>>,
     child_suffix: Option<usize>,
     humble: bool,
@@ -1931,6 +1932,13 @@ struct TeHelpLetterAddressee<'a> {
     illustrative: bool,
     start: usize,
     end: usize,
+}
+
+struct TeHelpLetterCount {
+    object: usize,
+    span: std::ops::Range<usize>,
+    numeral: String,
+    per_writer: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2067,6 +2075,102 @@ fn linked_letter_case(noun: &Atom, particle: &Atom) -> bool {
         && noun.doc_tok_idx.is_some()
         && particle.head == noun.doc_tok_idx
         && noun.span.end_char == particle.span.start_char
+}
+
+fn te_help_letter_count(
+    arguments: &[Atom],
+    letter_idx: usize,
+    action_idx: usize,
+    can_distribute_to_writers: bool,
+) -> Option<TeHelpLetterCount> {
+    let object = arguments
+        .iter()
+        .position(|atom| atom.doc_tok_idx == Some(letter_idx))?;
+    let case = arguments.get(object + 1)?;
+    if case.surface != "を" || !linked_letter_case(&arguments[object], case) {
+        return None;
+    }
+    let mut counters = arguments
+        .iter()
+        .enumerate()
+        .skip(object + 2)
+        .filter_map(|(index, atom)| {
+            let prefix = atom.surface.strip_suffix('通')?;
+            (!atom.is_locked
+                && atom.upos == Some(Upos::Noun)
+                && atom.deprel == "obl"
+                && atom.head == Some(action_idx)
+                && (prefix.is_empty() || is_japanese_numeral(prefix)))
+            .then_some((index, atom, prefix))
+        });
+    let (counter_index, counter, fused_number) = counters.next()?;
+    let counter_id = counter.doc_tok_idx?;
+    if counters.next().is_some() {
+        return None;
+    }
+
+    let mut start = counter_index;
+    let numeral = if fused_number.is_empty() {
+        while start > object + 1 {
+            let part = &arguments[start - 1];
+            if part.span.end_char != arguments[start].span.start_char
+                || !is_japanese_numeral(&part.surface)
+            {
+                break;
+            }
+            let linked_number = (part.upos == Some(Upos::Num)
+                && matches!(part.deprel.as_str(), "nummod" | "nmod"))
+                || (part.upos == Some(Upos::Noun)
+                    && part.deprel == "compound"
+                    && part.surface.chars().all(|ch| matches!(ch, '０'..='９')));
+            if part.is_locked
+                || !linked_number
+                || !arguments[start..=counter_index]
+                    .iter()
+                    .any(|next| next.doc_tok_idx.is_some() && part.head == next.doc_tok_idx)
+            {
+                return None;
+            }
+            start -= 1;
+        }
+        if start == counter_index {
+            return None;
+        }
+        arguments[start..counter_index]
+            .iter()
+            .map(|part| part.surface.as_str())
+            .collect()
+    } else {
+        fused_number.to_owned()
+    };
+    let numeral = normalize_decimal_digits(&numeral);
+    let after_counter = counter_index + 1;
+    let per_writer = arguments.get(after_counter).is_some_and(|each| {
+        !each.is_locked
+            && each.surface == "ずつ"
+            && each.upos == Some(Upos::Part)
+            && each.deprel == "discourse"
+            && each.head == Some(counter_id)
+            && counter.span.end_char == each.span.start_char
+    });
+    let span = start..after_counter + usize::from(per_writer);
+    if (per_writer && !can_distribute_to_writers)
+        || arguments.iter().enumerate().any(|(index, atom)| {
+            !span.contains(&index)
+                && atom.head.is_some()
+                && arguments[span.clone()]
+                    .iter()
+                    .any(|bound| atom.head == bound.doc_tok_idx)
+        })
+    {
+        return None;
+    }
+    Some(TeHelpLetterCount {
+        object,
+        span,
+        numeral,
+        per_writer,
+    })
 }
 
 fn te_help_letter_addressee(
@@ -2539,6 +2643,14 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
             bound.start = prior;
         }
     }
+    let letter_count = letter_idx.and_then(|letter_idx| {
+        // With one explicit addressee, a counted group can write a letter each.
+        let can_distribute_to_writers = letter_addressee.as_ref().is_some_and(|address| {
+            address.members.len() == 1 && address.count.is_none() && !address.illustrative
+        }) && (letter_writers.is_some()
+            || manner.as_ref().is_some_and(|group| group.count.is_some()));
+        te_help_letter_count(arguments, letter_idx, action_idx, can_distribute_to_writers)
+    });
     let is_modifier = |index| {
         manner
             .as_ref()
@@ -2552,6 +2664,9 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
             || letter_writers
                 .as_ref()
                 .is_some_and(|(bound, _)| (bound.start..bound.end).contains(&index))
+            || letter_count
+                .as_ref()
+                .is_some_and(|bound| bound.span.contains(&index))
     };
 
     let child_suffix = te_help_child_suffix(arguments, action_idx);
@@ -2651,6 +2766,7 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
         person,
         letter_addressee,
         letter_writers,
+        letter_count,
         manner,
         child_suffix,
         humble,
@@ -5616,6 +5732,10 @@ fn render_te_help_request(
             .as_ref()
             .is_some_and(|person| person.role == TeHelpPersonRole::Performer)
     });
+    let per_writer = request
+        .letter_count
+        .as_ref()
+        .is_some_and(|count| count.per_writer);
     let mut action: Vec<_> = request
         .action
         .iter()
@@ -5641,19 +5761,52 @@ fn render_te_help_request(
             if let Some(manner) = &request.manner
                 && (manner.start..manner.end).contains(&index)
             {
-                return (index == manner.start && performer_count.is_none()).then(|| Atom {
-                    span: Span {
-                        start_char: atom.span.start_char,
-                        end_char: request.action[manner.end - 1].span.end_char,
+                return (index == manner.start && performer_count.is_none() && !per_writer).then(
+                    || Atom {
+                        span: Span {
+                            start_char: atom.span.start_char,
+                            end_char: request.action[manner.end - 1].span.end_char,
+                        },
+                        surface: "一起".to_owned(),
+                        lemma: None,
+                        upos: Some(Upos::Adv),
+                        doc_tok_idx: None,
+                        head: action_head,
+                        deprel: "advmod".to_owned(),
+                        is_locked: false,
                     },
-                    surface: "一起".to_owned(),
-                    lemma: None,
-                    upos: Some(Upos::Adv),
-                    doc_tok_idx: None,
-                    head: action_head,
-                    deprel: "advmod".to_owned(),
-                    is_locked: false,
-                });
+                );
+            }
+            if let Some(count) = &request.letter_count {
+                if count.span.contains(&index) {
+                    return (count.per_writer && index == count.span.start).then(|| Atom {
+                        span: Span {
+                            start_char: atom.span.start_char,
+                            end_char: request.action[count.span.end - 1].span.end_char,
+                        },
+                        surface: "各".to_owned(),
+                        lemma: None,
+                        upos: Some(Upos::Adv),
+                        doc_tok_idx: None,
+                        head: action_head,
+                        deprel: "advmod".to_owned(),
+                        is_locked: false,
+                    });
+                }
+                if index == count.object {
+                    let mut object = atom.clone();
+                    let numeral = if count.numeral == "2" {
+                        "二"
+                    } else {
+                        &count.numeral
+                    };
+                    object.surface.clear();
+                    counted_object::push_quantity(&mut object.surface, numeral, "封");
+                    object.surface.push('信');
+                    object.lemma = None;
+                    object.is_locked = true;
+                    return Some(object);
+                }
             }
             if !atom.is_locked && atom.surface == "もう一度" && atom.deprel == "advmod" {
                 repeat = true;
@@ -5779,7 +5932,9 @@ fn render_te_help_request(
         {
             let name = render_person(writer);
             if let Some(count) = performer_count {
-                joint = "一起";
+                if !per_writer {
+                    joint = "一起";
+                }
                 format!("包括{name}在內的{}", counted_listener(count))
             } else {
                 name
@@ -19907,6 +20062,76 @@ mod existence_rule_tests {
             (
                 "明日、母と二人で先生宛ての手紙を書いていただけますか。",
                 "可以請您和母親兩人明天一起寫信給老師嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_requests_keep_the_number_of_letters() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "先生方お二人に、校長宛ての手紙を二通書いていただけますか。",
+                "可以請兩位老師寫兩封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を一通ずつ書いていただけますか。",
+                "可以請兩位老師各寫一封信給校長嗎？",
+            ),
+            (
+                "父と母の二人宛ての手紙を一通書いていただけますか。",
+                "可以請您寫一封信給父親和母親兩人嗎？",
+            ),
+            (
+                "二人で校長宛ての手紙を二通書いていただけませんか。",
+                "可以麻煩兩位一起寫兩封信給校長嗎？",
+            ),
+            (
+                "先生宛ての手紙を二人で二通書いていただけますか。",
+                "可以請兩位一起寫兩封信給老師嗎？",
+            ),
+            (
+                "二人で先生宛ての手紙を一通ずつ書いていただけますか。",
+                "可以請兩位各寫一封信給老師嗎？",
+            ),
+            (
+                "手紙を２通書いていただけますか。",
+                "可以請您幫我寫兩封信嗎？",
+            ),
+            (
+                "校長宛ての手紙を二十通書いていただけますか。",
+                "可以請您寫二十封信給校長嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_counter_preserves_other_actions_and_opaque_amounts() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "校長宛ての手紙を二通読んでいただけますか。",
+                "校長宛，二通讀能得到信嗎？",
+            ),
+            (
+                "校長宛ての手紙を`二通`書いていただけますか。",
+                "校長宛，`二通`寫信，能得到嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を二通書かないでいただけますか。",
+                "位給二人老師お，校長宛，二通不寫能得到信嗎？",
             ),
         ] {
             assert_eq!(

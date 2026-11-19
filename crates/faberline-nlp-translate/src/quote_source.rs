@@ -156,8 +156,8 @@ fn protect_sibling_forms(
         let opening = quote.start_char - 1;
         let before = &chars[scope.start_char..opening];
         let after = skip_space(&chars[quote.end_char + 1..scope.end_char]);
-        let count_question = asks_character_count(after);
-        if count_question
+        let measures_form = measures_written_form(after);
+        if measures_form
             || describes_written_form(after)
             || writes_with_character_count(before, after)
         {
@@ -182,11 +182,7 @@ fn protect_sibling_forms(
 
         // The count noun applies to the whole list within this quotation scope,
         // even if terminal marks inside the operands split the analysis sentences.
-        let shares_count = after
-            .strip_prefix(&['の'])
-            .is_some_and(names_character_count)
-            || count_question;
-        let first = if index > first_for_count && shares_count {
+        let first = if index > first_for_count && measures_form {
             first_for_count
         } else if index > first_for_comparison {
             let before = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
@@ -423,7 +419,9 @@ fn after_total_modifier(chars: &[char]) -> &[char] {
         .map_or(chars, skip_space)
 }
 
-fn asks_character_count(after: &[char]) -> bool {
+fn measures_written_form(after: &[char]) -> bool {
+    // When the quote names a word, the case marker belongs to that word.
+    // A country or another referent introduced by という is a different use.
     let after = if let Some(nominal) = strip_prefix(after, "という") {
         let nominal = skip_space(nominal);
         let Some(after) = WORD_NAMES
@@ -436,8 +434,15 @@ fn asks_character_count(after: &[char]) -> bool {
     } else {
         after
     };
+    if after
+        .strip_prefix(&['の'])
+        .is_some_and(names_character_count)
+    {
+        return true;
+    }
     let Some(topic) = after
         .strip_prefix(&['は'])
+        .or_else(|| after.strip_prefix(&['が']))
         .or_else(|| strip_prefix(after, "には"))
     else {
         return false;
@@ -463,8 +468,7 @@ fn asks_character_count(after: &[char]) -> bool {
     else {
         return false;
     };
-    let has_question_mark = |chars: &[char]| matches!(chars.first(), Some('？' | '?'));
-    has_question_mark(tail)
+    character_count_is_question(tail)
         || [
             "です",
             "でした",
@@ -478,18 +482,30 @@ fn asks_character_count(after: &[char]) -> bool {
             "なの",
         ]
         .iter()
-        .any(|predicate| {
-            strip_prefix(tail, predicate).is_some_and(|rest| {
-                let rest = skip_space(rest);
-                has_question_mark(rest)
-                    || rest.strip_prefix(&['か']).is_some_and(|end| {
-                        matches!(
-                            skip_space(end).first(),
-                            None | Some('。' | '？' | '?' | '、' | 'ね' | 'と')
-                        )
-                    })
-            })
-        })
+        .any(|predicate| strip_prefix(tail, predicate).is_some_and(character_count_is_question))
+}
+
+fn character_count_is_question(after: &[char]) -> bool {
+    let after = skip_space(after);
+    if matches!(after.first(), Some('？' | '?')) {
+        return true;
+    }
+    let Some(after) = after.strip_prefix(&['か']) else {
+        return false;
+    };
+    let after = skip_space(after);
+    if matches!(
+        after.first(),
+        None | Some('。' | '？' | '?' | '、' | 'ね' | 'と')
+    ) {
+        return true;
+    }
+    // In an embedded question, a local checking or asking verb distinguishes
+    // the question marker か from the indefinite amount in 何文字か.
+    let after = after.strip_prefix(&['を']).map_or(after, skip_space);
+    ["調べ", "確かめ", "確認", "尋ね", "聞い", "聞く", "聞き"]
+        .iter()
+        .any(|verb| strip_prefix(after, verb).is_some())
 }
 
 fn after_character_count(chars: &[char]) -> Option<&[char]> {
@@ -660,6 +676,53 @@ mod tests {
             );
             assert_eq!(translated.glossary_hits.len(), 1, "{source}");
         }
+    }
+
+    #[test]
+    fn preserves_only_the_forms_whose_characters_are_counted() {
+        let glossary = glossary();
+        for (source, raw_quote) in [
+            (
+                "ドイツで「ドイツ」という単語の文字数を調べました。",
+                "「ドイツ」",
+            ),
+            (
+                "ドイツで「来て」という語が何文字あるか調べました。",
+                "「来て」",
+            ),
+            (
+                "ドイツへ行く前に、「ドイツ」という言葉は何文字か調べました。",
+                "「ドイツ」",
+            ),
+            (
+                "ドイツで「行く」という単語が何文字かを確認しました。",
+                "「行く」",
+            ),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(result.target_text.matches(raw_quote).count(), 1, "{source}");
+            assert_eq!(result.target_text.matches("德國").count(), 1, "{source}");
+            assert_eq!(result.glossary_hits.len(), 1, "{source}");
+        }
+
+        let source = "ドイツで「ドイツ」という国について書いた文が何文字あるか調べました。";
+        let result = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert!(!result.target_text.contains("ドイツ"), "{source}");
+        assert_eq!(result.target_text.matches("德國").count(), 2, "{source}");
     }
 
     #[test]

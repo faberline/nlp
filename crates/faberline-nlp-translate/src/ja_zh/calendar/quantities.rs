@@ -1,4 +1,8 @@
-use super::*;
+use super::{
+    Atom, DISTRIBUTED_SUBJECT, DayInterval, MEASURED_SUBJECT, ONLY_MEASURED_SUBJECT,
+    ONLY_REPETITIONS, REPETITIONS, Upos, calendar_number, day_interval, is_numeral, linked_case,
+    number_before,
+};
 use crate::ja_zh::{counted_object, translate_single_ja_term};
 
 struct Measure {
@@ -75,9 +79,14 @@ pub(super) fn has_measure(atoms: &[Atom], day: usize) -> bool {
         // Unknown units still carry an overt amount. Keep a bare 日
         // undecided even when the target classifier cannot be rendered.
         let unit = &atoms[i];
-        let Some(prev) = i.checked_sub(1).and_then(|n| atoms.get(n)) else {
-            return false;
-        };
+        let prev = &atoms[i - 1];
+        let adjacent_focus = i == day + 3
+            && atoms.get(i + 1).is_some_and(|focus| {
+                !focus.is_locked
+                    && focus.head == unit.doc_tok_idx
+                    && focus.deprel == "discourse"
+                    && matches!(focus.surface.as_str(), "だけ" | "ずつ")
+            });
         !unit.is_locked
             && unit.upos == Some(Upos::Noun)
             && !matches!(
@@ -88,7 +97,8 @@ pub(super) fn has_measure(atoms: &[Atom], day: usize) -> bool {
             && prev.deprel == "nummod"
             && prev.head == unit.doc_tok_idx
             && prev.span.end_char == unit.span.start_char
-            && (unit.head == atoms[day].head
+            && (adjacent_focus
+                || unit.head == atoms[day].head
                 || atoms.iter().any(|a| {
                     !a.is_locked && a.doc_tok_idx == unit.head && a.head == atoms[day].head
                 }))

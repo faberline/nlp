@@ -439,7 +439,7 @@ fn expression(atoms: &[Atom], end: usize, contrasts_recurrence: bool) -> Option<
     // An explicit month still identifies a date independently of that lock.
     let opaque_focus = matches!(&atoms[end + 2..], [locked, only, ..] if locked.is_locked
         && locked.surface.contains("[[PH") && locked.span.start_char == case.span.end_char
-        && !only.is_locked && only.upos == Some(Upos::Part) && only.surface == "だけ"
+        && !only.is_locked && only.upos == Some(Upos::Part) && matches!(only.surface.as_str(), "だけ" | "ずつ")
         && only.span.start_char == locked.span.end_char);
     let frequency = !deadline
         && (contrasts_recurrence
@@ -505,15 +505,23 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, contrasts_recurrence: bool) {
     // Work from the right: binding a count can collapse both the counted
     // phrase and its day interval. Start the date pass with the resulting spans.
     for idx in (0..atoms.len()).rev() {
-        if atoms.get(idx).is_some_and(|a| a.surface == "日") {
-            quantities::bind(atoms, idx, contrasts_recurrence);
-        }
+        let Some(day) = atoms.get(idx).filter(|a| !a.is_locked && a.surface == "日") else {
+            continue;
+        };
+        let recurring = contrasts_recurrence
+            || atoms.iter().any(|a| {
+                !a.is_locked
+                    && a.head == day.head
+                    && a.deprel == "advmod"
+                    && matches!(a.surface.as_str(), "いつも" | "毎回" | "繰り返し")
+            });
+        quantities::bind(atoms, idx, recurring);
         if atoms.get(idx).is_some_and(|a| a.surface == "日") {
             bind_repetitions(atoms, idx);
         }
         // The amount may keep its native の or an unsupported classifier.
         // An explicit contrast still resolves the interval independently.
-        if contrasts_recurrence
+        if recurring
             && atoms
                 .get(idx)
                 .is_some_and(|a| !a.is_locked && a.surface == "日")

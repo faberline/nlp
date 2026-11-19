@@ -4269,14 +4269,7 @@ fn try_translate_homework_transfer(
     {
         return None;
     }
-    let (before_verb, verb, after_verb, passive) =
-        synthesize_predicate_complex(std::slice::from_ref(predicate), true, target, None);
-    if verb != "拿出" || passive {
-        return None;
-    }
-    let negative = before_verb
-        .iter()
-        .any(|word| matches!(word.as_str(), "不" | "沒有"));
+    let mut deadline = None;
     let mut subject = None;
     let mut recipient = None;
     let mut homework = None;
@@ -4288,11 +4281,10 @@ fn try_translate_homework_transfer(
             return None;
         }
         if bunsetsu.case_particle.as_deref() == Some("までに") {
-            if deadline_governor(bunsetsu, doc) != head {
+            if deadline.is_some() || deadline_governor(bunsetsu, doc) != head {
                 return None;
             }
-            let time = render_bunsetsu_np(bunsetsu, target);
-            adjuncts.push(render_asserted_deadline(&time, negative));
+            deadline = Some((adjuncts.len(), bunsetsu));
             continue;
         }
         if bunsetsu.role != BunsetsuRole::Obj && bunsetsu.atoms.iter().any(|atom| atom.is_locked) {
@@ -4354,21 +4346,32 @@ fn try_translate_homework_transfer(
         (ClassroomRole::Teacher, ClassroomRole::Student) => format!("出{homework}給{recipient}"),
         _ => return None,
     };
-    // Keep the existing interpretation of negative nonpast questions, which
-    // can invite the listener to act.
-    if terminal_ka.is_some() && before_verb.iter().any(|word| word == "不") {
+    let (before_verb, verb, after_verb, passive) =
+        synthesize_predicate_complex(std::slice::from_ref(predicate), true, target, None);
+    if verb != "拿出" || passive {
         return None;
+    }
+    if let Some((position, group)) = deadline {
+        let time = render_bunsetsu_np(group, target);
+        // Negation applies to completing the transfer by the deadline.
+        let cutoff = match before_verb.as_slice() {
+            [] => format!("最晚在{time}"),
+            [word] if word == "沒有" => format!("沒有在{time}前"),
+            [word] if word == "不" && terminal_ka.is_none() => format!("不會在{time}前"),
+            // A negative nonpast question can invite the listener to act.
+            _ => return None,
+        };
+        adjuncts.insert(position, cutoff);
+    } else {
+        adjuncts.extend(before_verb);
     }
     let mut parts = vec![subject.to_owned()];
     parts.extend(adjuncts);
-    parts.extend(before_verb);
     parts.push(action);
     parts.extend(after_verb);
     if terminal_ka.is_some() {
-        let deadline = bunsetsus
-            .iter()
-            .find(|group| deadline_governor(group, doc) == head)?;
-        if !deadline
+        let (_, group) = deadline?;
+        if !group
             .atoms
             .iter()
             .any(|atom| deadline_time_question(atom).is_some())
@@ -8372,11 +8375,10 @@ fn translate_clause_bunsetsus(
                     };
                     parts.push(format!("{also}{modal}在{}{cutoff}", o.text));
                 }
+            } else if predicate_is_negative && !o.deadline_has_detached_negation {
+                parts.push(format!("到{}為止", o.text));
             } else {
-                parts.push(render_asserted_deadline(
-                    &o.text,
-                    predicate_is_negative && !o.deadline_has_detached_negation,
-                ));
+                parts.push(format!("最晚在{}", o.text));
             }
         } else if route.is_some()
             && o.case_particle.as_deref() == Some("へ")
@@ -11346,14 +11348,6 @@ fn has_detached_voice_negation(source: &[Atom], timed: usize) -> bool {
                 && a.deprel == "aux"
                 && matches!(a.lemma.as_deref().unwrap_or(&a.surface), "ない" | "ん")
         })
-}
-
-fn render_asserted_deadline(time: &str, negative: bool) -> String {
-    if negative {
-        format!("到{time}為止")
-    } else {
-        format!("最晚在{time}")
-    }
 }
 
 fn deadline_governor(group: &Bunsetsu, doc: &Document) -> Option<usize> {

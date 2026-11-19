@@ -829,7 +829,10 @@ pub(super) fn render(
 // surrounding dependency links. Verify the clause against its ordinary source
 // parse and put each original placeholder back on the same source phrase.
 fn render_glossary_choice(atoms: &[Atom], target: TargetVariant, chars: &[char]) -> Option<String> {
-    if !atoms.iter().any(choice_particle)
+    // A single final か cannot link two alternatives. In particular, keep
+    // each full question and each fragment before a real verb on its normal path.
+    let (_, before_last) = atoms.split_last()?;
+    if !before_last.iter().any(choice_particle)
         || !atoms.iter().any(|a| a.surface == "の")
         || !atoms
             .iter()

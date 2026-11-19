@@ -36,8 +36,8 @@ fn day_at(atoms: &[Atom], start: usize) -> Option<NumberedDay> {
         i += 1;
     }
     let day = atoms.get(i)?;
-    if day.surface != "日"
-        || !matches!(day.upos, Some(Upos::Noun | Upos::Adv))
+    let joined = day.surface.strip_suffix('日')?;
+    if !matches!(day.upos, Some(Upos::Noun | Upos::Adv))
         || atoms[start..=i].iter().any(|a| a.is_locked)
         || atoms[start..=i]
             .windows(2)
@@ -45,10 +45,11 @@ fn day_at(atoms: &[Atom], start: usize) -> Option<NumberedDay> {
     {
         return None;
     }
-    let raw: String = atoms[number_start..i]
+    let mut raw: String = atoms[number_start..i]
         .iter()
         .map(|a| a.surface.as_str())
         .collect();
+    raw.push_str(joined);
     (1..=31)
         .contains(&calendar_number(&raw)?)
         .then(|| NumberedDay {
@@ -137,7 +138,7 @@ fn bind(atoms: &mut Vec<Atom>, start: usize, end: usize, text: String, tag: &str
     atoms.splice(start..=end, [day]);
 }
 
-fn bind_lists(atoms: &mut Vec<Atom>) {
+fn bind_month_dates(atoms: &mut Vec<Atom>) {
     let mut i = 0;
     while i < atoms.len() {
         let start = i;
@@ -170,14 +171,23 @@ fn bind_lists(atoms: &mut Vec<Atom>) {
             text.push_str(&render(&next));
             end = next.end;
         }
-        if end == first.end {
-            continue;
-        }
         let Some(case) = atoms.get(end + 1) else {
             continue;
         };
         let explicit_case = matches!(case.surface.as_str(), "に" | "まで")
             && linked_case(case, &atoms[end], &atoms[end], &case.surface);
+        if end == first.end {
+            // A single token such as 七日 still carries its written month.
+            // Standalone 七日 and duration units do not establish a date.
+            if atoms[end].surface != "日"
+                && matches!(atoms[end].deprel.as_str(), "obl" | "iobj")
+                && explicit_case
+                && let Some((start, text)) = super::dated_month(atoms, start, text)
+            {
+                bind(atoms, start, end, text, DATE);
+            }
+            continue;
+        }
         // A detached list can be resumed by それぞれ + counted ずつ.
         let distributive = atoms
             .get(end + 2)
@@ -260,7 +270,7 @@ impl DateContext {
         {
             bind(atoms, 0, day.end, text, DATE);
         }
-        bind_lists(atoms);
+        bind_month_dates(atoms);
         for start in 0..atoms.len() {
             let Some(day) = day_at(atoms, start).filter(|d| d.month.is_some()) else {
                 continue;

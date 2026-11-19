@@ -8227,13 +8227,30 @@ fn localize_elapsed_modal(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
         {
             continue;
         }
-        let tail = &source[index + 1..];
-        if tail.iter().any(|a| a.is_locked)
-            || tail
+        let full_tail = &source[index + 1..];
+        let (tail, question) = match full_tail.last() {
+            Some(q) if q.surface == "か" => (&full_tail[..full_tail.len() - 1], Some(q)),
+            _ => (full_tail, None),
+        };
+        if tail.is_empty()
+            || full_tail.iter().any(|a| a.is_locked)
+            || full_tail
                 .windows(2)
                 .any(|w| w[0].span.end_char != w[1].span.start_char)
         {
             continue;
+        }
+        if let Some(q) = question {
+            let Some(finite) = tail.iter().find(|a| a.deprel == "root") else {
+                continue;
+            };
+            if q.upos != Some(Upos::Part)
+                || q.deprel != "discourse"
+                || finite.doc_tok_idx.is_none()
+                || q.head != finite.doc_tok_idx
+            {
+                continue;
+            }
         }
         let spelling: String = tail.iter().map(|a| a.surface.as_str()).collect();
         let prefix = if modal.surface == "予定"
@@ -8285,7 +8302,11 @@ fn localize_elapsed_modal(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
             continue;
         };
         let modal_start = modal.span.start_char;
-        let modal_end = tail.last().expect("modal tail is nonempty").span.end_char;
+        let modal_end = full_tail
+            .last()
+            .expect("modal tail is nonempty")
+            .span
+            .end_char;
         let mut candidate = groups.clone();
         if candidate.iter().flat_map(|g| &g.atoms).any(|a| {
             a.span.start_char < modal_end
@@ -8306,16 +8327,66 @@ fn localize_elapsed_modal(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
         else {
             continue;
         };
-        if event.sconj_tail.is_some() || event.case_particle.is_some() {
+        if event.sconj_tail.is_some() || event.case_particle.is_some() || event.sfp_tail.is_some() {
             continue;
         }
         event.role = BunsetsuRole::Predicate;
+        if question.is_some() {
+            event.sfp_tail = Some("か".to_owned());
+        }
         prepend_locked_atom(event, prefix.to_owned());
         if take_elapsed_duration(&mut candidate.clone(), source).is_some() {
             *groups = candidate;
             return;
         }
     }
+}
+
+// Accept only a complete object subtree, including its own modifiers, between
+// the duration and the action. Opaque material cannot establish attachment.
+fn elapsed_interposed_object(atoms: &[Atom], action: usize) -> bool {
+    let Some(case) = atoms.last() else {
+        return false;
+    };
+    if case.surface != "を" || case.deprel != "case" || case.upos != Some(Upos::Adp) {
+        return false;
+    }
+    if atoms
+        .iter()
+        .any(|a| a.is_locked || a.doc_tok_idx.is_none() || is_punct_atom(a))
+        || atoms
+            .windows(2)
+            .any(|w| w[0].span.end_char != w[1].span.start_char)
+    {
+        return false;
+    }
+    let Some(noun) = atoms.iter().find(|a| {
+        a.doc_tok_idx == case.head
+            && a.deprel == "obj"
+            && a.head == Some(action)
+            && matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+    }) else {
+        return false;
+    };
+    let Some(noun_id) = noun.doc_tok_idx else {
+        return false;
+    };
+    atoms.iter().all(|atom| {
+        let mut current = atom.doc_tok_idx;
+        for _ in 0..atoms.len() {
+            if current == Some(noun_id) {
+                return true;
+            }
+            let Some(part) = atoms.iter().find(|a| a.doc_tok_idx == current) else {
+                return false;
+            };
+            if matches!(part.deprel.as_str(), "conj" | "cc" | "punct") {
+                return false;
+            }
+            current = part.head;
+        }
+        false
+    })
 }
 
 fn take_elapsed_duration(groups: &mut Vec<Bunsetsu>, source: &[Atom]) -> Option<String> {
@@ -8364,56 +8435,82 @@ fn take_elapsed_duration(groups: &mut Vec<Bunsetsu>, source: &[Atom]) -> Option<
         {
             continue;
         }
-        for start in 0..action_index {
-            let slice = &source[start..action_index];
-            if starts_inside_elapsed_number(source, start) {
-                continue;
-            }
-            if slice.is_empty()
-                || slice.iter().any(|a| a.is_locked || a.doc_tok_idx.is_none())
-                || slice
-                    .windows(2)
-                    .any(|w| w[0].span.end_char != w[1].span.start_char)
-                || slice.last()?.span.end_char != action.span.start_char
-                || !slice.iter().any(|a| a.head == Some(action_id))
-                || slice.iter().any(|a| {
-                    !slice.iter().any(|b| b.doc_tok_idx == a.head)
-                        && a.head != Some(action_id)
-                        && a.head != action.head
-                })
-            {
-                continue;
-            }
-            let surface: String = slice.iter().map(|a| a.surface.as_str()).collect();
-            let Some(rendered) = elapsed_duration_surface(&surface) else {
-                continue;
-            };
-            let first = slice.first()?.span.start_char;
-            let end = slice.last()?.span.end_char;
-            let overlapping: Vec<&Atom> = groups
-                .iter()
-                .flat_map(|g| &g.atoms)
-                .filter(|a| a.span.start_char < end && a.span.end_char > first)
-                .collect();
-            if overlapping.is_empty()
-                || overlapping.first()?.span.start_char != first
-                || overlapping.last()?.span.end_char != end
-                || overlapping
+        let mut ends = vec![action_index];
+        if source
+            .get(action_index.wrapping_sub(1))
+            .is_some_and(|case| {
+                !case.is_locked
+                    && case.surface == "を"
+                    && case.upos == Some(Upos::Adp)
+                    && case.deprel == "case"
+                    && case.span.end_char == action.span.start_char
+            })
+        {
+            ends.extend(
+                (0..action_index).rev().filter(|&end| {
+                    elapsed_interposed_object(&source[end..action_index], action_id)
+                }),
+            );
+        }
+        for end in ends {
+            for start in 0..end {
+                if starts_inside_elapsed_number(source, start) {
+                    continue;
+                }
+                let slice = &source[start..end];
+                let between = &source[end..action_index];
+                if slice.is_empty()
+                    || slice.iter().any(|a| a.is_locked || a.doc_tok_idx.is_none())
+                    || slice
+                        .windows(2)
+                        .any(|w| w[0].span.end_char != w[1].span.start_char)
+                    || slice.last()?.span.end_char
+                        != between
+                            .first()
+                            .map_or(action.span.start_char, |a| a.span.start_char)
+                    || between
+                        .last()
+                        .is_some_and(|a| a.span.end_char != action.span.start_char)
+                    || !slice.iter().any(|a| a.head == Some(action_id))
+                    || slice.iter().any(|a| {
+                        !slice.iter().any(|b| b.doc_tok_idx == a.head)
+                            && a.head != Some(action_id)
+                            && a.head != action.head
+                    })
+                {
+                    continue;
+                }
+                let surface: String = slice.iter().map(|a| a.surface.as_str()).collect();
+                let Some(rendered) = elapsed_duration_surface(&surface) else {
+                    continue;
+                };
+                let first = slice.first()?.span.start_char;
+                let end = slice.last()?.span.end_char;
+                let overlapping: Vec<&Atom> = groups
                     .iter()
-                    .any(|a| a.is_locked || a.span.start_char < first || a.span.end_char > end)
-                || overlapping
-                    .windows(2)
-                    .any(|w| w[0].span.end_char != w[1].span.start_char)
-            {
-                continue;
+                    .flat_map(|g| &g.atoms)
+                    .filter(|a| a.span.start_char < end && a.span.end_char > first)
+                    .collect();
+                if overlapping.is_empty()
+                    || overlapping.first()?.span.start_char != first
+                    || overlapping.last()?.span.end_char != end
+                    || overlapping
+                        .iter()
+                        .any(|a| a.is_locked || a.span.start_char < first || a.span.end_char > end)
+                    || overlapping
+                        .windows(2)
+                        .any(|w| w[0].span.end_char != w[1].span.start_char)
+                {
+                    continue;
+                }
+                for group in groups.iter_mut() {
+                    group
+                        .atoms
+                        .retain(|a| !(a.span.start_char >= first && a.span.end_char <= end));
+                }
+                groups.retain(|g| !g.atoms.is_empty());
+                return Some(rendered);
             }
-            for group in groups.iter_mut() {
-                group
-                    .atoms
-                    .retain(|a| !(a.span.start_char >= first && a.span.end_char <= end));
-            }
-            groups.retain(|g| !g.atoms.is_empty());
-            return Some(rendered);
         }
     }
     None
@@ -10263,6 +10360,22 @@ fn translate_clause_bunsetsus(
     let keep_go = has_spatial_made && preserve_go && verb_core == "去";
     if has_spatial_made && verb_core == "去" && !preserve_go {
         verb_core.clear();
+    }
+    // The repeated verb makes the elapsed reading natural without claiming
+    // that the whole object was read. Restrict this to an ordinary past read.
+    if elapsed_duration.is_some()
+        && verb_core == "讀"
+        && post_verb_mods.len() == 1
+        && post_verb_mods[0] == "了"
+        && objs.len() == 1
+        && purpose.is_none()
+        && !has_front_modal
+        && goal_tails.is_empty()
+        && made_endpoints.is_empty()
+        && result_value.is_none()
+    {
+        parts.push(verb_core.clone());
+        parts.push(objs.remove(0));
     }
     if !verb_core.is_empty() {
         parts.push(verb_core);
@@ -14850,6 +14963,85 @@ mod clock_rule_tests {
             clock.contains("到兩點半") && !clock.contains("個小時"),
             "{clock}"
         );
+    }
+
+    #[test]
+    fn elapsed_modal_questions_keep_question_scope() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("私は二時間休む必要がありますか。"),
+            "我需要休息兩個小時嗎？"
+        );
+        assert_eq!(
+            translate("私は二時間休む必要がありましたか。"),
+            "我曾經需要休息兩個小時嗎？"
+        );
+        assert_eq!(
+            translate("授業は二時間続く予定ですか。"),
+            "授業預計持續兩個小時嗎？"
+        );
+        assert_eq!(
+            translate("会議は二時間続く予定ではありませんか。"),
+            "會議沒有預計持續兩個小時嗎？"
+        );
+        let embedded = translate("私は二時間休む必要があるか確認しました。");
+        assert!(
+            embedded.contains("確認") && embedded.ends_with('。'),
+            "{embedded}"
+        );
+    }
+
+    #[test]
+    fn elapsed_amount_can_precede_its_source_linked_object() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("私は本を一時間読みました。"),
+            "我讀書讀了一個小時。"
+        );
+        assert_eq!(
+            translate("私は一時間本を読みました。"),
+            "我讀書讀了一個小時。"
+        );
+        assert_eq!(
+            translate("私は一時間本を読みましたか。"),
+            "我讀書讀了一個小時嗎？"
+        );
+        assert_eq!(
+            translate("私は一時間本を読む必要がありますか。"),
+            "我需要讀書一個小時嗎？"
+        );
+        let clock = translate("三時に着く電車を二時間待ちました。");
+        assert!(
+            clock.contains("三點") && clock.contains("抵達") && clock.contains("電車兩個小時"),
+            "{clock}"
+        );
+        let opaque = translate("私は一時間`本`を読みました。");
+        assert!(opaque.contains("`本`"), "{opaque}");
+    }
+
+    #[test]
+    fn elapsed_interposed_object_needs_complete_source_attachment() {
+        let mut noun = atom("本", 0, false);
+        noun.doc_tok_idx = Some(3);
+        noun.head = Some(5);
+        noun.deprel = "obj".to_owned();
+        let mut case = atom("を", 1, false);
+        case.doc_tok_idx = Some(4);
+        case.head = Some(3);
+        case.upos = Some(Upos::Adp);
+        case.deprel = "case".to_owned();
+        assert!(super::elapsed_interposed_object(
+            &[noun.clone(), case.clone()],
+            5
+        ));
+        assert!(!super::elapsed_interposed_object(
+            &[noun.clone(), case.clone()],
+            6
+        ));
+        noun.is_locked = true;
+        assert!(!super::elapsed_interposed_object(&[noun, case], 5));
     }
 
     #[test]

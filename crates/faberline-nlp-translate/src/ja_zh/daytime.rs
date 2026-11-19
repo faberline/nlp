@@ -16,25 +16,29 @@ pub(super) fn is_modifier(atom: &Atom) -> bool {
     atom.is_locked && atom.lemma.as_deref() == Some(DAYTIME)
 }
 
-// A user term covering 日中に can tokenize as a single acl. Repair this
-// before relative clauses are split, using the predicate of the noun which
-// the term was attached to. A subject of that spurious acl follows it.
+// A glossary entry covering 日中に can be analyzed as a verb. Recover
+// the real head directly for advcl, or through the modified noun for acl.
 pub(super) fn restore_glossary_attachment(atoms: &mut [Atom]) {
     for i in 0..atoms.len() {
         let day = &atoms[i];
-        if day.lemma.as_deref() != Some(GLOSSARY_TIME_PHRASE) || day.deprel != "acl" {
+        if day.lemma.as_deref() != Some(GLOSSARY_TIME_PHRASE) || day.doc_tok_idx.is_none() {
             continue;
         }
-        let Some(argument) = atoms.iter().find(|a| {
-            a.doc_tok_idx.is_some()
-                && a.doc_tok_idx == day.head
-                && a.upos == Some(Upos::Noun)
-                && matches!(a.deprel.as_str(), "obj" | "obl" | "nsubj")
-        }) else {
-            continue;
+        let owner = match day.deprel.as_str() {
+            "advcl" => day.head,
+            "acl" => atoms
+                .iter()
+                .find(|a| {
+                    a.doc_tok_idx.is_some()
+                        && a.doc_tok_idx == day.head
+                        && a.upos == Some(Upos::Noun)
+                        && matches!(a.deprel.as_str(), "obj" | "obl" | "nsubj")
+                })
+                .and_then(|noun| noun.head),
+            _ => continue,
         };
         let Some(verb) = atoms.iter().find(|a| {
-            a.doc_tok_idx.is_some() && a.doc_tok_idx == argument.head && a.upos == Some(Upos::Verb)
+            a.doc_tok_idx.is_some() && a.doc_tok_idx == owner && a.upos == Some(Upos::Verb)
         }) else {
             continue;
         };
@@ -45,6 +49,14 @@ pub(super) fn restore_glossary_attachment(atoms: &mut [Atom]) {
             if a.head == day_id && a.deprel == "nsubj" {
                 a.head = owner;
             }
+        }
+        if let Some(comma) = atoms.get_mut(i + 1)
+            && comma.head == day_id
+            && comma.deprel == "punct"
+            && !comma.is_locked
+            && matches!(comma.surface.as_str(), "、" | "，" | ",")
+        {
+            comma.head = owner;
         }
     }
 }
@@ -296,5 +308,51 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
         day.upos = Some(Upos::Adv);
         day.is_locked = true;
         atoms.splice(range, [day]);
+    }
+}
+
+// A pause between two modifiers need not end the clause: in 日中に、患者に
+// 送った the time, recipient and pause all depend on the same sending verb.
+pub(super) fn join_recipient_pauses(atoms: &mut Vec<Atom>) {
+    for split in (1..atoms.len()).rev() {
+        let comma = &atoms[split];
+        if comma.is_locked
+            || comma.deprel != "punct"
+            || !matches!(comma.surface.as_str(), "、" | "，" | ",")
+        {
+            continue;
+        }
+        let Some(owner) = comma.head else { continue };
+        let Some(offset) = atoms[split + 1..].iter().position(|a| {
+            a.doc_tok_idx == Some(owner) && !a.is_locked && a.upos == Some(Upos::Verb)
+        }) else {
+            continue;
+        };
+        let verb_index = split + 1 + offset;
+        let verb = &atoms[verb_index];
+        let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+        if !selects_participant(lemma.strip_suffix("する").unwrap_or(lemma))
+            || atoms[split + 1..verb_index].iter().any(|a| {
+                super::is_punct_atom(a) || a.upos == Some(Upos::Verb) || a.deprel == "nsubj"
+            })
+        {
+            continue;
+        }
+        let joins = (split.saturating_sub(3)..split).any(|idx| {
+            let day = &atoms[idx];
+            form(day, &atoms[idx + 1], atoms.get(idx + 2))
+                .is_some_and(|(end, head, _)| end == comma.span.start_char && head == owner)
+                && !atoms[..idx].last().is_some_and(|a| {
+                    a.span.end_char == day.span.start_char
+                        && (a.upos == Some(Upos::Num) || a.is_locked)
+                })
+                && other_goal(atoms, day, verb).is_some_and(|case| {
+                    comma.span.end_char <= case.span.start_char
+                        && case.span.end_char <= verb.span.start_char
+                })
+        });
+        if joins {
+            atoms.remove(split);
+        }
     }
 }

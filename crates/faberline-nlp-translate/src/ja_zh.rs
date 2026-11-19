@@ -209,6 +209,7 @@ pub(crate) fn translate_ja_sentence(
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
+        daytime::join_recipient_pauses(&mut atoms);
         nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target, chars);
     }
 
@@ -14621,7 +14622,11 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
         }
     }
 
-    let role = if is_connector
+    // The original frame may call a glossary token covering 日中に a
+    // predicate. Its resolved activity modifier must keep its local role.
+    let role = if matches!(atoms.as_slice(), [day] if daytime::is_modifier(day)) {
+        BunsetsuRole::Adv
+    } else if is_connector
         && case_particle.is_none()
         && !has_verb_or_adj
         && !has_copula
@@ -15934,6 +15939,25 @@ mod clock_rule_tests {
                 rendered.target_text.contains("白天"),
                 expected_daylight,
                 "{source}"
+            );
+        }
+        for term in ["日中", "日中に"] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "日間".to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            let sentence = public_translate(
+                "病院は日中に、患者に予約の確認メールを送りました。",
+                &glossary,
+            );
+            assert_eq!(sentence.glossary_hits.len(), 1);
+            assert!(
+                sentence.target_text.starts_with("醫院日間給患者寄送"),
+                "{}",
+                sentence.target_text
             );
         }
     }

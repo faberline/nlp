@@ -11,6 +11,7 @@ mod calendar;
 pub(crate) use calendar::DateContext;
 mod copular_time;
 mod counted_object;
+mod daytime;
 mod finite_adjective;
 mod homework_desire;
 mod nominal_possession;
@@ -5787,6 +5788,7 @@ fn translate_clause_atoms(
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
+        daytime::bind(&mut norm_atoms, body);
     }
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
@@ -6270,16 +6272,13 @@ fn try_translate_homework_transfer(
             adjuncts.push("什麼時候".to_owned());
             continue;
         }
-        if is_event_daypart(bunsetsu, bunsetsus, source, target) {
-            adjuncts.push(render_daypart_np(bunsetsu, target));
-            continue;
-        }
-        if matches!(bunsetsu.role, BunsetsuRole::Adv | BunsetsuRole::Other)
-            && bunsetsu.case_particle.is_none()
-            && bunsetsu
-                .atoms
-                .iter()
-                .any(|atom| atom.head == head && atom.deprel == "advmod")
+        if is_event_daypart(bunsetsu, bunsetsus, source)
+            || (matches!(bunsetsu.role, BunsetsuRole::Adv | BunsetsuRole::Other)
+                && bunsetsu.case_particle.is_none()
+                && bunsetsu
+                    .atoms
+                    .iter()
+                    .any(|atom| atom.head == head && atom.deprel == "advmod"))
         {
             adjuncts.push(render_bunsetsu_np(bunsetsu, target));
             continue;
@@ -9642,10 +9641,13 @@ fn translate_clause_bunsetsus(
     let daypart_groups: Vec<_> = bunsetsus
         .iter()
         .enumerate()
-        .filter_map(|(idx, group)| {
-            is_event_daypart(group, &bunsetsus, source, target).then_some(idx)
-        })
+        .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
+    let daylight_meeting = bunsetsus
+        .iter()
+        .flat_map(|g| &g.atoms)
+        .filter(|a| daytime::is_modifier(a))
+        .find_map(|day| daytime::meeting_verb(source, day));
     for (idx, b) in bunsetsus.drain(..).enumerate() {
         if arrival_head.is_some()
             && b.role == BunsetsuRole::Subj
@@ -10151,6 +10153,11 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if let Some(action) = daylight_meeting
+        && matches!(verb_core.as_str(), "開" | "舉辦")
+    {
+        verb_core = action.to_owned();
+    }
     if target == TargetVariant::ZhHant
         && let Some(state) = finite_adjective::render(
             source,
@@ -14938,14 +14945,6 @@ fn trip_relative_daypart(group: &Bunsetsu, source: &[Atom], returning: usize) ->
 }
 
 fn render_daypart_np(group: &Bunsetsu, target: TargetVariant) -> String {
-    if target == TargetVariant::ZhHant
-        && group
-            .atoms
-            .first()
-            .is_some_and(|time| !time.is_locked && time.surface == "日中")
-    {
-        return "白天".to_owned();
-    }
     if let [t, _] = group.atoms.as_slice()
         && let Some(label) = after_daypart(t)
     {
@@ -15324,50 +15323,13 @@ fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool
         })
 }
 
-// 日中 can denote daylight or the two countries. In a に phrase, a
-// routine activity supplies a time reading. A request or transfer can
-// instead take the countries as its recipient.
-fn daytime_activity(lemma: &str) -> bool {
-    matches!(
-        lemma,
-        "働く"
-            | "休む"
-            | "寝る"
-            | "眠る"
-            | "起きる"
-            | "暮らす"
-            | "過ごす"
-            | "読む"
-            | "食べる"
-            | "飲む"
-            | "洗う"
-            | "片付ける"
-            | "掃除する"
-            | "料理する"
-            | "勉強する"
-            | "練習する"
-            | "泳ぐ"
-            | "走る"
-            | "歩く"
-            | "散歩する"
-            | "遊ぶ"
-            | "降る"
-            | "晴れる"
-            | "咲く"
-            | "始まる"
-            | "終わる"
-    )
-}
-
 // 夕方に働く, 夕方にする and 夕方に戻る can share the same case relation.
 // Keep the time only when its own governor and that governor's other
 // arguments support an event-time reading.
-fn is_event_daypart(
-    group: &Bunsetsu,
-    clause: &[Bunsetsu],
-    source: &[Atom],
-    target: TargetVariant,
-) -> bool {
+fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> bool {
+    if matches!(group.atoms.as_slice(), [day] if daytime::is_modifier(day)) {
+        return true;
+    }
     let (time, ni, focused) = match group.atoms.as_slice() {
         [time, ni] => (time, ni, false),
         [time, ni, focus]
@@ -15390,8 +15352,7 @@ fn is_event_daypart(
         || group.sfp_tail.is_some()
         || time.is_locked
         || ni.is_locked
-        || !(is_daypart_surface(&time.surface)
-            || target == TargetVariant::ZhHant && time.surface == "日中")
+        || !is_daypart_surface(&time.surface)
         || !matches!(time.upos, Some(Upos::Noun | Upos::Adv))
         || !(matches!(time.deprel.as_str(), "obl" | "advmod" | "iobj")
             || focused && time.deprel == "nsubj")
@@ -15404,10 +15365,7 @@ fn is_event_daypart(
     {
         return false;
     }
-    if time.surface != "日中"
-        && !focused
-        && return_endpoint::time_before_place_modifier(time, source)
-    {
+    if !focused && return_endpoint::time_before_place_modifier(time, source) {
         return true;
     }
     // Phrase rendering can join a lexical governor and する into one translated
@@ -15426,16 +15384,8 @@ fn is_event_daypart(
         return false;
     }
     let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
-    if time.surface == "日中"
-        && (!daytime_activity(lemma)
-            || source
-                .iter()
-                .any(|a| a.span.end_char == time.span.start_char && a.upos == Some(Upos::Num)))
-    {
-        return false;
-    }
     let physical_return = lemma == "戻る" && return_endpoint::local_motion(verb, clause, source);
-    if focused && !physical_return && time.surface != "日中" {
+    if focused && !physical_return {
         return false;
     }
     if !has_verb_reading(lemma) || selects_time_value(lemma) {
@@ -16997,6 +16947,39 @@ mod motion_endpoint_tests {
             ("私は`夕方`に帰ります。", "我回到`夕方`。"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn daylight_stays_with_its_activity_and_preserves_the_recipient() {
+        for (source, expected) in [
+            (
+                "係員は日中に机の上を片付けました。",
+                "係員白天收拾了書桌上面。",
+            ),
+            ("父は日中には本を読みました。", "父親白天讀了書。"),
+            ("母は日中にも働きます。", "母親白天也工作。"),
+            ("日中に会議を開きました。", "白天召開了會議。"),
+            ("市は日中に会議を開催しました。", "市白天召開了會議。"),
+            ("日中に説明会を開きます。", "白天舉辦說明會。"),
+            ("日中に先生に手紙を送りました。", "白天給老師寄送了信。"),
+            (
+                "母は日中に先生に手紙を送り、父は夜に働きました。",
+                "母親白天給老師寄送信，父親夜晚工作了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for source in [
+            "政府は日中に協力を求めました。",
+            "米国は日中に市場を開きました。",
+            "日中両国に書類を送りました。",
+            "手紙を日中に送りました。",
+            "母は日中に手紙を送り、父は夜に先生に会いました。",
+            "一日中に起きた変化を調べます。",
+            "父は`日中`に本を読みました。",
+        ] {
+            assert!(!translate(source).contains("白天"), "{source}");
         }
     }
 

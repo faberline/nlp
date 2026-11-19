@@ -200,7 +200,7 @@ pub(crate) fn translate_ja_sentence(
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
-        nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target);
+        nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target, chars);
     }
 
     if atoms.is_empty() {
@@ -359,6 +359,7 @@ pub(crate) fn translate_ja_sentence(
                                 None,
                                 false,
                                 &ClauseDiscourseCtx {
+                                    source_chars: chars,
                                     inside_quote: true,
                                     ..Default::default()
                                 },
@@ -421,6 +422,7 @@ pub(crate) fn translate_ja_sentence(
                             None,
                             false,
                             &ClauseDiscourseCtx {
+                                source_chars: chars,
                                 inside_quote: true,
                                 ..Default::default()
                             },
@@ -715,6 +717,7 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
+                    source_chars: chars,
                     return_trip: None,
                     inside_quote: ends_continued_quote(
                         segments.get(seg_idx + 1),
@@ -4005,7 +4008,8 @@ pub(crate) fn direct_quote_end(
 }
 
 #[derive(Clone, Default)]
-struct ClauseDiscourseCtx {
+struct ClauseDiscourseCtx<'a> {
+    source_chars: &'a [char],
     return_trip: Option<ReturnTrip>,
     inside_quote: bool,
     in_nagara_follow: bool,
@@ -4701,8 +4705,13 @@ fn translate_clause_atoms(
     }
 
     if target == TargetVariant::ZhHant
-        && let Some(text) =
-            nominal_possession::render(core_non_punct(atoms), doc, sentence_idx, target)
+        && let Some(text) = nominal_possession::render(
+            core_non_punct(atoms),
+            doc,
+            sentence_idx,
+            target,
+            ctx.source_chars,
+        )
     {
         return (text, false);
     }
@@ -17331,6 +17340,23 @@ fn place_companion(source: &[Atom], predicate: usize, known_place: Option<usize>
     person.filter(|_| has_place)
 }
 
+fn demonstrative_classifier(word: &str, noun: &Atom) -> &'static str {
+    match word {
+        "書" | "教科書" | "課本" | "小說" | "雜誌" | "字典" => "本",
+        "帽子" => "頂",
+        "手錶" => "支",
+        "車" | "公車" | "電車" | "汽車" | "卡車" | "腳踏車" | "自行車" => "輛",
+        "證明書" | "資料" | "文件" | "報告" | "報紙" => "份",
+        "商店" | "餐廳" | "公司" => "家",
+        "寺" | "寺廟" | "橋" => "座",
+        "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
+        _ if is_demonstrative_person_noun(noun) => "個",
+        // With no established unit or count reading, keep the deictic
+        // without guessing an amount, e.g. 這水 rather than a cup of water.
+        _ => "",
+    }
+}
+
 fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;
@@ -17358,21 +17384,7 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
                 continue;
             }
             let word = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
-            let classifier = match word.as_str() {
-                "書" | "小說" | "雜誌" | "字典" => "本",
-                "車" | "公車" | "電車" | "汽車" | "卡車" | "腳踏車" | "自行車" => {
-                    "輛"
-                }
-                "資料" | "文件" | "報告" | "報紙" => "份",
-                "商店" | "餐廳" | "公司" => "家",
-                "寺" | "寺廟" | "橋" => "座",
-                "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
-                _ if is_demonstrative_person_noun(noun) => "個",
-                // With no established unit or count reading, keep the deictic
-                // without guessing an amount, e.g. 這水 rather than a cup of water.
-                _ => "",
-            };
-            out.push_str(classifier);
+            out.push_str(demonstrative_classifier(&word, noun));
             out.push_str(if word == "箱" { "箱子" } else { &word });
             i += 2;
             continue;
@@ -18220,6 +18232,7 @@ fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upo
 
 fn lookup_curated_ja_word(s: &str) -> Option<&'static str> {
     Some(match s {
+        "腕時計" => "手錶",
         // Discourse connectors & adverbs
         "しかし" | "だが" | "けれど" | "けれども" | "けど" | "ところが" => "但是",
         "だから" | "そのため" | "したがって" | "ゆえに" => "所以",

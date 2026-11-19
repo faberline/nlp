@@ -1,4 +1,6 @@
 //! Render a source-linked genitive complement as a single noun phrase after 是.
+use std::borrow::Cow;
+
 use super::{
     Atom, BunsetsuRole, Document, TargetVariant, Upos, group_into_bunsetsus,
     is_demonstrative_person_noun, merge_adnominal_bunsetsus, render_bunsetsu_np,
@@ -53,6 +55,28 @@ pub(super) fn whole_nominal_lock(a: &Atom, doc: &Document) -> bool {
             .all(|w| w[0].span.end_char == w[1].span.start_char)
 }
 
+// Recover the noun only for grammatical decisions. The glossary placeholder
+// still supplies its output, including when the same term occurs twice.
+const PROTECTED_COMPOUND: &str = "__ja_possession_protected_compound";
+
+fn source_noun<'a>(atom: &'a Atom, doc: &Document, source: &[char]) -> Option<Cow<'a, Atom>> {
+    if !atom.is_locked {
+        return Some(Cow::Borrowed(atom));
+    }
+    if atom.lemma.as_deref() != Some(PROTECTED_COMPOUND) && !whole_nominal_lock(atom, doc) {
+        return None;
+    }
+    let head = doc.tokens.get(atom.doc_tok_idx?)?;
+    let mut noun = atom.clone();
+    noun.surface = source
+        .get(atom.span.start_char..atom.span.end_char)?
+        .iter()
+        .collect();
+    noun.upos = head.upos;
+    noun.is_locked = false;
+    Some(Cow::Owned(noun))
+}
+
 // Keep the ordinary clause split unless all of the text around a Japanese
 // list comma parses as one nominal identification. In particular, two full
 // questions each have their own copula and must keep their boundary.
@@ -61,6 +85,7 @@ pub(super) fn join_choice_commas(
     doc: &Document,
     sentence: usize,
     target: TargetVariant,
+    source: &[char],
 ) {
     let is_comma = |a: &Atom| !a.is_locked && matches!(a.surface.as_str(), "、" | "，");
     let follows_marker = |prefix: &[Atom]| {
@@ -97,7 +122,7 @@ pub(super) fn join_choice_commas(
                 .cloned()
                 .collect();
             if joined.windows(2).any(|p| links_choice(&p[0], &p[1]))
-                && render(&joined, doc, sentence, target).is_some()
+                && render(&joined, doc, sentence, target, source).is_some()
             {
                 drop.append(&mut commas);
             } else {
@@ -120,6 +145,68 @@ fn links_choice(noun: &Atom, particle: &Atom) -> bool {
         && matches!(noun.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
 }
 
+// A compound may have one token per kanji. Keep its final syntactic head so
+// both the demonstrative and the genitive still point to the complete noun.
+fn join_choice_compounds<'a>(atoms: &'a [Atom], doc: &Document) -> Cow<'a, [Atom]> {
+    if !atoms.iter().any(choice_particle) {
+        return Cow::Borrowed(atoms);
+    }
+    let nominal = |a: &Atom| {
+        matches!(a.upos, Some(Upos::Noun | Upos::Propn))
+            && (!a.is_locked || whole_nominal_lock(a, doc))
+    };
+    let mut merged = Vec::new();
+    let mut copied = 0;
+    for (i, head) in atoms.iter().enumerate() {
+        if !nominal(head) || head.deprel == "compound" || head.doc_tok_idx.is_none() {
+            continue;
+        }
+        let mut start = i;
+        while start > copied {
+            let part = &atoms[start - 1];
+            if !nominal(part)
+                || part.deprel != "compound"
+                || part.head.is_none()
+                || part.span.end_char != atoms[start].span.start_char
+                || !atoms[start..=i].iter().any(|a| a.doc_tok_idx == part.head)
+            {
+                break;
+            }
+            start -= 1;
+        }
+        if start != i {
+            merged.extend_from_slice(&atoms[copied..start]);
+            let mut noun = head.clone();
+            noun.span.start_char = atoms[start].span.start_char;
+            let parts = &atoms[start..=i];
+            noun.is_locked = parts.iter().any(|a| a.is_locked);
+            if noun.is_locked {
+                noun.lemma = Some(PROTECTED_COMPOUND.into());
+                noun.surface = parts
+                    .iter()
+                    .map(|a| {
+                        if a.is_locked {
+                            a.surface.clone()
+                        } else {
+                            super::translate_single_ja_term(&a.surface, a.lemma.as_deref(), a.upos)
+                        }
+                    })
+                    .collect();
+            } else {
+                noun.lemma = None;
+                noun.surface = parts.iter().map(|a| a.surface.as_str()).collect();
+            }
+            merged.push(noun);
+            copied = i + 1;
+        }
+    }
+    if copied == 0 {
+        return Cow::Borrowed(atoms);
+    }
+    merged.extend_from_slice(&atoms[copied..]);
+    Cow::Owned(merged)
+}
+
 // In 兄か姉の本 the first owner modifies the second and の supplies one
 // shared genitive. 図書館か学生の部屋 can instead offer two different places.
 fn shared_owner_choices(
@@ -128,6 +215,7 @@ fn shared_owner_choices(
     doc: &Document,
     sentence: usize,
     target: TargetVariant,
+    source: &[char],
 ) -> Option<Vec<String>> {
     let [owners @ .., no, item] = phrase else {
         return None;
@@ -136,25 +224,57 @@ fn shared_owner_choices(
     if no.is_locked || no.surface != "の" || no.head != last.doc_tok_idx || no.deprel != "case" {
         return None;
     }
+    let item_source = source_noun(item, doc, source)?;
     let same_item = topic
         .last()
-        .is_some_and(|a| !a.is_locked && a.surface == item.surface);
+        .and_then(|a| source_noun(a, doc, source))
+        .is_some_and(|a| a.surface == item_source.surface);
     let groups: Vec<_> = owners.split(choice_particle).collect();
     if groups.len() < 2 {
         return None;
     }
     let mut names = Vec::with_capacity(groups.len());
     for (i, group) in groups.iter().enumerate() {
-        let [owner] = *group else { return None };
-        let governor = groups
+        let owner = group.last()?;
+        // Multiple nouns may name one owner (学校の先生). Its head can
+        // attach to the first modifier in the following owner phrase.
+        let governed = groups
             .get(i + 1)
-            .and_then(|next| next.last())
-            .unwrap_or(item);
+            .copied()
+            .unwrap_or(std::slice::from_ref(item));
+        let mut parts = group.chunks_exact(2);
+        if parts.remainder().len() != 1 {
+            return None;
+        }
+        for (j, pair) in parts.by_ref().enumerate() {
+            let (modifier, no) = (&pair[0], &pair[1]);
+            if no.surface != "の"
+                || no.deprel != "case"
+                || no.head != modifier.doc_tok_idx
+                || modifier.deprel != "nmod"
+                || modifier.head != group[j * 2 + 2].doc_tok_idx
+            {
+                return None;
+            }
+        }
+        // 父の車か母の車 offers two owned objects. 車 cannot serve as the
+        // first personal owner simply because it also has a genitive.
+        let owner_source = source_noun(owner, doc, source)?;
+        if group.len() > 1
+            && (!is_demonstrative_person_noun(&owner_source)
+                || is_demonstrative_person_noun(&item_source))
+        {
+            return None;
+        }
         if owner.deprel != "nmod"
-            || governor.doc_tok_idx.is_none()
-            || owner.head != governor.doc_tok_idx
+            || owner.head.is_none()
+            || !governed
+                .iter()
+                .step_by(2)
+                .any(|a| owner.head == a.doc_tok_idx)
             || !same_item
-                && (is_demonstrative_person_noun(item) || !is_demonstrative_person_noun(owner))
+                && (is_demonstrative_person_noun(&item_source)
+                    || !is_demonstrative_person_noun(&owner_source))
         {
             return None;
         }
@@ -179,6 +299,7 @@ pub(super) fn render(
     doc: &Document,
     sentence: usize,
     target: TargetVariant,
+    chars: &[char],
 ) -> Option<String> {
     let (body, ending) = match atoms {
         [body @ .., yo, ne]
@@ -200,6 +321,7 @@ pub(super) fn render(
         }
         _ => (atoms, ""),
     };
+    let body = join_choice_compounds(body, doc);
     let head_index = body
         .iter()
         .rposition(|a| matches!(a.upos, Some(Upos::Noun | Upos::Propn)))?;
@@ -212,9 +334,11 @@ pub(super) fn render(
     if tail.is_empty()
         || tail.len() > 7
         || tail.iter().any(|a| a.is_locked)
-        || nominals
-            .iter()
-            .any(|a| a.is_locked && !whole_nominal_lock(a, doc))
+        || nominals.iter().any(|a| {
+            a.is_locked
+                && a.lemma.as_deref() != Some(PROTECTED_COMPOUND)
+                && !whole_nominal_lock(a, doc)
+        })
         || !body[head_index..]
             .windows(2)
             .all(|p| p[0].span.end_char == p[1].span.start_char)
@@ -280,6 +404,17 @@ pub(super) fn render(
             let mut subject = match topic {
                 [a] if a.surface == "これ" => "這".to_owned(),
                 [a] if matches!(a.surface.as_str(), "それ" | "あれ") => "那".to_owned(),
+                [det, locked] if locked.is_locked && body.iter().any(choice_particle) => {
+                    let original = source_noun(locked, doc, chars)?;
+                    let deictic = super::attached_demonstrative(det, &original)?;
+                    let term =
+                        super::translate_single_ja_term(&original.surface, None, original.upos);
+                    format!(
+                        "{deictic}{}{}",
+                        super::demonstrative_classifier(&term, &original),
+                        locked.surface
+                    )
+                }
                 _ => noun_phrase(topic, doc, sentence, target)?,
             };
             if nominals[i].surface == "も" {
@@ -328,8 +463,14 @@ pub(super) fn render(
     if !has_owner {
         return None;
     }
-    let alternatives =
-        shared_owner_choices(phrase, topic, doc, sentence, target).unwrap_or(alternatives);
+    let shared = shared_owner_choices(phrase, topic, doc, sentence, target, chars);
+    if let Some(owners) = &shared
+        && ending.is_empty()
+        && let Some(past) = copula.strip_suffix("不是")
+    {
+        return Some(format!("{subject}{past}既不是{}", owners.join("，也不是")));
+    }
+    let alternatives = shared.unwrap_or(alternatives);
     let asks_choice = alternatives.len() > 1 && ending == "嗎" && matches!(copula, "是" | "當時是");
     let complement = alternatives.join(if asks_choice { "還是" } else { "或是" });
     let asks_which = nominals.iter().any(|a| {
@@ -411,6 +552,68 @@ mod tests {
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
+    }
+
+    #[test]
+    fn shared_owners_use_the_complete_compound_noun() {
+        for (source, expected) in [
+            (
+                "その帽子は、母か妹の帽子ではありませんでした。",
+                "那頂帽子當時既不是母親的，也不是妹妹的。",
+            ),
+            (
+                "この教科書は兄か姉の教科書ですか。",
+                "這本教科書是哥哥的還是姊姊的？",
+            ),
+            (
+                "その帽子は学校の先生か店の店員の帽子ですか。",
+                "那頂帽子是學校的老師的還是商店的店員的？",
+            ),
+            (
+                "その教科書は父か母の証明書です。",
+                "那本教科書是父親的證明書或是母親的。",
+            ),
+            (
+                "この先生は母の先生か妹の先生ですか。",
+                "這個老師是母親的老師還是妹妹的老師？",
+            ),
+            (
+                "それは母の帽子か妹の椅子ですか。",
+                "那是母親的帽子還是妹妹的椅子？",
+            ),
+            (
+                "この腕時計は、母か妹の腕時計ですか。",
+                "這支手錶是母親的還是妹妹的？",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn shared_owners_retain_each_protected_noun_occurrence() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.objects.push(crate::GlossaryEntry {
+            canonical: "帽子".into(),
+            surfaces: vec!["帽子".into()],
+            targets: [(TargetVariant::ZhHant, "雲帽".into())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        });
+        let result = analyze_and_translate(
+            "その帽子は、母か妹の帽子ではありませんでした。",
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(
+            result.target_text,
+            "那頂雲帽當時既不是母親的，也不是妹妹的雲帽。"
+        );
+        assert_eq!(result.glossary_hits.len(), 2);
     }
 
     #[test]

@@ -1943,6 +1943,7 @@ struct TeHelpLetterCount {
     periodic_joint: bool,
     joint_signature: Option<std::ops::Range<usize>>,
     writer_each: Option<usize>,
+    occurrence_rate: Option<(std::ops::Range<usize>, String)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2081,6 +2082,67 @@ fn linked_letter_case(noun: &Atom, particle: &Atom) -> bool {
         && noun.span.end_char == particle.span.start_char
 }
 
+fn te_help_letter_occurrence_rate(
+    arguments: &[Atom],
+    end: usize,
+    action_idx: usize,
+) -> Option<(std::ops::Range<usize>, String)> {
+    let [.., unit, per] = &arguments[..end] else {
+        return None;
+    };
+    let unit_idx = unit.doc_tok_idx?;
+    if unit.is_locked
+        || per.is_locked
+        || per.surface != "につき"
+        || per.upos != Some(Upos::Adp)
+        || per.deprel != "case"
+        || per.head != Some(unit_idx)
+        || unit.head != Some(action_idx)
+    {
+        return None;
+    }
+    let unit_surface = unit.surface.strip_suffix(['回', '度'])?;
+    let (start, numeral) = if unit_surface.is_empty() {
+        let index = end.checked_sub(3)?;
+        let number = &arguments[index];
+        if number.is_locked
+            || unit.upos != Some(Upos::Noun)
+            || unit.deprel != "obl"
+            || !matches!(
+                (number.upos, number.deprel.as_str()),
+                (Some(Upos::Num), "nummod") | (Some(Upos::Noun), "compound")
+            )
+            || number.head != Some(unit_idx)
+            || number.span.end_char != unit.span.start_char
+            || index.checked_sub(1).is_some_and(|prior| {
+                let earlier = &arguments[prior];
+                earlier.span.end_char == number.span.start_char
+                    && is_japanese_numeral(&earlier.surface)
+            })
+        {
+            return None;
+        }
+        (index, number.surface.as_str())
+    } else {
+        if unit.upos != Some(Upos::Adv) || unit.deprel != "advmod" {
+            return None;
+        }
+        (end - 2, unit_surface)
+    };
+    if !is_japanese_numeral(numeral) {
+        return None;
+    }
+    let numeral = normalize_decimal_digits(numeral);
+    let mut rendered = String::from("每");
+    if matches!(numeral.as_str(), "1" | "一") {
+        rendered.push('次');
+    } else {
+        let numeral = if numeral == "2" { "二" } else { &numeral };
+        counted_object::push_quantity(&mut rendered, numeral, "次");
+    }
+    Some((start..end, rendered))
+}
+
 fn te_help_letter_count(
     arguments: &[Atom],
     letter_idx: usize,
@@ -2186,12 +2248,15 @@ fn te_help_letter_count(
         .map(|index| &arguments[index])
         .filter(|period| {
             !period.is_locked
-                && matches!(period.surface.as_str(), "毎日" | "毎週" | "毎月" | "毎年")
+                && period.surface.strip_prefix('毎').is_some_and(|unit| {
+                    matches!(unit, "日" | "週" | "月" | "年" | "朝" | "晩" | "回" | "度")
+                })
                 && period.upos == Some(Upos::Adv)
                 && period.deprel == "advmod"
                 && period.head == Some(action_idx)
                 && period.span.end_char == arguments[start].span.start_char
         });
+    let occurrence_rate = te_help_letter_occurrence_rate(arguments, start, action_idx);
     let writer_each = if qualifier_text == Some("ずつ") && can_distribute_to_writers {
         arguments.iter().position(|atom| {
             !atom.is_locked
@@ -2201,16 +2266,30 @@ fn te_help_letter_count(
                 && (atom.head == Some(action_idx)
                     || recurring_period.is_some_and(|period| {
                         period.doc_tok_idx.is_some() && atom.head == period.doc_tok_idx
+                    })
+                    || occurrence_rate.as_ref().is_some_and(|(span, _)| {
+                        atom.head.is_some()
+                            && arguments[span.clone()]
+                                .iter()
+                                .any(|period| period.doc_tok_idx == atom.head)
                     }))
         })
     } else {
         None
     };
     let periodic_joint = qualifier_text == Some("ずつ")
-        && recurring_period.is_some()
+        && (recurring_period.is_some() || occurrence_rate.is_some())
         && writer_each.is_none()
         && (joint_manner || signature.is_some())
         && signatures.next().is_none();
+    // A joint signature does not provide proof that each writer owes a letter.
+    if signature.is_some()
+        && qualifier_text == Some("ずつ")
+        && !periodic_joint
+        && writer_each.is_none()
+    {
+        return None;
+    }
     let modifier = if periodic_joint {
         Some(match (signature.is_some(), additional) {
             (true, true) => "再聯名",
@@ -2257,6 +2336,7 @@ fn te_help_letter_count(
         periodic_joint,
         joint_signature: signature.filter(|_| periodic_joint),
         writer_each,
+        occurrence_rate,
     })
 }
 
@@ -5880,6 +5960,12 @@ fn render_te_help_request(
                 .then(|| linked_adverb(manner.start, manner.end, "一起"));
             }
             if let Some(count) = &request.letter_count {
+                if let Some((span, rendered)) = &count.occurrence_rate
+                    && span.contains(&index)
+                {
+                    return (index == span.start)
+                        .then(|| linked_adverb(span.start, span.end, rendered));
+                }
                 if count.writer_each == Some(index)
                     || count
                         .joint_signature
@@ -20283,6 +20369,18 @@ mod existence_rule_tests {
             (
                 "校長宛ての手紙を二人でそれぞれ毎週一通ずつ書いていただけますか。",
                 "可以請兩位每週各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で連名で毎回一通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で連名で一回につき二通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫兩封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で連名で１回につき二通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫兩封信給校長嗎？",
             ),
         ] {
             assert_eq!(

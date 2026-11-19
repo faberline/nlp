@@ -2155,6 +2155,7 @@ fn te_help_letter_count(
     });
     let span = start..after_counter + usize::from(per_writer);
     if (per_writer && !can_distribute_to_writers)
+        || te_help_has_following_focus(arguments, span.end)
         || arguments.iter().enumerate().any(|(index, atom)| {
             !span.contains(&index)
                 && atom.head.is_some()
@@ -5736,6 +5737,19 @@ fn render_te_help_request(
         .letter_count
         .as_ref()
         .is_some_and(|count| count.per_writer);
+    let linked_adverb = |start: usize, end: usize, surface: &str| Atom {
+        span: Span {
+            start_char: request.action[start].span.start_char,
+            end_char: request.action[end - 1].span.end_char,
+        },
+        surface: surface.to_owned(),
+        lemma: None,
+        upos: Some(Upos::Adv),
+        doc_tok_idx: None,
+        head: action_head,
+        deprel: "advmod".to_owned(),
+        is_locked: false,
+    };
     let mut action: Vec<_> = request
         .action
         .iter()
@@ -5761,37 +5775,15 @@ fn render_te_help_request(
             if let Some(manner) = &request.manner
                 && (manner.start..manner.end).contains(&index)
             {
-                return (index == manner.start && performer_count.is_none() && !per_writer).then(
-                    || Atom {
-                        span: Span {
-                            start_char: atom.span.start_char,
-                            end_char: request.action[manner.end - 1].span.end_char,
-                        },
-                        surface: "一起".to_owned(),
-                        lemma: None,
-                        upos: Some(Upos::Adv),
-                        doc_tok_idx: None,
-                        head: action_head,
-                        deprel: "advmod".to_owned(),
-                        is_locked: false,
-                    },
-                );
+                return (index == manner.start
+                    && performer_count.is_none()
+                    && (!per_writer || manner.count.is_none()))
+                .then(|| linked_adverb(manner.start, manner.end, "一起"));
             }
             if let Some(count) = &request.letter_count {
                 if count.span.contains(&index) {
-                    return (count.per_writer && index == count.span.start).then(|| Atom {
-                        span: Span {
-                            start_char: atom.span.start_char,
-                            end_char: request.action[count.span.end - 1].span.end_char,
-                        },
-                        surface: "各".to_owned(),
-                        lemma: None,
-                        upos: Some(Upos::Adv),
-                        doc_tok_idx: None,
-                        head: action_head,
-                        deprel: "advmod".to_owned(),
-                        is_locked: false,
-                    });
+                    return (count.per_writer && index == count.span.start)
+                        .then(|| linked_adverb(count.span.start, count.span.end, "各"));
                 }
                 if index == count.object {
                     let mut object = atom.clone();
@@ -20099,6 +20091,10 @@ mod existence_rule_tests {
             (
                 "二人で先生宛ての手紙を一通ずつ書いていただけますか。",
                 "可以請兩位各寫一封信給老師嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を一緒に一通ずつ書いていただけますか。",
+                "可以請兩位老師一起各寫一封信給校長嗎？",
             ),
             (
                 "手紙を２通書いていただけますか。",

@@ -775,19 +775,26 @@ pub(crate) fn translate_ja_sentence(
                     false
                 };
                 let cond_opt = Some(conditioning);
+                let inside_quote =
+                    ends_continued_quote(segments.get(seg_idx + 1), doc, sentence_idx, chars);
                 let ctx = ClauseDiscourseCtx {
                     adjective: finite_adjective::Context::at(&segments, seg_idx, doc),
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
                     return_trip: None,
+                    parallel_elapsed_te: if target == TargetVariant::ZhHant
+                        && !prev_was_quote
+                        && !inside_quote
+                        && matches!(trailing_punct.as_deref(), None | Some("、" | "，"))
+                    {
+                        match segments.get(seg_idx + 1) {
+                            Some(Segment::Clause { atoms: next, .. }) => parallel_elapsed_te(trimmed_atoms, next),
+                            _ => None,
+                        }
+                    } else { None },
                     elapsed_modal_applied: None,
-                    inside_quote: ends_continued_quote(
-                        segments.get(seg_idx + 1),
-                        doc,
-                        sentence_idx,
-                        chars,
-                    ),
+                    inside_quote,
                     in_nagara_follow: prev_was_nagara,
                     in_concessive_follow: prev_concessive_dou,
                     in_kuseni_follow,
@@ -5124,6 +5131,7 @@ struct ClauseDiscourseCtx<'a> {
     contrasts_recurrence: bool,
     source_chars: &'a [char],
     return_trip: Option<ReturnTrip>,
+    parallel_elapsed_te: Option<usize>,
     inside_quote: bool,
     elapsed_modal_applied: Option<std::rc::Rc<std::cell::Cell<bool>>>,
     in_nagara_follow: bool,
@@ -5139,6 +5147,87 @@ struct ClauseDiscourseCtx<'a> {
     sentence_topic_pronoun: Option<&'static str>,
     sonomono_antecedent: Option<String>,
     prior_letter_distribution: Option<PriorLetterDistribution>,
+}
+
+// The segmenter has already separated two explicitly voiced subjects. Prove
+// the terminal て belongs to the first action and that action reaches the
+// second clause's root; auxiliaries and quotative segments do not qualify.
+fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
+    if first
+        .iter()
+        .chain(next)
+        .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+        || next.first().is_some_and(|a| a.surface == "から")
+    {
+        return None;
+    }
+    let [.., action, te] = first else { return None };
+    if action.upos != Some(Upos::Verb)
+        || action.deprel != "advcl"
+        || te.upos != Some(Upos::Sconj)
+        || !matches!(te.surface.as_str(), "て" | "で")
+        || te.deprel != "mark"
+        || te.head != action.doc_tok_idx
+        || action.span.end_char != te.span.start_char
+        || first.iter().filter(|a| a.upos == Some(Upos::Verb)).count() != 1
+    {
+        return None;
+    }
+    let action_id = action.doc_tok_idx?;
+    if !elapsed_owned_by(first, action_id) {
+        return None;
+    }
+    let mut verbs = next.iter().filter(|a| a.upos == Some(Upos::Verb));
+    let root = verbs.next()?;
+    if root.deprel != "root" || verbs.next().is_some() {
+        return None;
+    }
+    let root_id = root.doc_tok_idx?;
+    let reaches_root = |mut head: Option<usize>| {
+        for _ in 0..next.len() {
+            if head == Some(root_id) {
+                return true;
+            }
+            let Some(part) = next.iter().find(|a| a.doc_tok_idx == head) else {
+                return false;
+            };
+            if part.deprel != "advcl" || part.upos != Some(Upos::Adj) {
+                return false;
+            }
+            head = part.head;
+        }
+        false
+    };
+    if !reaches_root(action.head) {
+        return None;
+    }
+    fn subjects(atoms: &[Atom]) -> Vec<&Atom> {
+        atoms
+            .windows(2)
+            .filter_map(|w| {
+                let noun = &w[0];
+                let case = &w[1];
+                (matches!(noun.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+                    && noun.deprel == "nsubj"
+                    && case.upos == Some(Upos::Adp)
+                    && matches!(case.surface.as_str(), "は" | "が")
+                    && case.deprel == "case"
+                    && noun.doc_tok_idx == case.head
+                    && noun.span.end_char == case.span.start_char)
+                    .then_some(noun)
+            })
+            .collect()
+    }
+    let left = subjects(first);
+    let right = subjects(next);
+    if left.len() != 1
+        || right.len() != 1
+        || !(left[0].head == Some(action_id) || reaches_root(left[0].head))
+        || !reaches_root(right[0].head)
+    {
+        return None;
+    }
+    Some(action_id)
 }
 
 fn atoms_has_any(atoms: &[Atom], targets: &[&str]) -> bool {
@@ -9774,7 +9863,7 @@ fn localize_elapsed_modal(
             event.sfp_tail = Some("か".to_owned());
         }
         prepend_locked_atom(event, prefix.to_owned());
-        if take_elapsed_duration(&mut candidate.clone(), source).is_some() {
+        if take_elapsed_duration(&mut candidate.clone(), source, None).is_some() {
             *groups = candidate;
             return true;
         }
@@ -9832,6 +9921,7 @@ fn elapsed_interposed_object(atoms: &[Atom], action: usize) -> bool {
 fn take_elapsed_duration(
     groups: &mut Vec<Bunsetsu>,
     source: &[Atom],
+    parallel_te: Option<usize>,
 ) -> Option<(String, bool, usize)> {
     for (action_index, action) in source.iter().enumerate() {
         if action.is_locked || action.doc_tok_idx.is_none() || action.upos != Some(Upos::Verb) {
@@ -9873,8 +9963,17 @@ fn take_elapsed_duration(
         let progressive_negative = progressive_relative && progressive_acl_is_negative(predicate);
         let past_negative = elapsed_past_negative_action(predicate)
             .is_some_and(|verb| verb.doc_tok_idx == Some(action_id));
+        let separate_te = parallel_te == Some(action_id)
+            && matches!(predicate.atoms.as_slice(), [verb, marker]
+                if verb.doc_tok_idx == Some(action_id) && !marker.is_locked
+                    && matches!(marker.surface.as_str(), "て" | "で")
+                    && marker.upos == Some(Upos::Sconj) && marker.deprel == "mark"
+                    && marker.head == verb.doc_tok_idx && verb.span.end_char == marker.span.start_char);
         // Negation can change the quantifier's scope.
-        if predicate.sconj_tail.is_some() && !temporal_after && !progressive_relative
+        if predicate.sconj_tail.is_some()
+            && !temporal_after
+            && !progressive_relative
+            && !separate_te
             || predicate.atoms.iter().any(|a| {
                 (!progressive_negative
                     && !past_negative
@@ -9883,6 +9982,7 @@ fn take_elapsed_duration(
                     || (!past_negative && a.surface == "ませ")
                     || !temporal_after
                         && !progressive_relative
+                        && !separate_te
                         && matches!(a.surface.as_str(), "て" | "で" | "から")
             })
         {
@@ -9939,7 +10039,7 @@ fn take_elapsed_duration(
                 };
                 let first = slice.first()?.span.start_char;
                 let end = slice.last()?.span.end_char;
-                if (progressive_relative || past_negative)
+                if (progressive_relative || past_negative || separate_te)
                     && groups
                         .iter()
                         .filter(|g| g.role == BunsetsuRole::Predicate)
@@ -9995,7 +10095,7 @@ fn translate_clause_bunsetsus(
     target: TargetVariant,
 ) -> (String, bool) {
     let elapsed = if target == TargetVariant::ZhHant {
-        take_elapsed_duration(&mut bunsetsus, source)
+        take_elapsed_duration(&mut bunsetsus, source, ctx.parallel_elapsed_te)
     } else {
         None
     };
@@ -17296,6 +17396,78 @@ mod clock_rule_tests {
         assert_eq!(
             translate("先生は二時間走った子どもを待ちました。"),
             "老師等待了跑了兩個小時的孩子。"
+        );
+    }
+
+    #[test]
+    fn elapsed_te_clause_keeps_its_own_subject_action_and_amount() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("父は一時間歩いて、母は三時間泳ぎました。"),
+            "父親走一個小時，母親游泳了三個小時。"
+        );
+        assert_eq!(
+            translate("父は一時間歩き、母は三時間泳ぎました。"),
+            "父親走一個小時，母親游泳了三個小時。"
+        );
+        assert_eq!(
+            translate("客は二時間待って、先生は三十分話しました。"),
+            "客等待兩個小時，老師說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("客は二時間待ち、先生は三十分話しました。"),
+            "客等待兩個小時，老師說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("父は一時間泳いで、母は三時間歩きました。"),
+            "父親游泳一個小時，母親走了三個小時。"
+        );
+        assert_eq!(
+            translate("父は一時間歩いて、母は泳ぎました。"),
+            "父親走一個小時，母親游泳了。"
+        );
+        assert_eq!(
+            translate("父は一時間歩いて母は三時間泳ぎました。"),
+            "父親走一個小時，母親游泳了三個小時。"
+        );
+        assert_eq!(
+            translate("父は一時間歩いて母は泳ぎました。"),
+            "父親走一個小時，母親游泳了。"
+        );
+        assert_eq!(
+            translate("父は一時間歩いて、母は三時間泳ぎませんでした。"),
+            "父親走一個小時，母親沒有游泳三個小時。"
+        );
+    }
+
+    #[test]
+    fn elapsed_te_clause_does_not_reinterpret_other_uses_of_te() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間待っていて、三十分話しました。"),
+            "時間二等待，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("二時間待ってから帰りました。"),
+            "等待兩個小時後，回去了。"
+        );
+        assert_eq!(
+            translate("父は二時間待ってから、母は三時間泳ぎました。"),
+            "父親等待兩個小時後，母親游泳了三個小時。"
+        );
+        assert_eq!(
+            translate("私は二時間待っていました。"),
+            "我時間二正在等待。"
+        );
+        assert_eq!(
+            translate("私は二時間待っておきました。"),
+            "我時間二等待，おき了。"
+        );
+        assert_eq!(
+            translate("「二時間待って」と先生は言いました。"),
+            "「時間二等待」老師說了。"
         );
     }
 

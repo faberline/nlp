@@ -104,7 +104,7 @@ fn choice_phrase(
             "帽子" => "頂",
             "手錶" => "支",
             "證明書" => "份",
-            _ => super::demonstrative_classifier(&word, &original),
+            _ => noun_classifier(&word, &original),
         };
         let text = if noun.is_locked {
             &noun.surface
@@ -190,7 +190,11 @@ fn choice_particle(a: &Atom) -> bool {
     !a.is_locked && a.surface == "か" && a.upos == Some(Upos::Part) && a.deprel == "discourse"
 }
 
+// か attaches to the last noun even when the intervening の stands for the item.
 fn links_choice(noun: &Atom, particle: &Atom) -> bool {
+    if !noun.is_locked && noun.surface == "の" && noun.deprel == "case" {
+        return choice_particle(particle) && noun.head.is_some() && particle.head == noun.head;
+    }
     choice_particle(particle)
         && noun.doc_tok_idx.is_some()
         && particle.head == noun.doc_tok_idx
@@ -389,7 +393,9 @@ pub(super) fn contains_copular_node(atoms: &[Atom], at: usize, doc: &Document) -
 
 fn owner_atom(a: &Atom, doc: &Document) -> bool {
     matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
-        && (!a.is_locked || a.lemma.as_deref() == Some(MODIFIED_NOUN) || whole_nominal_lock(a, doc))
+        && (!a.is_locked
+            || matches!(a.lemma.as_deref(), Some(MODIFIED_NOUN | PROTECTED_COMPOUND))
+            || whole_nominal_lock(a, doc))
 }
 
 const MODIFIED_NOUN: &str = "__ja_possession_modified_noun";
@@ -422,6 +428,16 @@ pub(super) fn modified_noun(
     chars: &[char],
     time: Option<&str>,
 ) -> Option<Vec<Atom>> {
+    describe_noun(words, doc, chars, time, false)
+}
+
+fn describe_noun(
+    words: &[Atom],
+    doc: &Document,
+    chars: &[char],
+    time: Option<&str>,
+    compact_choice: bool,
+) -> Option<Vec<Atom>> {
     let (head, prefix) = words.split_last()?;
     if !owner_atom(head, doc) || head.doc_tok_idx.is_none() {
         return None;
@@ -450,6 +466,7 @@ pub(super) fn modified_noun(
         }
     }
     let mut descriptions = Vec::new();
+    let mut short = false;
     while !modifiers.is_empty() {
         let (degree, content) = match modifiers {
             [adverb, adj, ..]
@@ -471,9 +488,12 @@ pub(super) fn modified_noun(
         };
         let (adj, rest) = content.split_first()?;
         let adjective = original_pos(adj, doc) == Some(Upos::Adj)
-            || !adj.is_locked
-                && matches!(adj.surface.as_str(), "大きな" | "小さな")
-                && adj.deprel == "det";
+            || original_pos(adj, doc) == Some(Upos::Det)
+                && adj.deprel == "det"
+                && matches!(
+                    chars.get(adj.span.start_char..adj.span.end_char),
+                    Some(['大', 'き', 'な'] | ['小', 'さ', 'な'])
+                );
         if !adjective
             || !(adj.head == head.doc_tok_idx
                 && matches!(adj.deprel.as_str(), "amod" | "acl" | "det")
@@ -524,6 +544,12 @@ pub(super) fn modified_noun(
             )
         };
         let word = adjective.trim_end_matches('的');
+        short = compact_choice
+            && !adj.is_locked
+            && !past
+            && !negative
+            && degree.is_empty()
+            && word.chars().count() == 1;
         let hue = matches!(
             word,
             "紅" | "黑" | "白" | "藍" | "黃" | "綠" | "紫" | "灰" | "棕"
@@ -559,7 +585,34 @@ pub(super) fn modified_noun(
         .get(head.span.start_char..head.span.end_char)?
         .iter()
         .collect();
-    let word = super::translate_single_ja_term(&raw, None, original_pos(head, doc));
+    let mut word = super::translate_single_ja_term(&raw, None, original_pos(head, doc));
+    if compact_choice && !head.is_locked {
+        let first = doc
+            .tokens
+            .partition_point(|t| t.span.start_char < head.span.start_char);
+        let parts = doc.tokens.get(first..=head.doc_tok_idx?)?;
+        if raw == "腕時計" {
+            word = "手錶".to_owned();
+        } else if parts.len() > 1
+            && super::lookup_curated_ja_word(&raw).is_none()
+            && super::lookup_ja_lexicon_gloss(&raw, None, head.upos).is_none()
+        {
+            // A compound lacking its own dictionary entry still has the
+            // ordinary translations of its source tokens (旅行 + かばん).
+            word.clear();
+            for token in parts {
+                let part: String = chars
+                    .get(token.span.start_char..token.span.end_char)?
+                    .iter()
+                    .collect();
+                word.push_str(&super::translate_single_ja_term(
+                    &part,
+                    token.lemma.as_deref(),
+                    token.upos,
+                ));
+            }
+        }
+    }
     let mut noun = head.clone();
     let classifier = if demonstrative.is_empty() {
         ""
@@ -573,8 +626,13 @@ pub(super) fn modified_noun(
     } else {
         &word
     };
+    let linker = if short && descriptions.len() == 1 {
+        ""
+    } else {
+        "的"
+    };
     noun.surface = format!(
-        "{demonstrative}{classifier}{}{}的{text}",
+        "{demonstrative}{classifier}{}{}{linker}{text}",
         if descriptions.len() > 1 { "又" } else { "" },
         descriptions.join("又")
     );
@@ -763,6 +821,104 @@ pub(super) fn render(
     target: TargetVariant,
     chars: &[char],
 ) -> Option<String> {
+    render_choice(atoms, doc, sentence, target, chars)
+        .or_else(|| render_glossary_choice(atoms, target, chars))
+}
+
+// A glossary can merge 旅行 + かばん into one token tagged VERB, changing the
+// surrounding dependency links. Verify the clause against its ordinary source
+// parse and put each original placeholder back on the same source phrase.
+fn render_glossary_choice(atoms: &[Atom], target: TargetVariant, chars: &[char]) -> Option<String> {
+    // A single final か cannot link two alternatives. In particular, keep
+    // each full question and each fragment before a real verb on its normal path.
+    let (_, before_last) = atoms.split_last()?;
+    if !before_last.iter().any(choice_particle)
+        || !atoms.iter().any(|a| a.surface == "の")
+        || !atoms
+            .iter()
+            .any(|a| a.is_locked && a.surface.starts_with("[[PH"))
+    {
+        return None;
+    }
+    let start = atoms.first()?.span.start_char;
+    let end = atoms.last()?.span.end_char;
+    let extra = usize::from(
+        chars
+            .get(end)
+            .is_some_and(|c| matches!(c, '。' | '？' | '?' | '！' | '!')),
+    );
+    let source = chars.get(start..end + extra)?;
+    let text: String = source.iter().collect();
+    let doc = faberline_nlp::doc::analyze_document(
+        &text,
+        &faberline_nlp::doc::Options {
+            normalize_traditional: true,
+            enrich_morphology: true,
+            cpu_syntax: true,
+            ..Default::default()
+        },
+    );
+    if doc.segmentation.sentences.len() != 1 {
+        return None;
+    }
+    let tokens: Vec<_> = doc.tokens.iter().collect();
+    let mut raw =
+        super::build_sentence_atoms(0, source, &doc, &tokens, &super::SpanLockTable::default());
+    let question = raw
+        .split_last()
+        .is_some_and(|(end, clause)| super::direct_ka_before_period(clause, end, &doc));
+    raw.retain(|a| {
+        a.span.end_char <= end - start
+            && (!matches!(a.surface.as_str(), "、" | "，")
+                || atoms.iter().any(|old| {
+                    old.span.start_char == start + a.span.start_char && old.surface == a.surface
+                }))
+    });
+    for lock in atoms.iter().rev().filter(|a| a.is_locked) {
+        if !lock.surface.starts_with("[[PH") || !lock.surface.ends_with("]]") {
+            return None;
+        }
+        let begin = raw
+            .iter()
+            .position(|a| a.span.start_char + start == lock.span.start_char)?;
+        let last = raw
+            .iter()
+            .position(|a| a.span.end_char + start >= lock.span.end_char)?;
+        let parts = raw.get(begin..=last)?;
+        let mut head = parts.last()?.clone();
+        let entire = head.span.end_char + start == lock.span.end_char;
+        // In 大き + な and 小さ + な the final な marks the attributive form.
+        let size_stem = parts.len() == 1
+            && head.deprel == "det"
+            && matches!(head.surface.as_str(), "大きな" | "小さな")
+            && head.span.end_char + start == lock.span.end_char + 1;
+        if !(entire || size_stem)
+            || parts.len() > 1
+                && !parts
+                    .iter()
+                    .all(|a| matches!(a.upos, Some(Upos::Noun | Upos::Propn)))
+        {
+            return None;
+        }
+        head.span.start_char = parts.first()?.span.start_char;
+        head.surface.clone_from(&lock.surface);
+        head.is_locked = true;
+        raw.splice(begin..=last, [head]);
+    }
+    let mut result = render_choice(&raw, &doc, 0, target, source)?;
+    if question {
+        result.push('？');
+    }
+    Some(result)
+}
+
+fn render_choice(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    target: TargetVariant,
+    chars: &[char],
+) -> Option<String> {
     let (body, ending) = match atoms {
         [body @ .., yo, ne]
             if yo.surface == "よ"
@@ -819,32 +975,56 @@ pub(super) fn render(
         return Some(text);
     }
     let body = join_choice_compounds(body, doc);
-    let head_index = body
-        .iter()
-        .rposition(|a| matches!(a.upos, Some(Upos::Noun | Upos::Propn)))?;
+    let choice = body.iter().any(choice_particle);
+    let head_index = body.iter().rposition(|a| {
+        matches!(a.upos, Some(Upos::Noun | Upos::Propn)) || choice && a.upos == Some(Upos::Pron)
+    })?;
     let (nominals, tail) = body.split_at(head_index + 1);
     let head = nominals.last()?;
     // 「鳥のことです」 can define what a word refers to. こと is not a possessed item.
     if matches!(head.surface.as_str(), "こと" | "事") {
         return None;
     }
-    if tail.is_empty()
-        || tail.len() > 7
+    if tail.len() > 7
         || tail.iter().any(|a| a.is_locked)
-        || nominals.iter().any(|a| {
-            a.is_locked
-                && a.lemma.as_deref() != Some(PROTECTED_COMPOUND)
-                && !whole_nominal_lock(a, doc)
-        })
         || !body[head_index..]
             .windows(2)
             .all(|p| p[0].span.end_char == p[1].span.start_char)
     {
         return None;
     }
+    // A final genitive can share a token with the following copula (母／ので／は).
+    // Keep that source edge separate from the word that carries tense and negation.
+    let final_genitive = choice
+        && tail.first().is_some_and(|no| {
+            !no.is_locked
+                && head.doc_tok_idx.is_some()
+                && no.head == head.doc_tok_idx
+                && matches!(
+                    (no.surface.as_str(), no.deprel.as_str()),
+                    ("の", "case") | ("ので", "mark")
+                )
+        });
     let suffix: String = tail.iter().map(|a| a.surface.as_str()).collect();
-    let copula = match suffix.as_str() {
-        "です" | "だ" if tail[0].upos == Some(Upos::Aux) => "是",
+    let suffix = if final_genitive {
+        suffix.strip_prefix('の')?
+    } else {
+        suffix.as_str()
+    };
+    // A bare question mark can replace final か. Only inspect punctuation
+    // immediately after this clause, including when it is inside a quotation.
+    let next_char = chars
+        .get(atoms.last()?.span.end_char..)?
+        .iter()
+        .find(|c| !c.is_whitespace());
+    let question = ending == "嗎" || matches!(next_char, Some('？' | '?'));
+    let omitted_item = final_genitive
+        || nominals
+            .windows(2)
+            .any(|pair| pair[0].surface == "の" && links_choice(&pair[0], &pair[1]));
+    let copula = match suffix {
+        "" if omitted_item && question => "是",
+        "です" | "だ" if tail[usize::from(final_genitive)].upos == Some(Upos::Aux) => "是",
         "だった" | "でした" => "當時是",
         "じゃない"
         | "ではない"
@@ -871,11 +1051,23 @@ pub(super) fn render(
     // An object or adjunct before an instrumental で and する is a different
     // construction. Every atom here must belong to the topic or its nominal complement.
     let nominal_part = |a: &Atom| {
+        if a.is_locked
+            && !matches!(a.lemma.as_deref(), Some(PROTECTED_COMPOUND | MODIFIED_NOUN))
+            && !whole_nominal_lock(a, doc)
+        {
+            return false;
+        }
         matches!(
             a.upos,
             Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Num | Upos::Det)
         ) || (a.surface == "の" && a.deprel == "case")
     };
+    let described_topic = if choice {
+        describe_noun(topic, doc, chars, None, true)
+    } else {
+        None
+    };
+    let topic = described_topic.as_deref().unwrap_or(topic);
     if !topic.iter().all(nominal_part) {
         return None;
     }
@@ -888,7 +1080,11 @@ pub(super) fn render(
         }
     };
     let subject = match (topic, split) {
-        ([], None) if !(suffix == "でした" && tail[0].upos == Some(Upos::Adp)) => String::new(),
+        ([], None)
+            if !suffix.is_empty() && !(suffix == "でした" && tail[0].upos == Some(Upos::Adp)) =>
+        {
+            String::new()
+        }
         ([], _) => return None,
         (_, Some(i)) => {
             let noun = topic.last()?;
@@ -920,15 +1116,47 @@ pub(super) fn render(
     };
     // An interior か belongs to the preceding noun. The final か, if present,
     // was removed with the other sentence particles above.
-    if phrase.windows(2).any(|pair| {
-        choice_particle(&pair[1])
-            && (pair[0].doc_tok_idx.is_none() || pair[1].head != pair[0].doc_tok_idx)
-    }) {
+    if phrase
+        .windows(2)
+        .any(|pair| choice_particle(&pair[1]) && !links_choice(&pair[0], &pair[1]))
+    {
         return None;
     }
     let mut alternatives = Vec::new();
     let mut has_owner = false;
     for part in phrase.split(choice_particle) {
+        // Bind adjectives inside this alternative only. A described item
+        // keeps its own source head and must remain explicit in the target.
+        let described = if has_choices {
+            describe_noun(part, doc, chars, None, true)
+        } else {
+            None
+        };
+        let part = described.as_deref().unwrap_or(part);
+        // Parse each alternative on its own side of か. A bare owner ends in
+        // の, while a full possession must link that owner to its explicit head.
+        let bare_owner = match part {
+            [owner @ .., no] if has_choices && !no.is_locked && no.surface == "の" => {
+                let last = owner.last()?;
+                if no.deprel != "case" || no.head != last.doc_tok_idx {
+                    return None;
+                }
+                Some(owner)
+            }
+            _ if final_genitive && part.last()?.doc_tok_idx == head.doc_tok_idx => Some(part),
+            _ => None,
+        };
+        if let Some(owner) = bare_owner {
+            if !owner.iter().all(nominal_part) || !owner_atom(owner.last()?, doc) {
+                return None;
+            }
+            alternatives.push(format!(
+                "{}的",
+                elliptical_owner(owner, doc, sentence, target)?
+            ));
+            has_owner = true;
+            continue;
+        }
         let noun = part.last()?;
         let noun_id = noun.doc_tok_idx?;
         if !part.iter().all(nominal_part) || matches!(noun.surface.as_str(), "こと" | "事") {
@@ -947,7 +1175,16 @@ pub(super) fn render(
         has_owner |= owned;
         // In a nominal identification もの can stand for an already mentioned item.
         let name = match part {
-            [owner @ .., no, thing] if thing.surface == "もの" && no.surface == "の" => {
+            [owner @ .., no, item]
+                if no.surface == "の"
+                    && (item.surface == "もの"
+                        || omitted_item
+                            && !item.is_locked
+                            && topic
+                                .last()
+                                .and_then(|a| source_noun(a, doc, chars))
+                                .is_some_and(|a| a.surface == item.surface)) =>
+            {
                 format!("{}的", phrase_text(owner)?)
             }
             _ => phrase_text(part)?,
@@ -957,15 +1194,11 @@ pub(super) fn render(
     if !has_owner {
         return None;
     }
-    let alternatives =
-        shared_owner_choices(phrase, topic, doc, sentence, target, chars).unwrap_or(alternatives);
-    // A bare question mark can replace final か. Only inspect punctuation
-    // immediately after this clause, including when it is inside a quotation.
-    let next_char = chars
-        .get(atoms.last()?.span.end_char..)?
-        .iter()
-        .find(|c| !c.is_whitespace());
-    let question = ending == "嗎" || matches!(next_char, Some('？' | '?'));
+    let alternatives = if omitted_item {
+        alternatives
+    } else {
+        shared_owner_choices(phrase, topic, doc, sentence, target, chars).unwrap_or(alternatives)
+    };
     if alternatives.len() > 1
         && !question
         && let Some(past) = copula.strip_suffix("不是")
@@ -1007,6 +1240,136 @@ mod tests {
         )
         .unwrap()
         .target_text
+    }
+
+    #[test]
+    fn possessive_choices_allow_an_omitted_item_on_either_side() {
+        for (source, expected) in [
+            ("これは父の車か、母のですか。", "這是父親的車還是母親的？"),
+            ("これは父のか、母の車ですか。", "這是父親的還是母親的車？"),
+            ("この本は兄の本か姉のですか。", "這本書是哥哥的還是姊姊的？"),
+            ("これは母のか父の車でした。", "這當時是母親的或是父親的車。"),
+            ("これは彼の本か彼女のですか。", "這是他的書還是她的？"),
+            ("それは父のか母の車？", "那是父親的還是母親的車？"),
+            ("それは母の車か父の？", "那是母親的車還是父親的？"),
+            (
+                "これは父の車か母のではありません。",
+                "這既不是父親的車，也不是母親的。",
+            ),
+            ("これは妹の本か、姉のです。", "這是妹妹的書或是姊姊的。"),
+            (
+                "これは妹のか、姉の本ではありませんか。",
+                "這不是妹妹的或是姊姊的書嗎？",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn possessive_choices_keep_the_adjective_with_its_item() {
+        for (source, expected) in [
+            (
+                "これは父の赤い車か、母のですか。",
+                "這是父親的紅色車還是母親的？",
+            ),
+            (
+                "これは父のか、母の赤い車ですか。",
+                "這是父親的還是母親的紅色車？",
+            ),
+            (
+                "この傘は姉の古い傘か弟のですか。",
+                "這把傘是姊姊的舊傘還是弟弟的？",
+            ),
+            (
+                "この傘は弟のか姉の古い傘ですか。",
+                "這把傘是弟弟的還是姊姊的舊傘？",
+            ),
+            (
+                "これは父の赤い車か母のではありません。",
+                "這既不是父親的紅色車，也不是母親的。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn possessive_choice_keeps_a_glossary_size_modifier() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(crate::GlossaryEntry {
+            canonical: "大きな".into(),
+            surfaces: vec!["大きな".into()],
+            targets: [(TargetVariant::ZhHant, "大型".into())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        });
+        let product = analyze_and_translate(
+            "これは妹の大きな箱か父のですか。",
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(product.target_text, "這是妹妹的大型的箱子還是父親的？");
+    }
+
+    #[test]
+    fn compound_choices_preserve_the_source_parse_and_glossary_spans() {
+        for source in [
+            "これは父の大きな旅行かばんか、母のですか。",
+            "これは母のか、父の大きな旅行かばんですか。",
+        ] {
+            let plain = translate(source);
+            assert!(
+                plain.contains("大旅行包包") && plain.contains("還是"),
+                "{plain}"
+            );
+            for terms in [
+                vec![("旅行かばん", "旅用提袋")],
+                vec![("大きな", "特大款"), ("旅行かばん", "旅用提袋")],
+                vec![("大き", "加大款")],
+            ] {
+                let mut glossary = TranslationGlossary::new();
+                for &(term, value) in &terms {
+                    glossary.objects.push(crate::GlossaryEntry {
+                        canonical: term.into(),
+                        surfaces: vec![term.into()],
+                        targets: [(TargetVariant::ZhHant, value.into())]
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    });
+                }
+                let result = analyze_and_translate(
+                    source,
+                    &TranslateOptions::new(TargetVariant::ZhHant),
+                    &glossary,
+                    None,
+                    Backend::Onnx,
+                )
+                .unwrap();
+                assert!(
+                    result.target_text.contains("還是")
+                        && !result.target_text.contains('嗎')
+                        && result.target_text.ends_with('？'),
+                    "{}",
+                    result.target_text
+                );
+                for (term, value) in terms {
+                    assert_eq!(result.target_text.matches(value).count(), 1);
+                    assert!(result.glossary_hits.iter().any(|hit| {
+                        source
+                            .chars()
+                            .skip(hit.source_span.start_char)
+                            .take(hit.source_span.end_char - hit.source_span.start_char)
+                            .eq(term.chars())
+                    }));
+                }
+            }
+        }
     }
 
     #[test]

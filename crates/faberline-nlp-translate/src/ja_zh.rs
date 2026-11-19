@@ -193,6 +193,7 @@ pub(crate) fn translate_ja_sentence(
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
+    written_form_continuation: Option<Span>,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
@@ -216,11 +217,31 @@ pub(crate) fn translate_ja_sentence(
         .map(|(i, c)| (i, c.span))
         .collect();
 
+    // A written form can cross an analysis sentence boundary. Emit the
+    // continuation before syntax can put a translated particle in front of it.
+    let continuation = atoms.first().filter(|atom| {
+        written_form_continuation == Some(atom.span)
+            && atom.is_locked
+            && lock_table.locks.first().is_some_and(|lock| {
+                lock.source_span == atom.span && lock.origin == LockOrigin::QuotedSource
+            })
+    });
+    let clause_atoms = &atoms[usize::from(continuation.is_some())..];
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
-    let segments = split_atoms_into_segments(&atoms, doc, sent_span);
+    let segments = split_atoms_into_segments(clause_atoms, doc, sent_span);
 
     let mut out = String::new();
     let mut seg_target_spans: Vec<(Span, Span)> = Vec::with_capacity(segments.len());
+    if let Some(continuation) = continuation {
+        out.push_str(&continuation.surface);
+        seg_target_spans.push((
+            continuation.span,
+            Span {
+                start_char: 0,
+                end_char: out.chars().count(),
+            },
+        ));
+    }
     let mut is_first_non_quote_clause = true;
     let mut prev_was_quote = false;
     let mut emitted_pre_quote_verb = false;
@@ -951,6 +972,7 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
             &lock_table,
             &cond,
             target,
+            None,
             None,
         );
         out.push_str(&tr);

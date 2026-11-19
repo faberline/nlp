@@ -27,12 +27,18 @@ const FORM_LABELS: &[&str] = &[
     "ローマ字の",
 ];
 
+#[derive(Clone, Copy)]
+pub(crate) struct WrittenForm {
+    pub(crate) span: Span,
+    pub(crate) continuation: bool,
+}
+
 /// Find explicitly written forms on the source paragraph, then give each
 /// analysis sentence only its part of the original text to protect.
 pub(crate) fn plan_written_form_quotes(
     chars: &[char],
     segmentation: &Segmentation,
-) -> Vec<Vec<Span>> {
+) -> Vec<Vec<WrittenForm>> {
     let mut by_sentence = vec![Vec::new(); segmentation.sentences.len()];
     let sentences = &segmentation.sentences;
     for paragraph in &segmentation.paragraphs {
@@ -53,9 +59,12 @@ pub(crate) fn plan_written_form_quotes(
                 let start_char = quote.start_char.max(sent.span.start_char);
                 let end_char = quote.end_char.min(sent.span.end_char);
                 if start_char < end_char {
-                    by_sentence[index].push(Span {
-                        start_char,
-                        end_char,
+                    by_sentence[index].push(WrittenForm {
+                        span: Span {
+                            start_char,
+                            end_char,
+                        },
+                        continuation: quote.start_char < start_char,
                     });
                 }
             }
@@ -705,6 +714,14 @@ mod tests {
             (
                 "『二つの表記「ドイツ」と「独逸」を比べました』",
                 ["「ドイツ」", "「独逸」"],
+            ),
+            (
+                "先生は『「来て！帰る」と、「今すぐ。」の字数をそれぞれ数えなさい』と言いました。",
+                ["「来て！帰る」", "「今すぐ。」"],
+            ),
+            (
+                "先生は『「A!ドイツ？B」と、「行く？」の文字数をそれぞれ数えなさい』と言いました。",
+                ["「A!ドイツ？B」", "「行く？」"],
             ),
         ] {
             let translated = analyze_and_translate(

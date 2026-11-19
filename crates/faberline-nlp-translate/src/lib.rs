@@ -589,7 +589,7 @@ fn plan_cross_sentence_direct_quotes(
     inline_opaques: &[&Opaque],
     options: &TranslateOptions,
     compiled_glossary: &CompiledGlossary,
-    written_quotes: &[Vec<Span>],
+    written_quotes: &[Vec<quote_source::WrittenForm>],
 ) -> HashMap<usize, ja_zh::DirectQuotePlacement> {
     let sentences = &doc.segmentation.sentences;
     let mut placements: HashMap<usize, ja_zh::DirectQuotePlacement> = HashMap::new();
@@ -678,7 +678,7 @@ fn build_sentence_locks(
     raw_sent: &str,
     options: &TranslateOptions,
     compiled_glossary: &CompiledGlossary,
-    written_quotes: &[Span],
+    written_quotes: &[quote_source::WrittenForm],
 ) -> SpanLockTable {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     // Build `SpanLockTable` over inline opaques (priority 0), glossary hits (priority 1), and
@@ -703,7 +703,7 @@ fn build_sentence_locks(
         }
     }
 
-    for &span in written_quotes {
+    for &quote_source::WrittenForm { span, .. } in written_quotes {
         if blocked_for_glossary
             .iter()
             .any(|blocked| span.start_char < blocked.end_char && blocked.start_char < span.end_char)
@@ -758,7 +758,7 @@ fn translate_single_sentence(
     compiled_glossary: &CompiledGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
     direct_quote: Option<&ja_zh::DirectQuotePlacement>,
-    written_quotes: &[Span],
+    written_quotes: &[quote_source::WrittenForm],
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
@@ -893,6 +893,10 @@ fn translate_single_sentence(
             &conditioning,
             options.target,
             direct_quote,
+            written_quotes
+                .first()
+                .filter(|quote| quote.continuation)
+                .map(|quote| quote.span),
         );
         let mut clause_spans: Vec<Span> = clause_alignments
             .iter()

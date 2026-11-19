@@ -6270,13 +6270,16 @@ fn try_translate_homework_transfer(
             adjuncts.push("什麼時候".to_owned());
             continue;
         }
-        if is_event_daypart(bunsetsu, bunsetsus, source)
-            || (matches!(bunsetsu.role, BunsetsuRole::Adv | BunsetsuRole::Other)
-                && bunsetsu.case_particle.is_none()
-                && bunsetsu
-                    .atoms
-                    .iter()
-                    .any(|atom| atom.head == head && atom.deprel == "advmod"))
+        if is_event_daypart(bunsetsu, bunsetsus, source, target) {
+            adjuncts.push(render_daypart_np(bunsetsu, target));
+            continue;
+        }
+        if matches!(bunsetsu.role, BunsetsuRole::Adv | BunsetsuRole::Other)
+            && bunsetsu.case_particle.is_none()
+            && bunsetsu
+                .atoms
+                .iter()
+                .any(|atom| atom.head == head && atom.deprel == "advmod")
         {
             adjuncts.push(render_bunsetsu_np(bunsetsu, target));
             continue;
@@ -9639,7 +9642,9 @@ fn translate_clause_bunsetsus(
     let daypart_groups: Vec<_> = bunsetsus
         .iter()
         .enumerate()
-        .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
+        .filter_map(|(idx, group)| {
+            is_event_daypart(group, &bunsetsus, source, target).then_some(idx)
+        })
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
         if arrival_head.is_some()
@@ -14933,6 +14938,14 @@ fn trip_relative_daypart(group: &Bunsetsu, source: &[Atom], returning: usize) ->
 }
 
 fn render_daypart_np(group: &Bunsetsu, target: TargetVariant) -> String {
+    if target == TargetVariant::ZhHant
+        && group
+            .atoms
+            .first()
+            .is_some_and(|time| !time.is_locked && time.surface == "日中")
+    {
+        return "白天".to_owned();
+    }
     if let [t, _] = group.atoms.as_slice()
         && let Some(label) = after_daypart(t)
     {
@@ -15311,10 +15324,50 @@ fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool
         })
 }
 
+// 日中 can denote daylight or the two countries. In a に phrase, a
+// routine activity supplies a time reading. A request or transfer can
+// instead take the countries as its recipient.
+fn daytime_activity(lemma: &str) -> bool {
+    matches!(
+        lemma,
+        "働く"
+            | "休む"
+            | "寝る"
+            | "眠る"
+            | "起きる"
+            | "暮らす"
+            | "過ごす"
+            | "読む"
+            | "食べる"
+            | "飲む"
+            | "洗う"
+            | "片付ける"
+            | "掃除する"
+            | "料理する"
+            | "勉強する"
+            | "練習する"
+            | "泳ぐ"
+            | "走る"
+            | "歩く"
+            | "散歩する"
+            | "遊ぶ"
+            | "降る"
+            | "晴れる"
+            | "咲く"
+            | "始まる"
+            | "終わる"
+    )
+}
+
 // 夕方に働く, 夕方にする and 夕方に戻る can share the same case relation.
 // Keep the time only when its own governor and that governor's other
 // arguments support an event-time reading.
-fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> bool {
+fn is_event_daypart(
+    group: &Bunsetsu,
+    clause: &[Bunsetsu],
+    source: &[Atom],
+    target: TargetVariant,
+) -> bool {
     let (time, ni, focused) = match group.atoms.as_slice() {
         [time, ni] => (time, ni, false),
         [time, ni, focus]
@@ -15337,7 +15390,8 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
         || group.sfp_tail.is_some()
         || time.is_locked
         || ni.is_locked
-        || !is_daypart_surface(&time.surface)
+        || !(is_daypart_surface(&time.surface)
+            || target == TargetVariant::ZhHant && time.surface == "日中")
         || !matches!(time.upos, Some(Upos::Noun | Upos::Adv))
         || !(matches!(time.deprel.as_str(), "obl" | "advmod" | "iobj")
             || focused && time.deprel == "nsubj")
@@ -15350,7 +15404,10 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
     {
         return false;
     }
-    if !focused && return_endpoint::time_before_place_modifier(time, source) {
+    if time.surface != "日中"
+        && !focused
+        && return_endpoint::time_before_place_modifier(time, source)
+    {
         return true;
     }
     // Phrase rendering can join a lexical governor and する into one translated
@@ -15369,8 +15426,16 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
         return false;
     }
     let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    if time.surface == "日中"
+        && (!daytime_activity(lemma)
+            || source
+                .iter()
+                .any(|a| a.span.end_char == time.span.start_char && a.upos == Some(Upos::Num)))
+    {
+        return false;
+    }
     let physical_return = lemma == "戻る" && return_endpoint::local_motion(verb, clause, source);
-    if focused && !physical_return {
+    if focused && !physical_return && time.surface != "日中" {
         return false;
     }
     if !has_verb_reading(lemma) || selects_time_value(lemma) {

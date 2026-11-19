@@ -190,7 +190,12 @@ fn is_person(noun: &Atom, chars: &[char]) -> bool {
     }
     let mut original = noun.clone();
     original.upos = Some(Upos::Noun);
-    original.surface = spelling(noun, chars);
+    let raw = spelling(noun, chars);
+    let name = raw
+        .rsplit_once("にいる")
+        .or_else(|| raw.rsplit_once('の'))
+        .map_or(raw.as_str(), |(_, head)| head);
+    original.surface = name.to_owned();
     super::is_companion_person(&original)
 }
 
@@ -237,7 +242,22 @@ fn mark_filing_time(atoms: &mut [Atom], verb: usize, chars: &[char]) {
         if noun.head != Some(verb) || case.surface != "に" || !dasu_case_link(noun, case) {
             continue;
         }
-        let text = match spelling(noun, chars).as_str() {
+        let raw = spelling(noun, chars);
+        let time = if noun.is_locked {
+            raw.rsplit_once('の')
+                .and_then(|(qualifier, head)| {
+                    let mut day = noun.clone();
+                    day.is_locked = false;
+                    day.upos = Some(Upos::Noun);
+                    day.surface = qualifier.to_owned();
+                    day.lemma = None;
+                    super::render_temporal_made_atom(&day).map(|_| head)
+                })
+                .unwrap_or(raw.as_str())
+        } else {
+            raw.as_str()
+        };
+        let text = match time {
             "何時" => "幾點",
             "いつ" => "什麼時候",
             _ => continue,

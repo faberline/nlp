@@ -47,7 +47,7 @@ pub(super) fn word_mention(
             || dictionary_lookup(word, rest, previous);
     }
     if marker.surface == "に" {
-        return rest.windows(3).any(|triple| {
+        return rest.windows(3).enumerate().any(|(i, triple)| {
             let [line, case, draw] = triple else {
                 return false;
             };
@@ -59,7 +59,10 @@ pub(super) fn word_mention(
                 && case.surface == "を"
                 && case.head == line.doc_tok_idx
                 && line.head == draw.doc_tok_idx
-                && word.head == draw.doc_tok_idx
+                && marker.head == draw.doc_tok_idx
+                && rest[..i].iter().all(|a| {
+                    !a.is_locked && !matches!(a.upos, Some(Upos::Verb | Upos::Aux | Upos::Sconj))
+                })
                 && draw.lemma.as_deref() == Some("引く")
         });
     }
@@ -719,6 +722,7 @@ mod tests {
         for (jp, expected) in [
             ("日本語の単語「支払える」をノートに書きました。", true),
             ("黒板の「支払える」に下線を引きました。", true),
+            ("「支払える」に赤い線を引きました。", true),
             ("「支払える」の文字を一つずつ読みました。", true),
             ("私は「支払える」を辞書で引きました。", true),
             ("編集者は「支払える」の送り仮名を確認しました。", true),

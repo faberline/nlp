@@ -861,6 +861,9 @@ fn render_glossary_choice(atoms: &[Atom], target: TargetVariant, chars: &[char])
     let tokens: Vec<_> = doc.tokens.iter().collect();
     let mut raw =
         super::build_sentence_atoms(0, source, &doc, &tokens, &super::SpanLockTable::default());
+    let question = raw
+        .split_last()
+        .is_some_and(|(end, clause)| super::direct_ka_before_period(clause, end, &doc));
     raw.retain(|a| {
         a.span.end_char <= end - start
             && (!matches!(a.surface.as_str(), "、" | "，")
@@ -899,7 +902,11 @@ fn render_glossary_choice(atoms: &[Atom], target: TargetVariant, chars: &[char])
         head.is_locked = true;
         raw.splice(begin..=last, [head]);
     }
-    render_choice(&raw, &doc, 0, target, source)
+    let mut result = render_choice(&raw, &doc, 0, target, source)?;
+    if question {
+        result.push('？');
+    }
+    Some(result)
 }
 
 fn render_choice(
@@ -1342,7 +1349,9 @@ mod tests {
                 )
                 .unwrap();
                 assert!(
-                    result.target_text.contains("還是") && !result.target_text.contains('嗎'),
+                    result.target_text.contains("還是")
+                        && !result.target_text.contains('嗎')
+                        && result.target_text.ends_with('？'),
                     "{}",
                     result.target_text
                 );

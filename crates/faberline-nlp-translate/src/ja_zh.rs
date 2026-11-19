@@ -4723,6 +4723,103 @@ fn try_translate_nominal_receiving_request(
     Some(format!("可以給我{amount_text}{object}嗎"))
 }
 
+// A final yes/no question can ask whether someone asked an embedded duration
+// question. Translate the embedded event separately so its amount cannot be
+// attached to the reporting verb.
+fn translate_elapsed_embedded_question(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence_idx: usize,
+    ctx: &ClauseDiscourseCtx,
+    target: TargetVariant,
+) -> Option<String> {
+    let source = core_non_punct(atoms);
+    if ctx.return_trip.is_some()
+        || source
+            .iter()
+            .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+        || source
+            .windows(2)
+            .any(|w| w[0].span.end_char != w[1].span.start_char)
+    {
+        return None;
+    }
+    let outer = source.last()?;
+    if outer.surface != "か" || outer.upos != Some(Upos::Part) || outer.deprel != "discourse" {
+        return None;
+    }
+    let report_index = source.iter().position(|a| a.doc_tok_idx == outer.head)?;
+    let report = &source[report_index];
+    if report.lemma.as_deref() != Some("聞く")
+        || report.deprel != "root"
+        || report.upos != Some(Upos::Verb)
+        || report_index < 2
+        || source[report_index + 1..source.len() - 1]
+            .iter()
+            .any(|a| a.upos != Some(Upos::Aux) || a.head != report.doc_tok_idx)
+        || source[report_index + 1..source.len() - 1]
+            .iter()
+            .map(|a| a.surface.as_str())
+            .collect::<String>()
+            != "ました"
+    {
+        return None;
+    }
+    let question = &source[report_index - 1];
+    let action = &source[report_index - 2];
+    if question.surface != "か"
+        || question.upos != Some(Upos::Part)
+        || question.deprel != "discourse"
+        || question.head != action.doc_tok_idx
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "advcl"
+        || action.head != report.doc_tok_idx
+    {
+        return None;
+    }
+    let inner = &source[..report_index - 1];
+    let action_id = action.doc_tok_idx?;
+    if inner.iter().filter(|a| a.deprel == "nsubj").count() > 1
+        || !elapsed_owned_by(inner, action_id)
+    {
+        return None;
+    }
+    // Every argument in this small clause must belong to the embedded event.
+    for atom in inner {
+        let mut current = atom.doc_tok_idx;
+        let mut linked = false;
+        for _ in 0..inner.len() {
+            if current == Some(action_id) {
+                linked = true;
+                break;
+            }
+            let next = inner.iter().find(|a| a.doc_tok_idx == current)?;
+            if matches!(next.deprel.as_str(), "conj" | "cc" | "punct")
+                || next.upos == Some(Upos::Verb)
+            {
+                return None;
+            }
+            current = next.head;
+        }
+        if !linked {
+            return None;
+        }
+    }
+    let has_hour_question = inner.windows(2).any(|w| {
+        w[0].surface == "何"
+            && w[1].surface == "時間"
+            && w[0].head == Some(action_id)
+            && (w[1].head == Some(action_id) || w[1].head == w[0].doc_tok_idx)
+    }) || inner
+        .iter()
+        .any(|a| a.surface == "何時間" && a.head == Some(action_id));
+    if !has_hour_question {
+        return None;
+    }
+    let (question, _) = translate_clause_atoms(inner, doc, sentence_idx, None, false, ctx, target);
+    (!question.is_empty()).then(|| format!("有問{question}嗎"))
+}
+
 /// Core clause translator:
 /// 1. Matches multi-token idioms/collocations if the clause is a known idiom or contains one.
 /// 2. Normalizes passive `さ+れ`, adj-`そう`, `そんなに`, and adverbial `-く` forms.
@@ -4741,6 +4838,14 @@ fn translate_clause_atoms(
 ) -> (String, bool) {
     if atoms.is_empty() {
         return (String::new(), false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let Some(text) =
+            translate_elapsed_embedded_question(atoms, doc, sentence_idx, ctx, target)
+    {
+        return (text, false);
     }
 
     if target == TargetVariant::ZhHant
@@ -10681,6 +10786,7 @@ fn translate_clause_bunsetsus(
     // that the whole object was read. Restrict this to an ordinary past read.
     if elapsed_duration.is_some()
         && verb_core == "讀"
+        && !passive_agent_needed
         && post_verb_mods.len() == 1
         && post_verb_mods[0] == "了"
         && objs.len() == 1
@@ -12966,6 +13072,98 @@ fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
     })
 }
 
+fn elapsed_owned_by(source: &[Atom], owner: usize) -> bool {
+    let Some(action_index) = source
+        .iter()
+        .position(|a| a.doc_tok_idx == Some(owner) && !a.is_locked && a.upos == Some(Upos::Verb))
+    else {
+        return false;
+    };
+    let mut ends = vec![action_index];
+    if source[..action_index].last().is_some_and(|a| {
+        !a.is_locked && a.surface == "を" && a.upos == Some(Upos::Adp) && a.deprel == "case"
+    }) {
+        ends.extend(
+            (0..action_index)
+                .rev()
+                .filter(|&end| elapsed_interposed_object(&source[end..action_index], owner)),
+        );
+    }
+    ends.into_iter().any(|end| {
+        (0..end).any(|start| {
+            if starts_inside_elapsed_number(source, start) {
+                return false;
+            }
+            let amount = &source[start..end];
+            let next = &source[end];
+            if amount
+                .iter()
+                .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+                || amount
+                    .windows(2)
+                    .any(|w| w[0].span.end_char != w[1].span.start_char)
+                || amount
+                    .last()
+                    .is_none_or(|a| a.span.end_char != next.span.start_char)
+                || !amount.iter().any(|a| a.head == Some(owner))
+                || amount.iter().any(|a| {
+                    a.head != Some(owner) && !amount.iter().any(|other| other.doc_tok_idx == a.head)
+                })
+            {
+                return false;
+            }
+            elapsed_duration_surface(
+                &amount
+                    .iter()
+                    .map(|a| a.surface.as_str())
+                    .collect::<String>(),
+            )
+            .is_some()
+        })
+    })
+}
+
+// Keep the ordinary past-copula guard unless this exact ACL or its containing
+// noun's matrix action owns a source-linked elapsed quantity.
+fn is_elapsed_past_relative(predicate: &Bunsetsu, noun: &Bunsetsu, source: &[Atom]) -> bool {
+    let Some(verb) = predicate.atoms.iter().find(|a| {
+        !a.is_locked
+            && a.upos == Some(Upos::Verb)
+            && a.deprel == "acl"
+            && a.doc_tok_idx.is_some()
+            && noun
+                .atoms
+                .iter()
+                .any(|n| n.doc_tok_idx.is_some() && a.head == n.doc_tok_idx)
+    }) else {
+        return false;
+    };
+    let Some(past) = predicate.atoms.iter().find(|a| {
+        !a.is_locked
+            && a.surface == "だ"
+            && a.upos == Some(Upos::Aux)
+            && a.lemma.as_deref() == Some("た")
+            && a.head == verb.doc_tok_idx
+            && verb.span.end_char == a.span.start_char
+    }) else {
+        return false;
+    };
+    let mut probe = predicate.clone();
+    if let Some(atom) = probe.atoms.iter_mut().find(|a| a.span == past.span) {
+        atom.surface = "た".to_owned();
+    }
+    is_prenominal_pred(&probe)
+        && (verb
+            .doc_tok_idx
+            .is_some_and(|id| elapsed_owned_by(source, id))
+            || noun
+                .atoms
+                .iter()
+                .find(|n| n.doc_tok_idx == verb.head)
+                .and_then(|n| n.head)
+                .is_some_and(|id| elapsed_owned_by(source, id)))
+}
+
 fn is_prenominal_pred(b: &Bunsetsu) -> bool {
     if b.sconj_tail.is_some()
         || b.sfp_tail.is_some()
@@ -12986,16 +13184,6 @@ fn is_prenominal_pred(b: &Bunsetsu) -> bool {
     }
     let has_polite_or_copula_or_te = b.atoms.iter().any(|a| {
         !a.is_locked
-            && !(a.surface == "だ"
-                && a.upos == Some(Upos::Aux)
-                && a.lemma.as_deref() == Some("た")
-                && b.atoms.iter().any(|verb| {
-                    !verb.is_locked
-                        && verb.upos == Some(Upos::Verb)
-                        && verb.deprel == "acl"
-                        && verb.doc_tok_idx == a.head
-                        && verb.span.end_char == a.span.start_char
-                }))
             && matches!(
                 a.surface.as_str(),
                 "ます" | "まし" | "ません" | "です" | "でした" | "だ" | "だった" | "じゃ"
@@ -13367,15 +13555,8 @@ fn merge_adnominal_bunsetsus(
 
                 if let Some(pred_b) = res.pop_if(|prev| {
                     is_prenominal_pred(prev)
-                        && (!prev.atoms.iter().any(|a| !a.is_locked && a.surface == "だ")
-                            || prev.atoms.iter().any(|a| {
-                                !a.is_locked
-                                    && a.upos == Some(Upos::Verb)
-                                    && a.deprel == "acl"
-                                    && b.atoms.iter().any(|noun| {
-                                        noun.doc_tok_idx.is_some() && a.head == noun.doc_tok_idx
-                                    })
-                            }))
+                        || target == TargetVariant::ZhHant
+                            && is_elapsed_past_relative(prev, &b, source)
                 }) {
                     let has_verb = pred_b
                         .atoms
@@ -15464,6 +15645,66 @@ mod clock_rule_tests {
         assert!(
             clock.contains("三點") && clock.contains("電車兩個小時"),
             "{clock}"
+        );
+    }
+
+    #[test]
+    fn elapsed_passive_keeps_its_patient_action_and_relative_scope() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間半泳いだ子どもは先生にほめられました。"),
+            "游泳了兩個半小時的孩子被老師誇獎了。"
+        );
+        assert_eq!(
+            translate("泳いだ子どもは先生に二時間半ほめられました。"),
+            "游泳的孩子被老師誇獎了兩個半小時。"
+        );
+        assert_eq!(
+            translate("子どもは先生に何時間ほめられましたか。"),
+            "孩子被老師誇獎了幾個小時？"
+        );
+        assert_eq!(
+            translate("本は先生に二時間読まれました。"),
+            "書被老師讀了兩個小時。"
+        );
+        assert_eq!(
+            translate("先生は本を二時間読みました。"),
+            "老師讀書讀了兩個小時。"
+        );
+        let indirect = translate("私は先生に本を二時間読まれました。");
+        assert_eq!(indirect.matches('讀').count(), 1, "{indirect}");
+        assert!(
+            indirect.contains('被')
+                && indirect.contains('書')
+                && indirect.contains("兩個小時")
+                && !indirect.contains("我的"),
+            "{indirect}"
+        );
+    }
+
+    #[test]
+    fn elapsed_question_remains_inside_its_reporting_question() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("会議は何時間続くか聞きましたか。"),
+            "有問會議持續幾個小時嗎？"
+        );
+        let unasked = translate("会議は何時間続くか聞きました。");
+        assert!(!unasked.starts_with("有問"), "{unasked}");
+    }
+
+    #[test]
+    fn nonelapsed_past_relative_keeps_existing_translation() {
+        let text = public_translate(
+            "安全確認が済んだ時点で、現場責任者は作業の再開を許可しなければならない。",
+            &TranslationGlossary::new(),
+        )
+        .target_text;
+        assert_eq!(
+            text,
+            "安全的確認在時點了結了，現場責任者必須允許作業的再開。"
         );
     }
 

@@ -169,7 +169,10 @@ fn simultaneous_prefix(atoms: &[Atom]) -> Option<(&Atom, &[Atom])> {
     match atoms {
         [time, rest @ ..]
             if !time.is_locked
-                && matches!(time.surface.as_str(), "そのとき" | "その時" | "同時に") =>
+                && matches!(
+                    time.surface.as_str(),
+                    "そのとき" | "その時" | "そのときに" | "その時に" | "同時に"
+                ) =>
         {
             Some((time, rest))
         }
@@ -178,7 +181,7 @@ fn simultaneous_prefix(atoms: &[Atom]) -> Option<(&Atom, &[Atom])> {
                 && !second.is_locked
                 && first.span.end_char == second.span.start_char
                 && first.surface == "その"
-                && matches!(second.surface.as_str(), "とき" | "時") =>
+                && matches!(second.surface.as_str(), "とき" | "時" | "ときに" | "時に") =>
         {
             Some((second, rest))
         }
@@ -257,15 +260,128 @@ fn hand_kind(hand: &Atom, source: &[Atom]) -> Option<&'static str> {
     })
 }
 
+fn repeated_clock_owner(clock: &Atom, marker: &Atom, clause: &[Atom]) -> bool {
+    if clock.deprel != "nmod"
+        || !matches!(
+            clock.surface.as_str(),
+            "時計" | "腕時計" | "掛け時計" | "置き時計"
+        )
+        || marker.surface != "の"
+        || !attached_case(clock, marker)
+    {
+        return false;
+    }
+    let mut modifiers = clause.iter().filter(|atom| {
+        atom.head == clock.doc_tok_idx
+            && matches!(atom.deprel.as_str(), "det" | "nmod" | "acl" | "amod")
+    });
+    modifiers.next().is_some_and(|atom| {
+        !atom.is_locked
+            && atom.surface == "同じ"
+            && atom.deprel == "det"
+            && atom.span.end_char <= clock.span.start_char
+    }) && modifiers.next().is_none()
+}
+
 fn same_pointing_hand(subject: &Atom, clause: &[Atom], hand: &Atom, source: &[Atom]) -> bool {
     let kind = hand_kind(subject, clause);
-    !subject.is_locked
-        && (subject.surface == "針" && kind.is_none()
+    if subject.is_locked
+        || !(subject.surface == "針" && kind.is_none()
             || kind.is_some() && kind == hand_kind(hand, source))
-        && !clause.iter().any(|atom| {
-            atom.head == subject.doc_tok_idx
-                && matches!(atom.deprel.as_str(), "nmod" | "acl" | "amod")
+    {
+        return false;
+    }
+    let mut modifiers = clause.iter().enumerate().filter(|(_, atom)| {
+        atom.head == subject.doc_tok_idx && matches!(atom.deprel.as_str(), "nmod" | "acl" | "amod")
+    });
+    match modifiers.next() {
+        None => true,
+        Some((index, clock)) => {
+            modifiers.next().is_none()
+                && clause
+                    .get(index + 1)
+                    .is_some_and(|marker| repeated_clock_owner(clock, marker, clause))
+        }
+    }
+}
+
+fn dial_face_start(source: &[Atom], first: usize) -> Option<usize> {
+    let [prefix @ .., dial, particle] = &source[..first] else {
+        return None;
+    };
+    if particle.surface != "の"
+        || particle.span.end_char != source[first].span.start_char
+        || !attached_case(dial, particle)
+        || dial.head.is_none()
+        || dial.head != source[first].doc_tok_idx
+    {
+        return None;
+    }
+    if dial.surface == "文字盤" {
+        return Some(first - 2);
+    }
+    let stem = prefix.last()?;
+    (stem.surface == "文字"
+        && dial.surface == "盤"
+        && !stem.is_locked
+        && stem.head == dial.doc_tok_idx
+        && stem.deprel == "compound"
+        && stem.span.end_char == dial.span.start_char)
+        .then_some(first - 3)
+}
+
+fn indication_polarity(tail: &[Atom], source: &[char], after_verb: usize) -> Option<bool> {
+    // Suffix tokenization can split a modal across two rendering clauses.
+    let raw_tail: String = source
+        .get(after_verb..)?
+        .iter()
+        .copied()
+        .take_while(|&ch| {
+            !matches!(
+                ch,
+                '、' | '，' | '。' | '！' | '？' | '!' | '?' | '」' | '』' | '\n'
+            )
         })
+        .collect();
+    if [
+        "でしょう",
+        "でしょうか",
+        "だろう",
+        "だろうか",
+        "なら",
+        "たら",
+        "ならば",
+    ]
+    .iter()
+    .any(|&suffix| raw_tail.ends_with(suffix))
+    {
+        return None;
+    }
+    let mut points_at = true;
+    for atom in tail {
+        let word = atom.lemma.as_deref().unwrap_or(&atom.surface);
+        if atom.surface == "か" && atom.deprel == "discourse"
+            || matches!(atom.surface.as_str(), "なら" | "たら" | "ば")
+                && atom.upos == Some(Upos::Sconj)
+            || matches!(
+                atom.surface.as_str(),
+                "だろ" | "だろう" | "でしょ" | "でしょう"
+            )
+            || atom.upos == Some(Upos::Verb) && !matches!(word, "いる" | "おる")
+        {
+            return None;
+        }
+        if (matches!(word, "ない" | "ぬ" | "ず")
+            && matches!(atom.deprel.as_str(), "aux" | "advmod" | "mark"))
+            || word == "ん" && atom.upos == Some(Upos::Aux) && atom.deprel == "aux"
+        {
+            if !points_at {
+                return None;
+            }
+            points_at = false;
+        }
+    }
+    Some(points_at)
 }
 
 fn reading_at_return(
@@ -274,7 +390,8 @@ fn reading_at_return(
     hand: &Atom,
     source: &[Atom],
     doc: &Document,
-) -> Option<u32> {
+    chars: &[char],
+) -> Option<(u32, bool)> {
     let [
         Segment::Clause {
             atoms,
@@ -314,23 +431,8 @@ fn reading_at_return(
     if matches!(end_punct, Some("？" | "?")) || returning.deprel != "advcl" {
         return None;
     }
-    // Treat the reading as a fact only when its verb is asserted. The
-    // progressive can carry negation on いる instead of 指す.
-    if rest[indicator + 1..].iter().any(|atom| {
-        let word = atom.lemma.as_deref().unwrap_or(&atom.surface);
-        matches!(word, "ない" | "ぬ" | "ず" | "ん")
-            && matches!(atom.deprel.as_str(), "aux" | "advmod")
-            || atom.surface == "か" && atom.deprel == "discourse"
-            || matches!(atom.surface.as_str(), "なら" | "たら" | "ば")
-                && atom.upos == Some(Upos::Sconj)
-            || matches!(
-                atom.surface.as_str(),
-                "だろ" | "だろう" | "でしょ" | "でしょう"
-            )
-            || atom.upos == Some(Upos::Verb) && !matches!(word, "いる" | "おる")
-    }) {
-        return None;
-    }
+    let points_at =
+        indication_polarity(&rest[indicator + 1..], chars, rest[indicator].span.end_char)?;
     let mut subjects = rest.iter().filter(|atom| atom.deprel == "nsubj");
     let subject = subjects.next();
     if subjects.next().is_some()
@@ -349,6 +451,7 @@ fn reading_at_return(
         return None;
     }
     let (first, hour) = indicated_hour(rest, index, doc)?;
+    let first = dial_face_start(rest, first).unwrap_or(first);
     let reading_span = Span {
         start_char: rest[first].span.start_char,
         end_char: rest[index].span.end_char,
@@ -362,7 +465,7 @@ fn reading_at_return(
                     .get(owner)
                     .is_some_and(|token| contains_span(reading_span, token.span))
         })
-        .then_some(hour)
+        .then_some((hour, points_at))
 }
 
 fn stated_dial_position(
@@ -449,26 +552,9 @@ fn stated_dial_position(
         let (begin, number) = whole_dial_number(source, at - 2, &modifier.surface)?;
         (begin, format!("{number}的位置"))
     };
-    if let [.., dial, particle] = &source[..first]
-        && particle.surface == "の"
-        && particle.span.end_char == source[first].span.start_char
-        && attached_case(dial, particle)
-        && dial.head == source[first].doc_tok_idx
-    {
-        if dial.surface == "文字盤" {
-            first -= 2;
-            label = format!("鐘面上{label}");
-        } else if let [.., stem, dial, _] = &source[..first]
-            && stem.surface == "文字"
-            && dial.surface == "盤"
-            && !stem.is_locked
-            && stem.head == dial.doc_tok_idx
-            && stem.deprel == "compound"
-            && stem.span.end_char == dial.span.start_char
-        {
-            first -= 3;
-            label = format!("鐘面上{label}");
-        }
+    if let Some(start) = dial_face_start(source, first) {
+        first = start;
+        label = format!("鐘面上{label}");
     }
     Some((
         Span {
@@ -485,6 +571,7 @@ pub(super) fn clock_hand_return(
     source: &[Atom],
     doc: &Document,
     following: &[Segment],
+    chars: &[char],
     target: TargetVariant,
 ) -> Option<ClockHandReturn> {
     let mut verbs = predicates
@@ -659,8 +746,8 @@ pub(super) fn clock_hand_return(
         };
         // A separately stated reading can rule out a destination on the dial.
         if role == BunsetsuRole::Subj
-            && reading_at_return(following, verb, hand_noun, source, doc)
-                .is_some_and(|reading| reading != hour)
+            && reading_at_return(following, verb, hand_noun, source, doc, chars)
+                .is_some_and(|(reading, points_at)| points_at != (reading == hour))
         {
             return None;
         }

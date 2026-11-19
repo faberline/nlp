@@ -382,6 +382,7 @@ pub(crate) fn translate_ja_sentence(
                                 &ClauseDiscourseCtx {
                                     source_chars: chars,
                                     inside_quote: true,
+                                    following: &inner_segs[idx + 1..],
                                     adjective: finite_adjective::Context::in_quote(
                                         &inner_segs,
                                         idx,
@@ -451,6 +452,7 @@ pub(crate) fn translate_ja_sentence(
                             &ClauseDiscourseCtx {
                                 source_chars: chars,
                                 inside_quote: true,
+                                following: &inner_segs[idx + 1..],
                                 adjective: finite_adjective::Context::in_quote(
                                     &inner_segs,
                                     idx,
@@ -754,6 +756,7 @@ pub(crate) fn translate_ja_sentence(
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
+                    following: &segments[seg_idx + 1..],
                     return_trip: None,
                     inside_quote: ends_continued_quote(
                         segments.get(seg_idx + 1),
@@ -4081,6 +4084,7 @@ struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
     contrasts_recurrence: bool,
     source_chars: &'a [char],
+    following: &'a [Segment],
     return_trip: Option<ReturnTrip>,
     inside_quote: bool,
     in_nagara_follow: bool,
@@ -8579,7 +8583,14 @@ fn translate_clause_bunsetsus(
     };
     // Resolve time and result roles while the other arguments of the predicate are available.
     let hand_return = if ctx.return_trip.is_none() && target == TargetVariant::ZhHant {
-        return_endpoint::clock_hand_return(&bunsetsus, &candidates, source, doc, target)
+        return_endpoint::clock_hand_return(
+            &bunsetsus,
+            &candidates,
+            source,
+            doc,
+            ctx.following,
+            target,
+        )
     } else {
         None
     };
@@ -16139,6 +16150,63 @@ mod motion_endpoint_tests {
             ),
         ] {
             assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn clock_hand_returns_use_the_time_when_the_same_hand_indicates_another_number() {
+        for (source, expected) in [
+            (
+                "時計の針は六時に戻り、そのとき三を指していました。",
+                "手錶的針在六點回來，那時正在指著三。",
+            ),
+            (
+                "時計の長針は八時に戻り、そのとき九を指していました。",
+                "手錶的長針在八點回來，那時正在指著九。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for (source, expected) in [
+            (
+                "時計の針は六時に戻り、その時、三時を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の針は六時に戻り、同時に三を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき針は三を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき十二の位置を指していました。",
+                "在六點回來",
+            ),
+            (
+                "長針は六時に戻り、そのとき短針は三を指していました。",
+                "長針回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、その後、三を指していました。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき六を指していました。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき三を指していましたか。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時の位置に戻り、その後、三時の位置に進みました。",
+                "回到6點鐘的位置",
+            ),
+        ] {
+            let text = translate(source);
+            assert!(text.contains(expected), "{source}: {text}");
         }
     }
 

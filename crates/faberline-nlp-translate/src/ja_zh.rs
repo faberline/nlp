@@ -199,6 +199,7 @@ pub(crate) fn translate_ja_sentence(
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
+    written_form_continuation: Option<Span>,
     dates: &mut DateContext,
     prior_letter_distribution: Option<PriorLetterDistribution>,
 ) -> (String, Vec<ClauseAlignment>) {
@@ -206,7 +207,7 @@ pub(crate) fn translate_ja_sentence(
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
-        dates.normalize(&mut atoms, sentence_idx, chars, doc);
+        dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
         nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target, chars);
     }
 
@@ -226,9 +227,22 @@ pub(crate) fn translate_ja_sentence(
         .map(|(i, c)| (i, c.span))
         .collect();
 
-    let report = (target == TargetVariant::ZhHant && direct_quote.is_none())
-        .then(|| calendar::report::take(&mut atoms, doc, lock_table, chars))
-        .flatten();
+    // A written form can cross an analysis sentence boundary. Emit the
+    // continuation before syntax can put a translated particle in front of it.
+    let continuation = atoms
+        .first()
+        .is_some_and(|atom| {
+            written_form_continuation == Some(atom.span)
+                && atom.is_locked
+                && lock_table.locks.first().is_some_and(|lock| {
+                    lock.source_span == atom.span && lock.origin == LockOrigin::QuotedSource
+                })
+        })
+        .then(|| atoms.remove(0));
+    let report =
+        (target == TargetVariant::ZhHant && direct_quote.is_none() && continuation.is_none())
+            .then(|| calendar::report::take(&mut atoms, doc, lock_table, chars))
+            .flatten();
 
     if target == TargetVariant::ZhHant {
         calendar::bind_relative_contrast(&mut atoms, chars);
@@ -242,10 +256,21 @@ pub(crate) fn translate_ja_sentence(
 
     let mut out = String::new();
     let mut seg_target_spans: Vec<(Span, Span)> = Vec::with_capacity(segments.len());
+    if let Some(continuation) = continuation {
+        out.push_str(&continuation.surface);
+        seg_target_spans.push((
+            continuation.span,
+            Span {
+                start_char: 0,
+                end_char: out.chars().count(),
+            },
+        ));
+    }
     if let Some(report) = report {
+        let start = out.chars().count();
         out.push_str(&report.text);
         let target_span = Span {
-            start_char: 0,
+            start_char: start,
             end_char: out.chars().count(),
         };
         seg_target_spans.extend(report.spans.into_iter().map(|span| (span, target_span)));
@@ -1008,6 +1033,7 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
             &lock_table,
             &cond,
             target,
+            None,
             None,
             &mut dates,
             None,
@@ -21507,6 +21533,33 @@ mod existence_rule_tests {
                 translate(source, &glossary).target_text,
                 expected,
                 "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_request_uses_only_unquoted_prior_distribution() {
+        let glossary = TranslationGlossary::new();
+        let request = "校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。";
+        let quoted_statement = "『二人は各自一通ずつ書く』";
+
+        let plain = translate(&format!("二人は各自一通ずつ書きます。{request}"), &glossary);
+        assert!(
+            plain
+                .target_text
+                .ends_with("可以請兩位每次各寫一封信給校長嗎？")
+        );
+
+        for copied_statement in [
+            format!("{quoted_statement}と紙に書き写しました。"),
+            format!("紙に{quoted_statement}とそのまま書き写しました。"),
+        ] {
+            let copied = translate(&format!("{copied_statement}{request}"), &glossary);
+            assert!(copied.target_text.contains(quoted_statement));
+            assert!(
+                copied
+                    .target_text
+                    .ends_with("可以請兩位每次一起寫一封信給校長嗎？")
             );
         }
     }

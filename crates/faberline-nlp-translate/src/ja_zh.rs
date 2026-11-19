@@ -117,7 +117,8 @@ enum BunsetsuRole {
         only: bool,
     },
     ResidenceDuration,
-    ResidenceManner,
+    ResidenceTogether,
+    ResidenceCount,
     UnresolvedResidenceArgument,
     Subj,
     Obl,
@@ -6877,7 +6878,7 @@ fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
         })
     });
     if let Some(index) = together {
-        groups[index].role = BunsetsuRole::ResidenceManner;
+        groups[index].role = BunsetsuRole::ResidenceTogether;
     }
     let person = place_companion(source, id, Some(place));
     for (index, group) in groups.iter_mut().enumerate() {
@@ -6891,9 +6892,40 @@ fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
                 && number.upos == Some(Upos::Num) && number.deprel == "nummod"
                 && number.head == noun.doc_tok_idx && number.span.end_char == noun.span.start_char)
         {
-            group.role = BunsetsuRole::ResidenceManner;
+            group.role = BunsetsuRole::ResidenceCount;
         } else if case.surface == "と" && noun.head == Some(id) && !coordinated.contains(&index) {
+            // Xと一緒に explicitly marks a companion. Without 一緒, the
+            // dictionary's complete kinship noun can establish this reading.
+            let kin_or_pet = !noun.is_locked
+                && noun.upos == Some(Upos::Noun)
+                && (matches!(noun.surface.as_str(), "犬" | "猫")
+                    || lookup_ja(&noun.surface).is_some_and(|entry| {
+                        entry.upos_candidates.as_slice() == [Upos::Noun]
+                            && matches!(
+                                entry.counterpart.as_deref(),
+                                Some(
+                                    "家人"
+                                        | "父母"
+                                        | "親族"
+                                        | "親子"
+                                        | "兄弟"
+                                        | "姊妹"
+                                        | "夫婦"
+                                        | "丈夫"
+                                        | "妻子"
+                                )
+                            )
+                    }));
+            let explicit_companion = together == Some(index + 1)
+                && source.iter().any(|a| {
+                    a.span.start_char == case.span.end_char
+                        && !a.is_locked
+                        && a.surface == "一緒"
+                        && a.head == Some(id)
+                });
             if noun.doc_tok_idx == person
+                || kin_or_pet
+                || explicit_companion
                 || noun.is_locked
                     && (noun.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM)
                         || noun.lemma.as_deref() != Some(LOCKED_PLACE_ATOM)
@@ -7261,18 +7293,21 @@ fn translate_clause_bunsetsus(
                 }
                 residence = Some((render_bunsetsu_np(&b, target), form, past, wh, only));
             }
-            BunsetsuRole::ResidenceManner => {
-                let manner = if b.atoms[0].surface == "一緒" {
-                    "一起".to_owned()
-                } else {
-                    let number = normalize_decimal_digits(&b.atoms[0].surface);
-                    match number.as_str() {
+            BunsetsuRole::ResidenceTogether => residence_manners.push("一起".to_owned()),
+            BunsetsuRole::ResidenceCount => {
+                if let Some(number) = b
+                    .atoms
+                    .iter()
+                    .find(|a| a.upos == Some(Upos::Num) && !a.is_locked)
+                {
+                    let number = normalize_decimal_digits(&number.surface);
+                    let count = match number.as_str() {
                         "一" | "1" => "一個人".to_owned(),
                         "二" | "2" => "兩個人".to_owned(),
                         other => format!("{other}個人"),
-                    }
-                };
-                residence_manners.push(manner);
+                    };
+                    residence_manners.push(count);
+                }
             }
             BunsetsuRole::UnresolvedResidenceArgument => {
                 joint_companions.push(format!("{}と", render_bunsetsu_np(&b, target)));
@@ -11263,6 +11298,10 @@ fn merge_adnominal_bunsetsus(
 
                 if let Some(mut to_b) = res.pop_if(|prev| {
                     ends_in_coord_to(prev)
+                        && !matches!(
+                            b.role,
+                            BunsetsuRole::ResidenceTogether | BunsetsuRole::ResidenceCount
+                        )
                         && !(b.case_particle.as_deref() == Some("を")
                             && is_person_like_bunsetsu(prev)
                             && !is_person_like_bunsetsu(&b))
@@ -14477,6 +14516,30 @@ mod motion_endpoint_tests {
             ("姉が一人で京都に住んでいます。", "姊姊一個人住在京都。"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn residents_have_companions_and_places_can_share_a_case() {
+        for (jp, tw) in [
+            ("家族と東京に住んでいました。", "曾和家人住在東京。"),
+            (
+                "私は家族と一緒に大阪に住んでいました。",
+                "我曾和家人一起住在大阪。",
+            ),
+            ("両親と東京に住んでいました。", "曾和父母住在東京。"),
+            ("犬と東京に住んでいました。", "曾和狗住在東京。"),
+            (
+                "家族と妹だけが東京に住んでいました。",
+                "只有家人和妹妹曾住在東京。",
+            ),
+            ("家族の家と東京に住んでいました。", "曾住在家人的家和東京。"),
+            (
+                "東京と大阪に一緒に住んでいました。",
+                "曾一起住在東京和大阪。",
+            ),
+        ] {
+            assert_eq!(translate(jp), tw, "{jp}");
         }
     }
 

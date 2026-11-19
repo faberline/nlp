@@ -387,6 +387,7 @@ pub(crate) fn translate_ja_sentence(
                                 &ClauseDiscourseCtx {
                                     source_chars: chars,
                                     inside_quote: true,
+                                    following: &inner_segs[idx + 1..],
                                     adjective: finite_adjective::Context::in_quote(
                                         &inner_segs,
                                         idx,
@@ -456,6 +457,7 @@ pub(crate) fn translate_ja_sentence(
                             &ClauseDiscourseCtx {
                                 source_chars: chars,
                                 inside_quote: true,
+                                following: &inner_segs[idx + 1..],
                                 adjective: finite_adjective::Context::in_quote(
                                     &inner_segs,
                                     idx,
@@ -759,6 +761,7 @@ pub(crate) fn translate_ja_sentence(
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
+                    following: &segments[seg_idx + 1..],
                     return_trip: None,
                     inside_quote: ends_continued_quote(
                         segments.get(seg_idx + 1),
@@ -1051,9 +1054,13 @@ fn normalize_decimal_digits(text: &str) -> String {
 }
 
 fn clock_number(text: &str) -> Option<u32> {
+    bounded_clock_number(text, 24)
+}
+
+fn bounded_clock_number(text: &str, maximum: u32) -> Option<u32> {
     let normalized = normalize_decimal_digits(text);
     if normalized.chars().all(|ch| ch.is_ascii_digit()) {
-        return normalized.parse::<u32>().ok().filter(|&n| n <= 24);
+        return normalized.parse::<u32>().ok().filter(|&n| n <= maximum);
     }
     fn digit(s: &str) -> Option<u32> {
         match s {
@@ -1079,9 +1086,10 @@ fn clock_number(text: &str) -> Option<u32> {
         if tens == 0 || ones == 0 && !normalized.ends_with('十') {
             return None;
         }
-        return (tens * 10 + ones <= 24).then_some(tens * 10 + ones);
+        let number = tens * 10 + ones;
+        return (number <= maximum).then_some(number);
     }
-    digit(&normalized)
+    digit(&normalized).filter(|&n| n <= maximum)
 }
 
 fn clock_hour_text(hour: u32) -> String {
@@ -4996,6 +5004,7 @@ struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
     contrasts_recurrence: bool,
     source_chars: &'a [char],
+    following: &'a [Segment],
     return_trip: Option<ReturnTrip>,
     inside_quote: bool,
     in_nagara_follow: bool,
@@ -9582,8 +9591,25 @@ fn translate_clause_bunsetsus(
         None
     };
     // Resolve time and result roles while the other arguments of the predicate are available.
-    let timed_result = timed_result_frame(&bunsetsus, source);
-    let endpoint = if ctx.return_trip.is_none() {
+    let hand_return = if ctx.return_trip.is_none() && target == TargetVariant::ZhHant {
+        return_endpoint::clock_hand_return(
+            &bunsetsus,
+            &candidates,
+            source,
+            doc,
+            ctx.following,
+            ctx.source_chars,
+            target,
+        )
+    } else {
+        None
+    };
+    let timed_result = if hand_return.is_none() {
+        timed_result_frame(&bunsetsus, source)
+    } else {
+        None
+    };
+    let endpoint = if ctx.return_trip.is_none() && hand_return.is_none() {
         return_endpoint::resolve(&bunsetsus, &candidates, source, doc, target)
     } else {
         None
@@ -9649,6 +9675,24 @@ fn translate_clause_bunsetsus(
             temporal_others.push(label);
             continue;
         }
+        if let Some(frame) = &hand_return {
+            if b.atoms
+                .iter()
+                .all(|atom| return_endpoint::contains_span(frame.dial, atom.span))
+            {
+                if b.atoms
+                    .iter()
+                    .any(|a| !a.is_locked && a.surface == "も" && a.deprel == "case")
+                {
+                    adverbs.push("也".to_owned());
+                }
+                continue;
+            }
+            if frame.object == Some(idx) {
+                affected_object = Some(render_bunsetsu_np(&b, target));
+                continue;
+            }
+        }
         if endpoint.as_ref().is_some_and(|(index, _)| *index == idx) {
             if b.atoms
                 .iter()
@@ -9682,6 +9726,9 @@ fn translate_clause_bunsetsus(
         }
         if daypart_groups.contains(&idx)
             || timed_result.is_some_and(|f| f.time == SettingTime::At(idx))
+            || hand_return
+                .as_ref()
+                .is_some_and(|frame| frame.event_time == Some(idx))
         {
             if matches!(b.atoms.as_slice(), [_, _, focus] if !focus.is_locked && focus.surface == "も")
             {
@@ -10119,6 +10166,8 @@ fn translate_clause_bunsetsus(
         } else {
             format!("{}{verb_core}", trip.action)
         };
+    } else if let Some(frame) = hand_return {
+        verb_core = frame.action;
     } else if let Some((_, action)) = endpoint {
         verb_core = action;
     } else if let Some(place) = trip_destination {
@@ -17072,6 +17121,279 @@ mod motion_endpoint_tests {
                 && transfer.contains("遞給"),
             "{transfer}"
         );
+    }
+
+    #[test]
+    fn clock_hand_returns_distinguish_the_dial_position_from_the_event_time() {
+        for (source, expected) in [
+            ("時計の長針が十二の位置に戻りました。", "長針回到12的位置"),
+            ("時計の長針は十二時に戻りました。", "長針回到十二點鐘的位置"),
+            ("時計の針が正午に元の位置に戻りました。", "正午回到原位"),
+            (
+                "正午に時計の針が六時の位置に戻りました。",
+                "正午回到6點鐘的位置",
+            ),
+            (
+                "私は正午に時計の針を六時の位置に戻しました。",
+                "正午把手錶的針撥回6點鐘的位置",
+            ),
+            (
+                "昨日六時に時計の針は十二の位置に戻りました。",
+                "昨天六點回到12的位置",
+            ),
+            (
+                "時計の秒針は正午に五秒の位置に戻りました。",
+                "秒針正午回到5秒的位置",
+            ),
+            (
+                "時計の秒針は正午に五十五秒の位置に戻りました。",
+                "秒針正午回到55秒的位置",
+            ),
+            (
+                "私は正午に時計の秒針を五秒の位置に戻しました。",
+                "正午把手錶的秒針撥回5秒的位置",
+            ),
+            (
+                "時計の針は十二時の位置には戻りませんでした。",
+                "沒有回到12點鐘的位置",
+            ),
+            ("時計の針は六時に戻りましたか。", "回到六點鐘的位置了嗎"),
+            ("時計の針は十二の位置に戻る予定です。", "預定回到12的位置"),
+        ] {
+            let text = translate(source);
+            assert!(text.contains(expected), "{source}: {text}");
+        }
+        for (source, expected) in [
+            (
+                "時計の針は毎日六時に戻りました。",
+                "手錶的針每天在六點回來了。",
+            ),
+            (
+                "時計の針は昨日六時に戻りました。",
+                "手錶的針昨天在六點回來了。",
+            ),
+            (
+                "時計の針が戻った時刻を聞きました。時計の針は昨日六時に戻りました。",
+                "聽了手錶的針回來的時刻。手錶的針昨天在六點回來了。",
+            ),
+            (
+                "時計の秒針は正午に五秒だけ戻りました。",
+                "手錶的秒針五秒只回來到正午了。",
+            ),
+            (
+                "看護師は正午に針を箱に戻しました。",
+                "看護師正午把針放回箱子裡了。",
+            ),
+            ("彼は学校で針を箱に戻しました。", "他在學校給箱放回了針。"),
+            (
+                "時計の針を持った客は正午に店に戻りました。",
+                "拿著了手錶的針的客正午回到商店了。",
+            ),
+            ("放送時間は夕方に戻りました。", "廣播時間恢復到傍晚了。"),
+            (
+                "時計の針は正午に`元の位置`に戻りました。",
+                "手錶的針回來到正午到`元の位置`了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn clock_hand_returns_keep_qualified_clock_times_with_the_return() {
+        for (source, expected) in [
+            (
+                "時計の針が戻った時刻を調べました。時計の針は今朝六時に戻りました。",
+                "調查了手錶的針回來的時刻。手錶的針在六點今朝回來了。",
+            ),
+            (
+                "時計の針は昨夜九時に戻りました。戻った先は十二の位置です。",
+                "手錶的針在九點昨夜回來了。回來的先十二的位置。",
+            ),
+            (
+                "時計の針は翌朝六時に戻りました。",
+                "手錶的針在六點隔天早上回來了。",
+            ),
+            (
+                "時計の針は先週六時に戻りました。",
+                "手錶的針在六點上週回來了。",
+            ),
+            (
+                "時計の針は月曜日六時に戻りました。",
+                "手錶的針在六點月曜日回來了。",
+            ),
+            (
+                "時計の針は今朝の六時に戻りました。",
+                "手錶的針在今朝的六點回來了。",
+            ),
+            (
+                "時計の針は今朝六時に十二の位置に戻りました。",
+                "手錶的針六點今朝回到12的位置了。",
+            ),
+            (
+                "今朝買った時計の針は六時に戻りました。",
+                "今朝買的手錶的針回到六點鐘的位置了。",
+            ),
+            (
+                "時計の針は突然六時に戻りました。",
+                "手錶的針突然回到六點鐘的位置了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn clock_hand_returns_use_the_time_when_the_same_hand_indicates_another_number() {
+        for (source, expected) in [
+            (
+                "時計の針は六時に戻り、そのとき三を指していました。",
+                "手錶的針在六點回來，那時正在指著三。",
+            ),
+            (
+                "時計の長針は八時に戻り、そのとき九を指していました。",
+                "手錶的長針在八點回來，那時正在指著九。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for (source, expected) in [
+            (
+                "時計の針は六時に戻り、その時、三時を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の針は六時に戻り、同時に三を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき針は三を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき十二の位置を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、そのとき、文字盤の九を指していました。",
+                "在八點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、そのときに、九を指していました。",
+                "在八點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、その時点では九を指していました。",
+                "在八點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、その時点で、九を指していました。",
+                "在八點回來",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき時計の文字盤の二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき腕時計の文字盤の二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき同じ時計の短針は二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の長針は四時に戻り、ちょうどそのとき、六を指していました。",
+                "在四點回來",
+            ),
+            (
+                "時計の長針は六時に戻り、ちょうどそのとき四を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、その瞬間、九を指していました。",
+                "在八點回來",
+            ),
+            (
+                "時計の短針は十時に戻り、その時点では、その時計の文字盤の三を指していました。",
+                "在十點回來",
+            ),
+            (
+                "腕時計の短針は七時に戻り、その時点では、その腕時計の文字盤の二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の短針は七時に戻り、そのときその時計の短針は二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の長針は四時に戻り、ちょうどそのとき、短針は六を指していました。",
+                "回到四點鐘的位置",
+            ),
+            (
+                "時計の長針は八時に戻り、その直後、九を指していました。",
+                "回到八點鐘的位置",
+            ),
+            (
+                "時計の短針は七時に戻り、その時に二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、そのとき八を指していませんでした。",
+                "在八點回來",
+            ),
+            (
+                "長針は六時に戻り、そのとき短針は三を指していました。",
+                "長針回到六點鐘的位置",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき別の時計の短針は二を指していました。",
+                "回到七點鐘的位置",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき同じ時計の長針は二を指していました。",
+                "回到七點鐘的位置",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき別の時計の文字盤の二を指していました。",
+                "回到七點鐘的位置",
+            ),
+            (
+                "時計の短針は七時に戻り、そのときに、別の時計の短針は二を指していました。",
+                "回到七點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、その後、三を指していました。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき六を指していました。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき三を指していましたか。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき三を指していませんでした。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき三を指していたでしょう。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき三を指していたなら、写真に残っています。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時の位置に戻り、その後、三時の位置に進みました。",
+                "回到6點鐘的位置",
+            ),
+        ] {
+            let text = translate(source);
+            assert!(text.contains(expected), "{source}: {text}");
+        }
     }
 
     #[test]

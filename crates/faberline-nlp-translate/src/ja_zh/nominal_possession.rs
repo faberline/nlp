@@ -63,10 +63,18 @@ pub(super) fn join_choice_commas(
     target: TargetVariant,
 ) {
     let is_comma = |a: &Atom| !a.is_locked && matches!(a.surface.as_str(), "、" | "，");
-    if !atoms
-        .windows(2)
-        .any(|p| choice_particle(&p[0]) && is_comma(&p[1]))
-    {
+    let follows_marker = |prefix: &[Atom]| {
+        let [.., noun, marker] = prefix else {
+            return false;
+        };
+        let topic = !marker.is_locked
+            && marker.deprel == "case"
+            && matches!(marker.surface.as_str(), "は" | "が" | "も")
+            && noun.doc_tok_idx.is_some()
+            && marker.head == noun.doc_tok_idx;
+        topic || links_choice(noun, marker)
+    };
+    if !atoms.iter().any(is_comma) || !atoms.iter().any(choice_particle) {
         return;
     }
     let mut start = 0;
@@ -74,7 +82,7 @@ pub(super) fn join_choice_commas(
     let mut drop = Vec::new();
     for end in 0..=atoms.len() {
         if let Some(a) = atoms.get(end) {
-            if end > start && is_comma(a) && choice_particle(&atoms[end - 1]) {
+            if is_comma(a) && follows_marker(&atoms[start..end]) {
                 commas.push(a.span.start_char);
                 continue;
             }
@@ -88,7 +96,9 @@ pub(super) fn join_choice_commas(
                 .filter(|a| !is_comma(a))
                 .cloned()
                 .collect();
-            if render(&joined, doc, sentence, target).is_some() {
+            if joined.windows(2).any(|p| links_choice(&p[0], &p[1]))
+                && render(&joined, doc, sentence, target).is_some()
+            {
                 drop.append(&mut commas);
             } else {
                 commas.clear();
@@ -101,6 +111,13 @@ pub(super) fn join_choice_commas(
 
 fn choice_particle(a: &Atom) -> bool {
     !a.is_locked && a.surface == "か" && a.upos == Some(Upos::Part) && a.deprel == "discourse"
+}
+
+fn links_choice(noun: &Atom, particle: &Atom) -> bool {
+    choice_particle(particle)
+        && noun.doc_tok_idx.is_some()
+        && particle.head == noun.doc_tok_idx
+        && matches!(noun.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
 }
 
 pub(super) fn render(
@@ -298,6 +315,18 @@ mod tests {
                 "這不是父親的車或是母親的車嗎？",
             ),
             ("これは父の車か、母の車です。", "這是父親的車或是母親的車。"),
+            (
+                "これは、父の車か母の車でした。",
+                "這當時是父親的車或是母親的車。",
+            ),
+            (
+                "これは、父の車か、母の車でした。",
+                "這當時是父親的車或是母親的車。",
+            ),
+            (
+                "これは、父の車か、母の車でしたか。",
+                "這當時是父親的車還是母親的車？",
+            ),
             ("これは誰の本ですか。", "這是誰的書？"),
             ("あれは友達の本ですか。", "那是朋友的書嗎？"),
         ] {

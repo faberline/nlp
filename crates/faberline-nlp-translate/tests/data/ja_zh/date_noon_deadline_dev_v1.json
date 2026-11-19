@@ -1,0 +1,651 @@
+{
+  "schema": "faberline.nlp.ja_zh.date_noon_deadline_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source_main": "a90c100bf1bd9edecb06f1834a975bb2313ba87c",
+  "source_tree": "e97ca7db7d4166b12df1c81f77cc7505e4d1d21c",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "evaluation_groups": {
+    "calendar_deadline": {
+      "targets": [
+        "DLC-01",
+        "DLC-03",
+        "DLC-05"
+      ],
+      "controls": [
+        "DLC-02",
+        "DLC-04",
+        "DLC-06",
+        "DLC-07"
+      ]
+    },
+    "noon_deadline": {
+      "targets": [
+        "DLN-01"
+      ],
+      "controls": [
+        "DLN-02",
+        "DLN-03",
+        "DLN-04"
+      ]
+    }
+  },
+  "reused_existing_controls": [
+    {
+      "file": "number_date_boundary_dev_v1.json",
+      "sha256": "f686ef6dd70b851ec3a69d8738ca92895f6476c213b7cc997c84d9d0b4d303bd",
+      "ids": [
+        "ND-01-CALENDAR-DATE",
+        "ND-02-DURATION-DAYS"
+      ]
+    },
+    {
+      "file": "temporal_made_dev_v1.json",
+      "sha256": "6511b554102c7aea8a21eb089d911ce2aa4628bbb661e7fb5a980a4577849baf",
+      "ids": [
+        "TMD-N5-03",
+        "TMD-N5-04"
+      ]
+    }
+  ],
+  "reused_standing_controls": [],
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "DLC-01",
+      "level_approx": "N5",
+      "jp": "今月は何日までに講座の申込書を出しますか。",
+      "zh_hant": "這個月最晚幾號交課程報名表？",
+      "allowed_variants": [
+        "這個月最遲幾號會交課程報名表？",
+        "課程報名表這個月最晚要在幾號交？"
+      ],
+      "semantic_checks": [
+        "詢問本月哪個日曆日是交表的截止。",
+        "保留課程報名表和開放式問句。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指定幾號、誰交表或是否已交。"
+      ],
+      "control": {
+        "kind": "calendar_open_day_limit",
+        "contrast_ids": [
+          "DLC-02"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DLC-02",
+      "level_approx": "N5",
+      "jp": "今月は何日に講座の申込書を出しますか。",
+      "zh_hant": "這個月幾號交課程報名表？",
+      "allowed_variants": [
+        "這個月哪一天交課程報名表？",
+        "這個月會在幾號交課程報名表？"
+      ],
+      "semantic_checks": [
+        "詢問打算交表的本月日期。",
+        "保留課程報名表和開放式問句。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有給交表期限、幾號或交表人。"
+      ],
+      "control": {
+        "kind": "calendar_open_day_point",
+        "contrast_ids": [
+          "DLC-01"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DLC-03",
+      "level_approx": "N5",
+      "jp": "来週は何曜日までに会議の資料を送りますか。",
+      "zh_hant": "下週最晚星期幾把會議資料送出？",
+      "allowed_variants": [
+        "下週最遲星期幾要送出會議資料？",
+        "最晚要在下週星期幾把會議資料送出？"
+      ],
+      "semantic_checks": [
+        "詢問下週星期幾是寄送的截止。",
+        "保留會議資料、寄送動作和開放式問句。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指定星期幾、寄件人、收件人或寄送方式。"
+      ],
+      "control": {
+        "kind": "calendar_open_weekday_limit",
+        "contrast_ids": [
+          "DLC-04"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DLC-04",
+      "level_approx": "N5",
+      "jp": "来週は何曜日に会議の資料を送りますか。",
+      "zh_hant": "下週星期幾把會議資料送出？",
+      "allowed_variants": [
+        "會議資料下週星期幾送出？",
+        "下週會在星期幾送出會議資料？"
+      ],
+      "semantic_checks": [
+        "詢問下週安排在星期幾寄送。",
+        "保留會議資料、寄送動作和開放式問句。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指定日期、上限、寄件人或收件人。"
+      ],
+      "control": {
+        "kind": "calendar_open_weekday_point",
+        "contrast_ids": [
+          "DLC-03"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DLC-05",
+      "level_approx": "N5",
+      "jp": "田中さんは四月五日までに予約の記録を確認しました。",
+      "zh_hant": "田中最晚在四月五日核對了預約紀錄。",
+      "allowed_variants": [
+        "田中最遲在四月五日核對了預約紀錄。",
+        "田中在四月五日當天或更早核對了預約紀錄。"
+      ],
+      "semantic_checks": [
+        "四月五日是日曆日期，也是已完成核對的最晚日期。",
+        "保留田中、預約紀錄和已執行的核對動作。"
+      ],
+      "semantic_unknowns": [
+        "實際是哪一天核對和工作花了多久均未指定。"
+      ],
+      "control": {
+        "kind": "calendar_fixed_day_limit",
+        "contrast_ids": [
+          "DLC-06",
+          "DLC-07"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DLC-06",
+      "level_approx": "N5",
+      "jp": "田中さんは四月五日に予約の記録を確認しました。",
+      "zh_hant": "田中在四月五日核對了預約紀錄。",
+      "allowed_variants": [
+        "田中四月五日核對了預約紀錄。",
+        "四月五日，田中核對了預約紀錄。"
+      ],
+      "semantic_checks": [
+        "四月五日是田中實際核對預約紀錄的日期。",
+        "保留已執行的核對動作。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有給工作期限或工作天數。"
+      ],
+      "control": {
+        "kind": "calendar_fixed_day_point",
+        "contrast_ids": [
+          "DLC-05",
+          "DLC-07"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DLC-07",
+      "level_approx": "N5",
+      "jp": "田中さんは五日間、予約の記録を確認しました。",
+      "zh_hant": "田中核對預約紀錄，這項工作持續了五天。",
+      "allowed_variants": [
+        "田中花了五天核對預約紀錄。",
+        "田中用了五天的時間核對預約紀錄。"
+      ],
+      "semantic_checks": [
+        "五天是核對工作持續的時間。",
+        "保留田中和預約紀錄。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說哪天開始、哪天結束，或是否已核對全部紀錄。"
+      ],
+      "control": {
+        "kind": "calendar_day_duration",
+        "contrast_ids": [
+          "DLC-05",
+          "DLC-06"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DLN-01",
+      "level_approx": "N5",
+      "jp": "午前の作業は十二時までです。係員は昼までに机の上を片付けました。",
+      "zh_hant": "上午的作業到十二點。工作人員最晚在中午把桌面收拾好了。",
+      "allowed_variants": [
+        "上午的工作到十二點。工作人員最遲在中午就收拾好桌面了。",
+        "上午的作業到十二點。工作人員在中午或更早就把桌面收拾好了。"
+      ],
+      "semantic_checks": [
+        "第一句將上午工作結束的十二點定為中午語境。",
+        "第二句以中午為最晚界線，工作人員已把桌面收拾好。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指定實際收拾完成的時刻。"
+      ],
+      "control": {
+        "kind": "noon_limit",
+        "contrast_ids": [
+          "DLN-02",
+          "DLN-03",
+          "DLN-04"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DLN-02",
+      "level_approx": "N5",
+      "jp": "午前の作業は十二時までです。係員は昼に机の上を片付けました。",
+      "zh_hant": "上午的作業到十二點。工作人員在中午把桌面收拾好了。",
+      "allowed_variants": [
+        "上午的工作到十二點。工作人員中午把桌面收拾好了。",
+        "上午的作業到十二點。工作人員是在中午收拾好桌面的。"
+      ],
+      "semantic_checks": [
+        "保留上午工作的結束時間。",
+        "第二句表示工作人員在中午收拾桌面。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有規定最晚完成時刻。"
+      ],
+      "control": {
+        "kind": "noon_point",
+        "contrast_ids": [
+          "DLN-01",
+          "DLN-03",
+          "DLN-04"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DLN-03",
+      "level_approx": "N5",
+      "jp": "午前の作業は十二時までです。係員は昼まで机の上を片付けていました。",
+      "zh_hant": "上午的作業到十二點。工作人員整理桌面，一直整理到中午。",
+      "allowed_variants": [
+        "上午的工作到十二點。工作人員持續收拾桌面，直到中午。",
+        "上午的作業到十二點。工作人員一直收拾桌面到中午。"
+      ],
+      "semantic_checks": [
+        "保留上午工作的結束時間。",
+        "第二句表示收拾桌面的活動持續到中午。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指定何時開始收拾或最後有沒有收拾完。"
+      ],
+      "control": {
+        "kind": "noon_duration_endpoint",
+        "contrast_ids": [
+          "DLN-01",
+          "DLN-02",
+          "DLN-04"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "DLN-04",
+      "level_approx": "N5",
+      "jp": "係員は日中に机の上を片付けました。",
+      "zh_hant": "工作人員在白天把桌面收拾好了。",
+      "allowed_variants": [
+        "工作人員白天把桌面收拾好了。",
+        "工作人員在日間收拾好桌面了。"
+      ],
+      "semantic_checks": [
+        "保留白天這一較廣的時段。",
+        "工作人員完成了收拾桌面的動作。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有指定中午、最晚完成時間或持續時間。"
+      ],
+      "control": {
+        "kind": "daytime_point_guard",
+        "contrast_ids": [
+          "DLN-01",
+          "DLN-02",
+          "DLN-03"
+        ]
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [],
+          "domain_terms": []
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

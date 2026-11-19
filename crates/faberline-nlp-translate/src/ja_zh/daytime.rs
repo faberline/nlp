@@ -16,6 +16,39 @@ pub(super) fn is_modifier(atom: &Atom) -> bool {
     atom.is_locked && atom.lemma.as_deref() == Some(DAYTIME)
 }
 
+// A user term covering 日中に can tokenize as a single acl. Repair this
+// before relative clauses are split, using the predicate of the noun which
+// the term was attached to. A subject of that spurious acl follows it.
+pub(super) fn restore_glossary_attachment(atoms: &mut [Atom]) {
+    for i in 0..atoms.len() {
+        let day = &atoms[i];
+        if day.lemma.as_deref() != Some(GLOSSARY_TIME_PHRASE) || day.deprel != "acl" {
+            continue;
+        }
+        let Some(argument) = atoms.iter().find(|a| {
+            a.doc_tok_idx.is_some()
+                && a.doc_tok_idx == day.head
+                && a.upos == Some(Upos::Noun)
+                && matches!(a.deprel.as_str(), "obj" | "obl" | "nsubj")
+        }) else {
+            continue;
+        };
+        let Some(verb) = atoms.iter().find(|a| {
+            a.doc_tok_idx.is_some() && a.doc_tok_idx == argument.head && a.upos == Some(Upos::Verb)
+        }) else {
+            continue;
+        };
+        let (day_id, owner) = (day.doc_tok_idx, verb.doc_tok_idx);
+        atoms[i].head = owner;
+        atoms[i].deprel = "obl".to_owned();
+        for a in &mut atoms[..i] {
+            if a.head == day_id && a.deprel == "nsubj" {
+                a.head = owner;
+            }
+        }
+    }
+}
+
 // A 会 meeting may be tokenized as 説明 + 会. Only the object of this
 // particular verb establishes its event reading of 開く.
 fn meeting_object<'a>(source: &'a [Atom], verb: &Atom) -> Option<&'a str> {
@@ -172,30 +205,9 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
         {
             continue;
         }
-        let Some(mut verb) = source
+        let Some(verb) = source
             .iter()
-            .find(|a| !a.is_locked && a.doc_tok_idx == Some(owner))
-        else {
-            continue;
-        };
-        // A glossary entry that covers に is one tokenizer unit. If it attaches
-        // to a noun as an acl, follow that argument to its own predicate.
-        if word.lemma.as_deref() == Some(GLOSSARY_TIME_PHRASE)
-            && word.deprel == "acl"
-            && matches!(verb.deprel.as_str(), "obj" | "obl" | "nsubj")
-            && verb.upos == Some(Upos::Noun)
-        {
-            let Some(predicate) = source
-                .iter()
-                .find(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == verb.head)
-            else {
-                continue;
-            };
-            verb = predicate;
-        }
-        let Some(owner) = verb
-            .doc_tok_idx
-            .filter(|_| !verb.is_locked && verb.upos == Some(Upos::Verb))
+            .find(|a| !a.is_locked && a.doc_tok_idx == Some(owner) && a.upos == Some(Upos::Verb))
         else {
             continue;
         };

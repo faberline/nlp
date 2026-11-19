@@ -1692,6 +1692,7 @@ fn normalized_sentence_atoms(
     let atoms = normalize_keigo_atoms(&atoms);
     let atoms = normalize_glossary_clocks(&atoms, chars, locks);
     let mut atoms = normalize_clock_atoms(&atoms);
+    daytime::restore_glossary_attachment(&mut atoms);
     copular_time::mark_questions(&mut atoms, chars, locks);
     preserve_clock_adjacent_locks(&atoms, doc, sentence_idx)
 }
@@ -15900,6 +15901,9 @@ mod clock_rule_tests {
             let rendered = public_translate(source, &glossary);
             assert_eq!(rendered.glossary_hits.len(), 1, "{source}");
             assert_eq!(rendered.target_text.matches("山海").count(), 1, "{source}");
+            if term == "日中に" {
+                assert_eq!(rendered.target_text, "父親山海讀了書。");
+            }
             assert_eq!(
                 rendered.target_text.contains("白天"),
                 expected_daylight,

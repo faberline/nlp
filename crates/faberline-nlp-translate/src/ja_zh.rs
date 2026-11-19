@@ -1820,7 +1820,7 @@ fn is_te_form_link(base: &Atom, te: &Atom, auxiliary: &Atom) -> bool {
 struct TeHelpRequest<'a> {
     action: &'a [Atom],
     person: Option<TeHelpPerson<'a>>,
-    letter_addressee: Option<TeHelpPerson<'a>>,
+    letter_addressee: Option<TeHelpLetterAddressee<'a>>,
     letter_writers: Option<(TeHelpPerson<'a>, &'a str)>,
     manner: Option<TeHelpManner<'a>>,
     child_suffix: Option<usize>,
@@ -1832,6 +1832,7 @@ struct TeHelpManner<'a> {
     start: usize,
     end: usize,
     count: Option<&'a str>,
+    companion: Option<&'a Atom>,
 }
 
 struct TeHelpPerson<'a> {
@@ -1839,6 +1840,14 @@ struct TeHelpPerson<'a> {
     start: usize,
     end: usize,
     role: TeHelpPersonRole,
+}
+
+struct TeHelpLetterAddressee<'a> {
+    members: Vec<&'a [Atom]>,
+    count: Option<&'a str>,
+    illustrative: bool,
+    start: usize,
+    end: usize,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1928,13 +1937,63 @@ fn te_help_person<'a>(
     })
 }
 
+fn letter_address_nominal(atom: &Atom) -> bool {
+    !atom.is_locked
+        && atom.doc_tok_idx.is_some()
+        && matches!(atom.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+}
+
+fn letter_address_member_start(
+    arguments: &[Atom],
+    last: usize,
+    address_idx: usize,
+) -> Option<usize> {
+    let name = &arguments[last];
+    if !letter_address_nominal(name) || name.surface == "人" {
+        return None;
+    }
+    let mut start = last;
+    while let Some(modifier) = start.checked_sub(2) {
+        let [noun, no, following] = &arguments[modifier..=start] else {
+            return None;
+        };
+        if no.surface != "の" || no.span.end_char != following.span.start_char {
+            break;
+        }
+        if !letter_address_nominal(noun)
+            || !linked_letter_case(noun, no)
+            || noun.deprel != "nmod"
+            || (noun.head != following.doc_tok_idx && noun.head != Some(address_idx))
+        {
+            return None;
+        }
+        start = modifier;
+    }
+    if let Some(demonstrative) = start.checked_sub(1)
+        && attached_demonstrative(&arguments[demonstrative], &arguments[start]).is_some()
+    {
+        start = demonstrative;
+    }
+    Some(start)
+}
+
+fn linked_letter_case(noun: &Atom, particle: &Atom) -> bool {
+    !particle.is_locked
+        && particle.upos == Some(Upos::Adp)
+        && particle.deprel == "case"
+        && noun.doc_tok_idx.is_some()
+        && particle.head == noun.doc_tok_idx
+        && noun.span.end_char == particle.span.start_char
+}
+
 fn te_help_letter_addressee(
     arguments: &[Atom],
-    start: usize,
+    marker: usize,
     action_idx: usize,
     letter_idx: usize,
-) -> Option<TeHelpPerson<'_>> {
-    let [name, address, tail @ ..] = &arguments[start..] else {
+    separate_writers: bool,
+) -> Option<TeHelpLetterAddressee<'_>> {
+    let [address, tail @ ..] = &arguments[marker..] else {
         return None;
     };
     let address_idx = address.doc_tok_idx?;
@@ -1942,27 +2001,13 @@ fn te_help_letter_addressee(
         && suffix.upos == Some(Upos::Sconj)
         && suffix.deprel == "mark"
         && suffix.head == Some(address_idx));
-    let case_index = start + 2 + usize::from(has_suffix);
+    let case_index = marker + 1 + usize::from(has_suffix);
     let particle = arguments.get(case_index)?;
-    let bound = &arguments[start..=case_index];
     let attached_to_letter =
         particle.surface == "の" && address.deprel == "nmod" && address.head == Some(letter_idx);
     let attached_to_writing =
         particle.surface == "に" && address.deprel == "obl" && address.head == Some(action_idx);
-    if bound.iter().any(|atom| atom.is_locked)
-        || !bound
-            .windows(2)
-            .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
-        || !is_demonstrative_person_noun(name)
-        || name.doc_tok_idx.is_none()
-        || arguments[..start].iter().any(|atom| {
-            atom.head == name.doc_tok_idx
-                && matches!(atom.deprel.as_str(), "det" | "compound" | "nmod")
-        })
-        || name.deprel != "compound"
-        || name.head != Some(address_idx)
-        || !matches!(address.surface.as_str(), "宛" | "宛て")
-        || particle.upos != Some(Upos::Adp)
+    if particle.upos != Some(Upos::Adp)
         || particle.deprel != "case"
         || particle.head != Some(address_idx)
         || !(attached_to_letter || attached_to_writing)
@@ -1970,11 +2015,107 @@ fn te_help_letter_addressee(
     {
         return None;
     }
-    Some(TeHelpPerson {
-        phrase: &arguments[start..start + 1],
+
+    let mut start = marker.checked_sub(1)?;
+    let mut count = None;
+    let mut members = Vec::new();
+    let mut conjunction = None;
+    if let Some(number_idx) = marker.checked_sub(2)
+        && let [number, people] = &arguments[number_idx..marker]
+        && people.surface == "人"
+        && people.deprel == "compound"
+        && people.head == Some(address_idx)
+        && number.upos == Some(Upos::Num)
+        && number.deprel == "nummod"
+        && number.head == Some(address_idx)
+        && is_japanese_numeral(&number.surface)
+    {
+        count = Some(number.surface.as_str());
+        start = number_idx;
+    }
+    let last_member = if count.is_some() {
+        if start >= 2 && arguments[start - 1].surface == "の" {
+            let (name, no) = (&arguments[start - 2], &arguments[start - 1]);
+            if name.deprel != "nmod"
+                || name.head != Some(address_idx)
+                || !linked_letter_case(name, no)
+            {
+                return None;
+            }
+            Some(start - 2)
+        } else {
+            None
+        }
+    } else {
+        let name = &arguments[start];
+        if name.deprel != "compound" || name.head != Some(address_idx) {
+            return None;
+        }
+        Some(start)
+    };
+    if let Some(last) = last_member {
+        start = letter_address_member_start(arguments, last, address_idx)?;
+        members.push(&arguments[start..=last]);
+        let mut next_head = arguments[last].doc_tok_idx;
+        while let Some(previous) = start.checked_sub(2) {
+            let (name, joint) = (&arguments[previous], &arguments[previous + 1]);
+            if !matches!(joint.surface.as_str(), "と" | "や")
+                || joint.span.end_char != arguments[start].span.start_char
+            {
+                break;
+            }
+            let linked_conjunct =
+                name.deprel == "conj" && (name.head == Some(address_idx) || name.head == next_head);
+            // The parser may attach a と conjunct to 書く. Only extend that
+            // span with a separate writer group or an explicit addressee count.
+            let scoped_conjunct = joint.surface == "と"
+                && (separate_writers || count.is_some())
+                && name.deprel == "obl"
+                && name.head == Some(action_idx);
+            if !(linked_conjunct || scoped_conjunct)
+                || !linked_letter_case(name, joint)
+                || conjunction.is_some_and(|seen| seen != joint.surface.as_str())
+            {
+                return None;
+            }
+            conjunction = Some(joint.surface.as_str());
+            start = letter_address_member_start(arguments, previous, address_idx)?;
+            members.push(&arguments[start..=previous]);
+            next_head = name.doc_tok_idx;
+        }
+        members.reverse();
+    }
+    let end = case_index + 1;
+    if count.is_some_and(|number| {
+        !members.is_empty()
+            && super::opaque::parse_cjk_or_ascii_num(number).map(|n| n as usize)
+                != Some(members.len())
+    }) || arguments[start..end].iter().any(|atom| atom.is_locked)
+        || !arguments[start..end]
+            .windows(2)
+            .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+        || arguments.iter().enumerate().any(|(index, atom)| {
+            !(start..end).contains(&index)
+                && matches!(
+                    atom.deprel.as_str(),
+                    "det" | "compound" | "nmod" | "nummod" | "conj"
+                )
+                && (atom.head == Some(address_idx)
+                    || members.iter().any(|member| {
+                        member
+                            .iter()
+                            .any(|noun| noun.doc_tok_idx.is_some() && atom.head == noun.doc_tok_idx)
+                    }))
+        })
+    {
+        return None;
+    }
+    Some(TeHelpLetterAddressee {
+        members,
+        count,
+        illustrative: conjunction == Some("や"),
         start,
-        end: case_index + 1,
-        role: TeHelpPersonRole::Recipient,
+        end,
     })
 }
 
@@ -1991,6 +2132,15 @@ fn te_help_letter_writers(
     let [number, people, particle, ..] = &tail[prefix..] else {
         return None;
     };
+    let plural_links_to_action = plural.head == Some(action_idx)
+        || arguments.iter().any(|atom| {
+            atom.doc_tok_idx.is_some()
+                && atom.doc_tok_idx == plural.head
+                && !atom.is_locked
+                && atom.upos == Some(Upos::Adv)
+                && atom.deprel == "advmod"
+                && atom.head == Some(action_idx)
+        });
     let end = start + 5 + prefix;
     if !is_demonstrative_person_noun(name)
         || name.doc_tok_idx.is_none()
@@ -2001,7 +2151,9 @@ fn te_help_letter_writers(
         || name.deprel != "obl"
         || !matches!(name.head, Some(head) if head == action_idx || head == helper_idx)
         || plural.surface != "方"
-        || plural.head != Some(action_idx)
+        || plural.deprel != "advmod"
+        || !plural_links_to_action
+        || (prefix != 0 && tail[0].head != Some(helper_idx))
         || number.upos != Some(Upos::Num)
         || number.deprel != "nummod"
         || !is_japanese_numeral(&number.surface)
@@ -2029,6 +2181,38 @@ fn te_help_letter_writers(
         },
         number.surface.as_str(),
     ))
+}
+
+fn te_help_letter_companion(
+    arguments: &[Atom],
+    start: usize,
+    action_idx: usize,
+) -> Option<TeHelpManner<'_>> {
+    let [name, to, number, people, de, ..] = &arguments[start..] else {
+        return None;
+    };
+    let end = start + 5;
+    if to.surface != "と"
+        || !is_demonstrative_person_noun(name)
+        || name.head != Some(action_idx)
+        || !linked_joint_case(name, to)
+        || !matches!(
+            normalize_decimal_digits(&number.surface).as_str(),
+            "二" | "2"
+        )
+        || people.head != Some(action_idx)
+        || !linked_joint_people(number, people, de)
+        || to.span.end_char != number.span.start_char
+        || te_help_has_following_focus(arguments, end)
+    {
+        return None;
+    }
+    Some(TeHelpManner {
+        start,
+        end,
+        count: Some(number.surface.as_str()),
+        companion: Some(name),
+    })
 }
 
 // Some lexical child compounds contain ども even when the tokenizer gives it
@@ -2156,9 +2340,14 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
         {
             return None;
         }
-        Some(TeHelpManner { start, end, count })
+        Some(TeHelpManner {
+            start,
+            end,
+            count,
+            companion: None,
+        })
     });
-    let manner = manners.next();
+    let mut manner = manners.next();
     if manners.next().is_some() {
         return None;
     }
@@ -2196,18 +2385,21 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
     } else {
         None
     };
-    let letter_addressee = if let Some(letter_idx) = letter_idx {
-        let mut addressees = (0..arguments.len())
-            .filter_map(|start| te_help_letter_addressee(arguments, start, action_idx, letter_idx));
-        let addressee = addressees.next();
-        if addressees.next().is_some() {
+    let letter_marker = if let Some(letter_idx) = letter_idx {
+        let mut markers = arguments.iter().enumerate().filter(|(_, atom)| {
+            matches!(atom.surface.as_str(), "宛" | "宛て")
+                && ((atom.deprel == "nmod" && atom.head == Some(letter_idx))
+                    || (atom.deprel == "obl" && atom.head == Some(action_idx)))
+        });
+        let marker = markers.next().map(|(index, _)| (index, letter_idx));
+        if markers.next().is_some() {
             return None;
         }
-        addressee
+        marker
     } else {
         None
     };
-    let letter_writers = if letter_addressee.is_some() {
+    let letter_writers = if letter_marker.is_some() {
         let mut groups = (0..arguments.len())
             .filter_map(|start| te_help_letter_writers(arguments, start, action_idx, helper_idx));
         let writers = groups.next();
@@ -2220,6 +2412,50 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
     } else {
         None
     };
+    let letter_addressee = if let Some((marker, letter_idx)) = letter_marker {
+        Some(te_help_letter_addressee(
+            arguments,
+            marker,
+            action_idx,
+            letter_idx,
+            letter_writers.is_some(),
+        )?)
+    } else {
+        None
+    };
+    if letter_addressee.is_some() && manner.is_none() && letter_writers.is_none() {
+        let mut companions = (0..arguments.len())
+            .filter_map(|start| te_help_letter_companion(arguments, start, action_idx));
+        manner = companions.next();
+        if companions.next().is_some() {
+            return None;
+        }
+    }
+    if let Some(addressee) = &letter_addressee
+        && (manner
+            .as_ref()
+            .is_some_and(|manner| manner.start < addressee.end && addressee.start < manner.end)
+            || letter_writers.as_ref().is_some_and(|(writers, _)| {
+                writers.start < addressee.end && addressee.start < writers.end
+            }))
+    {
+        return None;
+    }
+    if letter_idx.is_some()
+        && let Some(bound) = &mut manner
+        && bound.count.is_some()
+        && bound.companion.is_none()
+        && let Some(prior) = bound.start.checked_sub(1)
+    {
+        let prefix = &arguments[prior];
+        if !prefix.is_locked
+            && prefix.surface == "お"
+            && prefix.head == Some(helper_idx)
+            && prefix.span.end_char == arguments[bound.start].span.start_char
+        {
+            bound.start = prior;
+        }
+    }
     let is_modifier = |index| {
         manner
             .as_ref()
@@ -2247,7 +2483,12 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
         atom.upos == Some(Upos::Adp) && atom.surface == "に" && !is_modifier(index)
     });
     let person = if let Some((index, _)) = datives.next() {
-        if datives.next().is_some() || letter_writers.is_some() {
+        if datives.next().is_some()
+            || letter_writers.is_some()
+            || manner
+                .as_ref()
+                .is_some_and(|bound| bound.companion.is_some())
+        {
             return None;
         }
         Some(te_help_person(
@@ -2288,12 +2529,18 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
         }
     }
 
-    if let Some(comma) = arguments.iter().position(is_punct_atom) {
-        let (lead, rest) = arguments.split_at(comma);
-        if !matches!(rest[0].surface.as_str(), "、" | "，" | ",")
+    let mut lead_start = 0;
+    for (comma, separator) in arguments
+        .iter()
+        .enumerate()
+        .filter(|(_, atom)| is_punct_atom(atom))
+    {
+        let lead = &arguments[lead_start..comma];
+        if !matches!(separator.surface.as_str(), "、" | "，" | ",")
             || lead.is_empty()
-            || rest[1..].iter().any(is_punct_atom)
-            || !lead.iter().enumerate().all(|(index, adverb)| {
+            || (lead_start > 0 && letter_addressee.is_none())
+            || !lead.iter().enumerate().all(|(offset, adverb)| {
+                let index = lead_start + offset;
                 is_modifier(index)
                     || (letter_role.is_some()
                         && person
@@ -2303,7 +2550,7 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
                         && adverb.upos == Some(Upos::Adv)
                         && adverb.deprel == "advmod"
                         && (adverb.head == Some(action_idx)
-                            || rest[1..].iter().any(|next| {
+                            || arguments[comma + 1..].iter().any(|next| {
                                 next.doc_tok_idx.is_some()
                                     && adverb.head == next.doc_tok_idx
                                     && next.deprel == "advmod"
@@ -2313,6 +2560,7 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
         {
             return None;
         }
+        lead_start = comma + 1;
     }
 
     Some(TeHelpRequest {
@@ -4828,10 +5076,10 @@ fn render_te_help_request(
             text.to_owned()
         }
     };
-    let render_person = |person: &TeHelpPerson<'_>| {
+    let render_name = |phrase: &[Atom]| {
         render_bunsetsu_np(
             &Bunsetsu {
-                atoms: person.phrase.to_vec(),
+                atoms: phrase.to_vec(),
                 role: BunsetsuRole::Other,
                 case_particle: None,
                 sconj_tail: None,
@@ -4840,6 +5088,7 @@ fn render_te_help_request(
             target,
         )
     };
+    let render_person = |person: &TeHelpPerson<'_>| render_name(person.phrase);
     let polite = if request.negative_form {
         "可以麻煩"
     } else {
@@ -4851,17 +5100,30 @@ fn render_te_help_request(
         "你"
     };
 
-    let unresolved_letter_participant = request
-        .person
-        .as_ref()
-        .filter(|person| person.role == TeHelpPersonRole::UnresolvedLetterParticipant);
-    if let Some(address) = request
-        .letter_addressee
-        .as_ref()
-        .or(unresolved_letter_participant)
-    {
+    let addressee = if let Some(address) = &request.letter_addressee {
+        let names = address
+            .members
+            .iter()
+            .map(|member| render_name(member))
+            .collect::<Vec<_>>();
+        if address.illustrative {
+            Some(format!("{}等人", names.join("、")))
+        } else {
+            let mut names = names.join("和");
+            if let Some(count) = address.count {
+                names.push_str(&render_joint_people(count));
+            }
+            Some(names)
+        }
+    } else {
         // Only the wording chooses an addressee for an unresolved dative.
-        let addressee = render_person(address);
+        request
+            .person
+            .as_ref()
+            .filter(|person| person.role == TeHelpPersonRole::UnresolvedLetterParticipant)
+            .map(render_person)
+    };
+    if let Some(addressee) = addressee {
         let counted_listener = |count: &str| format!("{}位", count.trim_end_matches('人'));
         let mut joint = "";
         let listener = if let Some((writers, number)) = &request.letter_writers {
@@ -4882,6 +5144,11 @@ fn render_te_help_request(
             } else {
                 name
             }
+        } else if let Some(companion) = request.manner.as_ref().and_then(|bound| bound.companion) {
+            format!(
+                "{fallback_listener}和{}兩人",
+                render_name(std::slice::from_ref(companion))
+            )
         } else {
             participants
                 .as_deref()
@@ -17696,6 +17963,47 @@ mod existence_rule_tests {
     }
 
     #[test]
+    fn te_help_letter_request_keeps_conjoined_recipients_and_counts() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "父や母宛ての手紙を書いていただけますか。",
+                "可以請您寫信給父親、母親等人嗎？",
+            ),
+            (
+                "父と母の二人宛ての手紙を書いていただけますか。",
+                "可以請您寫信給父親和母親兩人嗎？",
+            ),
+            (
+                "先生方お二人に、父と母宛ての手紙を書いていただけますか。",
+                "可以請兩位老師寫信給父親和母親嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を書いていただけますか。",
+                "可以請兩位老師寫信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、明日、父宛ての手紙を書いていただけますか。",
+                "可以請兩位老師明天寫信給父親嗎？",
+            ),
+            (
+                "先生宛ての手紙を明日お二人で書いていただけますか。",
+                "可以請兩位明天一起寫信給老師嗎？",
+            ),
+            (
+                "明日、母と二人で先生宛ての手紙を書いていただけますか。",
+                "可以請您和母親兩人明天一起寫信給老師嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn te_help_letter_rule_preserves_statements_and_unspecified_roles() {
         let glossary = TranslationGlossary::new();
         for (source, expected) in [
@@ -17709,6 +18017,14 @@ mod existence_rule_tests {
             (
                 "二人で手紙を書いていただけますか。",
                 "可以請兩人一起寫信嗎？",
+            ),
+            (
+                "父と母宛ての手紙を書いていただけますか。",
+                "父親和母親宛，寫信，能得到嗎？",
+            ),
+            (
+                "姉と母宛ての手紙を二人で書いていただけますか。",
+                "姊姊和母親宛，在二人寫信，能得到嗎？",
             ),
         ] {
             assert_eq!(

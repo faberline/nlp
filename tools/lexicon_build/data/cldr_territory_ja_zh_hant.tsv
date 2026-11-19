@@ -1,0 +1,9 @@
+# Selected CLDR territory labels joined by territory code.
+# Source: unicode-org/cldr-json at 4d06be52b51bb2f75688d0abe55c52a66afed790
+# cldr-json/cldr-localenames-full/main/ja/territories.json
+# SHA-256: 2e9976a1d5e6a02e48b5a5c18987bd6246b0a21369513386bb5874a6887056d2
+# cldr-json/cldr-localenames-full/main/zh-Hant/territories.json
+# SHA-256: 2a316ff8da8e54295d4d13ec76e1b6e9d07f3a1a11c76af2ac85ec7d6a7960c6
+# License: Unicode-3.0. See crates/faberline-nlp/lexicon/LICENSES/LICENSE-CLDR-UNICODE-3.0.txt.
+# territory_code	ja	zh_hant
+DE	ドイツ	德國

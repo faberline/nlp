@@ -12883,6 +12883,31 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn opaque_count_keeps_the_day_ambiguous_unless_a_month_is_present() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "一度".to_owned(),
+            surfaces: vec!["一度".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "保留次數".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        for (source, dated) in [
+            ("二日に一度だけ薬を飲みます。", false),
+            ("六月二日に一度だけ薬を飲みます。", true),
+        ] {
+            let output = public_translate(source, &glossary);
+            assert_eq!(output.glossary_hits.len(), 1, "{source}");
+            assert_eq!(output.target_text.matches("保留次數").count(), 1);
+            assert_eq!(output.target_text.contains("在六月二日"), dated);
+            assert!(
+                !output.target_text.contains("二號") && !output.target_text.contains("每兩天"),
+                "{}",
+                output.target_text
+            );
+        }
+    }
+
+    #[test]
     fn duration_and_selected_values_do_not_become_calendar_dates() {
         let glossary = TranslationGlossary::new();
         for source in [

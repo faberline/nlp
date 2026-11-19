@@ -378,8 +378,15 @@ fn expression(atoms: &[Atom], end: usize) -> Option<(usize, String)> {
         return None;
     }
     // Counted repetitions turn 何日 into an interval: 何日に一回, 何日に三度.
+    // A glossary lock followed by だけ can hide the repetition count.
+    // An explicit month still identifies a date independently of that lock.
+    let opaque_focus = matches!(&atoms[end + 2..], [locked, only, ..] if locked.is_locked
+        && locked.surface.contains("[[PH") && locked.span.start_char == case.span.end_char
+        && !only.is_locked && only.upos == Some(Upos::Part) && only.surface == "だけ"
+        && only.span.start_char == locked.span.end_char);
     let frequency = !deadline
-        && (adjacent_count(atoms, end + 1).is_some()
+        && (opaque_focus
+            || adjacent_count(atoms, end + 1).is_some()
             || atoms[end + 2..].iter().any(|a| {
                 a.head == verb.doc_tok_idx
                     && !a.is_locked

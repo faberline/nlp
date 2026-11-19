@@ -306,6 +306,7 @@ pub(crate) fn translate_ja_sentence(
                         if target == TargetVariant::ZhHant
                             && payment_potential::word_mention(
                                 inner_atoms,
+                                seg_idx.checked_sub(1).and_then(|i| segments.get(i)),
                                 segments.get(seg_idx + 1),
                             )
                         {

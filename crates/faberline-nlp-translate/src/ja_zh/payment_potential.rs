@@ -12,22 +12,117 @@ fn potential(atom: &Atom) -> bool {
 }
 
 // Distinguish a word being discussed from the contents of a reported utterance.
-pub(super) fn word_mention(inner: &[Atom], next: Option<&Segment>) -> bool {
+pub(super) fn word_mention(
+    inner: &[Atom],
+    previous: Option<&Segment>,
+    next: Option<&Segment>,
+) -> bool {
     let [word] = inner else { return false };
     let Some(Segment::Clause { atoms, .. }) = next else {
         return false;
     };
-    let [marker, label, ..] = atoms.as_slice() else {
+    let [marker, rest @ ..] = atoms.as_slice() else {
         return false;
     };
-    potential(word)
-        && !marker.is_locked
-        && !label.is_locked
-        && matches!(
-            (marker.surface.as_str(), label.surface.as_str()),
-            ("は" | "が", "動詞" | "名詞" | "形容詞" | "単語")
-                | ("の", "読み方" | "発音" | "意味" | "表記" | "読み")
-        )
+    if !potential(word) || marker.is_locked {
+        return false;
+    }
+    if marker.surface == "を" {
+        return dictionary_lookup(word, rest, previous);
+    }
+    let rest = match (marker.surface.as_str(), rest) {
+        ("という", [no, topic, tail @ ..])
+            if !no.is_locked && !topic.is_locked && no.surface == "の" && topic.surface == "は" =>
+        {
+            tail
+        }
+        ("と", [topic, tail @ ..]) if !topic.is_locked && topic.surface == "は" => tail,
+        ("は" | "が" | "って" | "の" | "という", rest) => rest,
+        _ => return false,
+    };
+    let rest = match rest {
+        [det, tail @ ..]
+            if !det.is_locked && matches!(det.surface.as_str(), "どんな" | "どういう") =>
+        {
+            tail
+        }
+        _ => rest,
+    };
+    let Some(label) = rest.first().filter(|a| !a.is_locked) else {
+        return false;
+    };
+    match label.surface.as_str() {
+        "動詞" | "名詞" | "形容詞" | "語" | "単語" | "言葉" | "用語" | "表現" => {
+            true
+        }
+        "発音" | "意味" | "表記" | "読み方" | "読み" | "品詞" | "活用" => {
+            marker.surface != "という"
+        }
+        "言い"
+            if rest.get(1).is_some_and(|a| {
+                !a.is_locked && a.surface == "方" && a.doc_tok_idx == label.head
+            }) =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
+fn dictionary_lookup(word: &Atom, after_object: &[Atom], previous: Option<&Segment>) -> bool {
+    let Some((idx, lookup)) = after_object.iter().enumerate().find(|(i, a)| {
+        !a.is_locked
+            && (matches!(a.lemma.as_deref().unwrap_or(&a.surface), "調べる" | "引く")
+                || (a.surface == "調べ"
+                    && after_object.get(i + 1).is_some_and(|aux| {
+                        !aux.is_locked && aux.upos == Some(Upos::Aux) && aux.head == a.doc_tok_idx
+                    })))
+    }) else {
+        return false;
+    };
+    if after_object[..idx]
+        .iter()
+        .any(|a| a.is_locked || matches!(a.upos, Some(Upos::Verb | Upos::Aux | Upos::Punct)))
+    {
+        return false;
+    }
+    // A dictionary marked with で can precede the cited word or follow it.
+    // Keep the match within these adjacent parts of the same sentence.
+    let before = match previous {
+        Some(Segment::Clause {
+            atoms,
+            trailing_punct: None,
+            ..
+        }) => atoms.as_slice(),
+        _ => &[],
+    };
+    [before, &after_object[..idx]].into_iter().any(|args| {
+        args.windows(2).enumerate().any(|(i, pair)| {
+            let noun = &pair[0];
+            let case = &pair[1];
+            if noun.is_locked
+                || case.is_locked
+                || case.surface != "で"
+                || case.deprel != "case"
+                || case.head.is_none()
+                || case.head != noun.doc_tok_idx
+            {
+                return false;
+            }
+            let dictionary = matches!(noun.surface.as_str(), "辞書" | "辞典" | "字典")
+                || (noun.surface == "典"
+                    && i > 0
+                    && !args[i - 1].is_locked
+                    && matches!(args[i - 1].surface.as_str(), "辞" | "字")
+                    && args[i - 1].head == noun.doc_tok_idx
+                    && args[i - 1].deprel == "compound");
+            dictionary
+                && noun.head.is_some()
+                && (noun.head == lookup.doc_tok_idx
+                    || noun.head == lookup.head
+                    || noun.head == word.doc_tok_idx)
+        })
+    })
 }
 
 pub(super) fn ends_in_question(inner: &[Atom]) -> bool {
@@ -499,6 +594,28 @@ mod tests {
             ("二人は家賃の話を聞きました。", "二人聽了家賃的話。"),
         ] {
             assert_eq!(translate(jp), expected, "{jp}");
+        }
+    }
+
+    #[test]
+    fn naming_and_dictionary_lookup_preserve_a_cited_word() {
+        for jp in [
+            "「支払える」という動詞を調べました。",
+            "先生は「支払える」という言葉を書きました。",
+            "「支払える」を辞書で調べます。",
+            "辞書で「支払える」を調べました。",
+            "「支払える」を辞典で引きました。",
+            "「支払える」とはどういう意味ですか。",
+        ] {
+            assert!(translate(jp).contains("「支払える」"), "{jp}");
+        }
+        let gloss = super::lookup_ja_lexicon_gloss("支払える", None, Some(super::Upos::Verb))
+            .unwrap_or_else(|| "支払える".to_owned());
+        for jp in [
+            "「支払える」という返事を聞きました。",
+            "彼は「支払える」と言いました。",
+        ] {
+            assert!(translate(jp).contains(&format!("「{gloss}」")), "{jp}");
         }
     }
 }

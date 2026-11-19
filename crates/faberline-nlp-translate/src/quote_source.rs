@@ -1,4 +1,5 @@
 use faberline_nlp::Span;
+use faberline_nlp::doc::Segmentation;
 
 const FORM_NAMES: &[&str] = &[
     "文字数",
@@ -23,13 +24,48 @@ const FORM_LABELS: &[&str] = &[
     "ローマ字の",
 ];
 
-/// Find quoted source text followed by an explicit description of its written form.
-/// The marks stay outside the lock so the normal quote renderer can handle them.
-pub(crate) fn written_form_quotes(chars: &[char], sentence: Span, context_end: usize) -> Vec<Span> {
+/// Find explicitly written forms on the source paragraph, then give each
+/// analysis sentence only its part of the original text to protect.
+pub(crate) fn plan_written_form_quotes(
+    chars: &[char],
+    segmentation: &Segmentation,
+) -> Vec<Vec<Span>> {
+    let mut by_sentence = vec![Vec::new(); segmentation.sentences.len()];
+    let sentences = &segmentation.sentences;
+    for paragraph in &segmentation.paragraphs {
+        let mut quotes = written_form_quotes(chars, paragraph.span);
+        quotes.sort_unstable_by_key(|span| (span.start_char, std::cmp::Reverse(span.end_char)));
+        let mut last_end = paragraph.span.start_char;
+        for quote in quotes {
+            // An explicitly literal outer quote already contains its inner quote.
+            if quote.start_char < last_end {
+                continue;
+            }
+            last_end = quote.end_char;
+            let first = sentences.partition_point(|sent| sent.span.end_char <= quote.start_char);
+            for (index, sent) in sentences.iter().enumerate().skip(first) {
+                if quote.end_char <= sent.span.start_char {
+                    break;
+                }
+                let start_char = quote.start_char.max(sent.span.start_char);
+                let end_char = quote.end_char.min(sent.span.end_char);
+                if start_char < end_char {
+                    by_sentence[index].push(Span {
+                        start_char,
+                        end_char,
+                    });
+                }
+            }
+        }
+    }
+    by_sentence
+}
+
+fn written_form_quotes(chars: &[char], paragraph: Span) -> Vec<Span> {
     let mut openings = Vec::new();
     let mut protected = Vec::new();
     let mut top_level = Vec::new();
-    let raw = &chars[sentence.start_char..sentence.end_char];
+    let raw = &chars[paragraph.start_char..paragraph.end_char];
     for (at, &ch) in raw.iter().enumerate() {
         match ch {
             '「' => openings.push((at, '」')),
@@ -46,11 +82,20 @@ pub(crate) fn written_form_quotes(chars: &[char], sentence: Span, context_end: u
                     continue;
                 }
                 let inner = Span {
-                    start_char: sentence.start_char + start + 1,
-                    end_char: sentence.start_char + at,
+                    start_char: paragraph.start_char + start + 1,
+                    end_char: paragraph.start_char + at,
                 };
-                if describes_written_form(&chars[inner.end_char + 1..context_end]) {
-                    protected.push(inner);
+                if describes_written_form(&chars[inner.end_char + 1..paragraph.end_char]) {
+                    protected.push(if openings.is_empty() {
+                        inner
+                    } else {
+                        // Keep a nested written form as one atom inside the outer
+                        // quote, including its own pair of marks.
+                        Span {
+                            start_char: inner.start_char - 1,
+                            end_char: inner.end_char + 1,
+                        }
+                    });
                 }
                 if openings.is_empty()
                     && !chars[inner.start_char..inner.end_char]
@@ -63,13 +108,13 @@ pub(crate) fn written_form_quotes(chars: &[char], sentence: Span, context_end: u
             _ => {}
         }
     }
-    protect_compared_forms(chars, sentence, &top_level, &mut protected);
+    protect_coordinated_forms(chars, paragraph, &top_level, &mut protected);
     protected
 }
 
-fn protect_compared_forms(
+fn protect_coordinated_forms(
     chars: &[char],
-    sentence: Span,
+    paragraph: Span,
     quotes: &[Span],
     protected: &mut Vec<Span>,
 ) {
@@ -88,7 +133,7 @@ fn protect_compared_forms(
             labelled &= right_labelled;
         } else {
             first = index;
-            let before = &chars[sentence.start_char..opening];
+            let before = &chars[paragraph.start_char..opening];
             labelled = FORM_LABELS.iter().any(|label| {
                 before
                     .iter()
@@ -100,8 +145,13 @@ fn protect_compared_forms(
             });
         }
 
-        let after = skip_space(&chars[quote.end_char + 1..sentence.end_char]);
-        if index > first && (compares_written_forms(after) || (labelled && compares_objects(after)))
+        // A conjunction may bridge two analysis sentences when they split
+        // on punctuation inside a quote. Outside punctuation breaks the group.
+        let after = skip_space(&chars[quote.end_char + 1..paragraph.end_char]);
+        if index > first
+            && (compares_written_forms(after)
+                || counts_each_form(after)
+                || (labelled && compares_objects(after)))
         {
             for span in &quotes[first..=index] {
                 if !protected.contains(span) {
@@ -110,6 +160,18 @@ fn protect_compared_forms(
             }
         }
     }
+}
+
+fn counts_each_form(after: &[char]) -> bool {
+    let Some(rest) = after.strip_prefix(&['の']) else {
+        return false;
+    };
+    ["文字数", "字数"].iter().any(|count| {
+        strip_prefix(skip_space(rest), count)
+            .and_then(|rest| skip_space(rest).strip_prefix(&['を']))
+            .and_then(|rest| strip_prefix(skip_space(rest), "それぞれ"))
+            .is_some_and(|rest| strip_prefix(skip_space(rest), "数え").is_some())
+    })
 }
 
 // Only the conjunction and an optional label may occur between the two operands.
@@ -271,7 +333,8 @@ mod tests {
     use faberline_nlp::doc::model::Backend;
 
     use crate::{
-        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+        GlossaryEntry, TargetVariant, TranslateOptions, TranslateUnknownKind, TranslationGlossary,
+        analyze_and_translate,
     };
 
     fn glossary() -> TranslationGlossary {
@@ -404,6 +467,89 @@ mod tests {
             assert!(translated.target_text.contains("德國"), "{source}");
             assert!(translated.target_text.contains("法國"), "{source}");
             assert_eq!(translated.glossary_hits.len(), 2, "{source}");
+        }
+    }
+
+    #[test]
+    fn nested_written_forms_stay_inside_the_outer_quote_and_alignment() {
+        let glossary = glossary();
+        for (source, written) in [
+            (
+                "先生は『「ドイツ」という三文字を書きなさい』と言いました。",
+                "「ドイツ」",
+            ),
+            ("父は『「駅」の文字を消しなさい』と言いました。", "「駅」"),
+        ] {
+            let translated = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            let text = &translated.target_text;
+            let quote = text.find(written).unwrap_or_else(|| panic!("{text}"));
+            assert_eq!(text.matches(written).count(), 1, "{text}");
+            assert!(
+                text.find('『').unwrap() < quote && quote < text.find('』').unwrap(),
+                "{text}"
+            );
+            let start = text[..quote].chars().count();
+            let end = start + written.chars().count();
+            assert!(
+                translated.clause_alignments.iter().any(|clause| {
+                    clause.target_span.start_char <= start && end <= clause.target_span.end_char
+                }),
+                "{text}"
+            );
+            assert!(
+                !translated
+                    .unknown
+                    .iter()
+                    .any(|item| { item.kind == TranslateUnknownKind::PlaceholderRepaired }),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn counting_retains_complete_written_forms_across_analysis_sentences() {
+        let glossary = glossary();
+        for (source, written) in [
+            (
+                "「来て！すぐ帰る」の文字数を数えます。",
+                &["「来て！すぐ帰る」"][..],
+            ),
+            ("「A!ドイツ？B」の文字数を数えます。", &["「A!ドイツ？B」"]),
+            (
+                "「ドイツ！」と「行く？」の文字数をそれぞれ数えました。",
+                &["「ドイツ！」", "「行く？」"],
+            ),
+        ] {
+            let translated = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            for original in written {
+                assert!(
+                    translated.target_text.contains(original),
+                    "{}",
+                    translated.target_text
+                );
+            }
+            assert!(translated.glossary_hits.is_empty(), "{source}");
+            assert!(
+                !translated
+                    .unknown
+                    .iter()
+                    .any(|item| { item.kind == TranslateUnknownKind::PlaceholderRepaired }),
+                "{source}"
+            );
         }
     }
 }

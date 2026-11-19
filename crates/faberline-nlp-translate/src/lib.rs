@@ -228,6 +228,11 @@ pub fn translate_document(
         }
     }
 
+    let written_quotes = if options.target.is_zh() && seq2seq.is_none() {
+        quote_source::plan_written_form_quotes(&chars, &doc.segmentation)
+    } else {
+        Vec::new()
+    };
     let direct_quote_placements = if options.target == TargetVariant::ZhHant && seq2seq.is_none() {
         plan_cross_sentence_direct_quotes(
             &chars,
@@ -236,6 +241,7 @@ pub fn translate_document(
             &inline_opaques,
             options,
             &compiled_glossary,
+            &written_quotes,
         )
     } else {
         HashMap::new()
@@ -362,6 +368,7 @@ pub fn translate_document(
                     &compiled_glossary,
                     seq2seq,
                     direct_quote_placements.get(&si),
+                    written_quotes.get(si).map_or(&[], Vec::as_slice),
                 );
 
                 let start = target_char_pos;
@@ -582,6 +589,7 @@ fn plan_cross_sentence_direct_quotes(
     inline_opaques: &[&Opaque],
     options: &TranslateOptions,
     compiled_glossary: &CompiledGlossary,
+    written_quotes: &[Vec<Span>],
 ) -> HashMap<usize, ja_zh::DirectQuotePlacement> {
     let sentences = &doc.segmentation.sentences;
     let mut placements: HashMap<usize, ja_zh::DirectQuotePlacement> = HashMap::new();
@@ -626,7 +634,7 @@ fn plan_cross_sentence_direct_quotes(
             &raw_sent,
             options,
             compiled_glossary,
-            true,
+            written_quotes.get(index).map_or(&[], Vec::as_slice),
         );
         let tokens = &tokens_by_sent[index];
         if let Some((first, mut frame)) = opening.take() {
@@ -670,7 +678,7 @@ fn build_sentence_locks(
     raw_sent: &str,
     options: &TranslateOptions,
     compiled_glossary: &CompiledGlossary,
-    protect_written_quotes: bool,
+    written_quotes: &[Span],
 ) -> SpanLockTable {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     // Build `SpanLockTable` over inline opaques (priority 0), glossary hits (priority 1), and
@@ -695,32 +703,16 @@ fn build_sentence_locks(
         }
     }
 
-    if protect_written_quotes {
-        // A terminal mark within a balanced quote may split its description
-        // into the next sentence. The source lock still belongs to this one.
-        let sent = &doc.segmentation.sentences[sentence_idx];
-        let context_end = doc
-            .segmentation
-            .sentences
-            .get(sentence_idx + 1)
-            .filter(|next| {
-                next.paragraph == sent.paragraph
-                    && sent_span.end_char <= next.span.start_char
-                    && chars[sent_span.end_char..next.span.start_char]
-                        .iter()
-                        .all(|ch| matches!(ch, ' ' | '\t' | '　'))
-            })
-            .map_or(sent_span.end_char, |next| next.span.end_char);
-        for span in quote_source::written_form_quotes(chars, sent_span, context_end) {
-            if blocked_for_glossary.iter().any(|blocked| {
-                span.start_char < blocked.end_char && blocked.start_char < span.end_char
-            }) {
-                continue;
-            }
-            let source = chars[span.start_char..span.end_char].iter().collect();
-            blocked_for_glossary.push(span);
-            lock_candidates.push((0, span, source, LockOrigin::QuotedSource, true));
+    for &span in written_quotes {
+        if blocked_for_glossary
+            .iter()
+            .any(|blocked| span.start_char < blocked.end_char && blocked.start_char < span.end_char)
+        {
+            continue;
         }
+        let source = chars[span.start_char..span.end_char].iter().collect();
+        blocked_for_glossary.push(span);
+        lock_candidates.push((0, span, source, LockOrigin::QuotedSource, true));
     }
 
     for gm in
@@ -766,6 +758,7 @@ fn translate_single_sentence(
     compiled_glossary: &CompiledGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
     direct_quote: Option<&ja_zh::DirectQuotePlacement>,
+    written_quotes: &[Span],
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
@@ -816,7 +809,7 @@ fn translate_single_sentence(
         &raw_sent,
         options,
         compiled_glossary,
-        is_ja_to_zh,
+        written_quotes,
     );
 
     // Determine routing track for this sentence.

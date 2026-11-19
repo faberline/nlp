@@ -3,6 +3,7 @@ use faberline_nlp::doc::Segmentation;
 
 const FORM_NAMES: &[&str] = &[
     "文字数",
+    "字数",
     "送り仮名",
     "表記",
     "字形",
@@ -12,6 +13,8 @@ const FORM_NAMES: &[&str] = &[
     "文字",
     "字",
 ];
+const COMPARED_FORM_NAMES: &[&str] = &["表記", "字形", "字面", "綴り", "つづり"];
+const FORM_COUNTERS: &[&str] = &["つの", "種類の"];
 const FORM_LABELS: &[&str] = &[
     "日本語の",
     "英語の",
@@ -61,104 +64,127 @@ pub(crate) fn plan_written_form_quotes(
     by_sentence
 }
 
+struct OpenQuote {
+    start: usize,
+    expected_close: char,
+    children: Vec<Span>,
+    first_protection: usize,
+}
+
 fn written_form_quotes(chars: &[char], paragraph: Span) -> Vec<Span> {
     let mut openings = Vec::new();
     let mut protected = Vec::new();
     let mut top_level = Vec::new();
     let raw = &chars[paragraph.start_char..paragraph.end_char];
-    for (at, &ch) in raw.iter().enumerate() {
+    for (offset, &ch) in raw.iter().enumerate() {
+        let at = paragraph.start_char + offset;
         match ch {
-            '「' => openings.push((at, '」')),
-            '『' => openings.push((at, '』')),
+            '「' | '『' => openings.push(OpenQuote {
+                start: at,
+                expected_close: if ch == '「' { '」' } else { '』' },
+                children: Vec::new(),
+                first_protection: protected.len(),
+            }),
             close @ ('」' | '』') => {
-                let Some((start, expected)) = openings.pop() else {
+                let Some(frame) = openings.pop() else {
                     continue;
                 };
-                if close != expected {
+                if close != frame.expected_close {
+                    let first = openings.first().unwrap_or(&frame);
+                    protected.truncate(first.first_protection);
                     openings.clear();
                     continue;
                 }
-                if start + 1 == at {
+                if frame.start + 1 == at {
                     continue;
                 }
                 let inner = Span {
-                    start_char: paragraph.start_char + start + 1,
-                    end_char: paragraph.start_char + at,
+                    start_char: frame.start + 1,
+                    end_char: at,
                 };
-                if describes_written_form(&chars[inner.end_char + 1..paragraph.end_char]) {
-                    protected.push(if openings.is_empty() {
-                        inner
-                    } else {
-                        // Keep a nested written form as one atom inside the outer
-                        // quote, including its own pair of marks.
-                        Span {
-                            start_char: inner.start_char - 1,
-                            end_char: inner.end_char + 1,
-                        }
-                    });
-                }
-                if openings.is_empty()
-                    && !chars[inner.start_char..inner.end_char]
-                        .iter()
-                        .any(|&ch| "「」『』".contains(ch))
-                {
+                protect_sibling_forms(chars, inner, &frame.children, true, &mut protected);
+                if let Some(parent) = openings.last_mut() {
+                    parent.children.push(inner);
+                } else {
                     top_level.push(inner);
                 }
             }
             _ => {}
         }
     }
-    protect_coordinated_forms(chars, paragraph, &top_level, &mut protected);
+    if let Some(unclosed) = openings.first() {
+        protected.truncate(unclosed.first_protection);
+    }
+    protect_sibling_forms(chars, paragraph, &top_level, false, &mut protected);
     protected
 }
 
-fn protect_coordinated_forms(
+fn protection_span(inner: Span, nested: bool) -> Span {
+    if nested {
+        // Keep the inner quotation as one atom within the outer quotation.
+        Span {
+            start_char: inner.start_char - 1,
+            end_char: inner.end_char + 1,
+        }
+    } else {
+        inner
+    }
+}
+
+fn protect_sibling_forms(
     chars: &[char],
-    paragraph: Span,
+    scope: Span,
     quotes: &[Span],
+    nested: bool,
     protected: &mut Vec<Span>,
 ) {
-    if quotes.len() < 2 {
-        return;
-    }
-    let mut first = 0;
+    let mut first_for_count = 0;
+    let mut first_for_comparison = 0;
     let mut labelled = false;
     for (index, quote) in quotes.iter().enumerate() {
         let opening = quote.start_char - 1;
+        let after = skip_space(&chars[quote.end_char + 1..scope.end_char]);
+        if describes_written_form(after) {
+            protected.push(protection_span(*quote, nested));
+        }
         let join = index.checked_sub(1).and_then(|prev| {
             let after_close = quotes[prev].end_char + 1;
             quote_join(&chars[after_close..opening])
         });
-        if let Some(right_labelled) = join {
+        if let Some(QuoteJoin::Conjunction(right_labelled)) = join {
             labelled &= right_labelled;
         } else {
-            first = index;
-            let before = &chars[paragraph.start_char..opening];
-            labelled = FORM_LABELS.iter().any(|label| {
-                before
-                    .iter()
-                    .rev()
-                    .copied()
-                    .skip_while(|&ch| is_horizontal_space(ch))
-                    .take(label.chars().count())
-                    .eq(label.chars().rev())
-            });
+            first_for_comparison = index;
+            if join.is_none() {
+                first_for_count = index;
+            }
+            let before = trim_space_end(&chars[scope.start_char..opening]);
+            labelled = FORM_LABELS
+                .iter()
+                .any(|label| strip_suffix(before, label).is_some());
         }
 
-        // A conjunction may bridge two analysis sentences when they split
-        // on punctuation inside a quote. The join still has to be explicit.
-        let after = skip_space(&chars[quote.end_char + 1..paragraph.end_char]);
-        if index > first
-            && (compares_written_forms(after)
-                || counts_each_form(after)
-                || (labelled && compares_objects(after)))
-        {
-            for span in &quotes[first..=index] {
-                if !protected.contains(span) {
-                    protected.push(*span);
-                }
+        // Terminal marks inside the operands can split the analysis sentences,
+        // but the operands still belong to this one balanced quotation scope.
+        let first = if index > first_for_count && counts_each_form(after) {
+            first_for_count
+        } else if index > first_for_comparison {
+            let before = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
+            let count = index - first_for_comparison + 1;
+            if !compares_written_forms(after)
+                && !compares_apposed_forms(before, after, count, labelled)
+            {
+                continue;
             }
-        }
+            first_for_comparison
+        } else {
+            continue;
+        };
+        protected.extend(
+            quotes[first..=index]
+                .iter()
+                .map(|&span| protection_span(span, nested)),
+        );
     }
 }
 
@@ -174,18 +200,73 @@ fn counts_each_form(after: &[char]) -> bool {
     })
 }
 
-// A single Japanese comma can follow the conjunction と.
-fn quote_join(between: &[char]) -> Option<bool> {
-    let rest = skip_space(skip_space(between).strip_prefix(&['と'])?);
+#[derive(Debug, PartialEq, Eq)]
+enum QuoteJoin {
+    Conjunction(bool),
+    Enumeration,
+}
+
+fn quote_join(between: &[char]) -> Option<QuoteJoin> {
+    let between = skip_space(between);
+    if trim_space_end(between) == ['、'] {
+        return Some(QuoteJoin::Enumeration);
+    }
+    // A single Japanese comma can follow the conjunction と.
+    let rest = skip_space(between.strip_prefix(&['と'])?);
     let rest = rest.strip_prefix(&['、']).map(skip_space).unwrap_or(rest);
     if rest.is_empty() {
-        Some(false)
+        Some(QuoteJoin::Conjunction(false))
     } else {
         FORM_LABELS
             .iter()
             .any(|label| strip_prefix(rest, label).is_some_and(|tail| skip_space(tail).is_empty()))
-            .then_some(true)
+            .then_some(QuoteJoin::Conjunction(true))
     }
+}
+
+fn compares_apposed_forms(before: &[char], after: &[char], count: usize, labelled: bool) -> bool {
+    if compares_objects(after) && (labelled || has_form_name_before(before, count)) {
+        return true;
+    }
+    let after = strip_prefix(after, "という")
+        .or_else(|| after.strip_prefix(&['、']))
+        .or_else(|| after.strip_prefix(&['の']))
+        .unwrap_or(after);
+    let Some((&number, rest)) = skip_space(after).split_first() else {
+        return false;
+    };
+    matches_list_count(number, count)
+        && FORM_COUNTERS.iter().any(|counter| {
+            strip_prefix(skip_space(rest), counter).is_some_and(|rest| {
+                COMPARED_FORM_NAMES.iter().any(|form| {
+                    strip_prefix(skip_space(rest), form)
+                        .is_some_and(|tail| compares_objects(skip_space(tail)))
+                })
+            })
+        })
+}
+
+fn has_form_name_before(before: &[char], count: usize) -> bool {
+    COMPARED_FORM_NAMES.iter().any(|form| {
+        let Some(before) = strip_suffix(trim_space_end(before), form) else {
+            return false;
+        };
+        FORM_COUNTERS.iter().any(|counter| {
+            strip_suffix(trim_space_end(before), counter)
+                .and_then(|before| trim_space_end(before).split_last())
+                .is_some_and(|(&number, rest)| {
+                    matches_list_count(number, count)
+                        && !rest.last().is_some_and(|&ch| is_count_character(ch))
+                })
+        })
+    })
+}
+
+fn matches_list_count(ch: char, count: usize) -> bool {
+    count < 10
+        && ("〇一二三四五六七八九".chars().nth(count) == Some(ch)
+            || ch.to_digit(10) == Some(count as u32)
+            || ch as u32 == '０' as u32 + count as u32)
 }
 
 fn compares_objects(after: &[char]) -> bool {
@@ -299,12 +380,31 @@ fn strip_prefix<'a>(mut chars: &'a [char], prefix: &str) -> Option<&'a [char]> {
     Some(chars)
 }
 
+fn strip_suffix<'a>(mut chars: &'a [char], suffix: &str) -> Option<&'a [char]> {
+    for expected in suffix.chars().rev() {
+        let (&actual, rest) = chars.split_last()?;
+        if actual != expected {
+            return None;
+        }
+        chars = rest;
+    }
+    Some(chars)
+}
+
 fn skip_space(chars: &[char]) -> &[char] {
     let count = chars
         .iter()
         .take_while(|&&ch| is_horizontal_space(ch))
         .count();
     &chars[count..]
+}
+
+fn trim_space_end(chars: &[char]) -> &[char] {
+    let end = chars
+        .iter()
+        .rposition(|&ch| !is_horizontal_space(ch))
+        .map_or(0, |index| index + 1);
+    &chars[..end]
 }
 
 fn is_horizontal_space(ch: char) -> bool {
@@ -314,13 +414,15 @@ fn is_horizontal_space(ch: char) -> bool {
 fn without_count(chars: &[char]) -> &[char] {
     let count = chars
         .iter()
-        .take_while(|&&ch| {
-            ch.is_ascii_digit()
-                || ('０'..='９').contains(&ch)
-                || "〇零一二三四五六七八九十百千万".contains(ch)
-        })
+        .take_while(|&&ch| is_count_character(ch))
         .count();
     skip_space(&chars[count..])
+}
+
+fn is_count_character(ch: char) -> bool {
+    ch.is_ascii_digit()
+        || ('０'..='９').contains(&ch)
+        || "〇零一二三四五六七八九十百千万".contains(ch)
 }
 
 fn noun_boundary(chars: &[char]) -> bool {
@@ -439,6 +541,9 @@ mod tests {
             ("「ドイツ」と『どいつ』は表記が違います。", "どいつ"),
             ("「ドイツ」と、『どいつ』は表記が違います。", "どいつ"),
             ("『ドイツ』と『フランス』の表記を見比べました。", "フランス"),
+            ("二つの表記「ドイツ」と「独逸」を比べました。", "独逸"),
+            ("「ドイツ」と「独逸」という二つの表記を比べました。", "独逸"),
+            ("「ドイツ」と「独逸」、二つの表記を比べました。", "独逸"),
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -461,6 +566,10 @@ mod tests {
             "「ドイツ」と、「フランス」の人口を比べました。",
             "太郎は「ドイツ」と、花子は「フランス」と答えました。",
             "今日は「ドイツ」と、「フランス」について話しました。次に地図の表記を比べました。",
+            "二つの国「ドイツ」と「フランス」を比べました。",
+            "表記を確認したあと、「ドイツ」と「フランス」の人口を比べました。",
+            "三つの表記「ドイツ」と「フランス」を比べました。",
+            "十二の表記「ドイツ」と「フランス」を比べました。",
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -528,6 +637,8 @@ mod tests {
                 &["「来て！すぐ帰る」"][..],
             ),
             ("「A!ドイツ？B」の文字数を数えます。", &["「A!ドイツ？B」"]),
+            ("「来て！帰る」の字数を数えました。", &["「来て！帰る」"]),
+            ("「来て！帰る」の字数を調べました。", &["「来て！帰る」"]),
             (
                 "「ドイツ！」と「行く？」の文字数をそれぞれ数えました。",
                 &["「ドイツ！」", "「行く？」"],
@@ -543,6 +654,10 @@ mod tests {
             (
                 "「来て！」と、「すぐ帰る」の文字数をそれぞれ数えました。",
                 &["「来て！」", "「すぐ帰る」"],
+            ),
+            (
+                "「ドイツ！」、「行く？」、「払える！」の文字数をそれぞれ数えました。",
+                &["「ドイツ！」", "「行く？」", "「払える！」"],
             ),
         ] {
             let translated = analyze_and_translate(
@@ -572,13 +687,86 @@ mod tests {
     }
 
     #[test]
+    fn coordinated_children_keep_their_complete_text_inside_the_parent_quote() {
+        let glossary = glossary();
+        for (source, expected) in [
+            (
+                "先生は『「ドイツ！」と、「行く？」の文字数をそれぞれ数えなさい』と言いました。",
+                ["「ドイツ！」", "「行く？」"],
+            ),
+            (
+                "父は『「来て！」と、「すぐ帰る」の文字数をそれぞれ数えなさい』と言いました。",
+                ["「来て！」", "「すぐ帰る」"],
+            ),
+            (
+                "母は『日本語の「ドイツ」と、漢字の「独逸」を比べなさい』と言いました。",
+                ["「ドイツ」", "「独逸」"],
+            ),
+            (
+                "『二つの表記「ドイツ」と「独逸」を比べました』",
+                ["「ドイツ」", "「独逸」"],
+            ),
+        ] {
+            let translated = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            let text = &translated.target_text;
+            let start = text.find('『').unwrap_or_else(|| panic!("{text}"));
+            let end = text.rfind('』').unwrap_or_else(|| panic!("{text}"));
+            let mut previous = start;
+            for original in expected {
+                let at = text.find(original).unwrap_or_else(|| panic!("{text}"));
+                assert!(previous < at && at + original.len() <= end, "{text}");
+                assert_eq!(text.matches(original).count(), 1, "{text}");
+                previous = at;
+            }
+            assert!(
+                !translated
+                    .unknown
+                    .iter()
+                    .any(|item| item.kind == TranslateUnknownKind::PlaceholderRepaired),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_count_inside_one_quote_does_not_protect_other_utterances() {
+        use super::{Span, written_form_quotes};
+
+        for source in [
+            "先生は『「行く？」の文字数を数えてから、「ドイツ！」と答えなさい』と言いました。",
+            "『「ドイツ！」と叫びました』と『「行く？」の文字数を数えました』を読みました。",
+        ] {
+            let chars: Vec<_> = source.chars().collect();
+            let spans = written_form_quotes(
+                &chars,
+                Span {
+                    start_char: 0,
+                    end_char: chars.len(),
+                },
+            );
+            let protected: Vec<String> = spans
+                .into_iter()
+                .map(|span| chars[span.start_char..span.end_char].iter().collect())
+                .collect();
+            assert_eq!(protected, ["「行く？」"], "{source}");
+        }
+    }
+
+    #[test]
     fn quote_join_accepts_only_one_comma_after_the_conjunction() {
-        use super::quote_join;
+        use super::{QuoteJoin, quote_join};
 
         for (between, expected) in [
-            ("と、", Some(false)),
-            (" と　、 漢字の　", Some(true)),
-            ("、", None),
+            ("と、", Some(QuoteJoin::Conjunction(false))),
+            (" と　、 漢字の　", Some(QuoteJoin::Conjunction(true))),
+            ("、", Some(QuoteJoin::Enumeration)),
             ("、と", None),
             ("と、、", None),
             ("と、。", None),

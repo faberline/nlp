@@ -1938,6 +1938,7 @@ struct TeHelpLetterAddressee<'a> {
     illustrative: bool,
     explicit_each: bool,
     recipient_noun: bool,
+    counted_person: Option<usize>,
     start: usize,
     end: usize,
 }
@@ -1947,6 +1948,7 @@ struct TeHelpLetterQuantity<'a> {
     span: std::ops::Range<usize>,
     numeral: String,
     additional: bool,
+    total: bool,
     qualifier: Option<&'a str>,
 }
 
@@ -2296,12 +2298,12 @@ fn te_help_letter_occurrence_rate(
     Some((start..end, rendered))
 }
 
-fn te_help_letter_quantity(
-    arguments: &[Atom],
+fn te_help_letter_quantity<'a>(
+    arguments: &'a [Atom],
     letter_idx: usize,
     action_idx: usize,
-    allow_before_object: bool,
-) -> Option<TeHelpLetterQuantity<'_>> {
+    direct_addressee: Option<&TeHelpLetterAddressee<'_>>,
+) -> Option<TeHelpLetterQuantity<'a>> {
     let object = arguments
         .iter()
         .position(|atom| atom.doc_tok_idx == Some(letter_idx))?;
@@ -2313,7 +2315,7 @@ fn te_help_letter_quantity(
         let prefix = atom.surface.strip_suffix('通')?;
         let after_object =
             index >= object + 2 && atom.deprel == "obl" && atom.head == Some(action_idx);
-        let before_object = allow_before_object
+        let before_object = direct_addressee.is_some()
             && atom.deprel == "nmod"
             && atom.head == Some(letter_idx)
             && match object.checked_sub(index) {
@@ -2325,14 +2327,29 @@ fn te_help_letter_quantity(
                 }
                 _ => false,
             };
+        let before_recipient = direct_addressee.is_some_and(|address| {
+            if index < object + 2
+                || atom.deprel != "nmod"
+                || address.counted_person.is_none()
+                || atom.head != address.counted_person
+            {
+                return false;
+            }
+            let last = arguments
+                .get(index + 1)
+                .filter(|word| linked_letter_quantity_qualifier(atom, word))
+                .map_or(index, |_| index + 1);
+            last + 1 == address.start
+                && arguments[last].span.end_char == arguments[address.start].span.start_char
+        });
         (!atom.is_locked
             && atom.upos == Some(Upos::Noun)
-            && (after_object || before_object)
+            && (after_object || before_object || before_recipient)
             && (prefix.is_empty() || is_japanese_numeral(prefix)))
-        .then_some((index, atom, prefix))
+        .then_some((index, atom, prefix, before_recipient))
     });
-    let (counter_index, counter, fused_number) = counters.next()?;
-    counter.doc_tok_idx?;
+    let (counter_index, counter, fused_number, scoped_to_recipient_group) = counters.next()?;
+    let counter_id = counter.doc_tok_idx?;
     if counters.next().is_some() {
         return None;
     }
@@ -2377,6 +2394,16 @@ fn te_help_letter_quantity(
         fused_number.to_owned()
     };
     let numeral = normalize_decimal_digits(&numeral);
+    let total = start.checked_sub(1).is_some_and(|index| {
+        let marker = &arguments[index];
+        !marker.is_locked
+            && matches!(marker.surface.as_str(), "合計" | "総計")
+            && marker.upos == Some(Upos::Noun)
+            && matches!(marker.deprel.as_str(), "compound" | "nmod")
+            && marker.head == Some(counter_id)
+            && marker.span.end_char == arguments[start].span.start_char
+    });
+    start -= usize::from(total);
     let additional = start.checked_sub(1).is_some_and(|index| {
         let more = &arguments[index];
         !more.is_locked
@@ -2391,12 +2418,17 @@ fn te_help_letter_quantity(
     let qualifier = arguments
         .get(after_counter)
         .filter(|word| linked_letter_quantity_qualifier(counter, word));
+    let distributed = qualifier.is_some_and(|word| word.surface == "ずつ");
+    if (total && distributed) || (scoped_to_recipient_group && !distributed && !total) {
+        return None;
+    }
     let span = start..after_counter + usize::from(qualifier.is_some());
     Some(TeHelpLetterQuantity {
         object,
         span,
         numeral,
         additional,
+        total,
         qualifier: qualifier.map(|word| word.surface.as_str()),
     })
 }
@@ -2425,6 +2457,7 @@ fn te_help_letter_count(
         span,
         numeral,
         additional,
+        total,
         qualifier: qualifier_text,
     } = quantity;
     let writer_count = match distribution {
@@ -2522,7 +2555,14 @@ fn te_help_letter_count(
     {
         return None;
     }
-    let modifier = if periodic_joint {
+    let modifier = if total {
+        Some(match (additional, qualifier_text) {
+            (true, Some("だけ")) => "總共只再",
+            (false, Some("だけ")) => "總共只",
+            (true, _) => "總共再",
+            (false, _) => "總共",
+        })
+    } else if periodic_joint {
         Some(match (signature.is_some(), additional) {
             (true, true) => "再聯名",
             (true, false) => "聯名",
@@ -2684,6 +2724,7 @@ fn te_help_letter_addressee(
         illustrative,
         explicit_each: false,
         recipient_noun: false,
+        counted_person: None,
         start,
         end,
     })
@@ -2757,7 +2798,7 @@ fn te_help_letter_recipient_group(
     role: usize,
     letter_idx: usize,
     action_idx: usize,
-) -> Option<(std::ops::Range<usize>, &str, bool)> {
+) -> Option<(std::ops::Range<usize>, &Atom, bool)> {
     let recipient = &arguments[role];
     let before = start.checked_sub(3).and_then(|begin| {
         let [number, person, no] = &arguments[begin..start] else {
@@ -2812,7 +2853,7 @@ fn te_help_letter_recipient_group(
         }
         _ => return None,
     };
-    Some((start..head + 1 + length, &number.surface, explicit_each))
+    Some((start..head + 1 + length, number, explicit_each))
 }
 
 fn te_help_letter_recipient_role(
@@ -2822,10 +2863,15 @@ fn te_help_letter_recipient_role(
     action_idx: usize,
 ) -> Option<TeHelpLetterAddressee<'_>> {
     let role = te_help_letter_recipient_noun(arguments, start)?;
-    let (span, count, explicit_each) = if let Some((span, number, explicit_each)) =
+    let (span, count, explicit_each, counted_person) = if let Some((span, number, explicit_each)) =
         te_help_letter_recipient_group(arguments, start, role, letter_idx, action_idx)
     {
-        (span, Some(number), explicit_each)
+        (
+            span,
+            Some(number.surface.as_str()),
+            explicit_each,
+            number.head,
+        )
     } else {
         let rate = role + 1;
         let length = te_help_letter_per_person(&arguments[rate..], action_idx)?;
@@ -2833,7 +2879,7 @@ fn te_help_letter_recipient_role(
         if owner.deprel != "nmod" || owner.head != arguments[rate + 1].doc_tok_idx {
             return None;
         }
-        (start..rate + length, None, true)
+        (start..rate + length, None, true, None)
     };
     Some(TeHelpLetterAddressee {
         members: Vec::new(),
@@ -2841,6 +2887,7 @@ fn te_help_letter_recipient_role(
         illustrative: false,
         explicit_each,
         recipient_noun: true,
+        counted_person,
         start: span.start,
         end: span.end,
     })
@@ -2886,6 +2933,7 @@ fn te_help_letter_direct_addressee(
             illustrative: false,
             explicit_each: true,
             recipient_noun: false,
+            counted_person: None,
             start,
             end: index + 1,
         }
@@ -3213,7 +3261,7 @@ fn te_help_request<'a>(
             arguments,
             index,
             action_idx,
-            each_addressee.is_some() && letter_marker.is_none(),
+            each_addressee.as_ref().filter(|_| letter_marker.is_none()),
         )
     });
     let distributes_letters = letter_quantity
@@ -3224,6 +3272,15 @@ fn te_help_request<'a>(
             !address.explicit_each || matches!(quantity.qualifier, None | Some("ずつ"))
         })
     });
+    if letter_quantity
+        .as_ref()
+        .is_some_and(|quantity| quantity.total)
+        && each_addressee
+            .as_ref()
+            .is_some_and(|address| address.explicit_each)
+    {
+        return None;
+    }
     let letter_writers = if letter_marker.is_some() || each_addressee.is_some() {
         let mut groups = (0..arguments.len())
             .filter_map(|start| te_help_letter_writers(arguments, start, action_idx, helper_idx));
@@ -21036,6 +21093,26 @@ mod existence_rule_tests {
             (
                 "二人の受取人に手紙を一通だけ書いていただけますか。",
                 "可以請您只寫一封信給兩位收件人嗎？",
+            ),
+            (
+                "二人の受取人に手紙を合計一通書いていただけますか。",
+                "可以請您總共寫一封信給兩位收件人嗎？",
+            ),
+            (
+                "二人の受取人に手紙を合計二通書いていただけますか。",
+                "可以請您總共寫兩封信給兩位收件人嗎？",
+            ),
+            (
+                "手紙を合計一通二人の受取人に書いていただけますか。",
+                "可以請您總共寫一封信給兩位收件人嗎？",
+            ),
+            (
+                "手紙を一通ずつ二人の受取人に書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "手紙を二通ずつ三人の受取人に書いていただけますか。",
+                "可以請您給三位收件人各寫兩封信嗎？",
             ),
             (
                 "二人の受取人にそれぞれ手紙を一通書いていただけますか。",

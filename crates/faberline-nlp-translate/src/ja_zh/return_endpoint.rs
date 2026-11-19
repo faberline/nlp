@@ -43,11 +43,21 @@ fn clock_name(atom: &Atom) -> bool {
     )
 }
 
+fn clock_owner<'a>(hand: &Atom, source: &'a [Atom]) -> Option<&'a Atom> {
+    let id = hand.doc_tok_idx?;
+    source.windows(2).find_map(|pair| {
+        let [clock, marker] = pair else { return None };
+        (clock.head == Some(id)
+            && clock.deprel == "nmod"
+            && clock_name(clock)
+            && marker.surface == "の"
+            && attached_case(clock, marker))
+        .then_some(clock)
+    })
+}
+
 fn clock_hand(noun: &Atom, source: &[Atom]) -> bool {
-    let Some(id) = noun.doc_tok_idx else {
-        return false;
-    };
-    if noun.is_locked || noun.upos != Some(Upos::Noun) {
+    if noun.is_locked || noun.doc_tok_idx.is_none() || noun.upos != Some(Upos::Noun) {
         return false;
     }
     if matches!(
@@ -57,15 +67,7 @@ fn clock_hand(noun: &Atom, source: &[Atom]) -> bool {
         return true;
     }
     has_hand_prefix(noun, source, &["長", "短", "時", "分", "秒"])
-        || noun.surface == "針"
-            && source.windows(2).any(|pair| {
-                pair[0].head == Some(id)
-                    && pair[0].deprel == "nmod"
-                    && clock_name(&pair[0])
-                    && !pair[0].is_locked
-                    && pair[1].surface == "の"
-                    && attached_case(&pair[0], &pair[1])
-            })
+        || noun.surface == "針" && clock_owner(noun, source).is_some()
 }
 
 fn whole_dial_number(source: &[Atom], last: usize, final_part: &str) -> Option<(usize, u32)> {
@@ -174,10 +176,21 @@ fn exact_time_point(word: &str) -> bool {
         .into_iter()
         .find_map(|case| word.strip_suffix(case))
         .unwrap_or(word);
-    matches!(head, "とき" | "時" | "時点")
+    matches!(head, "とき" | "時" | "時点" | "瞬間")
 }
 
-fn simultaneous_prefix(atoms: &[Atom]) -> Option<(&Atom, &[Atom])> {
+fn simultaneous_prefix(atoms: &[Atom], pointing: usize) -> Option<(&Atom, &[Atom])> {
+    let (adverb, atoms) = match atoms {
+        [adverb, rest @ ..]
+            if !adverb.is_locked
+                && adverb.upos == Some(Upos::Adv)
+                && adverb.deprel == "advmod"
+                && matches!(adverb.surface.as_str(), "ちょうど" | "丁度") =>
+        {
+            (Some(adverb), rest)
+        }
+        _ => (None, atoms),
+    };
     let (when, tail) = match atoms {
         [time, rest @ ..] if !time.is_locked && time.surface == "同時に" => (time, rest),
         [time, ni, rest @ ..]
@@ -205,6 +218,13 @@ fn simultaneous_prefix(atoms: &[Atom]) -> Option<(&Atom, &[Atom])> {
         }
         _ => return None,
     };
+    if adverb.is_some_and(|adverb| {
+        !adverb
+            .head
+            .is_some_and(|head| head == pointing || Some(head) == when.doc_tok_idx)
+    }) {
+        return None;
+    }
     let [particle, rest @ ..] = tail else {
         return Some((when, tail));
     };
@@ -300,7 +320,40 @@ fn hand_kind(hand: &Atom, source: &[Atom]) -> Option<&'static str> {
     })
 }
 
-fn repeated_clock_owner(clock: &Atom, marker: &Atom, clause: &[Atom]) -> bool {
+fn refers_to_clock(
+    determiner: &Atom,
+    clock: &Atom,
+    previous_clock: Option<&Atom>,
+    doc: &Document,
+) -> bool {
+    if determiner.is_locked || determiner.surface != "その" || determiner.upos != Some(Upos::Det)
+    {
+        return false;
+    }
+    let (Some(start), Some(current), Some(previous)) = (
+        determiner.doc_tok_idx,
+        clock.doc_tok_idx,
+        previous_clock.and_then(|clock| clock.doc_tok_idx),
+    ) else {
+        return false;
+    };
+    // Match both clock heads. Use the mention start so a clock name can
+    // begin with a separate compound token, as in その腕時計.
+    doc.coref.iter().any(|chain| {
+        chain.iter().any(|mention| mention.head_token == previous)
+            && chain
+                .iter()
+                .any(|mention| mention.head_token == current && mention.start_token == start)
+    })
+}
+
+fn repeated_clock_owner(
+    clock: &Atom,
+    marker: &Atom,
+    clause: &[Atom],
+    previous_clock: Option<&Atom>,
+    doc: &Document,
+) -> bool {
     if clock.deprel != "nmod"
         || !clock_name(clock)
         || marker.surface != "の"
@@ -314,13 +367,19 @@ fn repeated_clock_owner(clock: &Atom, marker: &Atom, clause: &[Atom]) -> bool {
     });
     modifiers.next().is_some_and(|atom| {
         !atom.is_locked
-            && atom.surface == "同じ"
             && atom.deprel == "det"
-            && atom.span.end_char <= clock.span.start_char
+            && (atom.surface == "同じ" && atom.span.end_char <= clock.span.start_char
+                || refers_to_clock(atom, clock, previous_clock, doc))
     }) && modifiers.next().is_none()
 }
 
-fn same_pointing_hand(subject: &Atom, clause: &[Atom], hand: &Atom, source: &[Atom]) -> bool {
+fn same_pointing_hand(
+    subject: &Atom,
+    clause: &[Atom],
+    hand: &Atom,
+    source: &[Atom],
+    doc: &Document,
+) -> bool {
     let kind = hand_kind(subject, clause);
     if subject.is_locked
         || !(subject.surface == "針" && kind.is_none()
@@ -335,9 +394,9 @@ fn same_pointing_hand(subject: &Atom, clause: &[Atom], hand: &Atom, source: &[At
         None => true,
         Some((index, clock)) => {
             modifiers.next().is_none()
-                && clause
-                    .get(index + 1)
-                    .is_some_and(|marker| repeated_clock_owner(clock, marker, clause))
+                && clause.get(index + 1).is_some_and(|marker| {
+                    repeated_clock_owner(clock, marker, clause, clock_owner(hand, source), doc)
+                })
         }
     }
 }
@@ -367,7 +426,12 @@ fn dial_face_start(source: &[Atom], first: usize) -> Option<usize> {
         .then_some(first - 3)
 }
 
-fn dial_object_start(source: &[Atom], first: usize) -> Option<usize> {
+fn dial_object_start(
+    source: &[Atom],
+    first: usize,
+    previous_clock: Option<&Atom>,
+    doc: &Document,
+) -> Option<usize> {
     let Some(face) = dial_face_start(source, first) else {
         return Some(first);
     };
@@ -384,16 +448,23 @@ fn dial_object_start(source: &[Atom], first: usize) -> Option<usize> {
     {
         return Some(face);
     }
-    if !clock_name(clock)
-        || source.iter().any(|atom| {
-            atom.head == clock.doc_tok_idx
-                && (matches!(atom.deprel.as_str(), "nmod" | "acl" | "amod")
-                    || atom.deprel == "det" && atom.surface != "同じ")
-        })
-    {
+    if !clock_name(clock) {
         return None;
     }
-    Some(face - 2)
+    let mut start = face - 2;
+    for (index, atom) in source.iter().enumerate().filter(|(_, atom)| {
+        atom.head == clock.doc_tok_idx
+            && matches!(atom.deprel.as_str(), "det" | "nmod" | "acl" | "amod")
+    }) {
+        match atom.deprel.as_str() {
+            "det" if atom.surface == "同じ" => {}
+            "det" if index < start && refers_to_clock(atom, clock, previous_clock, doc) => {
+                start = index;
+            }
+            _ => return None,
+        }
+    }
+    Some(start)
 }
 
 fn indication_polarity(tail: &[Atom], source: &[char], after_verb: usize) -> Option<bool> {
@@ -469,7 +540,8 @@ fn reading_at_return(
     else {
         return None;
     };
-    let (when, rest) = simultaneous_prefix(atoms)?;
+    let pointing = returning.head?;
+    let (when, rest) = simultaneous_prefix(atoms, pointing)?;
     let (rest, end_punct) =
         if rest.is_empty() && matches!(trailing_punct.as_deref(), Some("、" | "，")) {
             let [
@@ -487,7 +559,6 @@ fn reading_at_return(
         } else {
             (rest, trailing_punct.as_deref())
         };
-    let pointing = returning.head?;
     let indicator = rest.iter().position(|atom| {
         !atom.is_locked
             && atom.doc_tok_idx == Some(pointing)
@@ -503,7 +574,7 @@ fn reading_at_return(
     let subject = subjects.next();
     if subjects.next().is_some()
         || subject.is_some_and(|subject| {
-            subject.head != Some(pointing) || !same_pointing_hand(subject, rest, hand, source)
+            subject.head != Some(pointing) || !same_pointing_hand(subject, rest, hand, source, doc)
         })
     {
         return None;
@@ -517,7 +588,7 @@ fn reading_at_return(
         return None;
     }
     let (first, hour) = indicated_hour(rest, index, doc)?;
-    let first = dial_object_start(rest, first)?;
+    let first = dial_object_start(rest, first, clock_owner(hand, source), doc)?;
     let reading_span = Span {
         start_char: rest[first].span.start_char,
         end_char: rest[index].span.end_char,

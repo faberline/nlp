@@ -95,7 +95,184 @@ pub(super) fn contains_copular_node(atoms: &[Atom], at: usize, doc: &Document) -
 
 fn owner_atom(a: &Atom, doc: &Document) -> bool {
     matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
-        && (!a.is_locked || whole_nominal_lock(a, doc))
+        && (!a.is_locked || a.lemma.as_deref() == Some(MODIFIED_NOUN) || whole_nominal_lock(a, doc))
+}
+
+const MODIFIED_NOUN: &str = "__ja_possession_modified_noun";
+
+fn original_pos(atom: &Atom, doc: &Document) -> Option<Upos> {
+    if !atom.is_locked {
+        return atom.upos;
+    }
+    let token = doc.tokens.get(atom.doc_tok_idx?)?;
+    (atom.span == token.span).then_some(token.upos).flatten()
+}
+
+fn noun_classifier(word: &str, noun: &Atom) -> &'static str {
+    match word {
+        "鑰匙" | "傘" => "把",
+        "房間" => "間",
+        "包包" | "背包" => "個",
+        "帽子" => "頂",
+        "筆記本" | "課本" => "本",
+        "鞋子" => "雙",
+        _ => super::demonstrative_classifier(word, noun),
+    }
+}
+
+// Fold adjective phrases only into the noun identified by their source arcs.
+// The following の remains the possessor marker, outside this noun phrase.
+fn modified_noun(words: &[Atom], doc: &Document, chars: &[char]) -> Option<Vec<Atom>> {
+    let (head, prefix) = words.split_last()?;
+    if !owner_atom(head, doc) || head.doc_tok_idx.is_none() {
+        return None;
+    }
+    let start = prefix
+        .iter()
+        .rposition(|a| {
+            !a.is_locked && a.deprel == "case" && matches!(a.surface.as_str(), "の" | "と")
+        })
+        .map_or(0, |i| i + 1);
+    let mut modifiers = &prefix[start..];
+    let mut demonstrative = "";
+    if let [det, rest @ ..] = modifiers
+        && !det.is_locked
+        && det.deprel == "det"
+        && det.head == head.doc_tok_idx
+    {
+        demonstrative = match det.surface.as_str() {
+            "この" => "這",
+            "その" | "あの" => "那",
+            "どの" => "哪",
+            _ => "",
+        };
+        if !demonstrative.is_empty() {
+            modifiers = rest;
+        }
+    }
+    let mut descriptions = Vec::new();
+    while !modifiers.is_empty() {
+        let (degree, content) = match modifiers {
+            [adverb, adj, ..]
+                if !adverb.is_locked
+                    && adverb.deprel == "advmod"
+                    && adverb.head == adj.doc_tok_idx
+                    && original_pos(adj, doc) == Some(Upos::Adj) =>
+            {
+                (
+                    super::translate_single_ja_term(
+                        &adverb.surface,
+                        adverb.lemma.as_deref(),
+                        adverb.upos,
+                    ),
+                    &modifiers[1..],
+                )
+            }
+            _ => (String::new(), modifiers),
+        };
+        let (adj, rest) = content.split_first()?;
+        let adjective = original_pos(adj, doc) == Some(Upos::Adj)
+            || !adj.is_locked
+                && matches!(adj.surface.as_str(), "大きな" | "小さな")
+                && adj.deprel == "det";
+        if !adjective
+            || !(adj.head == head.doc_tok_idx
+                && matches!(adj.deprel.as_str(), "amod" | "acl" | "det")
+                || adj.deprel == "advcl"
+                    && rest.iter().any(|next| {
+                        next.doc_tok_idx == adj.head
+                            && original_pos(next, doc) == Some(Upos::Adj)
+                            && next.head == head.doc_tok_idx
+                    }))
+        {
+            return None;
+        }
+        let n = rest
+            .iter()
+            .take_while(|a| {
+                !a.is_locked
+                    && a.head == adj.doc_tok_idx
+                    && (a.deprel == "aux"
+                        || a.deprel == "discourse" && a.surface == "な"
+                        || a.deprel == "mark" && a.surface == "て" && adj.deprel == "advcl")
+            })
+            .count();
+        let morph: String = rest[..n].iter().map(|a| a.surface.as_str()).collect();
+        let tense = match morph.as_str() {
+            "" | "な" | "て" => "",
+            "ない" => "不",
+            "た" => "原本",
+            "なかった" => "原本不",
+            _ => return None,
+        };
+        let adjective = if adj.is_locked {
+            adj.surface.clone()
+        } else if adj.surface == "大きな" {
+            "大".to_owned()
+        } else if adj.surface == "小さな" {
+            "小".to_owned()
+        } else {
+            let stem = adj.lemma.clone().or_else(|| {
+                adj.surface
+                    .strip_suffix("かっ")
+                    .or_else(|| adj.surface.strip_suffix('く'))
+                    .map(|x| format!("{x}い"))
+            });
+            super::translate_single_ja_term(
+                stem.as_deref().unwrap_or(&adj.surface),
+                stem.as_deref(),
+                Some(Upos::Adj),
+            )
+        };
+        let word = adjective.trim_end_matches('的');
+        let hue = matches!(word, "紅" | "黑" | "白" | "藍" | "黃" | "綠" | "紫" | "灰");
+        let description = if hue && degree.is_empty() && descriptions.is_empty() && n == rest.len()
+        {
+            let tense = match tense {
+                "不" => "不是",
+                "原本不" => "原本不是",
+                "原本" => "原本是",
+                _ => "",
+            };
+            format!("{tense}{word}色")
+        } else {
+            format!("{tense}{degree}{word}")
+        };
+        descriptions.push(description);
+        modifiers = &rest[n..];
+    }
+    if descriptions.is_empty() {
+        return None;
+    }
+    let raw: String = chars
+        .get(head.span.start_char..head.span.end_char)?
+        .iter()
+        .collect();
+    let word = super::translate_single_ja_term(&raw, None, original_pos(head, doc));
+    let mut noun = head.clone();
+    let classifier = if demonstrative.is_empty() {
+        ""
+    } else {
+        noun_classifier(&word, head)
+    };
+    let text = if head.is_locked {
+        head.surface.as_str()
+    } else if word == "箱" {
+        "箱子"
+    } else {
+        &word
+    };
+    noun.surface = format!(
+        "{demonstrative}{classifier}{}{}的{text}",
+        if descriptions.len() > 1 { "又" } else { "" },
+        descriptions.join("又")
+    );
+    noun.span.start_char = words[start].span.start_char;
+    noun.is_locked = true;
+    noun.lemma = Some(MODIFIED_NOUN.to_owned());
+    let mut result = words[..start].to_vec();
+    result.push(noun);
+    Some(result)
 }
 
 fn elliptical_owner(
@@ -203,6 +380,10 @@ fn render_ellipsis(
         }
         (&[][..], prefix)
     };
+    let modified_topic = modified_noun(topic, doc, chars);
+    let modified_owner = modified_noun(owner_phrase, doc, chars);
+    let topic = modified_topic.as_deref().unwrap_or(topic);
+    let owner_phrase = modified_owner.as_deref().unwrap_or(owner_phrase);
     if !topic.iter().chain(owner_phrase).all(|a| {
         owner_atom(a, doc)
             || !a.is_locked
@@ -218,7 +399,8 @@ fn render_ellipsis(
         [det, noun]
             if !det.is_locked
                 && det.head == noun.doc_tok_idx
-                && (noun.surface == "鍵" || noun.is_locked && whole_nominal_lock(noun, doc))
+                && (matches!(noun.surface.as_str(), "鍵" | "傘")
+                    || noun.is_locked && whole_nominal_lock(noun, doc))
                 && matches!(det.surface.as_str(), "この" | "その" | "あの") =>
         {
             let mut source = noun.clone();
@@ -229,11 +411,7 @@ fn render_ellipsis(
             source.is_locked = false;
             source.upos = doc.tokens.get(noun.doc_tok_idx?)?.upos;
             let word = super::translate_single_ja_term(&source.surface, None, source.upos);
-            let classifier = if word == "鑰匙" {
-                "把"
-            } else {
-                super::demonstrative_classifier(&word, &source)
-            };
+            let classifier = noun_classifier(&word, &source);
             format!(
                 "{}{classifier}{}",
                 if det.surface == "この" {
@@ -464,6 +642,21 @@ mod tests {
     #[test]
     fn elliptical_possession_keeps_its_subject_owner_and_polarity() {
         for (source, expected) in [
+            ("その黒い傘は店長のですか。", "那把黑色的傘是店長的嗎？"),
+            ("この赤い本は姉のです。", "這本紅色的書是姊姊的。"),
+            (
+                "この赤い本は弟のではありません。",
+                "這本紅色的書不是弟弟的。",
+            ),
+            ("古い本は誰のですか。", "舊的書是誰的？"),
+            ("これは若い先生のです。", "這是年輕的老師的。"),
+            ("この静かな部屋は友達のです。", "這間安靜的房間是朋友的。"),
+            (
+                "あの大きな古い鞄は先生のです。",
+                "那個又大又舊的包包是老師的。",
+            ),
+            ("このとても古い本は誰のですか。", "這本非常舊的書是誰的？"),
+            ("どの古い本が学校のですか。", "哪本舊的書是學校的？"),
             ("この本は私のです。", "這本書是我的。"),
             ("その本は誰のですか。", "那本書是誰的？"),
             ("この鍵は私のものではありません。", "這把鑰匙不是我的。"),
@@ -498,6 +691,8 @@ mod tests {
         for source in [
             "人の物を取るものではない。",
             "これは私が書いたものではありません。",
+            "この赤い本は私が書いたのです。",
+            "この古い本を妹が読みました。",
         ] {
             let result = translate(source);
             assert!(

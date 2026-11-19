@@ -1,5 +1,5 @@
 use faberline_nlp::Span;
-use faberline_nlp::doc::{Segmentation, Token, Upos};
+use faberline_nlp::doc::{Document, SyntaxToken, Token, Upos};
 
 const FORM_NAMES: &[&str] = &[
     "文字数",
@@ -59,17 +59,24 @@ pub(crate) struct WrittenForm {
     pub(crate) continuation: bool,
 }
 
+#[derive(Clone, Copy, Default)]
+struct QuoteSyntax<'a> {
+    tokens: &'a [Token],
+    dependencies: &'a [SyntaxToken],
+}
+
 /// Find explicitly written forms on the source paragraph, then give each
 /// analysis sentence only its part of the original text to protect.
-pub(crate) fn plan_written_form_quotes(
-    chars: &[char],
-    segmentation: &Segmentation,
-    tokens: &[Token],
-) -> Vec<Vec<WrittenForm>> {
+pub(crate) fn plan_written_form_quotes(chars: &[char], doc: &Document) -> Vec<Vec<WrittenForm>> {
+    let segmentation = &doc.segmentation;
+    let syntax = QuoteSyntax {
+        tokens: &doc.tokens,
+        dependencies: &doc.syntax,
+    };
     let mut by_sentence = vec![Vec::new(); segmentation.sentences.len()];
     let sentences = &segmentation.sentences;
     for paragraph in &segmentation.paragraphs {
-        let mut quotes = written_form_quotes(chars, paragraph.span, tokens);
+        let mut quotes = written_form_quotes(chars, paragraph.span, syntax);
         quotes.sort_unstable_by_key(|span| (span.start_char, std::cmp::Reverse(span.end_char)));
         let mut last_end = paragraph.span.start_char;
         for quote in quotes {
@@ -107,7 +114,7 @@ struct OpenQuote {
     first_protection: usize,
 }
 
-fn written_form_quotes(chars: &[char], paragraph: Span, tokens: &[Token]) -> Vec<Span> {
+fn written_form_quotes(chars: &[char], paragraph: Span, syntax: QuoteSyntax<'_>) -> Vec<Span> {
     let mut openings = Vec::new();
     let mut protected = Vec::new();
     let mut top_level = Vec::new();
@@ -138,7 +145,7 @@ fn written_form_quotes(chars: &[char], paragraph: Span, tokens: &[Token]) -> Vec
                     start_char: frame.start + 1,
                     end_char: at,
                 };
-                protect_sibling_forms(chars, inner, &frame.children, true, tokens, &mut protected);
+                protect_sibling_forms(chars, inner, &frame.children, true, syntax, &mut protected);
                 if let Some(parent) = openings.last_mut() {
                     parent.children.push(inner);
                 } else {
@@ -151,7 +158,7 @@ fn written_form_quotes(chars: &[char], paragraph: Span, tokens: &[Token]) -> Vec
     if let Some(unclosed) = openings.first() {
         protected.truncate(unclosed.first_protection);
     }
-    protect_sibling_forms(chars, paragraph, &top_level, false, tokens, &mut protected);
+    protect_sibling_forms(chars, paragraph, &top_level, false, syntax, &mut protected);
     protected
 }
 
@@ -172,7 +179,7 @@ fn protect_sibling_forms(
     scope: Span,
     quotes: &[Span],
     nested: bool,
-    tokens: &[Token],
+    syntax: QuoteSyntax<'_>,
     protected: &mut Vec<Span>,
 ) {
     let mut first_in_list = 0;
@@ -200,7 +207,8 @@ fn protect_sibling_forms(
         }
         let measures_form = measures_written_form(after);
         let shared_copy_object = index > first_in_list && after.starts_with(&['を']);
-        let copies_form = copies_written_form(after, scope.end_char, tokens, shared_copy_object);
+        let copies_form =
+            copies_written_form(chars, after, scope.end_char, syntax, shared_copy_object);
         if measures_form
             || copies_form
             || describes_written_form(after)
@@ -431,9 +439,10 @@ fn acts_on_written_form(before: &[char], after: &[char]) -> bool {
 }
 
 fn copies_written_form(
+    chars: &[char],
     after: &[char],
     scope_end: usize,
-    tokens: &[Token],
+    syntax: QuoteSyntax<'_>,
     shared_object: bool,
 ) -> bool {
     let next = if let Some(word) = strip_prefix(after, "という") {
@@ -484,11 +493,97 @@ fn copies_written_form(
                 }
                 (immediate_copy || after_copying_manner(tail).is_some_and(starts_copying))
                     && copy_destination_without_predicate(
-                        tokens,
+                        syntax.tokens,
                         destination_start,
                         destination_start + index,
                     )
             })
+        || copy_with_linked_modifiers(chars, destination_start, scope_end, syntax)
+}
+
+fn copy_with_linked_modifiers(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    syntax: QuoteSyntax<'_>,
+) -> bool {
+    let first = syntax
+        .tokens
+        .partition_point(|token| token.span.start_char < start);
+    let Some((predicate, verb)) = syntax
+        .tokens
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take_while(|(_, token)| token.span.end_char <= end)
+        .find(|(_, token)| {
+            matches!(
+                token.upos,
+                Some(Upos::Verb | Upos::Aux | Upos::Sconj | Upos::Cconj)
+            )
+        })
+    else {
+        return false;
+    };
+    if verb.upos != Some(Upos::Verb)
+        || !starts_copying(&chars[verb.span.start_char..verb.span.end_char])
+        || chars[start..verb.span.start_char].iter().any(|&ch| {
+            matches!(
+                ch,
+                '\n' | '。' | '！' | '？' | '!' | '?' | '「' | '」' | '『' | '』'
+            )
+        })
+    {
+        return false;
+    }
+
+    let modifiers = first..predicate;
+    !modifiers.is_empty()
+        && modifiers.clone().all(|index| {
+            let token = &syntax.tokens[index];
+            let surface = &chars[token.span.start_char..token.span.end_char];
+            if token.upos == Some(Upos::Punct) {
+                return surface == ['、'];
+            }
+            !matches!(surface, ['を'] | ['は'] | ['が'])
+                && token.sentence == verb.sentence
+                && attaches_as_copy_modifier(
+                    index,
+                    modifiers.clone(),
+                    predicate,
+                    syntax.dependencies,
+                )
+        })
+}
+
+fn attaches_as_copy_modifier(
+    mut token: usize,
+    modifiers: std::ops::Range<usize>,
+    predicate: usize,
+    dependencies: &[SyntaxToken],
+) -> bool {
+    // Follow only local attachments. A case particle can attach through its noun,
+    // and several manner modifiers can modify one another before reaching the verb.
+    for _ in modifiers.clone() {
+        let Ok(index) = dependencies.binary_search_by_key(&token, |edge| edge.token) else {
+            return false;
+        };
+        let edge = &dependencies[index];
+        let Some(head) = edge.head else {
+            return false;
+        };
+        if matches!(edge.deprel.as_str(), "nsubj" | "csubj" | "obj" | "iobj") {
+            return false;
+        }
+        if head == predicate {
+            return matches!(edge.deprel.as_str(), "advmod" | "advcl" | "obl");
+        }
+        if !modifiers.contains(&head) {
+            return false;
+        }
+        token = head;
+    }
+    false
 }
 
 fn after_copying_manner(chars: &[char]) -> Option<&[char]> {
@@ -1122,6 +1217,26 @@ mod tests {
                 &["四點", "「入居申込書」", "筆記本"],
             ),
             (
+                "『来て』を紙に、丁寧に書き写しました。",
+                &["『来て』", "紙"],
+            ),
+            (
+                "『来て』を紙に、小さく書き写しました。",
+                &["『来て』", "紙"],
+            ),
+            (
+                "「帰る」を紙に、ゆっくり正確に書き写しました。",
+                &["「帰る」", "紙"],
+            ),
+            (
+                "「来て！」を紙に、丁寧に転記しました。",
+                &["「来て！」", "紙"],
+            ),
+            (
+                "『ドイツ』と『入居申込書』を紙に、丁寧に書き写しました。",
+                &["『ドイツ』", "『入居申込書』", "紙"],
+            ),
+            (
                 "『ドイツ』と『入居申込書』を紙に、書き写しました。",
                 &["『ドイツ』", "『入居申込書』", "紙"],
             ),
@@ -1154,6 +1269,14 @@ mod tests {
             (
                 "父は「入居申込書」と言った後でノートに、そのまま書き写しました。",
                 &["入住申請表", "筆記本"],
+            ),
+            (
+                "「来て」と丁寧に伝えてから紙に「行く」を小さく書き写しました。",
+                &["「來」", "「行く」", "紙"],
+            ),
+            (
+                "「来て」と言い、紙に宛名をゆっくり書き写しました。",
+                &["「來」", "宛名", "紙"],
             ),
             (
                 "4月2日に、申込書に『来て！』と書き写しました。",
@@ -1572,7 +1695,7 @@ mod tests {
 
     #[test]
     fn a_count_inside_one_quote_does_not_protect_other_utterances() {
-        use super::{Span, written_form_quotes};
+        use super::{QuoteSyntax, Span, written_form_quotes};
 
         for source in [
             "先生は『「行く？」の文字数を数えてから、「ドイツ！」と答えなさい』と言いました。",
@@ -1585,7 +1708,7 @@ mod tests {
                     start_char: 0,
                     end_char: chars.len(),
                 },
-                &[],
+                QuoteSyntax::default(),
             );
             let protected: Vec<String> = spans
                 .into_iter()

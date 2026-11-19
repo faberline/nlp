@@ -44,6 +44,26 @@ fn clock_qualifier<'a>(
     }
 }
 
+pub(super) fn modal(tail: &[Atom]) -> Option<&'static str> {
+    let suffix: String = tail.iter().map(|a| a.surface.as_str()).collect();
+    let plain = suffix
+        .strip_suffix("のです")
+        .or_else(|| suffix.strip_suffix("んです"))
+        .or_else(|| suffix.strip_suffix("です"))
+        .unwrap_or(&suffix);
+    Some(match plain {
+        "たい" => "想",
+        "たかった" => "當時想",
+        "たくない" | "たくはない" | "たくありません" | "たくはありません" => {
+            "不想"
+        }
+        "たくなかった" | "たくはなかった" | "たくありませんでした" | "たくはありませんでした" => {
+            "當時不想"
+        }
+        _ => return None,
+    })
+}
+
 pub(super) fn render(
     source: &[Atom],
     normalized: &[Atom],
@@ -79,23 +99,7 @@ pub(super) fn render(
     {
         return None;
     }
-    let suffix: String = tail.iter().map(|a| a.surface.as_str()).collect();
-    let plain = suffix
-        .strip_suffix("のです")
-        .or_else(|| suffix.strip_suffix("んです"))
-        .or_else(|| suffix.strip_suffix("です"))
-        .unwrap_or(&suffix);
-    let modal = match plain {
-        "たい" => "想",
-        "たかった" => "當時想",
-        "たくない" | "たくはない" | "たくありません" | "たくはありません" => {
-            "不想"
-        }
-        "たくなかった" | "たくはなかった" | "たくありませんでした" | "たくはありませんでした" => {
-            "當時不想"
-        }
-        _ => return None,
-    };
+    let modal = modal(tail)?;
     let idx = normalized
         .iter()
         .position(|a| a.doc_tok_idx == verb.doc_tok_idx && a.span == verb.span)?;
@@ -142,6 +146,7 @@ pub(super) fn render(
         doc,
         target,
         Some((modal, question && !asks_qualified_time)),
+        None,
     )
 }
 

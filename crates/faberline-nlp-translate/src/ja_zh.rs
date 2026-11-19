@@ -10,6 +10,7 @@ use std::collections::HashMap;
 mod copular_time;
 mod counted_object;
 mod homework_desire;
+mod homework_relative;
 mod nominal_possession;
 mod payment_potential;
 mod return_endpoint;
@@ -4815,7 +4816,8 @@ fn translate_clause_atoms(
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
-        && let Some(homework) = try_translate_homework_transfer(&bunsetsus, body, doc, target, None)
+        && let Some(homework) =
+            try_translate_homework_transfer(&bunsetsus, body, doc, target, None, None)
     {
         return (homework, false);
     }
@@ -5099,6 +5101,7 @@ fn nominal_conditional_tail(atoms: &[Atom]) -> Option<(&[Atom], [Atom; 2])> {
     Some((body, [predicate, ba.clone()]))
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
 enum ClassroomRole {
     Student,
     Teacher,
@@ -5141,6 +5144,7 @@ fn try_translate_homework_transfer(
     doc: &Document,
     target: TargetVariant,
     desire: Option<(&str, bool)>,
+    relative: Option<ClassroomRole>,
 ) -> Option<String> {
     // Inspect the source before nominal groups render protected atoms.
     // A normalized clock can pass if it has no glossary placeholder.
@@ -5232,7 +5236,10 @@ fn try_translate_homework_transfer(
             }
             continue;
         }
-        if bunsetsu.role != BunsetsuRole::Obj && bunsetsu.atoms.iter().any(|atom| atom.is_locked) {
+        if bunsetsu.role != BunsetsuRole::Obj
+            && bunsetsu.atoms.iter().any(|atom| atom.is_locked)
+            && homework_relative::person(bunsetsu, source).is_none()
+        {
             return None;
         }
         if bunsetsu.role == BunsetsuRole::Predicate
@@ -5273,7 +5280,9 @@ fn try_translate_homework_transfer(
         let [modifiers @ .., noun, marker] = bunsetsu.atoms.as_slice() else {
             return None;
         };
-        if noun.head != head || !dasu_case_link(noun, marker) {
+        if !dasu_case_link(noun, marker)
+            || (noun.head != head && !homework_relative::matrix_topic(noun, marker, head, source))
+        {
             return None;
         }
         match (noun.deprel.as_str(), marker.surface.as_str()) {
@@ -5293,7 +5302,7 @@ fn try_translate_homework_transfer(
                 has_clock_modifier = true;
             }
             ("nsubj", "は" | "が") if subject.is_none() => {
-                subject = Some(classroom_role(modifiers, noun)?);
+                subject = Some(homework_relative::person(bunsetsu, source)?);
             }
             ("obl" | "iobj", "に")
                 if desire.is_some()
@@ -5304,7 +5313,7 @@ fn try_translate_homework_transfer(
                 adjuncts.push(format!("在{time}"));
             }
             ("obl" | "iobj", "に") if recipient.is_none() => {
-                recipient = Some(classroom_role(modifiers, noun)?);
+                recipient = Some(homework_relative::person(bunsetsu, source)?);
             }
             ("obl", "で")
                 if noun.surface == "教室"
@@ -5325,12 +5334,25 @@ fn try_translate_homework_transfer(
             _ => return None,
         }
     }
-    let ((subject_role, subject), (recipient_role, recipient)) = (subject?, recipient?);
     let homework = homework?;
-    let action = match (subject_role, recipient_role) {
-        (ClassroomRole::Student, ClassroomRole::Teacher) => format!("把{homework}交給{recipient}"),
-        (ClassroomRole::Teacher, ClassroomRole::Student) => format!("出{homework}給{recipient}"),
+    let (subject_role, subject, recipient) = match (subject, recipient, relative) {
+        (Some((actor, name)), Some((receiver, text)), None) if actor != receiver => {
+            (actor, name, Some(text))
+        }
+        // The modified person fills the missing argument of the relative clause.
+        (None, receiver, Some(actor)) if receiver.as_ref().is_none_or(|r| r.0 != actor) => {
+            (actor, String::new(), receiver.map(|r| r.1))
+        }
+        (Some((actor, name)), None, Some(receiver)) if actor != receiver => {
+            (actor, name, Some(String::new()))
+        }
         _ => return None,
+    };
+    let action = match (subject_role, recipient) {
+        (ClassroomRole::Student, Some(name)) => format!("把{homework}交給{name}"),
+        (ClassroomRole::Teacher, Some(name)) => format!("出{homework}給{name}"),
+        (ClassroomRole::Student, None) => format!("交{homework}"),
+        (ClassroomRole::Teacher, None) => format!("出{homework}"),
     };
     let (before_verb, verb, after_verb, passive) =
         synthesize_predicate_complex(std::slice::from_ref(predicate), true, target, None);
@@ -5374,7 +5396,7 @@ fn try_translate_homework_transfer(
         }
         adjuncts.extend(before_verb);
     }
-    let mut parts = vec![subject.to_owned()];
+    let mut parts = vec![subject];
     if let Some(modal) = desire_prefix {
         parts.push(modal.to_owned());
     }
@@ -5387,7 +5409,11 @@ fn try_translate_homework_transfer(
     );
     parts.extend(continuation_tail);
     if terminal_ka.is_some() || desire.is_some_and(|(_, question)| question) {
-        if desire.is_none() && deadline.is_none() && !has_clock_modifier {
+        if desire.is_none()
+            && deadline.is_none()
+            && !has_clock_modifier
+            && !homework_relative::has_modified_person(bunsetsus, source)
+        {
             return None;
         }
         let asks_deadline_time = deadline.is_some_and(|(_, group)| {
@@ -5396,7 +5422,10 @@ fn try_translate_homework_transfer(
                 .iter()
                 .any(|atom| deadline_time_question(atom).is_some())
         });
-        if !asks_deadline_time && !asks_event_time {
+        if !asks_deadline_time
+            && !asks_event_time
+            && !homework_relative::asks_modifier_time(bunsetsus, source)
+        {
             parts.push("嗎".to_owned());
         }
     }
@@ -12258,7 +12287,13 @@ fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> 
         if !next_is_func
             && !next_is_aux
             && !keep_te_subsidiary
-            && (is_func || activity_adverb || !is_compound_noun_pair(atom, next))
+            && (is_func
+                || activity_adverb
+                || !is_compound_noun_pair(atom, next)
+                || next.is_some_and(|n| {
+                    is_honorific_suffix(&n.surface)
+                        && homework_relative::modifies_classroom_argument(atom, n, atoms)
+                }))
         {
             bunsetsus.push(classify_bunsetsu(
                 std::mem::take(&mut cur),
@@ -12570,7 +12605,13 @@ fn merge_adnominal_bunsetsus(
             // Keep the original atoms, syntactic role, and any following の or case particle.
             b.atoms.splice(0..0, modifier.atoms);
         }
-        if is_noun_bunsetsu(&b) {
+        if is_noun_bunsetsu(&b)
+            || (target == TargetVariant::ZhHant
+                && ends_in_genitive_no(&b)
+                && res
+                    .last()
+                    .is_some_and(|p| homework_relative::attached_predicate(p, &b, source)))
+        {
             let is_sue_ni = b.case_particle.as_deref() == Some("に")
                 && b.atoms
                     .first()
@@ -12705,7 +12746,11 @@ fn merge_adnominal_bunsetsus(
                     continue;
                 }
 
-                if let Some(pred_b) = res.pop_if(|prev| is_prenominal_pred(prev)) {
+                if let Some(pred_b) = res.pop_if(|prev| {
+                    is_prenominal_pred(prev)
+                        || (target == TargetVariant::ZhHant
+                            && homework_relative::attached_predicate(prev, &b, source))
+                }) {
                     let has_verb = pred_b
                         .atoms
                         .iter()
@@ -12739,8 +12784,18 @@ fn merge_adnominal_bunsetsus(
                         continue;
                     }
 
+                    if target == TargetVariant::ZhHant
+                        && homework_relative::fold(&mut res, &pred_b, &mut b, source, doc, target)
+                    {
+                        continue;
+                    }
                     // Relative clause (`彼は` stops, `彼が書いた` merges into `手紙`).
-                    let acl_bunsetsus = take_adnominal_arguments(&mut res, pred_b, doc, false);
+                    let classroom = target == TargetVariant::ZhHant
+                        && homework_relative::attached_predicate(&pred_b, &b, source);
+                    let mut acl_bunsetsus = take_adnominal_arguments(&mut res, pred_b, doc, false);
+                    if classroom {
+                        homework_relative::arrival_times(&mut acl_bunsetsus, source);
+                    }
                     let (mut inner, _) = translate_clause_bunsetsus(
                         acl_bunsetsus,
                         source,

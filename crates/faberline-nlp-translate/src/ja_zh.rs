@@ -4219,7 +4219,7 @@ fn try_translate_homework_transfer(
                     || faberline_nlp::lexicon::lookup_ja(&noun.surface)
                         .is_some_and(|hit| hit.sem_class == Some(SemanticClass::Location)) =>
             {
-                adjuncts.push(render_bunsetsu_obl(bunsetsu, target));
+                adjuncts.push(render_bunsetsu_obl(bunsetsu, target, false));
             }
             ("obj", "を")
                 if noun.upos == Some(Upos::Noun)
@@ -7045,9 +7045,10 @@ fn translate_clause_bunsetsus(
             | BunsetsuRole::ExplicitDeadline { .. }
             | BunsetsuRole::DeadlineWithDetachedNegation => {
                 let is_inst = b.case_particle.as_deref() == Some("で")
-                    && !is_place_location_bunsetsu(&b.atoms)
-                    && is_instrument_bunsetsu(&b.atoms);
-                let s = render_bunsetsu_obl(&b, target);
+                    && ((!is_place_location_bunsetsu(&b.atoms)
+                        && is_instrument_bunsetsu(&b.atoms))
+                        || is_payment_instrument(&b.atoms, &candidates));
+                let s = render_bunsetsu_obl(&b, target, is_inst);
                 if !s.is_empty() {
                     obliques.push(PlacedArg {
                         text: s,
@@ -11645,6 +11646,64 @@ fn is_instrument_bunsetsu(atoms: &[Atom]) -> bool {
     })
 }
 
+fn is_payment_instrument(atoms: &[Atom], predicates: &[Bunsetsu]) -> bool {
+    // The head of で must name a payment method and modify the payment
+    // predicate itself. A shop or a counter can modify the same predicate.
+    atoms.windows(2).enumerate().any(|(idx, pair)| {
+        let method = &pair[0];
+        let particle = &pair[1];
+        if method.is_locked
+            || method.upos != Some(Upos::Noun)
+            || method.deprel != "obl"
+            || !is_payment_medium(method, atoms[..idx].last())
+            || particle.is_locked
+            || particle.surface != "で"
+            || particle.upos != Some(Upos::Adp)
+            || particle.deprel != "case"
+            || particle.head.is_none()
+            || particle.head != method.doc_tok_idx
+        {
+            return false;
+        }
+        let Some(predicate_idx) = method.head else {
+            return false;
+        };
+        predicates.iter().flat_map(|b| &b.atoms).any(|verb| {
+            verb.doc_tok_idx == Some(predicate_idx)
+                && !verb.is_locked
+                && verb.upos == Some(Upos::Verb)
+                && matches!(
+                    verb.lemma.as_deref().unwrap_or(&verb.surface),
+                    "支払う" | "払う"
+                )
+        })
+    })
+}
+
+fn is_payment_medium(method: &Atom, modifier: Option<&Atom>) -> bool {
+    let word = method.lemma.as_deref().unwrap_or(&method.surface);
+    matches!(
+        word,
+        "現金"
+            | "カード"
+            | "クレジットカード"
+            | "デビットカード"
+            | "プリペイドカード"
+            | "小銭"
+            | "電子マネー"
+    ) || modifier.is_some_and(|m| {
+        !m.is_locked
+            && m.upos == Some(Upos::Noun)
+            && m.deprel == "compound"
+            && m.head == method.doc_tok_idx
+            && m.span.end_char == method.span.start_char
+            && matches!(
+                (m.lemma.as_deref().unwrap_or(&m.surface), word),
+                ("小", "銭") | ("電子", "マネー")
+            )
+    })
+}
+
 fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
     atoms.iter().any(is_clock_atom)
         || is_place_location_bunsetsu(atoms)
@@ -14963,13 +15022,13 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     out
 }
 
-fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant) -> String {
+fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool) -> String {
     let core = render_bunsetsu_np(b, target);
     if core.is_empty() {
         return core;
     }
     match b.case_particle.as_deref() {
-        Some("で") if !is_place_location_bunsetsu(&b.atoms) && is_instrument_bunsetsu(&b.atoms) => {
+        Some("で") if is_instrument => {
             if core.starts_with('用') {
                 core
             } else {
@@ -16062,6 +16121,49 @@ fn lookup_curated_ja_word(s: &str) -> Option<&'static str> {
         "場" => "場所",
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod payment_instrument_tests {
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    #[test]
+    fn payment_method_follows_the_payment_predicate() {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        let glossary = TranslationGlossary::new();
+
+        for (source, expected) in [
+            ("カードで支払います。", "用卡片結帳。"),
+            ("現金で払います。", "用現金付錢。"),
+            ("店でカードで支払います。", "在商店用卡片結帳。"),
+            ("会社のカードで払います。", "用公司的卡片付錢。"),
+            ("私は小銭で払いました。", "我用小錢付錢了。"),
+            ("受付で電子マネーで支払います。", "在受付用電子マネー結帳。"),
+            ("私は小 銭で払いました。", "我在小錢付錢了。"),
+            ("電子マネーの窓口で払います。", "在電子マネー的窓口付錢。"),
+            ("電子マネーで困っています。", "在電子マネー正在傷腦筋。"),
+            ("現金の窓口で支払います。", "在現金的窓口結帳。"),
+            ("二人で支払います。", "在二人結帳。"),
+            (
+                "生徒は教室で教師に宿題を出しました。",
+                "學生在教室把作業交給老師了。",
+            ),
+            (
+                "先生は二階で学生に宿題を出します。",
+                "老師在二樓出作業給學生。",
+            ),
+            (
+                "私は店で支払い、友達はカードで遊びます。",
+                "我在商店結帳，朋友在卡片遊びます。",
+            ),
+        ] {
+            let output = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                .expect("the CPU translator handles the payment instrument control");
+            assert_eq!(output.target_text, expected, "{source}");
+        }
+    }
 }
 
 #[cfg(test)]

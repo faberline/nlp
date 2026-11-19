@@ -107,6 +107,7 @@ enum BunsetsuRole {
         past_state: bool,
         wh: bool,
     },
+    ResidenceDuration,
     Subj,
     Obl,
     ExplicitDeadline { modal: &'static str, additive: bool },
@@ -6648,16 +6649,16 @@ fn normalize_building_floors(mut atoms: Vec<Atom>, doc: &Document) -> Vec<Atom> 
 fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
     use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
 
-    let Some(i) = source.iter().position(|a| {
+    let Some(action_index) = source.iter().position(|a| {
         !a.is_locked
             && a.upos == Some(Upos::Verb)
             && a.lemma.as_deref().unwrap_or(&a.surface) == "住む"
     }) else {
         return;
     };
-    let action = &source[i];
+    let action = &source[action_index];
     let Some(id) = action.doc_tok_idx else { return };
-    let (finite, tail) = match &source[i + 1..] {
+    let (finite, tail) = match &source[action_index + 1..] {
         [te, iru, tail @ ..]
             if action.deprel == "advcl"
                 && action.head == iru.doc_tok_idx
@@ -6689,12 +6690,24 @@ fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
         return;
     }
     let mut places = groups.iter().enumerate().filter_map(|(i, group)| {
-        let [.., noun, ni] = group.atoms.as_slice() else {
+        let (words, focused) = match group.atoms.as_slice() {
+            [words @ .., ni, focus]
+                if !focus.is_locked
+                    && matches!(focus.surface.as_str(), "は" | "も")
+                    && focus.deprel == "case"
+                    && focus.head == ni.head
+                    && ni.span.end_char == focus.span.start_char =>
+            {
+                (&group.atoms[..words.len() + 1], true)
+            }
+            words => (words, false),
+        };
+        let [.., noun, ni] = words else {
             return None;
         };
         if noun.is_locked
             || ni.is_locked
-            || noun.deprel != "obl"
+            || !(noun.deprel == "obl" || focused && noun.deprel == "nsubj")
             || noun.head != Some(id)
             || ni.surface != "に"
             || ni.deprel != "case"
@@ -6740,6 +6753,34 @@ fn mark_residence_place(groups: &mut [Bunsetsu], source: &[Atom]) {
             [.., noun, to] if noun.doc_tok_idx == Some(person) && to.surface == "と" && to.head == Some(person)))
     {
         group.role = BunsetsuRole::JointCompanion;
+    }
+    // A bare number and a time unit next to 住む give a duration. 年 can be
+    // analysed as a separate adverb, even when the two source words touch.
+    if let [.., number, unit] = &source[..action_index]
+        && !number.is_locked
+        && !unit.is_locked
+        && number.upos == Some(Upos::Num)
+        && number.span.end_char == unit.span.start_char
+        && unit.span.end_char == action.span.start_char
+        && matches!(
+            unit.surface.as_str(),
+            "年" | "年間" | "週間" | "日間" | "か月" | "ヶ月"
+        )
+        && unit.head == Some(id)
+        && matches!(unit.deprel.as_str(), "obl" | "advmod")
+        && (number.head == unit.doc_tok_idx && number.deprel == "nummod"
+            || number.head == Some(id) && number.deprel == "obl")
+        && let Some(start) = groups
+            .iter()
+            .position(|g| g.atoms.first().is_some_and(|a| a.span == number.span))
+        && let Some(end) = groups
+            .iter()
+            .position(|g| g.atoms.last().is_some_and(|a| a.span == unit.span))
+        && start <= end
+    {
+        for group in &mut groups[start..=end] {
+            group.role = BunsetsuRole::ResidenceDuration;
+        }
     }
 }
 
@@ -6793,6 +6834,7 @@ fn translate_clause_bunsetsus(
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
     let mut residence = None;
+    let mut residence_duration = String::new();
     let mut adverbs: Vec<String> = Vec::new();
     let mut iobjs: Vec<PlacedArg> = Vec::new();
     let mut objs: Vec<String> = Vec::new();
@@ -7054,7 +7096,23 @@ fn translate_clause_bunsetsus(
 
         match b.role {
             BunsetsuRole::ResidencePlace { past_state, wh } => {
+                if b.atoms.last().is_some_and(|a| a.surface == "も") {
+                    adverbs.push("也".to_owned());
+                }
                 residence = Some((render_bunsetsu_np(&b, target), past_state, wh));
+            }
+            BunsetsuRole::ResidenceDuration => {
+                for atom in &b.atoms {
+                    let text = match atom.surface.as_str() {
+                        "年間" => "年",
+                        "週間" => "週",
+                        "日間" => "天",
+                        "か月" | "ヶ月" => "個月",
+                        "二" => "兩",
+                        other => other,
+                    };
+                    residence_duration.push_str(text);
+                }
             }
             BunsetsuRole::JointManner {
                 manner,
@@ -7365,9 +7423,27 @@ fn translate_clause_bunsetsus(
     if let Some((place, past_state, wh)) = residence {
         verb_core = format!("住在{place}");
         pre_verb_mods.retain(|m| m != "正在");
-        if past_state {
-            pre_verb_mods.insert(0, "當時".to_owned());
+        if past_state || !residence_duration.is_empty() {
             post_verb_mods.retain(|m| m != "了");
+            if residence_duration.is_empty() {
+                let past = if pre_verb_mods.iter().any(|m| m == "沒有") {
+                    "當時"
+                } else {
+                    "曾"
+                };
+                pre_verb_mods.insert(0, past.to_owned());
+            } else if pre_verb_mods
+                .iter()
+                .any(|m| matches!(m.as_str(), "不" | "沒有"))
+            {
+                temporal_others.push(residence_duration);
+            } else {
+                verb_core = format!(
+                    "在{place}住{}{}",
+                    if past_state { "了" } else { "" },
+                    residence_duration
+                );
+            }
         }
         if wh && sfp_suffix == Some("嗎") {
             sfp_suffix = Some("？");

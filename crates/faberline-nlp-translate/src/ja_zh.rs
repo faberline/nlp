@@ -200,6 +200,7 @@ pub(crate) fn translate_ja_sentence(
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
     dates: &mut DateContext,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
@@ -235,6 +236,9 @@ pub(crate) fn translate_ja_sentence(
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
     let segments = split_atoms_into_segments(&atoms, doc, sent_span);
+    let prior_letter_distribution = prior_letter_distribution.filter(|_| {
+        direct_quote.is_none() && matches!(segments.as_slice(), [Segment::Clause { .. }])
+    });
 
     let mut out = String::new();
     let mut seg_target_spans: Vec<(Span, Span)> = Vec::with_capacity(segments.len());
@@ -774,6 +778,7 @@ pub(crate) fn translate_ja_sentence(
                     in_proportional_follow,
                     sentence_topic_pronoun,
                     sonomono_antecedent: sonomono_antecedent.clone(),
+                    prior_letter_distribution,
                 };
                 let receiving_request = if target == TargetVariant::ZhHant
                     && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
@@ -997,6 +1002,7 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
             target,
             None,
             &mut dates,
+            None,
         );
         out.push_str(&tr);
         cursor = sent.span.end_char;
@@ -1942,8 +1948,14 @@ struct TeHelpLetterCount {
     per_writer: bool,
     periodic_joint: bool,
     joint_signature: Option<std::ops::Range<usize>>,
-    writer_each: Option<usize>,
+    writer_each: Option<std::ops::Range<usize>>,
     occurrence_rate: Option<(std::ops::Range<usize>, String)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PriorLetterDistribution {
+    writers: u32,
+    letters: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2082,6 +2094,114 @@ fn linked_letter_case(noun: &Atom, particle: &Atom) -> bool {
         && noun.span.end_char == particle.span.start_char
 }
 
+fn letter_writer_each_adverb(atom: &Atom) -> bool {
+    !atom.is_locked
+        && matches!(atom.surface.as_str(), "それぞれ" | "各自" | "各人")
+        && atom.upos == Some(Upos::Adv)
+        && atom.deprel == "advmod"
+}
+
+fn te_help_letter_per_person(atoms: &[Atom], action: usize) -> Option<usize> {
+    let [one, person, tail @ ..] = atoms else {
+        return None;
+    };
+    if one.is_locked
+        || person.is_locked
+        || !matches!(normalize_decimal_digits(&one.surface).as_str(), "一" | "1")
+        || one.upos != Some(Upos::Num)
+        || one.deprel != "nummod"
+        || person.doc_tok_idx.is_none()
+        || one.head != person.doc_tok_idx
+        || one.span.end_char != person.span.start_char
+        || person.surface != "人"
+        || person.upos != Some(Upos::Noun)
+        || person.deprel != "obl"
+        || person.head != Some(action)
+    {
+        return None;
+    }
+    match tail {
+        [per, ..]
+            if matches!(per.surface.as_str(), "につき" | "あたり")
+                && linked_letter_case(person, per) =>
+        {
+            Some(3)
+        }
+        // This spelling can split into an interjection and its attached particle.
+        [a, tari, ..]
+            if a.surface == "あ"
+                && tari.surface == "たり"
+                && !a.is_locked
+                && !tari.is_locked
+                && a.doc_tok_idx.is_some()
+                && tari.head == a.doc_tok_idx
+                && person.span.end_char == a.span.start_char
+                && a.span.end_char == tari.span.start_char =>
+        {
+            Some(4)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn prior_letter_distribution(
+    sentence_idx: usize,
+    chars: &[char],
+    doc: &Document,
+    locks: &SpanLockTable,
+) -> Option<PriorLetterDistribution> {
+    let tokens: Vec<_> = doc
+        .tokens
+        .iter()
+        .filter(|token| token.sentence == sentence_idx)
+        .collect();
+    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, &tokens, locks);
+    if atoms.last()?.surface != "。" || atoms.iter().any(|atom| atom.is_locked) {
+        return None;
+    }
+    let [number, people, topic, each, tail @ ..] = core_non_punct(&atoms) else {
+        return None;
+    };
+    let (count, qualifier, action, polite) = match tail {
+        [count, qualifier, action] => (count, qualifier, action, None),
+        [count, qualifier, action, polite] => (count, qualifier, action, Some(polite)),
+        _ => return None,
+    };
+    let action_id = action.doc_tok_idx?;
+    if action.lemma.as_deref() != Some("書く")
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "root"
+        || (polite.is_none() && action.surface != "書く")
+        || polite.is_some_and(|atom| {
+            atom.surface != "ます" || atom.deprel != "aux" || atom.head != Some(action_id)
+        })
+        || people.surface != "人"
+        || people.deprel != "nsubj"
+        || people.head != Some(action_id)
+        || !matches!(topic.surface.as_str(), "は" | "が")
+        || !linked_letter_case(people, topic)
+        || number.upos != Some(Upos::Num)
+        || number.deprel != "nummod"
+        || number.head != people.doc_tok_idx
+        || number.span.end_char != people.span.start_char
+        || !letter_writer_each_adverb(each)
+        || each.head != Some(action_id)
+        || count.upos != Some(Upos::Noun)
+        || count.deprel != "obl"
+        || count.head != Some(action_id)
+        || count.doc_tok_idx.is_none()
+        || qualifier.surface != "ずつ"
+        || qualifier.deprel != "discourse"
+        || qualifier.head != count.doc_tok_idx
+        || qualifier.span.start_char != count.span.end_char
+    {
+        return None;
+    }
+    let writers = super::opaque::parse_cjk_or_ascii_num(&number.surface)?;
+    let letters = super::opaque::parse_cjk_or_ascii_num(count.surface.strip_suffix('通')?)?;
+    (writers > 1 && letters > 0).then_some(PriorLetterDistribution { writers, letters })
+}
+
 fn te_help_letter_occurrence_rate(
     arguments: &[Atom],
     end: usize,
@@ -2091,13 +2211,21 @@ fn te_help_letter_occurrence_rate(
         return None;
     };
     let unit_idx = unit.doc_tok_idx?;
+    let linked_to_action = unit.head == Some(action_idx)
+        || unit.head.is_some_and(|head| {
+            arguments.iter().any(|atom| {
+                atom.doc_tok_idx == Some(head)
+                    && atom.head == Some(action_idx)
+                    && letter_writer_each_adverb(atom)
+            })
+        });
     if unit.is_locked
         || per.is_locked
         || per.surface != "につき"
         || per.upos != Some(Upos::Adp)
         || per.deprel != "case"
         || per.head != Some(unit_idx)
-        || unit.head != Some(action_idx)
+        || !linked_to_action
     {
         return None;
     }
@@ -2147,10 +2275,13 @@ fn te_help_letter_count(
     arguments: &[Atom],
     letter_idx: usize,
     action_idx: usize,
-    can_distribute_to_writers: bool,
+    writer_count: Option<&str>,
     writers: Option<&TeHelpPerson<'_>>,
-    joint_manner: bool,
+    manner: Option<&TeHelpManner<'_>>,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
 ) -> Option<TeHelpLetterCount> {
+    let can_distribute_to_writers = writer_count.is_some();
+    let joint_manner = manner.is_some();
     let object = arguments
         .iter()
         .position(|atom| atom.doc_tok_idx == Some(letter_idx))?;
@@ -2273,11 +2404,8 @@ fn te_help_letter_count(
         return None;
     }
     let writer_each = if qualifier_text == Some("ずつ") && can_distribute_to_writers {
-        arguments.iter().position(|atom| {
-            !atom.is_locked
-                && matches!(atom.surface.as_str(), "それぞれ" | "各自")
-                && atom.upos == Some(Upos::Adv)
-                && atom.deprel == "advmod"
+        arguments.iter().enumerate().find_map(|(index, atom)| {
+            if letter_writer_each_adverb(atom)
                 && (atom.head == Some(action_idx)
                     || recurring_period.is_some_and(|period| {
                         period.doc_tok_idx.is_some() && atom.head == period.doc_tok_idx
@@ -2288,13 +2416,30 @@ fn te_help_letter_count(
                                 .iter()
                                 .any(|period| period.doc_tok_idx == atom.head)
                     }))
+            {
+                Some(index..index + 1)
+            } else if signature.is_none() {
+                let length = te_help_letter_per_person(&arguments[index..], action_idx)?;
+                Some(index..index + length)
+            } else {
+                None
+            }
         })
     } else {
         None
     };
+    let each_in_prior_statement = prior_letter_distribution.is_some_and(|prior| {
+        // Carry the prior count only for the same anonymous group and quantity.
+        signature.is_none()
+            && manner.is_some_and(|group| group.companion.is_none())
+            && writer_count.and_then(super::opaque::parse_cjk_or_ascii_num) == Some(prior.writers)
+            && super::opaque::parse_cjk_or_ascii_num(&numeral) == Some(prior.letters)
+            && !atoms_has_any(arguments, &["合わせる", "合計", "共同", "一緒", "協力"])
+    });
     let periodic_joint = qualifier_text == Some("ずつ")
         && (recurring_period.is_some() || occurrence_rate.is_some())
         && writer_each.is_none()
+        && !each_in_prior_statement
         && (joint_manner || signature.is_some())
         && signatures.next().is_none();
     // A joint signature does not provide proof that each writer owes a letter.
@@ -2623,7 +2768,11 @@ fn te_help_has_following_focus(arguments: &[Atom], end: usize) -> bool {
     })
 }
 
-fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpRequest<'a>> {
+fn te_help_request<'a>(
+    atoms: &'a [Atom],
+    doc: &Document,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
+) -> Option<TeHelpRequest<'a>> {
     let (body, helper, polite, question, negative_form) = match atoms {
         [body @ .., helper, mase, n, question] if mase.surface == "ませ" && n.surface == "ん" => {
             (
@@ -2827,18 +2976,23 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
     }
     let letter_count = letter_idx.and_then(|letter_idx| {
         // With one explicit addressee, a counted group can write a letter each.
-        let can_distribute_to_writers = letter_addressee.as_ref().is_some_and(|address| {
+        let one_addressee = letter_addressee.as_ref().is_some_and(|address| {
             address.members.len() == 1 && address.count.is_none() && !address.illustrative
-        }) && (letter_writers.is_some()
-            || manner.as_ref().is_some_and(|group| group.count.is_some()));
+        });
+        let writer_count = letter_writers
+            .as_ref()
+            .map(|(_, count)| *count)
+            .or_else(|| manner.as_ref().and_then(|group| group.count))
+            .filter(|_| one_addressee);
         let writers = letter_writers.as_ref().map(|(person, _)| person);
         te_help_letter_count(
             arguments,
             letter_idx,
             action_idx,
-            can_distribute_to_writers,
+            writer_count,
             writers,
-            manner.is_some(),
+            manner.as_ref(),
+            prior_letter_distribution,
         )
     });
     let is_modifier = |index| {
@@ -3555,7 +3709,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
     let ending = &atoms[request_atoms.len()..];
     if (ending.is_empty()
         || matches!(ending, [punct] if !punct.is_locked && matches!(punct.surface.as_str(), "。" | "？" | "?")))
-        && te_help_request(request_atoms, doc).is_some()
+        && te_help_request(request_atoms, doc, None).is_some()
     {
         let punctuation = (!ending.is_empty()).then(|| "？".to_owned());
         flush_clause(&mut request_atoms.to_vec(), punctuation, &mut segments);
@@ -4397,6 +4551,7 @@ struct ClauseDiscourseCtx<'a> {
     in_proportional_follow: bool,
     sentence_topic_pronoun: Option<&'static str>,
     sonomono_antecedent: Option<String>,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
 }
 
 fn atoms_has_any(atoms: &[Atom], targets: &[&str]) -> bool {
@@ -5000,7 +5155,8 @@ fn translate_clause_atoms(
         return (text, false);
     }
 
-    if let Some(request) = te_help_request(core_non_punct(atoms), doc)
+    if let Some(request) =
+        te_help_request(core_non_punct(atoms), doc, ctx.prior_letter_distribution)
         && let Some(rendered) = render_te_help_request(request, doc, sentence_idx, ctx, target)
     {
         return (rendered, false);
@@ -5981,7 +6137,10 @@ fn render_te_help_request(
                     return (index == span.start)
                         .then(|| linked_adverb(span.start, span.end, rendered));
                 }
-                if count.writer_each == Some(index)
+                if count
+                    .writer_each
+                    .as_ref()
+                    .is_some_and(|span| span.contains(&index))
                     || count
                         .joint_signature
                         .as_ref()
@@ -20404,6 +20563,42 @@ mod existence_rule_tests {
             (
                 "校長宛ての手紙を毎回二人で連名で一通ずつ書いていただけますか。",
                 "可以請兩位每次聯名寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で各人毎回一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で毎回一人につき一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で一人につき毎回一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で毎回一人あたり一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で一回につき各人一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "二人は各自一通ずつ書きます。校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。",
+                "二人各自一通ずつ寫。可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "二人は各自一通ずつ書きます。校長宛ての手紙を二人で連名で毎回一通ずつ書いていただけますか。",
+                "二人各自一通ずつ寫。可以請兩位每次聯名寫一封信給校長嗎？",
+            ),
+            (
+                "三人は各自一通ずつ書きます。校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。",
+                "三人各自一通ずつ寫。可以請兩位每次一起寫一封信給校長嗎？",
+            ),
+            (
+                "二人は各自一通ずつ書きます。\n\n校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。",
+                "二人各自一通ずつ寫。\n\n可以請兩位每次一起寫一封信給校長嗎？",
             ),
         ] {
             assert_eq!(

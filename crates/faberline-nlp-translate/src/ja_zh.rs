@@ -8868,7 +8868,9 @@ fn take_elapsed_duration(
         // Negation can change the quantifier's scope.
         if predicate.sconj_tail.is_some() && !temporal_after && !progressive_relative
             || predicate.atoms.iter().any(|a| {
-                (!progressive_negative && matches!(a.lemma.as_deref(), Some("ない" | "ぬ")))
+                (!progressive_negative
+                    && !past_negative
+                    && matches!(a.lemma.as_deref(), Some("ない" | "ぬ")))
                     || matches!(a.surface.as_str(), "ながら" | "ので")
                     || (!past_negative && a.surface == "ませ")
                     || !temporal_after
@@ -13370,11 +13372,25 @@ fn progressive_acl_is_negative(predicate: &Bunsetsu) -> bool {
         && matches!(predicate.atoms.as_slice(), [_, _, _, negative, _] if negative.surface == "なかっ")
 }
 
-// Only bare, linked polite past negation is safe to combine with an elapsed
+// Only bare, linked finite past negation is safe to combine with an elapsed
 // amount here. Focus, deadlines, and other negation stay on their own paths.
 fn elapsed_past_negative_action(predicate: &Bunsetsu) -> Option<&Atom> {
-    let [action, mase, n, deshi, past] = predicate.atoms.as_slice() else {
-        return None;
+    let (action, auxiliaries) = predicate.atoms.split_first()?;
+    let recognized = match auxiliaries {
+        [negative, past] => {
+            negative.surface == "なかっ"
+                && negative.lemma.as_deref() == Some("ない")
+                && past.surface == "た"
+        }
+        [mase, n, deshi, past] => {
+            [
+                mase.surface.as_str(),
+                n.surface.as_str(),
+                deshi.surface.as_str(),
+                past.surface.as_str(),
+            ] == ["ませ", "ん", "でし", "た"]
+        }
+        _ => false,
     };
     if predicate.sconj_tail.is_some()
         || predicate.case_particle.is_some()
@@ -13384,15 +13400,10 @@ fn elapsed_past_negative_action(predicate: &Bunsetsu) -> Option<&Atom> {
             .any(|a| a.is_locked || a.doc_tok_idx.is_none())
         || action.upos != Some(Upos::Verb)
         || action.deprel != "root"
-        || [mase, n, deshi, past]
+        || !recognized
+        || auxiliaries
             .iter()
             .any(|a| a.upos != Some(Upos::Aux) || a.deprel != "aux" || a.head != action.doc_tok_idx)
-        || [
-            mase.surface.as_str(),
-            n.surface.as_str(),
-            deshi.surface.as_str(),
-            past.surface.as_str(),
-        ] != ["ませ", "ん", "でし", "た"]
         || predicate
             .atoms
             .windows(2)
@@ -16041,6 +16052,45 @@ mod clock_rule_tests {
         assert_eq!(
             translate("二時間待っていた客は三十分話しました。"),
             "已經等待了兩個小時的客說了三十分鐘。"
+        );
+    }
+
+    #[test]
+    fn plain_past_negative_keeps_the_duration_with_its_action() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間泳いでいた学生は三十分休まなかった。"),
+            "已經游泳了兩個小時的學生沒有休息三十分鐘。"
+        );
+        assert_eq!(
+            translate("三十分休んでいた学生は二時間泳がなかった。"),
+            "已經休息了三十分鐘的學生沒有游泳兩個小時。"
+        );
+        assert_eq!(
+            translate("二時間待っていなかった客は三十分話しませんでした。"),
+            "沒有等待兩個小時的客沒有說三十分鐘。"
+        );
+        assert_eq!(
+            translate("三十分話していなかった客は二時間待ちませんでした。"),
+            "沒有說三十分鐘的客沒有等待兩個小時。"
+        );
+        assert_eq!(
+            translate("二時間待っていなかった客は三十分話さなかった。"),
+            "沒有等待兩個小時的客沒有說三十分鐘。"
+        );
+        let book = translate("私は二時間本を読まなかった。");
+        assert!(
+            book.contains("沒有讀") && book.contains('書') && book.contains("兩個小時"),
+            "{book}"
+        );
+        assert_eq!(
+            translate("私は二時間は休まなかった。"),
+            "我二時間沒有休息。"
+        );
+        assert_eq!(
+            translate("私は三時まで休まなかった。"),
+            "我到三點為止沒有休息。"
         );
     }
 

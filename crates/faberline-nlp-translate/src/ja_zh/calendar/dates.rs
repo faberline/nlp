@@ -180,7 +180,62 @@ fn bind_friend_recipient(atoms: &mut Vec<Atom>) {
 
 // A comma after the case of a concrete date can separate a temporal
 // argument from the event it still modifies. Keep them in the same clause.
-fn bind_detached_dates(atoms: &mut Vec<Atom>, chars: &[char]) {
+fn protected_date(atoms: &[Atom], start: usize, chars: &[char]) -> Option<(usize, String)> {
+    let first = &atoms[start];
+    if !(first.is_locked || is_numeral(first) || month_text(&first.surface).is_some()) {
+        return None;
+    }
+    for (offset, part) in atoms[start..].iter().enumerate() {
+        let end = start + offset;
+        if !part.is_locked
+            && !(is_numeral(part)
+                || month_text(&part.surface).is_some()
+                || matches!(part.surface.as_str(), "月" | "日" | "の")
+                || dated_atom(part))
+        {
+            break;
+        }
+        if offset > 0 && atoms[end - 1].span.end_char != part.span.start_char {
+            break;
+        }
+        if !atoms
+            .get(end + 1)
+            .is_some_and(|c| !c.is_locked && matches!(c.surface.as_str(), "に" | "まで"))
+        {
+            continue;
+        }
+        let parts = &atoms[start..=end];
+        if !parts.iter().any(|a| a.is_locked) {
+            return None;
+        }
+        let source: String = chars
+            .get(parts[0].span.start_char..part.span.end_char)?
+            .iter()
+            .collect();
+        if !source.contains('月') || spelled_report_day(&source).is_none() {
+            return None;
+        }
+        return Some((
+            end,
+            parts
+                .iter()
+                .map(|a| {
+                    if a.is_locked {
+                        a.surface.clone()
+                    } else if a.surface == "の" {
+                        String::new()
+                    } else {
+                        month_text(&a.surface)
+                            .unwrap_or_else(|| normalize_decimal_digits(&a.surface))
+                    }
+                })
+                .collect(),
+        ));
+    }
+    None
+}
+
+fn bind_detached_dates(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
     let mut i = 0;
     while i < atoms.len() {
         let start = i;
@@ -191,16 +246,10 @@ fn bind_detached_dates(atoms: &mut Vec<Atom>, chars: &[char]) {
                     continue;
                 };
                 (start, day.end, text)
-            } else if super::is_date(&atoms[start])
-                || atoms[start].is_locked
-                    && chars
-                        .get(atoms[start].span.start_char..atoms[start].span.end_char)
-                        .is_some_and(|source| {
-                            source.contains(&'月')
-                                && spelled_report_day(&source.iter().collect::<String>()).is_some()
-                        })
-            {
+            } else if super::is_date(&atoms[start]) {
                 (start, start, atoms[start].surface.clone())
+            } else if let Some((end, text)) = protected_date(atoms, start, chars) {
+                (start, end, text)
             } else {
                 continue;
             };
@@ -224,13 +273,40 @@ fn bind_detached_dates(atoms: &mut Vec<Atom>, chars: &[char]) {
         if !atoms
             .get(comma)
             .is_some_and(|a| !a.is_locked && matches!(a.surface.as_str(), "、" | "，" | ","))
-            || !atoms[comma + 1..]
-                .iter()
-                .any(|a| a.doc_tok_idx == day.head && a.upos == Some(Upos::Verb))
         {
             continue;
         }
+        let following = &atoms[comma + 1..];
+        // A forced multi-token recipient can hide the original token to
+        // which the parser attached the date. Its case identifies the event.
+        let head = day.head.and_then(|head| {
+            if following
+                .iter()
+                .any(|a| a.doc_tok_idx == Some(head) && a.upos == Some(Upos::Verb))
+            {
+                return Some(head);
+            }
+            let recipient = following.windows(2).find_map(|pair| {
+                let [noun, case] = pair else { return None };
+                if !noun.is_locked
+                    || !matches!(case.surface.as_str(), "に" | "へ")
+                    || !linked_case(case, noun, noun, &case.surface)
+                {
+                    return None;
+                }
+                let token = doc.tokens.get(head)?;
+                (token.span.start_char >= noun.span.start_char
+                    && token.span.end_char <= noun.span.end_char)
+                    .then_some(noun)
+            })?;
+            following
+                .iter()
+                .find(|a| a.doc_tok_idx == recipient.head && a.upos == Some(Upos::Verb))?
+                .doc_tok_idx
+        });
+        let Some(head) = head else { continue };
         let list = day.lemma.as_deref() == Some(DATE_LIST);
+        atoms[end].head = Some(head);
         atoms.remove(comma);
         bind(atoms, start, end, text, if list { DATE_LIST } else { DATE });
     }
@@ -369,8 +445,23 @@ impl DateContext {
             bind(atoms, 0, day.end, text, DATE);
         }
         bind_friend_recipient(atoms);
+        for a in atoms.iter_mut().filter(|a| a.is_locked) {
+            let Some(raw) = chars.get(a.span.start_char..a.span.end_char) else {
+                continue;
+            };
+            let source: String = raw.iter().collect();
+            let mut dates = source.split(['と', 'や', '、', '・']);
+            if dates
+                .next()
+                .is_some_and(|date| date.contains('月') && spelled_report_day(date).is_some())
+                && dates.clone().next().is_some()
+                && dates.all(|date| spelled_report_day(date).is_some())
+            {
+                a.lemma = Some(DATE_LIST.to_owned());
+            }
+        }
         bind_month_dates(atoms);
-        bind_detached_dates(atoms, chars);
+        bind_detached_dates(atoms, chars, doc);
         for start in 0..atoms.len() {
             let Some(day) = day_at(atoms, start).filter(|d| d.month.is_some()) else {
                 continue;

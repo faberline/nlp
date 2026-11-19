@@ -19,11 +19,19 @@ const INTERVAL: &str = "__ja_day_interval";
 const MEASURED_SUBJECT: &str = "__ja_interval_subject_count";
 const DISTRIBUTED_SUBJECT: &str = "__ja_distributed_subject_count";
 const ONLY_MEASURED_SUBJECT: &str = "__ja_only_interval_subject_count";
+const PROTECTED_INTERVAL: &str = "__ja_protected_day_interval";
+
+fn regular_rate(surface: &str) -> bool {
+    matches!(
+        surface,
+        "毎日" | "毎週" | "毎月" | "毎年" | "毎回" | "毎朝" | "毎晩"
+    )
+}
 
 pub(super) fn contrasts_recurrence(atoms: &[Atom]) -> bool {
     let core = super::core_non_punct(atoms);
     matches!(core, [rate, ..] if matches!(core.len(),3|4) && !rate.is_locked &&
-        matches!(rate.surface.as_str(), "毎日" | "毎週" | "毎月" | "毎年" | "毎回" | "毎朝" | "毎晩") &&
+        regular_rate(&rate.surface) &&
         super::clause_contains_dewa_naku(core))
 }
 
@@ -268,11 +276,24 @@ fn genitive_month(atoms: &[Atom], start: usize, day: &Atom) -> bool {
 }
 
 fn countable_day(day: &Atom) -> bool {
-    !day.is_locked && day.surface == "日" || is_date(day)
+    !day.is_locked && day.surface == "日"
+        || is_date(day)
+        || day.lemma.as_deref() == Some(PROTECTED_INTERVAL)
 }
 
 fn day_interval(atoms: &[Atom], end: usize) -> Option<DayInterval> {
     let day = &atoms[end];
+    if day.lemma.as_deref() == Some(PROTECTED_INTERVAL) {
+        let mut interval = day.clone();
+        interval.surface = format!("每{}", day.surface);
+        interval.lemma = Some(INTERVAL.to_owned());
+        interval.span.end_char = atoms.get(end + 1)?.span.end_char;
+        return Some(DayInterval {
+            start: end,
+            dated: false,
+            atom: interval,
+        });
+    }
     if is_date(day) {
         return Some(DayInterval {
             start: end,

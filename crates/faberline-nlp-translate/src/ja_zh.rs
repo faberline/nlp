@@ -227,7 +227,7 @@ pub(crate) fn translate_ja_sentence(
         .flatten();
 
     if target == TargetVariant::ZhHant {
-        calendar::bind_relative_contrast(&mut atoms);
+        calendar::bind_relative_contrast(&mut atoms, chars);
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.

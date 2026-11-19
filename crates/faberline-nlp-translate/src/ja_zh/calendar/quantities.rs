@@ -283,12 +283,23 @@ pub(super) const HABIT: &str = "__ja_habitual_topic";
 
 // Attach an alternative rate to the measured event inside the relative
 // clause before punctuation can separate the two halves of its contrast.
-pub(in crate::ja_zh) fn bind_relative_contrast(atoms: &mut Vec<Atom>) {
+pub(in crate::ja_zh) fn bind_relative_contrast(atoms: &mut Vec<Atom>, chars: &[char]) {
     for start in 0..atoms.len() {
+        let rate = &atoms[start];
+        let spelling = |a: &Atom| {
+            chars
+                .get(a.span.start_char..a.span.end_char)
+                .map(|s| s.iter().collect::<String>())
+        };
+        if !(super::regular_rate(&rate.surface)
+            || rate.is_locked && spelling(rate).is_some_and(|s| super::regular_rate(&s)))
+        {
+            continue;
+        }
         let Some(end) = [3, 4].into_iter().map(|len| start + len).find(|&end| {
             atoms
                 .get(start..end)
-                .is_some_and(super::contrasts_recurrence)
+                .is_some_and(crate::ja_zh::clause_contains_dewa_naku)
         }) else {
             continue;
         };
@@ -303,9 +314,14 @@ pub(in crate::ja_zh) fn bind_relative_contrast(atoms: &mut Vec<Atom>) {
             continue;
         };
         let day = &atoms[day_idx];
-        if day.is_locked
-            || day.surface != "日"
-            || number == day_idx
+        let protected = day.is_locked
+            && number == day_idx
+            && spelling(day).is_some_and(|s| {
+                s.strip_suffix('日')
+                    .and_then(calendar_number)
+                    .is_some_and(|n| n > 0)
+            });
+        if !(protected || !day.is_locked && day.surface == "日" && number != day_idx)
             || !atoms
                 .get(day_idx + 1)
                 .is_some_and(|c| linked_case(c, day, day, "に"))
@@ -322,6 +338,10 @@ pub(in crate::ja_zh) fn bind_relative_contrast(atoms: &mut Vec<Atom>) {
             continue;
         }
         let mut scoped = atoms.clone();
+        if protected {
+            scoped[day_idx].lemma = Some(super::PROTECTED_INTERVAL.to_owned());
+            scoped[day_idx].upos = Some(Upos::Noun);
+        }
         bind(&mut scoped, day_idx, true);
         let Some(interval) = scoped
             .iter_mut()
@@ -329,8 +349,11 @@ pub(in crate::ja_zh) fn bind_relative_contrast(atoms: &mut Vec<Atom>) {
         else {
             continue;
         };
-        let rate = &atoms[start];
-        let text = translate_single_ja_term(&rate.surface, rate.lemma.as_deref(), rate.upos);
+        let text = if rate.is_locked {
+            rate.surface.clone()
+        } else {
+            translate_single_ja_term(&rate.surface, rate.lemma.as_deref(), rate.upos)
+        };
         interval.surface = format!("不是{text}，而是{}", interval.surface);
         // A topic before the relative contrast can be attached to なく.
         // Restore the matrix governor when the relative has its own subject.

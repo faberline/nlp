@@ -8556,10 +8556,12 @@ fn translate_clause_bunsetsus(
                 || bunsetsus.iter().any(|group| {
                     group.atoms.iter().any(|time| {
                         time.head == ka.head
-                            && (calendar::asks_interval(time)
+                            && (time.lemma.as_deref() == Some(application_form::OFFICE)
+                                && matches!(time.surface.as_str(), "誰" | "だれ" | "どなた")
+                                || calendar::asks_interval(time)
                                 || match group.case_particle.as_deref() {
                                     Some("までに") => deadline_time_question(time).is_some(),
-                                    Some("に") => calendar::question(time).is_some(),
+                                    Some("に") => open_event_time(time).is_some(),
                                     _ => false,
                                 })
                     })
@@ -8620,6 +8622,19 @@ fn translate_clause_bunsetsus(
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if b.case_particle.as_deref() == Some("に")
+            && let Some(time) = b
+                .atoms
+                .iter()
+                .find(|a| a.lemma.as_deref() == Some(application_form::TIME_QUESTION))
+        {
+            let label = render_bunsetsu_np(&b, target);
+            let label = label
+                .strip_suffix(&format!("的{}", time.surface))
+                .map_or_else(|| label.clone(), |day| format!("{day}{}", time.surface));
+            temporal_others.push(label);
+            continue;
+        }
         if filing_verb.is_some()
             && matches!(b.case_particle.as_deref(), Some("に" | "へ"))
             && b.atoms.iter().any(|a| {
@@ -8907,11 +8922,7 @@ fn translate_clause_bunsetsus(
                             .iter()
                             .any(|a| is_clock_atom(a) || calendar::is_date(a)),
                         is_building_floor: b.atoms.iter().any(is_building_floor),
-                        deadline_endpoint: if b
-                            .atoms
-                            .iter()
-                            .any(|a| calendar::question(a).is_some())
-                        {
+                        deadline_endpoint: if b.atoms.iter().any(|a| open_event_time(a).is_some()) {
                             DeadlineEndpoint::Question { calendar: true }
                         } else if b.atoms.iter().any(|a| deadline_time_question(a).is_some()) {
                             DeadlineEndpoint::Question { calendar: false }
@@ -13077,8 +13088,15 @@ fn deadline_weekday(surface: &str) -> Option<&'static str> {
 }
 
 // A time question can fill the endpoint slot just like a specified date or clock.
+fn open_event_time(atom: &Atom) -> Option<&str> {
+    if atom.lemma.as_deref() == Some(application_form::TIME_QUESTION) {
+        return Some(&atom.surface);
+    }
+    calendar::question(atom)
+}
+
 fn deadline_time_question(atom: &Atom) -> Option<&str> {
-    if let Some(day) = calendar::question(atom) {
+    if let Some(day) = open_event_time(atom) {
         return Some(day);
     }
     if atom.is_locked
@@ -14869,6 +14887,44 @@ mod clock_rule_tests {
                 text.contains("拿出") && text.contains("課程報名表"),
                 "{text}"
             );
+        }
+    }
+
+    #[test]
+    fn filing_time_and_person_keep_their_own_cases() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "学生は何時に講座の申込書を窓口に出しますか。",
+                "學生幾點向窗口交課程報名表？",
+            ),
+            (
+                "学生は明日の何時に講座の申込書を出しますか。",
+                "學生明天幾點交課程報名表？",
+            ),
+            (
+                "学生は何時に入居申込書を管理会社に出しますか。",
+                "學生幾點向管理公司交入住申請表？",
+            ),
+            (
+                "学生は講座の申込書を受付の先生に出しました。",
+                "學生向櫃檯的老師交了課程報名表。",
+            ),
+            (
+                "学生は講座の申込書を受付にいる先生に出しました。",
+                "學生向在櫃檯的老師交了課程報名表。",
+            ),
+            (
+                "学生は入居申込書を窓口の人に出しました。",
+                "學生向窗口的人交了入住申請表。",
+            ),
+            (
+                "学生は何時にかばんから講座の申込書を出しますか。",
+                "學生幾點從包包拿出課程報名表？",
+            ),
+            ("私は誰に講座の申込書を出しますか。", "我向誰交課程報名表？"),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
         }
     }
 
@@ -18350,7 +18406,7 @@ fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool)
                 format!("用{core}")
             }
         }
-        Some("に") if b.atoms.iter().any(|a| calendar::question(a).is_some()) => core,
+        Some("に") if b.atoms.iter().any(|a| open_event_time(a).is_some()) => core,
         Some("に") | Some("で") => {
             if core.starts_with('在')
                 || (core.starts_with("[[PH") && b.atoms.iter().any(is_clock_atom))

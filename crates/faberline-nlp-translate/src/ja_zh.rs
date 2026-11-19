@@ -5665,6 +5665,13 @@ fn translate_clause_atoms(
         return res;
     }
 
+    if target == TargetVariant::ZhHant
+        && let Some(text) =
+            homework_desire::reported(core_non_punct(atoms), doc, sentence_idx, target)
+    {
+        return (text, false);
+    }
+
     if let Some(res) = try_translate_toki_clause(atoms, doc, sentence_idx, target) {
         return res;
     }
@@ -5790,7 +5797,8 @@ fn translate_clause_atoms(
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
-        && let Some(text) = homework_desire::render(body, &norm_atoms, doc, sentence_idx, target)
+        && let Some(text) =
+            homework_desire::render(body, &norm_atoms, doc, sentence_idx, target, None)
     {
         return (text, false);
     }
@@ -6292,22 +6300,21 @@ fn try_translate_homework_transfer(
         }
         // A subject followed by a comma-framed present or past time can
         // locate its intention independently of the scheduled transfer.
-        if let Some((modal, _)) = desire
+        if desire.is_some()
             && let [time] = bunsetsu.atoms.as_slice()
-            && !time.is_locked
             && time.head == head
-            && time.deprel == "advmod"
-            && (time.surface == "今"
-                || (modal.starts_with("當時")
-                    && matches!(time.surface.as_str(), "昨日" | "先週" | "先月" | "去年")))
+            && matches!(
+                time.surface.as_str(),
+                "今" | "昨日" | "今朝" | "昨夜" | "昨晩" | "先週" | "先月" | "去年"
+            )
             && source.iter().any(|a| {
                 homework_relative::is_argument_comma(a) && time.span.end_char == a.span.start_char
             })
+            && let Some(label) = homework_desire::intention_adverb(time)
         {
-            if intention_time.is_some() {
+            if intention_time.replace(label).is_some() {
                 return None;
             }
-            intention_time = render_temporal_made_atom(time);
             continue;
         }
         if is_event_daypart(bunsetsu, bunsetsus, source)
@@ -8303,12 +8310,6 @@ fn try_translate_cognitive_matrix(
     );
     if inner_zh.is_empty() {
         return None;
-    }
-    if target == TargetVariant::ZhHant
-        && !has_tekkiri
-        && homework_desire::is_participants_intention(pre_to, v_atom, tail)
-    {
-        return Some((inner_zh, false));
     }
     let has_overt_subj = inner_atoms
         .iter()

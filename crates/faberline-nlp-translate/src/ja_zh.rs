@@ -2083,6 +2083,7 @@ fn te_help_letter_count(
     letter_idx: usize,
     action_idx: usize,
     can_distribute_to_writers: bool,
+    writers: Option<&TeHelpPerson<'_>>,
 ) -> Option<TeHelpLetterCount> {
     let object = arguments
         .iter()
@@ -2176,7 +2177,15 @@ fn te_help_letter_count(
     let span = start..after_counter + usize::from(qualifier.is_some());
     if te_help_has_following_focus(arguments, span.end)
         || arguments.iter().enumerate().any(|(index, atom)| {
+            // The analyzer can attach the writer group's 方 to the next adverb.
+            // The writer parser has already accounted for this group.
+            let writer_plural = additional
+                && writers.is_some_and(|group| (group.start..group.end).contains(&index))
+                && atom.surface == "方"
+                && atom.deprel == "advmod"
+                && atom.head == arguments[span.start].doc_tok_idx;
             !span.contains(&index)
+                && !writer_plural
                 && atom.head.is_some()
                 && arguments[span.clone()]
                     .iter()
@@ -2670,7 +2679,14 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
             address.members.len() == 1 && address.count.is_none() && !address.illustrative
         }) && (letter_writers.is_some()
             || manner.as_ref().is_some_and(|group| group.count.is_some()));
-        te_help_letter_count(arguments, letter_idx, action_idx, can_distribute_to_writers)
+        let writers = letter_writers.as_ref().map(|(person, _)| person);
+        te_help_letter_count(
+            arguments,
+            letter_idx,
+            action_idx,
+            can_distribute_to_writers,
+            writers,
+        )
     });
     let is_modifier = |index| {
         manner

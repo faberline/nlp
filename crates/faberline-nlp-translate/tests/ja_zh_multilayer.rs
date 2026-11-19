@@ -207,6 +207,67 @@ fn homework_dasu_preserves_modifiers_tense_and_transfer_direction() {
 }
 
 #[test]
+fn homework_dasu_preserves_roles_with_clock_modifiers() {
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let glossary = TranslationGlossary::new();
+    for (source, expected) in [
+        (
+            "生徒は五時に先生に宿題を出します。",
+            "學生在五點把作業交給老師。",
+        ),
+        (
+            "先生は生徒に五時に宿題を出します。",
+            "老師在五點出作業給學生。",
+        ),
+        (
+            "生徒は5時に先生に宿題を出しましたか。",
+            "學生在五點把作業交給老師了嗎？",
+        ),
+        (
+            "生徒は五時まで先生に宿題を出しませんでした。",
+            "學生到五點為止沒有把作業交給老師。",
+        ),
+        (
+            "先生は五時まで生徒に宿題を出しませんでした。",
+            "老師到五點為止沒有出作業給學生。",
+        ),
+        (
+            "生徒は六時半から先生に宿題を出しましたか。",
+            "學生從六點半起把作業交給老師了嗎？",
+        ),
+        (
+            "先生は五時から生徒に宿題を出しませんでした。",
+            "老師從五點起沒有出作業給學生。",
+        ),
+        (
+            "生徒は五時から七時まで先生に宿題を出しました。",
+            "學生從五點起把作業交給老師到七點。",
+        ),
+        (
+            "生徒は五時に箱から宿題を出します。",
+            "生徒在五點從箱拿出作業。",
+        ),
+        (
+            "先生は五時から箱から宿題を出しました。",
+            "老師從五點從箱拿出了作業。",
+        ),
+        ("私は五時から宿題を出します。", "我從五點拿出作業。"),
+        (
+            "生徒は`五時`に先生に宿題を出します。",
+            "生徒給`五時`給老師拿出作業。",
+        ),
+        (
+            "生徒は先生に宿題を出し、五時に帰ります。",
+            "學生把作業交給老師，在五點回去。",
+        ),
+    ] {
+        let doc = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert_eq!(doc.target_text, expected, "{source}");
+    }
+}
+
+#[test]
 fn homework_dasu_keeps_a_locked_homework_modifier_on_its_existing_path() {
     let source = "生徒は数学の宿題を先生に出しました。";
     let mut glossary = TranslationGlossary::new();

@@ -10,6 +10,7 @@ pub mod lock;
 pub mod model;
 pub mod opaque;
 pub mod postprocess;
+mod quote_source;
 pub mod render;
 pub mod schema;
 pub mod variant;
@@ -227,6 +228,11 @@ pub fn translate_document(
         }
     }
 
+    let written_quotes = if options.target.is_zh() && seq2seq.is_none() {
+        quote_source::plan_written_form_quotes(&chars, doc)
+    } else {
+        Vec::new()
+    };
     let direct_quote_placements = if options.target == TargetVariant::ZhHant && seq2seq.is_none() {
         plan_cross_sentence_direct_quotes(
             &chars,
@@ -235,6 +241,7 @@ pub fn translate_document(
             &inline_opaques,
             options,
             &compiled_glossary,
+            &written_quotes,
         )
     } else {
         HashMap::new()
@@ -362,6 +369,7 @@ pub fn translate_document(
                     &compiled_glossary,
                     seq2seq,
                     direct_quote_placements.get(&si),
+                    &written_quotes,
                     &mut dates,
                 );
 
@@ -583,6 +591,7 @@ fn plan_cross_sentence_direct_quotes(
     inline_opaques: &[&Opaque],
     options: &TranslateOptions,
     compiled_glossary: &CompiledGlossary,
+    written_quotes: &[Vec<quote_source::WrittenForm>],
 ) -> HashMap<usize, ja_zh::DirectQuotePlacement> {
     let sentences = &doc.segmentation.sentences;
     let mut placements: HashMap<usize, ja_zh::DirectQuotePlacement> = HashMap::new();
@@ -627,6 +636,7 @@ fn plan_cross_sentence_direct_quotes(
             &raw_sent,
             options,
             compiled_glossary,
+            written_quotes.get(index).map_or(&[], Vec::as_slice),
         );
         let tokens = &tokens_by_sent[index];
         if let Some((first, mut frame)) = opening.take() {
@@ -661,6 +671,7 @@ fn plan_cross_sentence_direct_quotes(
     placements
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_sentence_locks(
     sentence_idx: usize,
     chars: &[char],
@@ -669,6 +680,7 @@ fn build_sentence_locks(
     raw_sent: &str,
     options: &TranslateOptions,
     compiled_glossary: &CompiledGlossary,
+    written_quotes: &[quote_source::WrittenForm],
 ) -> SpanLockTable {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     // Build `SpanLockTable` over inline opaques (priority 0), glossary hits (priority 1), and
@@ -691,6 +703,18 @@ fn build_sentence_locks(
             blocked_for_glossary.push(ent.span);
             lock_candidates.push((0, ent.span, slice, LockOrigin::Entity, true));
         }
+    }
+
+    for &quote_source::WrittenForm { span, .. } in written_quotes {
+        if blocked_for_glossary
+            .iter()
+            .any(|blocked| span.start_char < blocked.end_char && blocked.start_char < span.end_char)
+        {
+            continue;
+        }
+        let source = chars[span.start_char..span.end_char].iter().collect();
+        blocked_for_glossary.push(span);
+        lock_candidates.push((0, span, source, LockOrigin::QuotedSource, true));
     }
 
     for gm in
@@ -736,10 +760,14 @@ fn translate_single_sentence(
     compiled_glossary: &CompiledGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
     direct_quote: Option<&ja_zh::DirectQuotePlacement>,
+    written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
     dates: &mut ja_zh::DateContext,
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
+    let written_quotes: &[quote_source::WrittenForm] = written_quotes_by_sentence
+        .get(sentence_idx)
+        .map_or(&[], Vec::as_slice);
     let raw_sent: String = chars[sent_span.start_char..sent_span.end_char]
         .iter()
         .collect();
@@ -775,6 +803,10 @@ fn translate_single_sentence(
         };
     }
 
+    let is_ja_to_zh = seq2seq.is_none()
+        && options.target.is_zh()
+        && (sent.lang == Lang::Ja
+            || (sent.lang == Lang::Mixed && ja_zh::has_kana_no_hangul(&raw_sent)));
     let lock_table = build_sentence_locks(
         sentence_idx,
         chars,
@@ -783,6 +815,7 @@ fn translate_single_sentence(
         &raw_sent,
         options,
         compiled_glossary,
+        written_quotes,
     );
 
     // Determine routing track for this sentence.
@@ -856,10 +889,6 @@ fn translate_single_sentence(
         options.target,
     );
 
-    let is_ja_to_zh = seq2seq.is_none()
-        && options.target.is_zh()
-        && (sent.lang == Lang::Ja
-            || (sent.lang == Lang::Mixed && ja_zh::has_kana_no_hangul(&raw_sent)));
     if is_ja_to_zh {
         let prior_letter_distribution = sentence_idx.checked_sub(1).and_then(|idx| {
             let prior = &doc.segmentation.sentences[idx];
@@ -883,8 +912,18 @@ fn translate_single_sentence(
             let raw_prior: String = chars[prior.span.start_char..prior.span.end_char]
                 .iter()
                 .collect();
-            let locks =
-                build_sentence_locks(idx, chars, doc, &[], &raw_prior, options, compiled_glossary);
+            let locks = build_sentence_locks(
+                idx,
+                chars,
+                doc,
+                &[],
+                &raw_prior,
+                options,
+                compiled_glossary,
+                written_quotes_by_sentence
+                    .get(idx)
+                    .map_or(&[], Vec::as_slice),
+            );
             ja_zh::prior_letter_distribution(idx, chars, doc, &locks)
         });
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
@@ -896,6 +935,10 @@ fn translate_single_sentence(
             &conditioning,
             options.target,
             direct_quote,
+            written_quotes
+                .first()
+                .filter(|quote| quote.continuation)
+                .map(|quote| quote.span),
             dates,
             prior_letter_distribution,
         );
@@ -1107,7 +1150,7 @@ fn finalize_sentence_outcome(
             .iter()
             .enumerate()
             .filter_map(|(i, r)| match r.origin {
-                LockOrigin::InlineOpaque(_) => Some(tracked_spans[i]),
+                LockOrigin::InlineOpaque(_) | LockOrigin::QuotedSource => Some(tracked_spans[i]),
                 _ => None,
             })
             .collect();
@@ -1120,7 +1163,7 @@ fn finalize_sentence_outcome(
             .iter()
             .enumerate()
             .filter_map(|(i, r)| match r.origin {
-                LockOrigin::InlineOpaque(_) => Some(tracked_spans[i]),
+                LockOrigin::InlineOpaque(_) | LockOrigin::QuotedSource => Some(tracked_spans[i]),
                 _ => None,
             })
             .collect();
@@ -1133,7 +1176,7 @@ fn finalize_sentence_outcome(
             .iter()
             .enumerate()
             .filter_map(|(i, r)| match r.origin {
-                LockOrigin::InlineOpaque(_) => Some(tracked_spans[i]),
+                LockOrigin::InlineOpaque(_) | LockOrigin::QuotedSource => Some(tracked_spans[i]),
                 _ => None,
             })
             .collect();
@@ -1168,7 +1211,7 @@ fn finalize_sentence_outcome(
                     target_span: final_target_span,
                 });
             }
-            LockOrigin::Entity => {}
+            LockOrigin::Entity | LockOrigin::QuotedSource => {}
         }
     }
 

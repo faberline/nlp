@@ -201,7 +201,7 @@ fn protected_date(atoms: &[Atom], start: usize, chars: &[char]) -> Option<(usize
         }
         if !atoms
             .get(end + 1)
-            .is_some_and(|c| !c.is_locked && matches!(c.surface.as_str(), "に" | "まで"))
+            .is_some_and(|c| !c.is_locked && matches!(c.surface.as_str(), "に" | "まで" | "の"))
         {
             continue;
         }
@@ -260,6 +260,32 @@ fn bind_detached_dates(
                 continue;
             };
         let day = &atoms[end];
+        // In 八月九日の切符 the date modifies the ticket. The month can
+        // have a separate parser arc, but the genitive case belongs to 日.
+        if day.deprel == "nmod"
+            && atoms
+                .get(end + 1)
+                .is_some_and(|no| linked_case(no, day, day, "の"))
+            && let Some(pos) = atoms[end + 2..].iter().position(|noun| {
+                noun.doc_tok_idx.is_some()
+                    && noun.doc_tok_idx == day.head
+                    && (noun.is_locked || matches!(noun.upos, Some(Upos::Noun | Upos::Propn)))
+            })
+        {
+            let object = end + 2 + pos;
+            if atoms[object].deprel == "obj"
+                && let [wo, pause, time, ..] = &atoms[object + 1..]
+                && linked_case(wo, &atoms[object], &atoms[object], "を")
+                && !pause.is_locked
+                && matches!(pause.surface.as_str(), "、" | "，" | ",")
+                && crate::ja_zh::is_clock_atom(time)
+                && atoms[object].head == time.head
+            {
+                atoms.remove(object + 2);
+            }
+            bind(atoms, start, end, text, DATE);
+            continue;
+        }
         let Some(case) = atoms.get(end + 1).filter(|c| {
             matches!(c.surface.as_str(), "まで" | "に") && linked_case(c, day, day, &c.surface)
         }) else {

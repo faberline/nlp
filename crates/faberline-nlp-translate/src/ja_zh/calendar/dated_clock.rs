@@ -83,7 +83,7 @@ fn bind_case(
     let marker = &atoms[case];
     if marker.is_locked
         || marker.deprel != "case"
-        || !matches!(marker.surface.as_str(), "まで" | "に" | "から")
+        || !matches!(marker.surface.as_str(), "まで" | "に" | "から" | "の")
     {
         return false;
     }
@@ -139,7 +139,17 @@ fn bind_case(
         && atoms[case + 1..]
             .iter()
             .any(|a| a.deprel == "cop" && a.head == Some(clock_id));
+    let nominal = marker.surface == "の"
+        && clock.deprel == "nmod"
+        && atoms[case + 1..].iter().any(|a| {
+            a.doc_tok_idx == clock.head
+                && (a.is_locked || matches!(a.upos, Some(Upos::Noun | Upos::Propn)))
+        });
+    if marker.surface == "の" && !nominal {
+        return false;
+    }
     if !copular_end
+        && !nominal
         && !(topic && clock.deprel == "nsubj")
         && (!matches!(clock.deprel.as_str(), "obl" | "advmod" | "iobj") || clock.head.is_none())
     {

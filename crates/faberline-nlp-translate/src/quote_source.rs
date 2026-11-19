@@ -15,6 +15,8 @@ const FORM_NAMES: &[&str] = &[
 ];
 const COMPARED_FORM_NAMES: &[&str] = &["表記", "字形", "字面", "綴り", "つづり"];
 const FORM_COUNTERS: &[&str] = &["つの", "種類の"];
+const FORM_SCRIPTS: &[&str] = &["カタカナ", "片仮名", "ひらがな", "平仮名", "漢字"];
+const WORD_NAMES: &[&str] = &["言葉", "単語", "語句", "文字列", "語"];
 const FORM_LABELS: &[&str] = &[
     "日本語の",
     "英語の",
@@ -320,6 +322,9 @@ fn compares_written_forms(after: &[char]) -> bool {
 
 fn describes_written_form(after: &[char]) -> bool {
     let after = skip_space(after);
+    if asks_character_count(after) {
+        return true;
+    }
     if let Some(object) = after.strip_prefix(&['を']) {
         return after_character_count(object)
             .and_then(|rest| rest.strip_prefix(&['で']))
@@ -358,6 +363,14 @@ fn describes_written_form(after: &[char]) -> bool {
     }
 
     let nominal = if let Some(nominal) = strip_prefix(after, "という") {
+        let nominal = skip_space(nominal);
+        if WORD_NAMES.iter().any(|word| {
+            strip_prefix(nominal, word)
+                .map(skip_space)
+                .is_some_and(asks_character_count)
+        }) {
+            return true;
+        }
         nominal
     } else if let Some(nominal) = after.strip_prefix(&['の']) {
         let nominal = skip_space(nominal);
@@ -374,9 +387,58 @@ fn describes_written_form(after: &[char]) -> bool {
         .any(|form| strip_prefix(nominal, form).is_some_and(noun_boundary))
 }
 
+fn asks_character_count(after: &[char]) -> bool {
+    let Some(topic) = after
+        .strip_prefix(&['は'])
+        .or_else(|| strip_prefix(after, "には"))
+    else {
+        return false;
+    };
+    let topic = skip_space(topic);
+    let topic = topic.strip_prefix(&['、']).map_or(topic, skip_space);
+    let question = FORM_SCRIPTS
+        .iter()
+        .find_map(|script| strip_prefix(topic, script))
+        .map_or(topic, |tail| {
+            let tail = skip_space(tail);
+            strip_prefix(tail, "では")
+                .or_else(|| tail.strip_prefix(&['で']))
+                .map_or(tail, skip_space)
+        });
+    let question = question.strip_prefix(&['、']).map_or(question, skip_space);
+    let Some(count) = question.strip_prefix(&['何']) else {
+        return false;
+    };
+    let Some(tail) = ["文字", "字"]
+        .iter()
+        .find_map(|unit| strip_prefix(skip_space(count), unit))
+        .map(skip_space)
+    else {
+        return false;
+    };
+    matches!(tail.first(), Some('？' | '?'))
+        || [
+            "ですか",
+            "でしたか",
+            "でしょうか",
+            "ありますか",
+            "あるのですか",
+            "なんですか",
+        ]
+        .iter()
+        .any(|ending| {
+            strip_prefix(tail, ending).is_some_and(|rest| {
+                matches!(
+                    skip_space(rest).first(),
+                    None | Some('。' | '？' | '?' | '、' | 'ね' | 'と')
+                )
+            })
+        })
+}
+
 fn after_character_count(chars: &[char]) -> Option<&[char]> {
     let chars = skip_space(chars);
-    let number = ["カタカナ", "片仮名", "ひらがな", "平仮名", "漢字"]
+    let number = FORM_SCRIPTS
         .iter()
         .find_map(|script| strip_prefix(chars, script))
         .map_or(chars, skip_space);
@@ -501,6 +563,12 @@ mod tests {
         for (source, preserved) in [
             ("出身国を聞かれて、「ドイツです」と答えました。", false),
             ("私は「ドイツ」という国を地図で見ました。", false),
+            ("「ドイツ」という国に行きました。", false),
+            ("「ドイツ」はどこにありますか。", false),
+            (
+                "「ドイツ」という言葉をニュースで聞きました。「来て」は何文字ですか。",
+                false,
+            ),
             ("彼は「ドイツ」を三秒で書きました。", false),
             (
                 "彼は「ドイツ」を書き、その隣に三文字の番号を添えました。",
@@ -623,6 +691,10 @@ mod tests {
                 "「ドイツ」",
             ),
             ("父は『「駅」の文字を消しなさい』と言いました。", "「駅」"),
+            (
+                "先生は『「行く」という単語は何文字ですか』と聞きました。",
+                "「行く」",
+            ),
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -654,6 +726,39 @@ mod tests {
                     .any(|item| { item.kind == TranslateUnknownKind::PlaceholderRepaired }),
                 "{text}"
             );
+        }
+    }
+
+    #[test]
+    fn a_character_count_question_keeps_the_word_being_measured() {
+        let glossary = glossary();
+        for (source, raw_quote) in [
+            ("「来て」という言葉は何文字ですか。", "「来て」"),
+            ("「行く」という単語は何文字ですか。", "「行く」"),
+            ("「ドイツ」という言葉は何文字ですか。", "「ドイツ」"),
+            ("「ドイツ」はカタカナで何文字ですか。", "「ドイツ」"),
+            ("「ドイツ」は、カタカナでは何文字？", "「ドイツ」"),
+            (
+                "「どいつ」という語は、ひらがなで何文字ですか。",
+                "「どいつ」",
+            ),
+            ("「来て」には何字ありますか。", "「来て」"),
+        ] {
+            let translated = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(
+                translated.target_text.matches(raw_quote).count(),
+                1,
+                "{source}: {}",
+                translated.target_text,
+            );
+            assert!(translated.glossary_hits.is_empty(), "{source}");
         }
     }
 

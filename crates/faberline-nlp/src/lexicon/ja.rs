@@ -136,6 +136,86 @@ struct BackEdge {
     kind: EdgeKind,
 }
 
+fn overlaps_custom_term(
+    start: usize,
+    end: usize,
+    text: &str,
+    byte_offs: &[usize],
+    custom_terms: &[(&str, usize)],
+) -> bool {
+    custom_terms.iter().any(|(term, len)| {
+        (start.saturating_sub(len.saturating_sub(1))..end)
+            .any(|at| at + len < byte_offs.len() && text[byte_offs[at]..].starts_with(term))
+    })
+}
+
+fn resolve_noon_endpoint(
+    path: &mut [(usize, usize, BackEdge)],
+    chars: &[char],
+    text: &str,
+    byte_offs: &[usize],
+    custom_terms: &[(&str, usize)],
+    verified_sentence_tail: bool,
+) {
+    // These forms can continue 昼ま (daytime) with a copula or では even
+    // when the lattice selected a separate で. Keep ambiguous readings.
+    const DAYTIME_CONTINUATIONS: &[&str] = &[
+        "した",
+        "して",
+        "しょう",
+        "ある",
+        "あり",
+        "あっ",
+        "あろ",
+        "ござ",
+        "ない",
+        "なく",
+        "なかっ",
+        "なけれ",
+    ];
+    for index in 1..path.len() {
+        let (start, middle, first) = &path[index - 1];
+        let (next_start, end, second) = &path[index];
+        let (start, middle, next_start, end) = (*start, *middle, *next_start, *end);
+        if first.len_chars != 2
+            || second.len_chars != 1
+            || middle != next_start
+            || !matches!(first.kind, EdgeKind::Lexicon)
+            || !matches!(second.kind, EdgeKind::Lexicon)
+            || chars[start..end] != ['昼', 'ま', 'で']
+        {
+            continue;
+        }
+        let in_context = match chars.get(end) {
+            Some('。' | '！' | '？' | '!' | '?') => true,
+            Some(&ch) => is_ja_stem_char(ch),
+            None => verified_sentence_tail,
+        };
+        let suffix = &text[byte_offs[end]..];
+        let followed_by_topic_particle = suffix.starts_with('は')
+            && path
+                .get(index + 1)
+                .is_some_and(|(_, _, edge)| edge.len_chars == 1);
+        if !in_context
+            || followed_by_topic_particle
+            || DAYTIME_CONTINUATIONS
+                .iter()
+                .any(|part| suffix.starts_with(part))
+            || overlaps_custom_term(start, end, text, byte_offs, custom_terms)
+        {
+            continue;
+        }
+
+        // The dictionary favors 昼ま + で by nine cost points. Move the boundary
+        // to emit the existing 昼 and まで entries without changing other costs.
+        let boundary = start + 1;
+        path[index - 1].1 = boundary;
+        path[index - 1].2.len_chars = 1;
+        path[index].0 = boundary;
+        path[index].2.len_chars = 2;
+    }
+}
+
 /// Look up the best-cost `zh-Hant` translation gloss (`counterpart`) for a Japanese surface form,
 /// preferring entries matching `upos` when provided.
 pub fn lookup_ja_gloss(surface: &str, upos: Option<Upos>) -> Option<&'static str> {
@@ -402,6 +482,14 @@ pub(crate) fn segment_ja_with_context(
         pos = start;
     }
     path.reverse();
+    resolve_noon_endpoint(
+        &mut path,
+        chars,
+        &text,
+        &byte_offs,
+        &custom_terms,
+        verified_sentence_tail,
+    );
 
     // Only resolve the selected ambiguous lexical-stem + polite auxiliary
     // path when an existing dictionary-backed finite inflection describes
@@ -430,11 +518,7 @@ pub(crate) fn segment_ja_with_context(
             index += 1;
             continue;
         }
-        let protected = custom_terms.iter().any(|(term, len)| {
-            (start.saturating_sub(len.saturating_sub(1))..end)
-                .any(|at| at + len <= n && text[byte_offs[at]..].starts_with(term))
-        });
-        if protected {
+        if overlaps_custom_term(start, end, &text, &byte_offs, &custom_terms) {
             index += 1;
             continue;
         }
@@ -943,6 +1027,78 @@ pub fn map_ja_shinjitai_char(c: char) -> char {
 /// [`map_ja_shinjitai_char`].
 pub fn map_ja_shinjitai(s: &str) -> String {
     s.chars().map(map_ja_shinjitai_char).collect()
+}
+
+#[cfg(test)]
+mod noon_endpoint_segmentation_tests {
+    use super::*;
+
+    #[test]
+    fn noon_endpoint_and_deadline_keep_source_spans() {
+        for (source, particles) in [
+            ("昼までに提出します。", &["昼", "まで", "に"][..]),
+            ("昼まで店を開けます。", &["昼", "まで"]),
+            ("昼までです。", &["昼", "まで", "です"]),
+        ] {
+            let chars: Vec<_> = source.chars().collect();
+            let base = 11;
+            let segments = segment_ja(&chars, base);
+            let mut offset = 0;
+            for (segment, surface) in segments.iter().zip(particles) {
+                let end = offset + surface.chars().count();
+                assert_eq!(
+                    segment.span,
+                    Span {
+                        start_char: base + offset,
+                        end_char: base + end
+                    }
+                );
+                assert_eq!(chars[offset..end].iter().collect::<String>(), *surface);
+                offset = end;
+            }
+            assert!(segments.len() >= particles.len());
+            assert_eq!(segments[1].decided_upos, Some(Upos::Adp));
+        }
+    }
+
+    #[test]
+    fn daytime_and_explicit_boundaries_keep_their_lexical_reading() {
+        for (source, base) in [
+            ("昼まです。", 0),
+            ("昼までも暗いです。", 0),
+            ("昼までした。", 0),
+            ("昼までは明るいです。", 0),
+            ("昼でなく、昼まではない。", 5),
+            ("昼までございます。", 0),
+            ("昼まに会います。", 0),
+            ("昼ま で働きます。", 0),
+            ("「昼ま」で働きます。", 1),
+            ("昼まで、もう一方は夜でした。", 0),
+        ] {
+            let chars: Vec<_> = source.chars().collect();
+            let segments = segment_ja(&chars, 0);
+            assert!(
+                segments.iter().any(|segment| {
+                    segment.span
+                        == Span {
+                            start_char: base,
+                            end_char: base + 2,
+                        }
+                }),
+                "{source}"
+            );
+        }
+        let chars: Vec<_> = "昼までに出します。".chars().collect();
+        let custom = ["昼ま".to_owned()];
+        let segments = segment_ja_with_lexicon(&chars, 0, &custom);
+        assert_eq!(
+            segments[0].span,
+            Span {
+                start_char: 0,
+                end_char: 2
+            }
+        );
+    }
 }
 
 #[cfg(test)]

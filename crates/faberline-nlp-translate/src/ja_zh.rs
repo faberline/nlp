@@ -1940,6 +1940,9 @@ struct TeHelpLetterCount {
     numeral: String,
     modifier: Option<&'static str>,
     per_writer: bool,
+    periodic_joint: bool,
+    joint_signature: Option<std::ops::Range<usize>>,
+    writer_each: Option<usize>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2084,6 +2087,7 @@ fn te_help_letter_count(
     action_idx: usize,
     can_distribute_to_writers: bool,
     writers: Option<&TeHelpPerson<'_>>,
+    joint_manner: bool,
 ) -> Option<TeHelpLetterCount> {
     let object = arguments
         .iter()
@@ -2166,13 +2170,63 @@ fn te_help_letter_count(
             && counter.span.end_char == word.span.start_char
     });
     let qualifier_text = qualifier.map(|word| word.surface.as_str());
-    let modifier = match (additional, qualifier_text) {
-        (true, Some("ずつ")) => Some("再各"),
-        (false, Some("ずつ")) => Some("各"),
-        (true, Some("だけ")) => Some("只再"),
-        (false, Some("だけ")) => Some("只"),
-        (true, _) => Some("再"),
-        (false, _) => None,
+    let mut signatures = arguments.windows(2).enumerate().filter(|(_, pair)| {
+        let (name, case) = (&pair[0], &pair[1]);
+        name.surface == "連名"
+            && !name.is_locked
+            && name.upos == Some(Upos::Noun)
+            && name.deprel == "obl"
+            && name.head == Some(action_idx)
+            && case.surface == "で"
+            && linked_letter_case(name, case)
+    });
+    let signature = signatures.next().map(|(index, _)| index..index + 2);
+    let recurring_period = start
+        .checked_sub(1)
+        .map(|index| &arguments[index])
+        .filter(|period| {
+            !period.is_locked
+                && matches!(period.surface.as_str(), "毎日" | "毎週" | "毎月" | "毎年")
+                && period.upos == Some(Upos::Adv)
+                && period.deprel == "advmod"
+                && period.head == Some(action_idx)
+                && period.span.end_char == arguments[start].span.start_char
+        });
+    let writer_each = if qualifier_text == Some("ずつ") && can_distribute_to_writers {
+        arguments.iter().position(|atom| {
+            !atom.is_locked
+                && matches!(atom.surface.as_str(), "それぞれ" | "各自")
+                && atom.upos == Some(Upos::Adv)
+                && atom.deprel == "advmod"
+                && (atom.head == Some(action_idx)
+                    || recurring_period.is_some_and(|period| {
+                        period.doc_tok_idx.is_some() && atom.head == period.doc_tok_idx
+                    }))
+        })
+    } else {
+        None
+    };
+    let periodic_joint = qualifier_text == Some("ずつ")
+        && recurring_period.is_some()
+        && writer_each.is_none()
+        && (joint_manner || signature.is_some())
+        && signatures.next().is_none();
+    let modifier = if periodic_joint {
+        Some(match (signature.is_some(), additional) {
+            (true, true) => "再聯名",
+            (true, false) => "聯名",
+            (false, true) => "再一起",
+            (false, false) => "一起",
+        })
+    } else {
+        match (additional, qualifier_text) {
+            (true, Some("ずつ")) => Some("再各"),
+            (false, Some("ずつ")) => Some("各"),
+            (true, Some("だけ")) => Some("只再"),
+            (false, Some("だけ")) => Some("只"),
+            (true, _) => Some("再"),
+            (false, _) => None,
+        }
     };
     let span = start..after_counter + usize::from(qualifier.is_some());
     if te_help_has_following_focus(arguments, span.end)
@@ -2199,7 +2253,10 @@ fn te_help_letter_count(
         span,
         numeral,
         modifier,
-        per_writer: qualifier_text == Some("ずつ") && can_distribute_to_writers,
+        per_writer: qualifier_text == Some("ずつ") && can_distribute_to_writers && !periodic_joint,
+        periodic_joint,
+        joint_signature: signature.filter(|_| periodic_joint),
+        writer_each,
     })
 }
 
@@ -2686,6 +2743,7 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
             action_idx,
             can_distribute_to_writers,
             writers,
+            manner.is_some(),
         )
     });
     let is_modifier = |index| {
@@ -5773,6 +5831,10 @@ fn render_te_help_request(
         .letter_count
         .as_ref()
         .is_some_and(|count| count.per_writer);
+    let periodic_joint = request
+        .letter_count
+        .as_ref()
+        .is_some_and(|count| count.periodic_joint);
     let linked_adverb = |start: usize, end: usize, surface: &str| Atom {
         span: Span {
             start_char: request.action[start].span.start_char,
@@ -5813,10 +5875,19 @@ fn render_te_help_request(
             {
                 return (index == manner.start
                     && performer_count.is_none()
+                    && !periodic_joint
                     && (!per_writer || manner.count.is_none()))
                 .then(|| linked_adverb(manner.start, manner.end, "一起"));
             }
             if let Some(count) = &request.letter_count {
+                if count.writer_each == Some(index)
+                    || count
+                        .joint_signature
+                        .as_ref()
+                        .is_some_and(|span| span.contains(&index))
+                {
+                    return None;
+                }
                 if count.span.contains(&index) {
                     return count
                         .modifier
@@ -5962,7 +6033,7 @@ fn render_te_help_request(
         {
             let name = render_person(writer);
             if let Some(count) = performer_count {
-                if !per_writer {
+                if !per_writer && !periodic_joint {
                     joint = "一起";
                 }
                 format!("包括{name}在內的{}", counted_listener(count))
@@ -20179,6 +20250,39 @@ mod existence_rule_tests {
             (
                 "もう一度手紙を書いていただけますか。",
                 "可以請您幫我再寫信一次嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_requests_distinguish_joint_periods_from_each_writer() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "校長宛ての手紙を二人で連名で毎週一通ずつ書いていただけますか。",
+                "可以請兩位每週聯名寫一封信給校長嗎？",
+            ),
+            (
+                "二人で書く手紙は、毎週合わせて一通だけです。校長宛ての手紙を二人で毎週一通ずつ書いていただけますか。",
+                "在二人寫的信，每週對齊，是一通。可以請兩位每週一起寫一封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を毎週一通ずつ書いていただけますか。",
+                "可以請兩位老師每週各寫一封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を二通ずつ書いていただけますか。",
+                "可以請兩位老師各寫兩封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人でそれぞれ毎週一通ずつ書いていただけますか。",
+                "可以請兩位每週各寫一封信給校長嗎？",
             ),
         ] {
             assert_eq!(

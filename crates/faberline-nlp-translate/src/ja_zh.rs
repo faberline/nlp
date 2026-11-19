@@ -4794,6 +4794,9 @@ fn translate_clause_atoms(
     mark_residence_place(&mut grouped, body);
     mark_joint_question(&mut grouped, &norm_atoms, body);
     let mut grouped = compose_relative_daypart(grouped);
+    if target == TargetVariant::ZhHant {
+        finite_adjective::fold_reported_modifier(&mut grouped, body, target);
+    }
     if let Some((predicate, _)) = proposal {
         localize_proposal_arguments(&mut grouped, predicate, body, target);
     }
@@ -8871,7 +8874,7 @@ fn translate_clause_bunsetsus(
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
     if target == TargetVariant::ZhHant
-        && let Some(state) = finite_adjective::render(source, ctx, &mut adverbs)
+        && let Some(state) = finite_adjective::render(source, &predicates, ctx, &mut adverbs)
     {
         pre_verb_mods.clear();
         verb_core = state;
@@ -12617,7 +12620,11 @@ fn merge_adnominal_bunsetsus(
                     continue;
                 }
 
-                if let Some(pred_b) = res.pop_if(|prev| is_prenominal_pred(prev)) {
+                if let Some(pred_b) = res.pop_if(|prev| {
+                    is_prenominal_pred(prev)
+                        || target == TargetVariant::ZhHant
+                            && finite_adjective::voiced_past_modifier(prev, &b, source)
+                }) {
                     let has_verb = pred_b
                         .atoms
                         .iter()

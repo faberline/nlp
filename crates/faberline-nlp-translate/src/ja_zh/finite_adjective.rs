@@ -428,8 +428,177 @@ fn has_surface_colour(noun: &Atom, previous: &[Atom], colour: &str) -> bool {
         || colour != "藍" && GREEN_OR_UNRIPE.contains(&name.as_str())
 }
 
+// The past of a lexical verb such as 運ぶ is 運んだ. Here だ is a verbal
+// auxiliary attached to the relative verb, rather than a nominal copula.
+pub(super) fn voiced_past_modifier(group: &Bunsetsu, head: &Bunsetsu, source: &[Atom]) -> bool {
+    matches!(group.atoms.as_slice(), [verb, past]
+        if !verb.is_locked && !past.is_locked && past.surface == "だ" && past.deprel == "aux"
+        && past.head == verb.doc_tok_idx && verb.upos == Some(Upos::Verb) && verb.deprel == "acl"
+        && head.atoms.iter().any(|noun| noun.doc_tok_idx == verb.head && noun.deprel == "nsubj"
+            && source.iter().any(|adj| adj.doc_tok_idx == noun.head && adj.upos == Some(Upos::Adj) && adj.deprel == "root")))
+}
+
+// In 子が白いと言った布, と marks the reported property. Its head is
+// 言う, whose relative-clause target is 布. Removing the report together
+// keeps the ordinary conditional-と renderer out of this speech complement.
+pub(super) fn fold_reported_modifier(
+    groups: &mut Vec<Bunsetsu>,
+    source: &[Atom],
+    target: TargetVariant,
+) {
+    let Some((start, noun, text)) = reported_modifier(source, target) else {
+        return;
+    };
+    let Some(first) = groups
+        .iter()
+        .position(|g| g.atoms.first().is_some_and(|a| a.span.start_char == start))
+    else {
+        return;
+    };
+    let Some(last) = groups.iter().position(|g| {
+        g.atoms
+            .first()
+            .is_some_and(|a| a.doc_tok_idx == noun.doc_tok_idx)
+    }) else {
+        return;
+    };
+    if first < last
+        && groups[first..last]
+            .iter()
+            .flat_map(|g| &g.atoms)
+            .all(|a| a.span.end_char <= noun.span.start_char)
+    {
+        prepend_locked_atom(&mut groups[last], text);
+        groups.drain(first..last);
+    }
+}
+
+fn reported_modifier(source: &[Atom], target: TargetVariant) -> Option<(usize, &Atom, String)> {
+    let r = source
+        .iter()
+        .position(|a| !a.is_locked && a.deprel == "acl" && a.lemma.as_deref() == Some("言う"))?;
+    let (prefix, rest) = source.split_at(r);
+    let (report, after) = rest.split_first()?;
+    let noun_index = after
+        .iter()
+        .position(|a| a.doc_tok_idx == report.head && a.deprel == "nsubj")?;
+    let noun = &after[noun_index];
+    let matrix = source
+        .iter()
+        .find(|a| a.doc_tok_idx == noun.head && a.upos == Some(Upos::Adj) && a.deprel == "root")?;
+    let matrix_lemma = matrix.lemma.as_deref().unwrap_or(&matrix.surface);
+    if hue(matrix_lemma).is_none() && !gradable(matrix_lemma) {
+        return None;
+    }
+    let past_negative = &after[..noun_index];
+    if !past_negative
+        .iter()
+        .all(|a| !a.is_locked && a.head == report.doc_tok_idx && a.upos == Some(Upos::Aux))
+    {
+        return None;
+    }
+    let ending: String = past_negative.iter().map(|a| a.surface.as_str()).collect();
+    let speech = match ending.as_str() {
+        "" | "た" => "說",
+        "なかった" => "沒有說",
+        "ない" => "不說",
+        _ => return None,
+    };
+    let (to, content) = prefix.split_last()?;
+    let idx = content
+        .iter()
+        .rposition(|a| !a.is_locked && a.upos == Some(Upos::Adj) && a.head == report.doc_tok_idx)?;
+    let inner = &content[idx];
+    if to.is_locked || to.surface != "と" || to.head != inner.doc_tok_idx {
+        return None;
+    }
+    let (past, neg) = inflection(inner, &content[idx + 1..])?;
+    let lemma = inner.lemma.as_deref().unwrap_or(&inner.surface);
+    let property = if let Some(c) = hue(lemma) {
+        if !has_surface_colour(noun, source, c) {
+            return None;
+        }
+        format!("{}{c}色", if neg { "不是" } else { "是" })
+    } else if gradable(lemma) && !uncertain_sense(lemma, &noun.surface) {
+        format!(
+            "{}{}",
+            if neg { "不" } else { "很" },
+            translate_single_ja_term(lemma, Some(lemma), Some(Upos::Adj))
+        )
+    } else {
+        return None;
+    };
+    let (ga, speaker_np) = content[..idx].split_last()?;
+    let (speaker, preceding) = speaker_np.split_last()?;
+    if ga.is_locked
+        || ga.surface != "が"
+        || ga.head != speaker.doc_tok_idx
+        || speaker.is_locked
+        || speaker.deprel != "nsubj"
+        || (speaker.head != inner.doc_tok_idx && speaker.head != report.doc_tok_idx)
+        || !(is_demonstrative_person_noun(speaker) || speaker.surface == "子")
+    {
+        return None;
+    }
+    let det = preceding
+        .last()
+        .filter(|a| attached_demonstrative(a, speaker).is_some());
+    let mut start_index = speaker_np.len() - 1 - usize::from(det.is_some());
+    let nominal = |atoms: &[Atom]| {
+        render_bunsetsu_np(
+            &Bunsetsu {
+                atoms: atoms.to_vec(),
+                role: BunsetsuRole::Other,
+                case_particle: None,
+                sconj_tail: None,
+                sfp_tail: None,
+            },
+            target,
+        )
+    };
+    let mut who = if speaker.surface == "子" {
+        let demonstrative = det.and_then(|a| attached_demonstrative(a, speaker));
+        demonstrative.map_or_else(|| "孩子".to_owned(), |d| format!("{d}個孩子"))
+    } else {
+        nominal(&speaker_np[start_index..])
+    };
+    let mut owned = speaker;
+    while let [earlier @ .., owner, no] = &speaker_np[..start_index] {
+        if no.surface != "の" {
+            break;
+        }
+        if owner.is_locked
+            || no.is_locked
+            || owner.head != owned.doc_tok_idx
+            || owner.deprel != "nmod"
+            || no.head != owner.doc_tok_idx
+        {
+            return None;
+        }
+        let end = start_index - 1;
+        start_index = end
+            - 1
+            - usize::from(
+                earlier
+                    .last()
+                    .is_some_and(|d| attached_demonstrative(d, owner).is_some()),
+            );
+        who = format!("{}的{who}", nominal(&speaker_np[start_index..end]));
+        owned = owner;
+    }
+    Some((
+        speaker_np[start_index].span.start_char,
+        noun,
+        format!(
+            "{who}{speech}{}{property}的",
+            if past { "當時" } else { "" }
+        ),
+    ))
+}
+
 pub(super) fn render(
     source: &[Atom],
+    predicates: &[Bunsetsu],
     ctx: &ClauseDiscourseCtx,
     adverbs: &mut Vec<String>,
 ) -> Option<String> {
@@ -440,6 +609,18 @@ pub(super) fn render(
     let (before, predicate_and_tail) = body.split_at(idx);
     let (predicate, tail) = predicate_and_tail.split_first()?;
     let id = predicate.doc_tok_idx?;
+    // Recursive rendering of relative clauses also receives the sentence source.
+    // Only its own predicate groups may select a particular adjective head.
+    let active = predicates.iter().flat_map(|b| &b.atoms);
+    if !active.clone().any(|a| a.doc_tok_idx == Some(id))
+        || active.clone().any(|a| {
+            a.upos == Some(Upos::Adj) && a.doc_tok_idx != Some(id)
+                || a.upos == Some(Upos::Verb)
+                    && !(a.lemma.as_deref() == Some("ある") && predicate.head == a.doc_tok_idx)
+        })
+    {
+        return None;
+    }
     if let Some(side) = ctx.adjective.coordinate {
         let lemma = predicate.lemma.as_deref().unwrap_or(&predicate.surface);
         let word = translate_single_ja_term(lemma, Some(lemma), Some(Upos::Adj));
@@ -535,6 +716,9 @@ pub(super) fn render(
         return None;
     }
     let modified = linked_adv.clone().any(scale) || comparative;
+    if !comparative && before.iter().any(|a| !a.is_locked && a.surface == "より") {
+        return None;
+    }
     let has_time = ctx.adjective.time_head == Some(id)
         || before.iter().any(|a| {
             past_anchor(a, before)
@@ -659,6 +843,40 @@ mod tests {
             assert_eq!(translate(jp), expected, "{jp}");
         }
         assert!(!translate("少し前、この箱は軽かった。").contains("當時"));
+    }
+
+    #[test]
+    fn relative_verbs_and_reported_colours_keep_their_own_arguments() {
+        for (jp, expected) in [
+            ("先生が買った車は白いです。", "老師買的車是白色的。"),
+            ("店員が運んだ箱は軽いです。", "店員搬運的箱很輕。"),
+            (
+                "先生が買わなかった車は白くないです。",
+                "老師沒有買的車不是白色的。",
+            ),
+            (
+                "あの子が白いと言った布は青いです。",
+                "那個孩子說是白色的布是藍色的。",
+            ),
+            (
+                "弟が赤いと言った布は白いです。",
+                "弟弟說是紅色的布是白色的。",
+            ),
+            (
+                "先生の弟が赤いと言った布は白いです。",
+                "老師的弟弟說是紅色的布是白色的。",
+            ),
+            (
+                "弟が白くないと言った布は青いです。",
+                "弟弟說不是白色的布是藍色的。",
+            ),
+            (
+                "弟が黒いと言わなかった布は白いです。",
+                "弟弟沒有說是黑色的布是白色的。",
+            ),
+        ] {
+            assert_eq!(translate(jp), expected, "{jp}");
+        }
     }
 
     #[test]

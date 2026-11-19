@@ -32,12 +32,11 @@ pub(super) fn mark_argument_commas(source: &mut [Atom], doc: &Document) {
     else {
         return;
     };
-    if verb.deprel != "root"
-        && !source.iter().any(|a| {
-            a.span.start_char == verb.span.end_char
-                && matches!(a.surface.as_str(), "たい" | "たく" | "たかっ" | "たかった")
-        })
-    {
+    let has_desire = source.iter().any(|a| {
+        a.span.start_char == verb.span.end_char
+            && matches!(a.surface.as_str(), "たい" | "たく" | "たかっ" | "たかった")
+    });
+    if verb.deprel != "root" && !has_desire {
         return;
     }
     let mut subject = None;
@@ -69,6 +68,21 @@ pub(super) fn mark_argument_commas(source: &mut [Atom], doc: &Document) {
         .take_while(|(_, atom)| atom.span.start_char < verb.span.start_char)
     {
         if !is_comma(atom) {
+            continue;
+        }
+        // An independently fronted time can set the frame for wanting.
+        // Let the normal splitter preserve it separately from the event time.
+        let time_frame = match &source[start..i] {
+            [time] => Some(time),
+            [time, marker] if marker.surface == "は" => Some(time),
+            _ => None,
+        };
+        if has_desire
+            && time_frame
+                .and_then(super::render_temporal_made_atom)
+                .is_some()
+        {
+            start = i + 1;
             continue;
         }
         // Use original tokens here: a normalized clock may contain several
@@ -412,6 +426,18 @@ mod tests {
             (
                 "先生は明日、生徒に宿題を出したいと思っています。",
                 "老師想明天出作業給學生。",
+            ),
+            (
+                "昨日、生徒は先生に今日の九時までに宿題を出したかったです。",
+                "昨天，學生當時想最晚在今天九點把作業交給老師。",
+            ),
+            (
+                "先生は昨日、生徒に明日の宿題を出したかったです。",
+                "老師昨天想出明天的作業給學生。",
+            ),
+            (
+                "生徒は今、先生に明日の朝に宿題を出したいと思っています。",
+                "學生現在想在明天早上把作業交給老師。",
             ),
             (
                 "昨日来た生徒は今日、先生に宿題を出しました。",

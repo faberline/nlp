@@ -6208,6 +6208,7 @@ fn try_translate_homework_transfer(
     let mut homework = None;
     let mut recipient_before_subject = false;
     let mut adjuncts = Vec::new();
+    let mut intention_time = None;
     for bunsetsu in bunsetsus {
         if bunsetsu.sconj_tail.is_some()
             || (bunsetsu.sfp_tail.is_some() && !bunsetsu.atoms.last().is_some_and(is_terminal_ka))
@@ -6282,6 +6283,26 @@ fn try_translate_homework_transfer(
         {
             asks_event_time = true;
             adjuncts.push("什麼時候".to_owned());
+            continue;
+        }
+        // A subject followed by a comma-framed present or past time can
+        // locate its intention independently of the scheduled transfer.
+        if let Some((modal, _)) = desire
+            && let [time] = bunsetsu.atoms.as_slice()
+            && !time.is_locked
+            && time.head == head
+            && time.deprel == "advmod"
+            && (time.surface == "今"
+                || (modal.starts_with("當時")
+                    && matches!(time.surface.as_str(), "昨日" | "先週" | "先月" | "去年")))
+            && source.iter().any(|a| {
+                homework_relative::is_argument_comma(a) && time.span.end_char == a.span.start_char
+            })
+        {
+            if intention_time.is_some() {
+                return None;
+            }
+            intention_time = render_temporal_made_atom(time);
             continue;
         }
         if is_event_daypart(bunsetsu, bunsetsus, source)
@@ -6423,6 +6444,10 @@ fn try_translate_homework_transfer(
         adjuncts.extend(before_verb);
     }
     let mut parts = vec![subject];
+    if let Some(time) = intention_time {
+        parts.push(time);
+        desire_prefix = desire_prefix.map(|modal| modal.strip_prefix("當時").unwrap_or(modal));
+    }
     if let Some(modal) = desire_prefix {
         parts.push(modal.to_owned());
     }

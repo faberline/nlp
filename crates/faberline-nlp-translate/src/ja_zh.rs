@@ -8456,6 +8456,10 @@ fn translate_clause_bunsetsus(
         if daypart_groups.contains(&idx)
             || timed_result.is_some_and(|f| f.time == SettingTime::At(idx))
         {
+            if matches!(b.atoms.as_slice(), [_, _, focus] if !focus.is_locked && focus.surface == "も")
+            {
+                adverbs.push("也".to_owned());
+            }
             temporal_others.push(render_daypart_np(&b, target));
             continue;
         }
@@ -13959,8 +13963,18 @@ fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool
 // Keep the time only when its own governor and that governor's other
 // arguments support an event-time reading.
 fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> bool {
-    let [time, ni] = group.atoms.as_slice() else {
-        return false;
+    let (time, ni, focused) = match group.atoms.as_slice() {
+        [time, ni] => (time, ni, false),
+        [time, ni, focus]
+            if !focus.is_locked
+                && matches!(focus.surface.as_str(), "は" | "も")
+                && focus.deprel == "case"
+                && focus.head == ni.head
+                && ni.span.end_char == focus.span.start_char =>
+        {
+            (time, ni, true)
+        }
+        _ => return false,
     };
     let (Some(time_id), Some(head)) = (time.doc_tok_idx, time.head) else {
         return false;
@@ -13973,7 +13987,8 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
         || ni.is_locked
         || !is_daypart_surface(&time.surface)
         || !matches!(time.upos, Some(Upos::Noun | Upos::Adv))
-        || !matches!(time.deprel.as_str(), "obl" | "advmod" | "iobj")
+        || !(matches!(time.deprel.as_str(), "obl" | "advmod" | "iobj")
+            || focused && time.deprel == "nsubj")
         || ni.surface != "に"
         || ni.upos != Some(Upos::Adp)
         || ni.deprel != "case"
@@ -13983,7 +13998,7 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
     {
         return false;
     }
-    if return_endpoint::time_before_place_modifier(time, source) {
+    if !focused && return_endpoint::time_before_place_modifier(time, source) {
         return true;
     }
     // Phrase rendering can join a lexical governor and する into one translated
@@ -14002,6 +14017,10 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
         return false;
     }
     let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    let physical_return = lemma == "戻る" && return_endpoint::local_motion(verb, clause, source);
+    if focused && !physical_return {
+        return false;
+    }
     if !has_verb_reading(lemma) || selects_time_value(lemma) {
         return false;
     }
@@ -14036,6 +14055,9 @@ fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> b
     }
     // 帰る expresses a return home. 戻る can instead restore a setting,
     // and 移る / 動く can move a scheduled value.
+    if physical_return {
+        return true;
+    }
     if matches!(lemma, "戻る" | "移る" | "動く") && !has_motion_reading(clause, source, head)
     {
         let has_other_result = lemma == "戻る" && return_endpoint::has_original_value(source, head);
@@ -14962,6 +14984,54 @@ mod motion_endpoint_tests {
             ("店に戻った客が本を買いました。", "回到商店的客買了書。"),
             ("私は正午に店に本を戻しました。", "我正午把書放回商店了。"),
             ("母は先生に本を返しました。", "母親給老師還給了書。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn a_subordinate_return_keeps_its_own_time() {
+        for (source, expected) in [
+            (
+                "正午に店に戻った客は本を買いました。",
+                "正午回到商店的客買了書。",
+            ),
+            (
+                "正午に店に戻った客は夕方に本を買いました。",
+                "正午回到商店的客傍晚買了書。",
+            ),
+            (
+                "正午に戻った先生は本を買いました。",
+                "正午回來的老師買了書。",
+            ),
+            (
+                "客は夕方に店に戻って、本を買いました。",
+                "客傍晚回到商店，買了書。",
+            ),
+            (
+                "客は店に戻って、正午に本を買いました。",
+                "客回到商店，正午買了書。",
+            ),
+            (
+                "客は朝に店に戻って、夜に本を買いました。",
+                "客早上回到商店，夜晚買了書。",
+            ),
+            (
+                "客は正午にも店に戻って、本を買いました。",
+                "客正午也回到商店，買了書。",
+            ),
+            (
+                "正午に店には戻らなかった客は本を買いました。",
+                "正午沒有回到商店的客買了書。",
+            ),
+            (
+                "客が正午に店に戻ると、店員が本を渡しました。",
+                "當客正午回到商店時，店員遞給了書。",
+            ),
+            (
+                "放送時間は夕方に戻って、父は店に戻りました。",
+                "廣播時間恢復到傍晚，父親回到商店了。",
+            ),
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }

@@ -5031,7 +5031,7 @@ fn try_translate_homework_transfer(
     target: TargetVariant,
 ) -> Option<String> {
     // Inspect the source before nominal groups render protected atoms.
-    // A normalized deadline clock can pass if it has no glossary placeholder.
+    // A normalized clock can pass if it has no glossary placeholder.
     if source.iter().any(|atom| {
         atom.is_locked
             && (atom.lemma.as_deref() != Some(CLOCK_ATOM) || atom.surface.contains("[[PH"))
@@ -5078,6 +5078,8 @@ fn try_translate_homework_transfer(
         return None;
     }
     let mut deadline = None;
+    let mut continuation_end = None;
+    let mut has_clock_modifier = false;
     let mut subject = None;
     let mut recipient = None;
     let mut homework = None;
@@ -5093,6 +5095,28 @@ fn try_translate_homework_transfer(
                 return None;
             }
             deadline = Some((adjuncts.len(), bunsetsu));
+            continue;
+        }
+        if let Some((clock, marker)) = explicit_clock_case(bunsetsu) {
+            if clock_case_governor(clock, marker, doc) != head {
+                return None;
+            }
+            has_clock_modifier = true;
+            match marker.surface.as_str() {
+                "まで" => {
+                    if continuation_end.is_some() {
+                        return None;
+                    }
+                    continuation_end = Some((adjuncts.len(), temporal_made_time(bunsetsu)?));
+                }
+                "から" => {
+                    adjuncts.push(format!(
+                        "{}起",
+                        render_bunsetsu_obl(bunsetsu, target, false)
+                    ));
+                }
+                _ => adjuncts.push(render_bunsetsu_obl(bunsetsu, target, false)),
+            }
             continue;
         }
         if bunsetsu.role != BunsetsuRole::Obj && bunsetsu.atoms.iter().any(|atom| atom.is_locked) {
@@ -5159,7 +5183,11 @@ fn try_translate_homework_transfer(
     if verb != "拿出" || passive {
         return None;
     }
+    let mut continuation_tail = None;
     if let Some((position, group)) = deadline {
+        if continuation_end.is_some() {
+            return None;
+        }
         let time = render_bunsetsu_np(group, target);
         // Negation applies to completing the transfer by the deadline.
         let cutoff = match before_verb.as_slice() {
@@ -5171,19 +5199,38 @@ fn try_translate_homework_transfer(
         };
         adjuncts.insert(position, cutoff);
     } else {
+        if let Some((position, time)) = continuation_end {
+            if before_verb
+                .iter()
+                .any(|word| matches!(word.as_str(), "不" | "沒有"))
+            {
+                adjuncts.insert(position, format!("到{time}為止"));
+            } else {
+                continuation_tail = Some(format!("到{time}"));
+            }
+        }
         adjuncts.extend(before_verb);
     }
     let mut parts = vec![subject.to_owned()];
     parts.extend(adjuncts);
     parts.push(action);
-    parts.extend(after_verb);
+    parts.extend(
+        after_verb
+            .into_iter()
+            .filter(|word| continuation_tail.is_none() || word != "了"),
+    );
+    parts.extend(continuation_tail);
     if terminal_ka.is_some() {
-        let (_, group) = deadline?;
-        if !group
-            .atoms
-            .iter()
-            .any(|atom| deadline_time_question(atom).is_some())
-        {
+        if deadline.is_none() && !has_clock_modifier {
+            return None;
+        }
+        let asks_deadline_time = deadline.is_some_and(|(_, group)| {
+            group
+                .atoms
+                .iter()
+                .any(|atom| deadline_time_question(atom).is_some())
+        });
+        if !asks_deadline_time {
             parts.push("嗎".to_owned());
         }
     }
@@ -16143,18 +16190,54 @@ mod motion_endpoint_tests {
 // particle is not a competing destination. Opaque/glossary placeholders and
 // mixed groups remain on the conservative path.
 fn is_plain_clock_ni(b: &Bunsetsu) -> bool {
+    b.case_particle.as_deref() == Some("に") && explicit_clock_case(b).is_some()
+}
+
+fn explicit_clock_case(b: &Bunsetsu) -> Option<(&Atom, &Atom)> {
     let [clock, particle] = b.atoms.as_slice() else {
-        return false;
+        return None;
     };
-    b.role == BunsetsuRole::Obl
-        && b.case_particle.as_deref() == Some("に")
+    (b.role == BunsetsuRole::Obl
+        && matches!(b.case_particle.as_deref(), Some("に" | "まで" | "から"))
         && clock.lemma.as_deref() == Some(CLOCK_ATOM)
         && clock.is_locked
         && !clock.surface.contains("[[PH")
         && !particle.is_locked
         && particle.upos == Some(Upos::Adp)
-        && particle.surface == "に"
-        && clock.span.end_char == particle.span.start_char
+        && b.case_particle.as_deref() == Some(particle.surface.as_str())
+        && clock.span.end_char == particle.span.start_char)
+        .then_some((clock, particle))
+}
+
+fn clock_case_governor(clock: &Atom, marker: &Atom, doc: &Document) -> Option<usize> {
+    if marker.deprel != "case" {
+        return None;
+    }
+    let marker_idx = marker.doc_tok_idx?;
+    let original_marker = &doc.tokens.get(marker_idx)?.span;
+    if *original_marker == marker.span {
+        let time = &doc.tokens.get(marker.head?)?.span;
+        if time.start_char >= clock.span.start_char && time.end_char <= clock.span.end_char {
+            return deadline_case_governor(marker, doc);
+        }
+        return None;
+    }
+
+    // A token such as 時に can supply both the end of the clock and its case.
+    // Its source node must attach as a temporal modifier on its own.
+    if marker.surface != "に"
+        || original_marker.start_char < clock.span.start_char
+        || original_marker.start_char >= clock.span.end_char
+        || original_marker.end_char != marker.span.end_char
+    {
+        return None;
+    }
+    let node = doc.syntax.iter().find(|node| node.token == marker_idx)?;
+    if matches!(node.deprel.as_str(), "advmod" | "obl") && node.head == marker.head {
+        node.head
+    } else {
+        None
+    }
 }
 
 fn physical_goal_head(b: &Bunsetsu) -> Option<usize> {

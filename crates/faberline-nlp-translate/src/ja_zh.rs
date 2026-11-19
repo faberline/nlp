@@ -4608,7 +4608,7 @@ fn translate_clause_atoms(
     }
 
     if target == TargetVariant::ZhHant
-        && let Some(text) = finite_adjective::comparison(core_non_punct(atoms), target)
+        && let Some(text) = finite_adjective::comparison(core_non_punct(atoms), ctx, target)
     {
         return (text, false);
     }
@@ -8874,7 +8874,8 @@ fn translate_clause_bunsetsus(
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
     if target == TargetVariant::ZhHant
-        && let Some(state) = finite_adjective::render(source, &predicates, ctx, &mut adverbs)
+        && let Some(state) =
+            finite_adjective::render(source, &predicates, ctx, &mut adverbs, &mut temporal_others)
     {
         pre_verb_mods.clear();
         verb_core = state;

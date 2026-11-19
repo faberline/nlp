@@ -186,14 +186,18 @@ pub(super) fn concessive(source: &[Atom], ctx: &ClauseDiscourseCtx) -> Option<Ve
     Some(clause)
 }
 
-// A は B ほど adjective-negative compares A with B. ほど does not express
-// an independent quantity, and the negative belongs to the comparison.
-pub(super) fn comparison(source: &[Atom], target: TargetVariant) -> Option<String> {
+// With a negative predicate より denies exceeding the reference (equality
+// is possible). ほど…ない says the subject falls short of the reference.
+pub(super) fn comparison(
+    source: &[Atom],
+    ctx: &ClauseDiscourseCtx,
+    target: TargetVariant,
+) -> Option<String> {
     let i = source
         .iter()
-        .position(|a| !a.is_locked && a.surface == "ほど")?;
+        .position(|a| !a.is_locked && matches!(a.surface.as_str(), "ほど" | "より"))?;
     let (left, right) = source.split_at(i);
-    let [hodo, adj, tail @ ..] = right else {
+    let [marker, adj, tail @ ..] = right else {
         return None;
     };
     if adj.is_locked || adj.upos != Some(Upos::Adj) || adj.deprel != "root" {
@@ -227,7 +231,7 @@ pub(super) fn comparison(source: &[Atom], target: TargetVariant) -> Option<Strin
     if subj.doc_tok_idx != left[case].head
         || subj.head != adj.doc_tok_idx
         || subj.deprel != "nsubj"
-        || other.doc_tok_idx != hodo.head
+        || other.doc_tok_idx != marker.head
         || other.deprel != "obl"
         || other.head != adj.doc_tok_idx
     {
@@ -267,12 +271,19 @@ pub(super) fn comparison(source: &[Atom], target: TargetVariant) -> Option<Strin
         };
         Some(render_bunsetsu_np(&group, target))
     };
-    Some(format!(
-        "{}{}沒有{}那麼{word}{suffix}",
-        nominal(&left[..case])?,
-        if past { "當時" } else { "" },
-        nominal(&left[case + 1..])?
-    ))
+    let subject = nominal(&left[..case])?;
+    let reference = nominal(&left[case + 1..])?;
+    let time = if past && ctx.adjective.time_head != adj.doc_tok_idx {
+        "當時"
+    } else {
+        ""
+    };
+    let relation = if marker.surface == "より" {
+        format!("不比{reference}")
+    } else {
+        format!("沒有{reference}那麼")
+    };
+    Some(format!("{subject}{time}{relation}{word}{suffix}"))
 }
 
 /// An i-adjective describes a past state with かった. Rendering that ending
@@ -601,6 +612,7 @@ pub(super) fn render(
     predicates: &[Bunsetsu],
     ctx: &ClauseDiscourseCtx,
     adverbs: &mut Vec<String>,
+    times: &mut Vec<String>,
 ) -> Option<String> {
     let body = core_non_punct(source);
     let idx = body
@@ -727,7 +739,7 @@ pub(super) fn render(
                         .clone()
                         .any(|modifier| a.head == modifier.doc_tok_idx))
         });
-    let word = if let Some(c) = colour {
+    let mut word = if let Some(c) = colour {
         c.to_owned()
     } else {
         translate_single_ja_term(lemma, Some(lemma), Some(Upos::Adj))
@@ -746,7 +758,7 @@ pub(super) fn render(
         let degree = adverbs.iter_mut().find(|s| s.as_str() == existing)?;
         *degree = negative_degree.to_owned();
         if past && !has_time {
-            adverbs.insert(0, "當時".to_owned());
+            times.push("當時".to_owned());
         }
         return Some(word);
     }
@@ -764,8 +776,16 @@ pub(super) fn render(
     {
         *most = "最".to_owned();
     }
+    if comparative
+        && matches!(before, [.., marker, degree] if !marker.is_locked && marker.surface == "より"
+            && !degree.is_locked && degree.surface == "ずっと" && degree.head == Some(id))
+        && let Some(i) = adverbs.iter().position(|s| s == "一直")
+    {
+        adverbs.remove(i);
+        word.push_str("得多");
+    }
     if past && !has_time {
-        adverbs.insert(0, "當時".to_owned());
+        times.push("當時".to_owned());
     }
     if colour.is_some() && !modified {
         return Some(format!(
@@ -825,6 +845,20 @@ mod tests {
             ("この箱は重くなりました。", "這個箱子變重了。"),
             ("この箱は重そうです。", "這個箱子看起來很重。"),
             ("この橋はあの橋ほど長くない。", "這座橋沒有那座橋那麼長。"),
+            ("車が壁より白かったです。", "車當時比壁白。"),
+            ("この箱はあの箱より重かった。", "這個箱子當時比那個箱子重。"),
+            (
+                "この箱はあの箱よりずっと重かった。",
+                "這個箱子當時比那個箱子重得多。",
+            ),
+            (
+                "この箱はあの箱より重くなかった。",
+                "這個箱子當時不比那個箱子重。",
+            ),
+            (
+                "昔、この箱はあの箱ほど重くなかった。",
+                "以前，這個箱子沒有那個箱子那麼重。",
+            ),
             ("車は白いが、箱は重いです。", "車是白色的，但是箱很重。"),
             ("この箱は重くて大きいです。", "這個箱子很重，也很大。"),
             ("当時、箱は重かった。", "當時，箱很重。"),

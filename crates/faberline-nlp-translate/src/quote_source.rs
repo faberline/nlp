@@ -146,7 +146,7 @@ fn protect_coordinated_forms(
         }
 
         // A conjunction may bridge two analysis sentences when they split
-        // on punctuation inside a quote. Outside punctuation breaks the group.
+        // on punctuation inside a quote. The join still has to be explicit.
         let after = skip_space(&chars[quote.end_char + 1..paragraph.end_char]);
         if index > first
             && (compares_written_forms(after)
@@ -174,9 +174,10 @@ fn counts_each_form(after: &[char]) -> bool {
     })
 }
 
-// Only the conjunction and an optional label may occur between the two operands.
+// A single Japanese comma can follow the conjunction と.
 fn quote_join(between: &[char]) -> Option<bool> {
     let rest = skip_space(skip_space(between).strip_prefix(&['と'])?);
+    let rest = rest.strip_prefix(&['、']).map(skip_space).unwrap_or(rest);
     if rest.is_empty() {
         Some(false)
     } else {
@@ -434,7 +435,9 @@ mod tests {
         }
         for (source, other) in [
             ("日本語の「ドイツ」と漢字の「独逸」を比べました。", "独逸"),
+            ("日本語の「ドイツ」と、漢字の「独逸」を比べました。", "独逸"),
             ("「ドイツ」と『どいつ』は表記が違います。", "どいつ"),
+            ("「ドイツ」と、『どいつ』は表記が違います。", "どいつ"),
             ("『ドイツ』と『フランス』の表記を見比べました。", "フランス"),
         ] {
             let translated = analyze_and_translate(
@@ -455,6 +458,9 @@ mod tests {
             "「ドイツ」と「フランス」の人口を比べました。",
             "「ドイツ」と「フランス」を比べるために旅行しました。",
             "太郎は「ドイツ」と答え、花子は「フランス」と答えました。",
+            "「ドイツ」と、「フランス」の人口を比べました。",
+            "太郎は「ドイツ」と、花子は「フランス」と答えました。",
+            "今日は「ドイツ」と、「フランス」について話しました。次に地図の表記を比べました。",
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -526,6 +532,18 @@ mod tests {
                 "「ドイツ！」と「行く？」の文字数をそれぞれ数えました。",
                 &["「ドイツ！」", "「行く？」"],
             ),
+            (
+                "「ドイツ！」と、「行く？」の文字数をそれぞれ数えました。",
+                &["「ドイツ！」", "「行く？」"],
+            ),
+            (
+                "「行く？」と、「ドイツ！」の文字数をそれぞれ数えました。",
+                &["「行く？」", "「ドイツ！」"],
+            ),
+            (
+                "「来て！」と、「すぐ帰る」の文字数をそれぞれ数えました。",
+                &["「来て！」", "「すぐ帰る」"],
+            ),
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -549,6 +567,28 @@ mod tests {
                     .iter()
                     .any(|item| { item.kind == TranslateUnknownKind::PlaceholderRepaired }),
                 "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn quote_join_accepts_only_one_comma_after_the_conjunction() {
+        use super::quote_join;
+
+        for (between, expected) in [
+            ("と、", Some(false)),
+            (" と　、 漢字の　", Some(true)),
+            ("、", None),
+            ("、と", None),
+            ("と、、", None),
+            ("と、。", None),
+            ("と、\n", None),
+            ("と、花子は", None),
+        ] {
+            assert_eq!(
+                quote_join(&between.chars().collect::<Vec<_>>()),
+                expected,
+                "{between:?}"
             );
         }
     }

@@ -60,16 +60,40 @@ pub(super) fn continues_habitual_action(
     if verb.upos != Some(Upos::Verb) || !matches!(verb.deprel.as_str(), "root" | "advcl" | "conj") {
         return false;
     }
-    // A caller can lock a whole quotation or list into one atom. Its original
-    // delimiters still separate the time from the reporting or list predicate.
-    !following[..action].iter().any(|a| {
-        a.is_locked
-            && chars[a.span.start_char..a.span.end_char].iter().any(|c| {
-                matches!(
-                    c,
-                    '「' | '」' | '『' | '』' | '、' | '，' | '。' | '！' | '？' | '!' | '?' | '…'
-                )
-            })
+    // Inspect source characters even when a glossary covers the delimiters or
+    // tokenization omits them. Skip only the original pause after the time.
+    let Some(between) = chars.get(rate.span.end_char..verb.span.start_char) else {
+        return false;
+    };
+    let Some(pause) = between.iter().position(|c| !c.is_whitespace()) else {
+        return false;
+    };
+    if !matches!(between[pause], '、' | '，') {
+        return false;
+    }
+    !between[pause + 1..].iter().enumerate().any(|(offset, c)| {
+        let index = pause + 1 + offset;
+        match c {
+            '「' | '」' | '『' | '』' | '"' | '＂' | '“' | '”' | '‘' | '、' | '，' | '。'
+            | '！' | '？' | '!' | '?' | '…' => true,
+            '\'' | '’' => {
+                !(between
+                    .get(index - 1)
+                    .is_some_and(char::is_ascii_alphanumeric)
+                    && between
+                        .get(index + 1)
+                        .is_some_and(char::is_ascii_alphanumeric))
+            }
+            ',' => {
+                !(between[index - 1].is_ascii_digit()
+                    && between[index + 1..]
+                        .iter()
+                        .take_while(|c| c.is_ascii_digit())
+                        .count()
+                        == 3)
+            }
+            _ => false,
+        }
     })
 }
 

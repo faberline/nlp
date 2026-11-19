@@ -16386,6 +16386,18 @@ mod clock_rule_tests {
                 "飲品甲和",
                 "我每晚，",
             ),
+            (
+                r#"私は毎朝、"おはよう"と言います。"#,
+                r#""おはよう""#,
+                "「早安」",
+                "我每天早上，",
+            ),
+            (
+                "私は毎朝、水,お茶,牛乳を買います。",
+                "水,お茶,",
+                "水、茶、",
+                "我每天早上，",
+            ),
         ] {
             let mut glossary = TranslationGlossary::new();
             glossary.domain_terms.push(GlossaryEntry {
@@ -16395,6 +16407,12 @@ mod clock_rule_tests {
                 ..Default::default()
             });
             let result = public_translate(source, &glossary);
+            let plain = public_translate(source, &TranslationGlossary::new());
+            assert!(
+                plain.target_text.starts_with(prefix),
+                "{}",
+                plain.target_text
+            );
             assert!(!result.glossary_hits.is_empty());
             assert!(result.target_text.contains(replacement));
             assert!(

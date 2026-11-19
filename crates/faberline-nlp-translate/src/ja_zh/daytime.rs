@@ -1,5 +1,6 @@
-use super::{Atom, LOCKED_RESIDENT_ATOM, Upos, is_companion_person, is_demonstrative_person_noun};
+use super::{Atom, Upos, is_daypart_surface, selects_time_value, source_time_head};
 
+pub(super) const GLOSSARY_DAYTIME: &str = "__ja_glossary_daytime";
 const DAYTIME: &str = "__ja_activity_daytime";
 
 pub(super) fn is_modifier(atom: &Atom) -> bool {
@@ -35,20 +36,19 @@ pub(super) fn meeting_verb(source: &[Atom], day: &Atom) -> Option<(super::Span, 
     Some((verb.span, label))
 }
 
-// Another person's に or へ identifies the recipient only for the very
-// same act of sending. A letter by itself cannot distinguish the readings.
-fn recipient_case<'a>(source: &'a [Atom], verb: &Atom) -> Option<&'a Atom> {
+// A separate destination or addressee for this verb leaves 日中 free to
+// modify the event. A participant of another predicate cannot do so.
+fn other_goal<'a>(source: &'a [Atom], day: &Atom, verb: &Atom) -> Option<&'a Atom> {
     source.windows(2).find_map(|pair| {
         let noun = &pair[0];
         let case = &pair[1];
         (noun.doc_tok_idx.is_some()
+            && noun.doc_tok_idx != day.doc_tok_idx
             && noun.head == verb.doc_tok_idx
             && matches!(noun.deprel.as_str(), "iobj" | "obl")
-            && (noun.is_locked && noun.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM)
-                || !noun.is_locked
-                    && (is_companion_person(noun)
-                        || noun.upos == Some(Upos::Noun)
-                            && (is_demonstrative_person_noun(noun) || noun.surface == "客")))
+            && !source_time_head(noun)
+            && !is_daypart_surface(&noun.surface)
+            && noun.surface != "日中"
             && !case.is_locked
             && case.deprel == "case"
             && case.head == noun.doc_tok_idx
@@ -57,45 +57,46 @@ fn recipient_case<'a>(source: &'a [Atom], verb: &Atom) -> Option<&'a Atom> {
     })
 }
 
-fn ordinary_activity(stem: &str) -> bool {
+// An unfilled participant or destination of these predicates can denote
+// Japan and China. The contrast is lexical even when both parses use obl.
+fn selects_participant(stem: &str) -> bool {
     matches!(
         stem,
-        // Work, rest, weather and a bounded set of ordinary activities do
-        // not require a second participant. Requests and negotiations do.
-        "働く"
-            | "休む"
-            | "寝る"
-            | "眠る"
-            | "起きる"
-            | "暮らす"
-            | "過ごす"
-            | "読む"
-            | "食べる"
-            | "飲む"
-            | "洗う"
-            | "片付ける"
-            | "掃除"
-            | "料理"
-            | "勉強"
-            | "練習"
-            | "泳ぐ"
-            | "走る"
-            | "歩く"
-            | "散歩"
-            | "遊ぶ"
-            | "降る"
-            | "晴れる"
-            | "咲く"
-            | "始まる"
-            | "終わる"
-            | "開催"
+        "送る"
+            | "送付"
+            | "郵送"
+            | "発送"
+            | "届ける"
+            | "渡す"
+            | "配る"
+            | "配布"
+            | "与える"
+            | "贈る"
+            | "伝える"
+            | "知らせる"
+            | "頼む"
+            | "求める"
+            | "要請"
+            | "要求"
+            | "依頼"
+            | "期待"
+            | "呼びかける"
+            | "働きかける"
+            | "輸出"
+            | "輸入"
+            | "投資"
+            | "侵攻"
+            | "抗議"
+            | "制裁"
+            | "譲渡"
     )
 }
 
 // The analyzer can split 日中にも as 日 + 中にも. Keep both source tokens
 // in the marker's span without manufacturing syntax tokens for に and も.
 fn form(a: &Atom, next: &Atom, following: Option<&Atom>) -> Option<(usize, usize, bool)> {
-    if a.is_locked
+    let glossary_day = a.lemma.as_deref() == Some(GLOSSARY_DAYTIME);
+    if a.is_locked && !glossary_day
         || next.is_locked
         || a.span.end_char != next.span.start_char
         || a.doc_tok_idx.is_none()
@@ -111,8 +112,7 @@ fn form(a: &Atom, next: &Atom, following: Option<&Atom>) -> Option<(usize, usize
     {
         return Some((next.span.end_char, next.head?, true));
     }
-    if a.surface != "日中"
-        || !matches!(a.upos, Some(Upos::Noun | Upos::Adv))
+    if !(glossary_day || a.surface == "日中" && matches!(a.upos, Some(Upos::Noun | Upos::Adv)))
         || next.surface != "に"
         || next.upos != Some(Upos::Adp)
         || next.deprel != "case"
@@ -189,27 +189,24 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
         }
         let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
         let stem = lemma.strip_suffix("する").unwrap_or(lemma);
-        let recipient = match stem {
-            "送る" | "送付" | "郵送" | "発送" | "届ける" | "渡す" => {
-                let Some(case) = recipient_case(source, verb) else {
-                    continue;
-                };
-                Some(case)
-            }
-            "開く" if meeting_object(source, verb).is_some() => None,
-            "" if source.iter().any(|n| {
-                !n.is_locked
-                    && n.deprel == "obj"
-                    && n.head == Some(owner)
-                    && n.span.start_char >= end
-                    && ordinary_activity(&n.surface)
-            }) =>
-            {
-                None
-            }
-            activity if ordinary_activity(activity) => None,
-            _ => continue,
-        };
+        let recipient = other_goal(source, word, verb);
+        // A market can be opened to two countries. A shop opening for the
+        // day and a meeting being held instead have an event-time modifier.
+        let takes_participant = selects_participant(stem)
+            || stem == "開く"
+                && source.iter().any(|n| {
+                    !n.is_locked
+                        && n.head == verb.doc_tok_idx
+                        && n.deprel == "obj"
+                        && n.surface == "市場"
+                })
+            || stem.is_empty()
+                && source.iter().any(|n| {
+                    !n.is_locked && n.head == Some(owner) && selects_participant(&n.surface)
+                });
+        if selects_time_value(lemma) || takes_participant && recipient.is_none() {
+            continue;
+        }
         let Some(start) = atoms
             .iter()
             .position(|a| a.span.start_char == word.span.start_char)
@@ -220,10 +217,14 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
             continue;
         };
         let range = start..=start + last;
-        if atoms[range.clone()].iter().any(|a| a.is_locked) {
+        if atoms[range.clone()]
+            .iter()
+            .any(|a| a.is_locked && a.lemma.as_deref() != Some(GLOSSARY_DAYTIME))
+        {
             continue;
         }
-        if let Some(case) = recipient.filter(|a| a.surface == "へ")
+        if takes_participant
+            && let Some(case) = recipient.filter(|a| a.surface == "へ")
             && let Some(direction) = atoms
                 .iter_mut()
                 .find(|a| !a.is_locked && a.span == case.span)
@@ -231,7 +232,12 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
             direction.surface = "に".to_owned();
         }
         let mut day = word.clone();
-        day.surface = if also { "白天也" } else { "白天" }.to_owned();
+        if !day.is_locked {
+            day.surface = "白天".to_owned();
+        }
+        if also {
+            day.surface.push('也');
+        }
         day.lemma = Some(DAYTIME.to_owned());
         day.span.end_char = end;
         day.head = Some(owner);

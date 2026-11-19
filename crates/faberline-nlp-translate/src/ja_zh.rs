@@ -1610,6 +1610,17 @@ fn build_sentence_atoms(
                     lemma: match (&lk.origin, whole_lock) {
                         (
                             LockOrigin::Glossary {
+                                kind: GlossaryKind::DomainTerm,
+                                ..
+                            },
+                            true,
+                        ) if chars[lk.source_span.start_char..lk.source_span.end_char]
+                            == ['日', '中'] =>
+                        {
+                            Some(daytime::GLOSSARY_DAYTIME.to_owned())
+                        }
+                        (
+                            LockOrigin::Glossary {
                                 kind: GlossaryKind::Place,
                                 ..
                             },
@@ -17009,6 +17020,23 @@ mod motion_endpoint_tests {
             ),
         ] {
             assert_eq!(translate(source), expected, "{source}");
+        }
+        for (source, participant) in [
+            ("私は日中に駅へ行きました。", "車站"),
+            ("日中に雨が止みました。", "雨"),
+            ("店は日中に開きます。", "商店"),
+            ("日中に生徒に手紙を配りました。", "信"),
+            ("私は日中に友達に会いました。", "朋友"),
+        ] {
+            let result = translate(source);
+            assert!(
+                result.contains("白天") && result.contains(participant),
+                "{source}: {result}"
+            );
+            assert!(
+                !result.contains("給白天") && !result.contains("到白天"),
+                "{source}: {result}"
+            );
         }
         for source in [
             "政府は日中に協力を求めました。",

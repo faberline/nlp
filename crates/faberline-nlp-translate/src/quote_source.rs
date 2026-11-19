@@ -225,7 +225,7 @@ fn protect_sibling_forms(
 
 fn names_character_count(chars: &[char]) -> bool {
     let chars = skip_space(chars);
-    let chars = ["合計の", "総計の", "総", "全体の"]
+    let chars = ["合計の", "総計の", "総", "全体の", "それぞれの", "各々の"]
         .iter()
         .find_map(|prefix| strip_prefix(chars, prefix))
         .map_or(chars, skip_space);
@@ -412,11 +412,49 @@ fn after_clause_comma(chars: &[char]) -> &[char] {
     chars.strip_prefix(&['、']).map_or(chars, skip_space)
 }
 
-fn after_total_modifier(chars: &[char]) -> &[char] {
-    ["合計で", "全部で"]
+fn after_count_modifiers(mut chars: &[char]) -> &[char] {
+    loop {
+        chars = after_clause_comma(chars);
+        let scope = [
+            "合計で",
+            "合計",
+            "全部で",
+            "両方合わせて",
+            "合わせて",
+            "あわせて",
+            "それぞれ",
+            "各々",
+        ]
         .iter()
-        .find_map(|phrase| strip_prefix(chars, phrase))
-        .map_or(chars, skip_space)
+        .find_map(|phrase| strip_prefix(chars, phrase));
+        let Some(rest) = scope.or_else(|| after_included_written_mark(chars)) else {
+            return chars;
+        };
+        chars = rest;
+    }
+}
+
+fn after_included_written_mark(chars: &[char]) -> Option<&[char]> {
+    let mark = [
+        "感嘆符",
+        "疑問符",
+        "句読点",
+        "句点",
+        "読点",
+        "記号",
+        "空白",
+        "スペース",
+        "括弧",
+    ]
+    .iter()
+    .find_map(|name| strip_prefix(chars, name))?;
+    let (&particle, relation) = skip_space(mark).split_first()?;
+    if !matches!(particle, 'を' | 'も') {
+        return None;
+    }
+    ["含めて", "入れて", "除いて", "抜いて"]
+        .iter()
+        .find_map(|predicate| strip_prefix(skip_space(relation), predicate))
 }
 
 fn measures_written_form(after: &[char]) -> bool {
@@ -450,7 +488,7 @@ fn measures_written_form(after: &[char]) -> bool {
     else {
         return false;
     };
-    let topic = after_total_modifier(after_clause_comma(topic));
+    let topic = after_count_modifiers(topic);
     let amount = FORM_SCRIPTS
         .iter()
         .find_map(|script| strip_prefix(topic, script))
@@ -460,7 +498,7 @@ fn measures_written_form(after: &[char]) -> bool {
                 .or_else(|| tail.strip_prefix(&['で']))
                 .map_or(tail, skip_space)
         });
-    let amount = after_total_modifier(after_clause_comma(amount));
+    let amount = after_count_modifiers(amount);
     if let Some(tail) = after_character_count(amount) {
         return matches!(tail.first(), None | Some('。' | '！' | '？' | '?'))
             || character_composition_predicate(tail)
@@ -817,6 +855,19 @@ mod tests {
             (
                 "「ドイツ」と「来て」は合計で五文字です。",
                 &["「ドイツ」", "「来て」"],
+            ),
+            ("「来て！」は感嘆符を含めて何文字ですか。", &["「来て！」"]),
+            (
+                "「ドイツ」と「来て」は合わせて何文字ですか。",
+                &["「ドイツ」", "「来て」"],
+            ),
+            (
+                "「ドイツ」と「来て」はそれぞれ何文字ですか。",
+                &["「ドイツ」", "「来て」"],
+            ),
+            (
+                "「ドイツ！」と「来て？」はそれぞれ、句読点も含めて何文字ですか。",
+                &["「ドイツ！」", "「来て？」"],
             ),
         ] {
             let result = analyze_and_translate(

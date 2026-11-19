@@ -5159,8 +5159,7 @@ struct ClauseDiscourseCtx<'a> {
 }
 
 // The segmenter has already separated the two clauses. Prove the terminal て
-// belongs to the first action and that action reaches the second clause's root.
-// Without both explicit subjects, the second action also needs its own amount.
+// belongs to the first action and that action reaches the second lexical event.
 fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
     if first
         .iter()
@@ -5170,28 +5169,70 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
     {
         return None;
     }
-    let [.., action, te] = first else { return None };
-    if action.upos != Some(Upos::Verb)
-        || action.deprel != "advcl"
+    let [.., terminal, te] = first else {
+        return None;
+    };
+    if terminal.upos != Some(Upos::Verb)
+        || terminal.deprel != "advcl"
         || te.upos != Some(Upos::Sconj)
         || !matches!(te.surface.as_str(), "て" | "で")
         || te.deprel != "mark"
-        || te.head != action.doc_tok_idx
-        || action.span.end_char != te.span.start_char
-        || first.iter().filter(|a| a.upos == Some(Upos::Verb)).count() != 1
+        || te.head != terminal.doc_tok_idx
+        || terminal.span.end_char != te.span.start_char
     {
         return None;
     }
+    let first_verbs: Vec<_> = first
+        .iter()
+        .filter(|a| a.upos == Some(Upos::Verb))
+        .collect();
+    let action = match first_verbs.as_slice() {
+        [only] if only.doc_tok_idx == terminal.doc_tok_idx => *only,
+        [lexical, finite]
+            if finite.doc_tok_idx == terminal.doc_tok_idx
+                && finite.lemma.as_deref() == Some("する")
+                && lexical.deprel == "advcl"
+                && lexical.head == finite.doc_tok_idx
+                && lexical.span.end_char == finite.span.start_char =>
+        {
+            *lexical
+        }
+        _ => return None,
+    };
     let action_id = action.doc_tok_idx?;
     if !elapsed_owned_by(first, action_id) {
         return None;
     }
-    let mut verbs = next.iter().filter(|a| a.upos == Some(Upos::Verb));
-    let root = verbs.next()?;
-    if root.deprel != "root" || verbs.next().is_some() {
+    if next.first().is_some_and(|a| {
+        te.span.end_char == a.span.start_char
+            && (is_te_subsidiary_atom(a)
+                || matches!(
+                    a.lemma.as_deref(),
+                    Some("いる" | "おく" | "あげる" | "もらう" | "くれる" | "しまう")
+                ))
+    }) {
         return None;
     }
+    let root = next
+        .iter()
+        .find(|a| a.upos == Some(Upos::Verb) && a.deprel == "root")?;
     let root_id = root.doc_tok_idx?;
+    let other_verbs: Vec<_> = next
+        .iter()
+        .filter(|a| a.upos == Some(Upos::Verb) && a.doc_tok_idx != Some(root_id))
+        .collect();
+    let sahen = match other_verbs.as_slice() {
+        [] => None,
+        [part]
+            if root.lemma.as_deref() == Some("する")
+                && part.deprel == "advcl"
+                && part.head == Some(root_id)
+                && part.span.end_char == root.span.start_char =>
+        {
+            Some(part.doc_tok_idx?)
+        }
+        _ => return None,
+    };
     let reaches_root = |mut head: Option<usize>| {
         for _ in 0..next.len() {
             if head == Some(root_id) {
@@ -5200,14 +5241,16 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
             let Some(part) = next.iter().find(|a| a.doc_tok_idx == head) else {
                 return false;
             };
-            if part.deprel != "advcl" || part.upos != Some(Upos::Adj) {
+            if part.deprel != "advcl"
+                || !(part.upos == Some(Upos::Adj) || part.doc_tok_idx == sahen)
+            {
                 return false;
             }
             head = part.head;
         }
         false
     };
-    if !reaches_root(action.head) {
+    if !reaches_root(terminal.head) {
         return None;
     }
     fn subjects(atoms: &[Atom]) -> Vec<&Atom> {
@@ -5231,6 +5274,7 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
     let right = subjects(next);
     let reaches_first = |head: Option<usize>| {
         head == Some(action_id)
+            || head == terminal.doc_tok_idx
             || first.iter().any(|part| {
                 part.doc_tok_idx == head
                     && part.upos == Some(Upos::Adj)
@@ -5247,7 +5291,6 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
         || right
             .first()
             .is_some_and(|subject| !reaches_root(subject.head))
-        || (left.is_empty() || right.is_empty()) && !elapsed_owned_by(next, root_id)
     {
         return None;
     }
@@ -9987,9 +10030,12 @@ fn take_elapsed_duration(
         let progressive_negative = progressive_relative && progressive_acl_is_negative(predicate);
         let past_negative = elapsed_past_negative_action(predicate)
             .is_some_and(|verb| verb.doc_tok_idx == Some(action_id));
+        let terminal_marker = core_non_punct(source).last();
         let separate_te = parallel_te == Some(action_id)
-            && matches!(predicate.atoms.as_slice(), [verb, marker]
-                if verb.doc_tok_idx == Some(action_id) && !marker.is_locked
+            && matches!(core_non_punct(source), [.., verb, marker]
+                if (verb.doc_tok_idx == Some(action_id)
+                    || sahen.is_some_and(|part| part.doc_tok_idx == verb.doc_tok_idx))
+                    && !marker.is_locked
                     && matches!(marker.surface.as_str(), "て" | "で")
                     && marker.upos == Some(Upos::Sconj) && marker.deprel == "mark"
                     && marker.head == verb.doc_tok_idx && verb.span.end_char == marker.span.start_char);
@@ -10073,6 +10119,15 @@ fn take_elapsed_duration(
                                     .atoms
                                     .iter()
                                     .all(|a| a.span.start_char >= first && a.span.end_char <= end)
+                                && !(separate_te
+                                    && sahen.is_some_and(|part| {
+                                        g.atoms.iter().all(|a| {
+                                            a.doc_tok_idx == part.doc_tok_idx
+                                                || terminal_marker.is_some_and(|marker| {
+                                                    a.doc_tok_idx == marker.doc_tok_idx
+                                                })
+                                        })
+                                    }))
                         })
                 {
                     continue;
@@ -17534,10 +17589,6 @@ mod clock_rule_tests {
             "我時間二幫忙等待了。"
         );
         assert_eq!(
-            translate("私は二時間待って、帰りました。"),
-            "我時間二等待，回去了。"
-        );
-        assert_eq!(
             translate("「二時間待って」と先生は言いました。"),
             "「時間二等待」老師說了。"
         );
@@ -17575,6 +17626,53 @@ mod clock_rule_tests {
             translate("父は一時間歩いて、三時間泳ぎました。"),
             "父親走一個小時，游泳了三個小時。"
         );
+    }
+
+    #[test]
+    fn elapsed_te_clause_needs_no_duration_on_the_following_event() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間待って、先生に電話しました。"),
+            "等待兩個小時，給老師打電話了。"
+        );
+        assert_eq!(
+            translate("二時間待ち、先生に電話しました。"),
+            "等待兩個小時，給老師打電話了。"
+        );
+        assert_eq!(
+            translate("二時間待って、電話しました。"),
+            "等待兩個小時，打電話了。"
+        );
+        assert_eq!(
+            translate("私は二時間待って、家に帰りました。"),
+            "我等待兩個小時，回到家了。"
+        );
+        assert_eq!(
+            translate("私は二時間待って、帰りました。"),
+            "我等待兩個小時，回去了。"
+        );
+        assert_eq!(
+            translate("一時間電話して、家に帰りました。"),
+            "打電話一個小時，回到家了。"
+        );
+        assert_eq!(
+            translate("一時間電話し、家に帰りました。"),
+            "打電話一個小時，回到家了。"
+        );
+        assert_eq!(
+            translate("一時間電話して家に帰りました。"),
+            "打電話一個小時，回到家了。"
+        );
+        assert_eq!(
+            translate("一時間散歩して、先生に電話しました。"),
+            "散步一個小時，給老師打電話了。"
+        );
+        assert_eq!(
+            translate("一時間散歩して先生に電話しました。"),
+            "散步一個小時，給老師打電話了。"
+        );
+        assert_eq!(translate("先生と三十分話しました。"), "老師和三十分說了。");
     }
 
     #[test]

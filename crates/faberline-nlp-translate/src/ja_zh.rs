@@ -8825,12 +8825,16 @@ fn take_elapsed_duration(
                 .filter(|g| g.role == BunsetsuRole::Predicate)
                 .count()
                 == 1;
+        let progressive_relative = progressive_acl_action(predicate)
+            .is_some_and(|(verb, _)| verb.doc_tok_idx == Some(action_id));
         // Negation can change the quantifier's scope.
-        if predicate.sconj_tail.is_some() && !temporal_after
+        if predicate.sconj_tail.is_some() && !temporal_after && !progressive_relative
             || predicate.atoms.iter().any(|a| {
                 matches!(a.lemma.as_deref(), Some("ない" | "ぬ"))
                     || matches!(a.surface.as_str(), "ながら" | "ので" | "ませ")
-                    || !temporal_after && matches!(a.surface.as_str(), "て" | "で" | "から")
+                    || !temporal_after
+                        && !progressive_relative
+                        && matches!(a.surface.as_str(), "て" | "で" | "から")
             })
         {
             continue;
@@ -8886,6 +8890,20 @@ fn take_elapsed_duration(
                 };
                 let first = slice.first()?.span.start_char;
                 let end = slice.last()?.span.end_char;
+                if progressive_relative
+                    && groups
+                        .iter()
+                        .filter(|g| g.role == BunsetsuRole::Predicate)
+                        .any(|g| {
+                            !g.atoms.iter().any(|a| a.doc_tok_idx == Some(action_id))
+                                && !g
+                                    .atoms
+                                    .iter()
+                                    .all(|a| a.span.start_char >= first && a.span.end_char <= end)
+                        })
+                {
+                    continue;
+                }
                 let overlapping: Vec<&Atom> = groups
                     .iter()
                     .flat_map(|g| &g.atoms)
@@ -8932,6 +8950,11 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
+    let elapsed_progressive_relative = elapsed.as_ref().is_some_and(|(_, _, id)| {
+        bunsetsus.iter().any(|g| {
+            progressive_acl_action(g).is_some_and(|(action, _)| action.doc_tok_idx == Some(*id))
+        })
+    });
     let elapsed_wh = elapsed.as_ref().is_some_and(|(_, wh, action_id)| {
         if !*wh {
             return false;
@@ -9695,6 +9718,13 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if elapsed_progressive_relative {
+        pre_verb_mods.retain(|m| m != "正在");
+        pre_verb_mods.push("已經".to_owned());
+        if !post_verb_mods.iter().any(|m| m == "了") {
+            post_verb_mods.push("了".to_owned());
+        }
+    }
     if target == TargetVariant::ZhHant
         && let Some(state) = finite_adjective::render(
             source,
@@ -13188,6 +13218,52 @@ fn elapsed_owned_by(source: &[Atom], owner: usize) -> bool {
     })
 }
 
+// A finite progressive relative has a lexical action linked through て to
+// いる, which modifies the following noun. Do not treat other て clauses as ACLs.
+fn progressive_acl_action(predicate: &Bunsetsu) -> Option<(&Atom, &Atom)> {
+    let [action, te, iru, past] = predicate.atoms.as_slice() else {
+        return None;
+    };
+    if predicate
+        .atoms
+        .iter()
+        .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "advcl"
+        || te.upos != Some(Upos::Sconj)
+        || !matches!(te.surface.as_str(), "て" | "で")
+        || te.deprel != "mark"
+        || te.head != action.doc_tok_idx
+        || iru.upos != Some(Upos::Verb)
+        || iru.lemma.as_deref() != Some("いる")
+        || iru.deprel != "acl"
+        || iru.head.is_none()
+        || action.head != iru.doc_tok_idx
+        || past.upos != Some(Upos::Aux)
+        || past.surface != "た"
+        || past.head != iru.doc_tok_idx
+        || predicate
+            .atoms
+            .windows(2)
+            .any(|w| w[0].span.end_char != w[1].span.start_char)
+    {
+        return None;
+    }
+    Some((action, iru))
+}
+
+fn is_elapsed_progressive_relative(predicate: &Bunsetsu, noun: &Bunsetsu, source: &[Atom]) -> bool {
+    let Some((action, iru)) = progressive_acl_action(predicate) else {
+        return false;
+    };
+    noun.atoms
+        .iter()
+        .any(|a| !a.is_locked && a.doc_tok_idx == iru.head)
+        && action
+            .doc_tok_idx
+            .is_some_and(|id| elapsed_owned_by(source, id))
+}
+
 // Keep the ordinary past-copula guard unless this exact ACL or its containing
 // noun's matrix action owns a source-linked elapsed quantity.
 fn is_elapsed_past_relative(predicate: &Bunsetsu, noun: &Bunsetsu, source: &[Atom]) -> bool {
@@ -13388,14 +13464,15 @@ fn take_adnominal_arguments(
 ) -> Vec<Bunsetsu> {
     // A split numeric duration is one argument of the ACL predicate. Move it
     // as a whole before translating the relative clause; never move a topic.
-    let owned_duration = predicate
-        .atoms
-        .iter()
-        .find(|a| {
-            !a.is_locked
-                && a.upos == Some(Upos::Verb)
-                && a.deprel == "acl"
-                && a.doc_tok_idx.is_some()
+    let owned_duration = progressive_acl_action(&predicate)
+        .map(|(action, _)| action)
+        .or_else(|| {
+            predicate.atoms.iter().find(|a| {
+                !a.is_locked
+                    && a.upos == Some(Upos::Verb)
+                    && a.deprel == "acl"
+                    && a.doc_tok_idx.is_some()
+            })
         })
         .and_then(|verb| {
             (0..remaining.len()).find(|&start| {
@@ -13622,7 +13699,8 @@ fn merge_adnominal_bunsetsus(
                     is_prenominal_pred(prev)
                         || target == TargetVariant::ZhHant
                             && (finite_adjective::voiced_past_modifier(prev, &b, source)
-                                || is_elapsed_past_relative(prev, &b, source))
+                                || is_elapsed_past_relative(prev, &b, source)
+                                || is_elapsed_progressive_relative(prev, &b, source))
                 }) {
                     let has_verb = pred_b
                         .atoms
@@ -15712,6 +15790,52 @@ mod clock_rule_tests {
             clock.contains("三點") && clock.contains("電車兩個小時"),
             "{clock}"
         );
+    }
+
+    #[test]
+    fn progressive_relative_keeps_each_duration_on_its_own_event() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        let wait_then_speak = translate("二時間待っていた客は三十分話しました。");
+        assert!(
+            wait_then_speak.contains("已經等待了兩個小時的客")
+                && wait_then_speak.contains("說了三十分鐘"),
+            "{wait_then_speak}"
+        );
+        let speak_then_wait = translate("三十分話していた客は二時間待ちました。");
+        assert!(
+            speak_then_wait.contains("已經說了三十分鐘的客")
+                && speak_then_wait.contains("等待了兩個小時"),
+            "{speak_then_wait}"
+        );
+        let one = translate("二時間待っていた客は話しました。");
+        assert!(
+            one.contains("已經等待了兩個小時的客") && one.contains('說'),
+            "{one}"
+        );
+        assert_eq!(
+            translate("先生は二時間走った子どもを待ちました。"),
+            "老師等待了跑了兩個小時的孩子。"
+        );
+    }
+
+    #[test]
+    fn progressive_elapsed_rule_does_not_cross_other_clause_shapes() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("十分に待っていた客は三十分話しました。"),
+            "客正在十分在等待說三十分鐘。"
+        );
+        assert_eq!(
+            translate("待っていた客は三十分話しました。"),
+            "客正在等待說三十分鐘。"
+        );
+        assert_eq!(
+            translate("二時間待っていて、三十分話しました。"),
+            "時間二等待，說了三十分鐘。"
+        );
+        assert_eq!(translate("会議は二時間までです。"), "會議是二時間到。");
     }
 
     #[test]

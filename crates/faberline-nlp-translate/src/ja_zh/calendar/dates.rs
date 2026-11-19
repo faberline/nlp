@@ -67,6 +67,26 @@ fn render(day: &NumberedDay) -> String {
     )
 }
 
+pub(super) fn spelled_report_day(spelling: &str) -> Option<String> {
+    let raw = spelling.strip_suffix('日')?;
+    let (month, number) = if let Some((month, day)) = raw.split_once('月') {
+        (
+            Some(super::month_text(&format!("{month}月"))?),
+            day.strip_prefix('の').unwrap_or(day),
+        )
+    } else {
+        (None, raw)
+    };
+    if !(1..=31).contains(&super::calendar_number(number)?) {
+        return None;
+    }
+    let number = super::normalize_decimal_digits(number);
+    Some(match month {
+        Some(month) => format!("{month}{number}日"),
+        None => format!("{number}號"),
+    })
+}
+
 pub(super) fn report_day(words: &[Atom]) -> Option<String> {
     if let [wh, rest @ .., day] = words
         && !wh.is_locked
@@ -92,14 +112,20 @@ pub(super) fn report_day(words: &[Atom]) -> Option<String> {
     {
         return Some(day.surface.clone());
     }
-    let day = day_at(words, 0)?;
-    (day.end + 1 == words.len()).then(|| {
-        if day.month.is_some() {
-            render(&day)
-        } else {
-            format!("{}號", day.number)
-        }
-    })
+    if words.iter().any(|a| a.is_locked)
+        || !words
+            .windows(2)
+            .all(|p| p[0].span.end_char == p[1].span.start_char)
+    {
+        return None;
+    }
+    spelled_report_day(&words.iter().map(|a| a.surface.as_str()).collect::<String>())
+}
+
+pub(super) fn dated_atom(atom: &Atom) -> bool {
+    !atom.is_locked
+        && matches!(atom.upos, Some(Upos::Noun | Upos::Adv))
+        && spelled_report_day(&atom.surface).is_some()
 }
 
 fn bind(atoms: &mut Vec<Atom>, start: usize, end: usize, text: String, tag: &str) {

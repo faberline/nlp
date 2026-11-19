@@ -12,13 +12,98 @@ pub(in crate::ja_zh) struct Report {
     pub(in crate::ja_zh) spans: Vec<Span>,
 }
 
+// An argument-free prenominal ある in ある学校 is the indefinite determiner.
+fn indefinite_modifier(a: &Atom, phrase: &[Atom]) -> bool {
+    !a.is_locked
+        && a.surface == "ある"
+        && a.deprel == "acl"
+        && !phrase.iter().any(|x| {
+            x.head == a.doc_tok_idx && matches!(x.deprel.as_str(), "obj" | "obl" | "nsubj")
+        })
+        && phrase.iter().any(|n| {
+            n.doc_tok_idx == a.head
+                && a.span.end_char == n.span.start_char
+                && matches!(n.upos, Some(Upos::Noun | Upos::Propn))
+        })
+}
+
+// In 来たと若い店員が答えた, the analyzer can attach 来た to the adjective
+// in the speaker phrase. Another verb may instead own the quotation.
+fn nominal_path(mut parent: Option<usize>, target: Option<usize>, inside: &[Atom]) -> bool {
+    while let Some(index) = parent {
+        if parent == target {
+            return true;
+        }
+        let Some(a) = inside.iter().find(|a| a.doc_tok_idx == parent) else {
+            return false;
+        };
+        if !(indefinite_modifier(a, inside)
+            || matches!(
+                a.deprel.as_str(),
+                "amod" | "nmod" | "compound" | "det" | "nsubj" | "obl"
+            ) && matches!(
+                a.upos,
+                Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Det | Upos::Adj)
+            ))
+        {
+            return false;
+        }
+        parent = a.head.filter(|next| *next > index);
+    }
+    false
+}
+
 fn nominal(noun: &[Atom], doc: &Document, locks: &SpanLockTable) -> Option<String> {
-    if noun.is_empty()
-        || !noun
+    let (head, modifiers) = noun.split_last()?;
+    if let [first, tail @ ..] = noun
+        && indefinite_modifier(first, noun)
+    {
+        return Some(format!("某{}", nominal(tail, doc, locks)?));
+    }
+    if let Some(i) = modifiers
+        .iter()
+        .position(|a| !a.is_locked && a.surface == "と" && a.deprel == "case")
+        && i > 0
+        && modifiers[i].head == noun[i - 1].doc_tok_idx
+        && (noun[i - 1].head == head.head
+            || nominal_path(noun[i - 1].head, head.doc_tok_idx, &noun[i + 1..]))
+    {
+        return Some(format!(
+            "{}和{}",
+            nominal(&noun[..i], doc, locks)?,
+            nominal(&noun[i + 1..], doc, locks)?
+        ));
+    }
+    if !(head.is_locked || matches!(head.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron)))
+        || !modifiers
             .iter()
-            .all(|a| a.is_locked || matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron)))
+            .all(|a| a.head.is_some() && noun.iter().any(|inside| inside.doc_tok_idx == a.head))
     {
         return None;
+    }
+    if modifiers
+        .iter()
+        .any(|a| !a.is_locked && !matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron)))
+    {
+        let sentence = doc.tokens.get(head.doc_tok_idx?)?.sentence;
+        if let Some(text) = crate::ja_zh::nominal_possession::noun_phrase(
+            noun,
+            doc,
+            sentence,
+            TargetVariant::ZhHant,
+        ) {
+            return Some(text);
+        }
+        if !modifiers.iter().all(|a| {
+            a.is_locked
+                || matches!(
+                    a.upos,
+                    Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Det | Upos::Adj)
+                )
+                || a.surface == "の" && a.deprel == "case"
+        }) {
+            return None;
+        }
     }
     if let [person] = noun
         && person.is_locked
@@ -45,6 +130,13 @@ fn nominal(noun: &[Atom], doc: &Document, locks: &SpanLockTable) -> Option<Strin
             )
         }),
     )
+}
+
+fn is_listener(words: &[Atom], doc: &Document, locks: &SpanLockTable) -> bool {
+    words
+        .last()
+        .is_some_and(crate::ja_zh::is_demonstrative_person_noun)
+        || render_direct_quote_person(words, doc, locks).is_some()
 }
 
 #[derive(Default)]
@@ -79,16 +171,8 @@ fn reporting_time(words: &[Atom], doc: &Document, chars: &[char]) -> Option<Stri
             .get(opaque.span.start_char..opaque.span.end_char)?
             .iter()
             .collect();
-        let number = spelling.strip_suffix('日')?;
-        let (month, day) = number
-            .split_once('月')
-            .map_or((None, number), |(m, d)| (Some(m), d));
-        if month.is_none_or(|m| super::calendar_number(m).is_some_and(|n| (1..=12).contains(&n)))
-            && super::calendar_number(day).is_some_and(|n| (1..=31).contains(&n))
-        {
-            return Some(format!("在{}", opaque.surface));
-        }
-        return None;
+        return super::dates::spelled_report_day(&spelling)
+            .map(|_| format!("在{}", opaque.surface));
     }
     if let Some(date) = super::dates::report_day(words) {
         return Some(format!("在{date}"));
@@ -177,7 +261,7 @@ impl Frame {
                     if owner.deprel != "iobj"
                         && !owner.is_locked
                         && !matches!(owner.surface.as_str(), "誰" | "だれ" | "どなた")
-                        && render_direct_quote_person(words, doc, locks).is_none()
+                        && !is_listener(words, doc, locks)
                     {
                         return None;
                     }
@@ -249,17 +333,19 @@ pub(in crate::ja_zh) fn take(
         ["ない"] | ["ませ", "ん"] | ["ません"] => "不",
         _ => return None,
     };
-    let marker = core[..report]
-        .iter()
-        .rposition(|m| !m.is_locked && m.surface == "と" && m.deprel == "case")?;
-    let to = &core[marker];
-    let pred = core[..marker].iter().rposition(|a| {
-        !a.is_locked
-            && a.doc_tok_idx == to.head
-            && a.head == verb.doc_tok_idx
-            && matches!(a.deprel.as_str(), "obl" | "ccomp")
-            && a.upos == Some(Upos::Verb)
+    let (marker, pred) = core[..report].iter().enumerate().rev().find_map(|(i, m)| {
+        if m.is_locked || m.surface != "と" || m.deprel != "case" {
+            return None;
+        }
+        let pred = core[..i].iter().rposition(|a| {
+            !a.is_locked
+                && a.doc_tok_idx == m.head
+                && a.upos == Some(Upos::Verb)
+                && matches!(a.deprel.as_str(), "obl" | "ccomp")
+        })?;
+        nominal_path(core[pred].head, verb.doc_tok_idx, &core[i + 1..report]).then_some((i, pred))
     })?;
+    let to = &core[marker];
     let event = &core[pred];
     if !core[pred + 1..marker]
         .iter()
@@ -269,12 +355,13 @@ pub(in crate::ja_zh) fn take(
     }
     if !(0..pred).any(|i| {
         let day = &core[i];
-        (is_date(day) || !day.is_locked && day.surface == "日")
+        (is_date(day) || super::dates::dated_atom(day) || !day.is_locked && day.surface == "日")
             && day.head == event.doc_tok_idx
             && core
                 .get(i + 1)
                 .is_some_and(|ni| linked_case(ni, day, day, "に"))
             && (is_date(day)
+                || super::dates::dated_atom(day)
                 || number_before(core, i).is_some()
                 || i.checked_sub(1).is_some_and(|p| {
                     !core[p].is_locked && core[p].surface == "何" && core[p].head == day.doc_tok_idx
@@ -287,6 +374,26 @@ pub(in crate::ja_zh) fn take(
     while !after.is_empty() {
         if is_punct_atom(&after[0]) {
             after = &after[1..];
+            continue;
+        }
+        if let Some((end, governor)) = after.iter().enumerate().find_map(|(end, a)| {
+            if !a.is_locked
+                && matches!(a.surface.as_str(), "は" | "が" | "に" | "も" | "で")
+                && matches!(a.deprel.as_str(), "case" | "discourse")
+                && let Some(owner) = after[..end]
+                    .iter()
+                    .find(|owner| owner.doc_tok_idx == a.head)
+                && nominal_path(owner.head, verb.doc_tok_idx, &after[end + 1..])
+            {
+                Some((end, owner.head))
+            } else {
+                None
+            }
+        }) && frame
+            .argument(&after[..=end], governor, doc, locks, chars)
+            .is_some()
+        {
+            after = &after[end + 1..];
             continue;
         }
         if after[0].head == verb.doc_tok_idx
@@ -304,21 +411,30 @@ pub(in crate::ja_zh) fn take(
             after = &after[1..];
             continue;
         }
-        let end = after.iter().position(|a| {
-            !a.is_locked
-                && matches!(a.surface.as_str(), "は" | "が" | "に" | "も" | "で")
-                && matches!(a.deprel.as_str(), "case" | "discourse")
-        })?;
-        frame.argument(&after[..=end], verb.doc_tok_idx, doc, locks, chars)?;
-        after = &after[end + 1..];
+        return None;
     }
     let mut start = 0;
     let mut spans = Vec::new();
+    // A comma can delimit the entire outer frame. In that frame the parser
+    // sometimes attaches dates and recipients to the nearer quoted verb.
+    let opening_end = core[..pred]
+        .iter()
+        .position(|a| matches!(a.surface.as_str(), "、" | "，" | ","))
+        .filter(|&i| {
+            core[i + 1..pred].iter().any(|a| {
+                (is_date(a) || a.surface == "日" || super::dates::dated_atom(a))
+                    && a.head == event.doc_tok_idx
+            })
+        });
     // The reporter can precede the complement. Extract only the actual
     // matrix subject and keep a quoted subject with its own predicate.
     while let Some(case) = core[start..pred]
         .iter()
-        .position(|a| !a.is_locked && a.deprel == "case")
+        .position(|a| {
+            !a.is_locked
+                && a.deprel == "case"
+                && matches!(a.surface.as_str(), "は" | "が" | "に" | "も" | "で")
+        })
         .map(|n| start + n)
     {
         let Some(owner) = core[start..case]
@@ -346,9 +462,14 @@ pub(in crate::ja_zh) fn take(
             && frame.recipient.is_none()
             && core[case].surface == "に"
             && owner.head == event.doc_tok_idx
-            && before_comma
-            && render_direct_quote_person(&core[start..case], doc, locks).is_some();
-        let front_time = before_comma
+            && opening_end.is_some_and(|end| case < end)
+            && is_listener(&core[start..case], doc, locks);
+        let front_time = (before_comma
+            || opening_end.is_some_and(|end| {
+                case < end
+                    && (frame.person.is_some()
+                        || core[case + 1..end].iter().any(|a| a.deprel == "nsubj"))
+            }))
             && core[case].surface == "に"
             && owner.head == event.doc_tok_idx
             && reporting_time(&core[start..case], doc, chars).is_some()
@@ -393,6 +514,14 @@ pub(in crate::ja_zh) fn take(
         last.surface = "？".to_owned();
     }
     let mut body = core[start..marker].to_vec();
+    let content_wh = body.iter().any(|a| {
+        !a.is_locked
+            && matches!(
+                a.surface.as_str(),
+                "誰" | "だれ" | "どなた" | "何" | "いつ" | "何時" | "どこ"
+            )
+            || super::question(a).is_some()
+    });
     body[pred - start].deprel = "root".to_owned();
     body[pred - start].head = None;
     body.extend(final_punctuation);
@@ -412,7 +541,11 @@ pub(in crate::ja_zh) fn take(
     Some(Report {
         text: format!(
             "{person}{also}{}{time}{place}{negative}{recipient}{spoken}{join}",
-            if question && !frame.wh { "是否" } else { "" }
+            if question && !frame.wh && !content_wh {
+                "是否"
+            } else {
+                ""
+            }
         ),
         spans,
     })

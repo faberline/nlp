@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 mod counted_object;
+mod homework_desire;
 mod nominal_possession;
 mod payment_potential;
 mod return_endpoint;
@@ -378,6 +379,7 @@ pub(crate) fn translate_ja_sentence(
                                 None,
                                 false,
                                 &ClauseDiscourseCtx {
+                                    source_chars: chars,
                                     inside_quote: true,
                                     ..Default::default()
                                 },
@@ -440,6 +442,7 @@ pub(crate) fn translate_ja_sentence(
                             None,
                             false,
                             &ClauseDiscourseCtx {
+                                source_chars: chars,
                                 inside_quote: true,
                                 ..Default::default()
                             },
@@ -734,6 +737,7 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
+                    source_chars: chars,
                     return_trip: None,
                     inside_quote: ends_continued_quote(
                         segments.get(seg_idx + 1),
@@ -3349,6 +3353,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
             && !is_temo_eval
             && !is_kagon_sconj
             && !is_source_kara
+            && !nominal_possession::contains_copular_node(atoms, i, doc)
             && (is_clause_split_sconj(&a.surface)
                 || (a.surface == "し" && a.upos == Some(Upos::Sconj))
                 || (a.surface == "だけど" && current.len() >= 2))
@@ -4025,7 +4030,8 @@ pub(crate) fn direct_quote_end(
 }
 
 #[derive(Clone, Default)]
-struct ClauseDiscourseCtx {
+struct ClauseDiscourseCtx<'a> {
+    source_chars: &'a [char],
     return_trip: Option<ReturnTrip>,
     inside_quote: bool,
     in_nagara_follow: bool,
@@ -4721,8 +4727,13 @@ fn translate_clause_atoms(
     }
 
     if target == TargetVariant::ZhHant
-        && let Some(text) =
-            nominal_possession::render(core_non_punct(atoms), doc, sentence_idx, target)
+        && let Some(text) = nominal_possession::render(
+            core_non_punct(atoms),
+            doc,
+            sentence_idx,
+            target,
+            ctx.source_chars,
+        )
     {
         return (text, false);
     }
@@ -4768,6 +4779,12 @@ fn translate_clause_atoms(
     if target == TargetVariant::ZhHant {
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
     }
+    if target == TargetVariant::ZhHant
+        && condition_tail.is_none()
+        && let Some(text) = homework_desire::render(body, &norm_atoms, doc, sentence_idx, target)
+    {
+        return (text, false);
+    }
     recover_route_predicate(&mut norm_atoms, body);
     let motion_go = motion_purpose_governor(&norm_atoms, ctx.inside_quote);
     if let Some(go) = motion_go {
@@ -4796,7 +4813,7 @@ fn translate_clause_atoms(
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
-        && let Some(homework) = try_translate_homework_transfer(&bunsetsus, body, doc, target)
+        && let Some(homework) = try_translate_homework_transfer(&bunsetsus, body, doc, target, None)
     {
         return (homework, false);
     }
@@ -5121,6 +5138,7 @@ fn try_translate_homework_transfer(
     source: &[Atom],
     doc: &Document,
     target: TargetVariant,
+    desire: Option<(&str, bool)>,
 ) -> Option<String> {
     // Inspect the source before nominal groups render protected atoms.
     // A normalized clock can pass if it has no glossary placeholder.
@@ -5172,6 +5190,7 @@ fn try_translate_homework_transfer(
     let mut deadline = None;
     let mut continuation_end = None;
     let mut has_clock_modifier = false;
+    let mut asks_event_time = false;
     let mut subject = None;
     let mut recipient = None;
     let mut homework = None;
@@ -5220,6 +5239,24 @@ fn try_translate_homework_transfer(
         {
             continue;
         }
+        if desire.is_some()
+            && let [when] = bunsetsu.atoms.as_slice()
+            && when.surface == "いつ"
+            && when.upos == Some(Upos::Pron)
+            && ((when.deprel == "advmod" && when.head == head)
+                || (when.deprel == "compound"
+                    && source.iter().any(|object| {
+                        object.surface == "宿題"
+                            && object.deprel == "obj"
+                            && object.head == head
+                            && when.head == object.doc_tok_idx
+                            && when.span.end_char == object.span.start_char
+                    })))
+        {
+            asks_event_time = true;
+            adjuncts.push("什麼時候".to_owned());
+            continue;
+        }
         if is_event_daypart(bunsetsu, bunsetsus, source)
             || (matches!(bunsetsu.role, BunsetsuRole::Adv | BunsetsuRole::Other)
                 && bunsetsu.case_particle.is_none()
@@ -5238,8 +5275,31 @@ fn try_translate_homework_transfer(
             return None;
         }
         match (noun.deprel.as_str(), marker.surface.as_str()) {
+            ("obl", "から" | "まで")
+                if desire.is_some()
+                    && modifiers.is_empty()
+                    && is_daypart_surface(&noun.surface) =>
+            {
+                let time = render_daypart_np(bunsetsu, target);
+                if marker.surface == "から" {
+                    adjuncts.push(format!("從{time}起"));
+                } else if continuation_end.is_none() {
+                    continuation_end = Some((adjuncts.len(), time));
+                } else {
+                    return None;
+                }
+                has_clock_modifier = true;
+            }
             ("nsubj", "は" | "が") if subject.is_none() => {
                 subject = Some(classroom_role(modifiers, noun)?);
+            }
+            ("obl" | "iobj", "に")
+                if desire.is_some()
+                    && modifiers.is_empty()
+                    && let Some(time) = deadline_time_question(noun) =>
+            {
+                asks_event_time = true;
+                adjuncts.push(format!("在{time}"));
             }
             ("obl" | "iobj", "に") if recipient.is_none() => {
                 recipient = Some(classroom_role(modifiers, noun)?);
@@ -5276,6 +5336,7 @@ fn try_translate_homework_transfer(
         return None;
     }
     let mut continuation_tail = None;
+    let mut desire_prefix = desire.map(|(modal, _)| modal);
     if let Some((position, group)) = deadline {
         if continuation_end.is_some() {
             return None;
@@ -5283,6 +5344,9 @@ fn try_translate_homework_transfer(
         let time = render_bunsetsu_np(group, target);
         // Negation applies to completing the transfer by the deadline.
         let cutoff = match before_verb.as_slice() {
+            [] if desire.is_some_and(|(modal, _)| modal.ends_with("不想")) => {
+                format!("在{time}前")
+            }
             [] => format!("最晚在{time}"),
             [word] if word == "沒有" => format!("沒有在{time}前"),
             [word] if word == "不" && terminal_ka.is_none() => format!("不會在{time}前"),
@@ -5292,7 +5356,12 @@ fn try_translate_homework_transfer(
         adjuncts.insert(position, cutoff);
     } else {
         if let Some((position, time)) = continuation_end {
-            if before_verb
+            if let Some(past) = desire_prefix.and_then(|word| word.strip_suffix("不想")) {
+                desire_prefix = (!past.is_empty()).then_some(past);
+                adjuncts.insert(position, format!("直到{time}都不想"));
+            } else if desire_prefix.is_some() {
+                continuation_tail = Some(format!("，一直到{time}"));
+            } else if before_verb
                 .iter()
                 .any(|word| matches!(word.as_str(), "不" | "沒有"))
             {
@@ -5304,6 +5373,9 @@ fn try_translate_homework_transfer(
         adjuncts.extend(before_verb);
     }
     let mut parts = vec![subject.to_owned()];
+    if let Some(modal) = desire_prefix {
+        parts.push(modal.to_owned());
+    }
     parts.extend(adjuncts);
     parts.push(action);
     parts.extend(
@@ -5312,8 +5384,8 @@ fn try_translate_homework_transfer(
             .filter(|word| continuation_tail.is_none() || word != "了"),
     );
     parts.extend(continuation_tail);
-    if terminal_ka.is_some() {
-        if deadline.is_none() && !has_clock_modifier {
+    if terminal_ka.is_some() || desire.is_some_and(|(_, question)| question) {
+        if desire.is_none() && deadline.is_none() && !has_clock_modifier {
             return None;
         }
         let asks_deadline_time = deadline.is_some_and(|(_, group)| {
@@ -5322,7 +5394,7 @@ fn try_translate_homework_transfer(
                 .iter()
                 .any(|atom| deadline_time_question(atom).is_some())
         });
-        if !asks_deadline_time {
+        if !asks_deadline_time && !asks_event_time {
             parts.push("嗎".to_owned());
         }
     }
@@ -17290,6 +17362,20 @@ fn place_companion(source: &[Atom], predicate: usize, known_place: Option<usize>
     person.filter(|_| has_place)
 }
 
+fn demonstrative_classifier(word: &str, noun: &Atom) -> &'static str {
+    match word {
+        "書" | "小說" | "雜誌" | "字典" => "本",
+        "車" | "公車" | "電車" | "汽車" | "卡車" | "腳踏車" | "自行車" => "輛",
+        "資料" | "文件" | "報告" | "報紙" => "份",
+        "商店" | "餐廳" | "公司" => "家",
+        "寺" | "寺廟" | "橋" => "座",
+        "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
+        _ if is_demonstrative_person_noun(noun) => "個",
+        // Keep a deictic without adding an unsupported unit (e.g. 這水).
+        _ => "",
+    }
+}
+
 fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;
@@ -17317,21 +17403,7 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
                 continue;
             }
             let word = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
-            let classifier = match word.as_str() {
-                "書" | "小說" | "雜誌" | "字典" => "本",
-                "車" | "公車" | "電車" | "汽車" | "卡車" | "腳踏車" | "自行車" => {
-                    "輛"
-                }
-                "資料" | "文件" | "報告" | "報紙" => "份",
-                "商店" | "餐廳" | "公司" => "家",
-                "寺" | "寺廟" | "橋" => "座",
-                "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
-                _ if is_demonstrative_person_noun(noun) => "個",
-                // With no established unit or count reading, keep the deictic
-                // without guessing an amount, e.g. 這水 rather than a cup of water.
-                _ => "",
-            };
-            out.push_str(classifier);
+            out.push_str(demonstrative_classifier(&word, noun));
             out.push_str(if word == "箱" { "箱子" } else { &word });
             i += 2;
             continue;

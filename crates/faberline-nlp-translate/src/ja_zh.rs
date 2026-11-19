@@ -677,6 +677,8 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
+                    contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
+                        matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     inside_quote: ends_continued_quote(
                         segments.get(seg_idx + 1),
                         doc,
@@ -3209,6 +3211,7 @@ pub(crate) fn direct_quote_end(
 
 #[derive(Clone, Default)]
 struct ClauseDiscourseCtx {
+    contrasts_recurrence: bool,
     inside_quote: bool,
     in_nagara_follow: bool,
     in_concessive_follow: bool,
@@ -3914,7 +3917,7 @@ fn translate_clause_atoms(
     let counted = counted_object::bind(body);
     let merged_atoms = apply_phrase_matches(counted.as_deref().unwrap_or(body));
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
-    calendar::normalize(&mut norm_atoms);
+    calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     recover_route_predicate(&mut norm_atoms, body);
     let motion_go = motion_purpose_governor(&norm_atoms, ctx.inside_quote);
     if let Some(go) = motion_go {
@@ -7226,7 +7229,13 @@ fn translate_clause_bunsetsus(
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
     let mut event_counts = Vec::new();
-    let mut count_only = false;
+    let mut counted_arrival = None;
+    let arrival_head = bunsetsus
+        .iter()
+        .flat_map(|b| &b.atoms)
+        .find(|a| calendar::is_counted_subject(a))
+        .and_then(|a| a.head);
+    let mut count_modifier = None;
     let mut joint_manner = None;
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
@@ -7438,13 +7447,25 @@ fn translate_clause_bunsetsus(
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if arrival_head.is_some()
+            && b.role == BunsetsuRole::Subj
+            && b.case_particle.as_deref() == Some("が")
+            && b.atoms
+                .iter()
+                .any(|a| a.deprel == "nsubj" && a.head == arrival_head)
+        {
+            counted_arrival = Some(calendar::arrival_noun(&b, target));
+            continue;
+        }
         if let [atom] = b.atoms.as_slice() {
             if calendar::is_interval(atom) {
                 temporal_others.push(atom.surface.clone());
                 continue;
             }
-            if let Some(only) = calendar::repetitions(atom) {
-                count_only |= only;
+            if let Some(modifier) = calendar::count_modifier(atom) {
+                if !modifier.is_empty() {
+                    count_modifier = Some(modifier);
+                }
                 event_counts.push(atom.surface.clone());
                 continue;
             }
@@ -8942,8 +8963,8 @@ fn translate_clause_bunsetsus(
         }
     }
     parts.extend(cause_prefixes);
-    if count_only {
-        parts.push("只".to_owned());
+    if let Some(modifier) = count_modifier {
+        parts.push(modifier.to_owned());
     }
     if ctx.in_concessive_follow
         && !manner_adverbs.iter().any(|x| x == "都")
@@ -9053,6 +9074,7 @@ fn translate_clause_bunsetsus(
     }
     parts.extend(transfer_recipient);
     parts.extend(event_counts);
+    parts.extend(counted_arrival);
     parts.extend(objs);
     parts.extend(purpose_recipients);
     parts.extend(route_endpoints);
@@ -13431,6 +13453,59 @@ mod clock_rule_tests {
                 public_translate(source, &glossary).target_text,
                 expected,
                 "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn counted_rates_keep_the_amount_with_the_book_or_arriving_person() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "毎日ではなく、二日に一冊だけ本を読みます。",
+                "不是每天，而是每兩天只讀一本書。",
+            ),
+            (
+                "毎日ではなく、二日に本を一冊だけ読みます。",
+                "不是每天，而是每兩天只讀一本書。",
+            ),
+            (
+                "毎日ではなく、二日に一人ずつお客さんが来ます。",
+                "不是每天，而是每兩天來一位客人。",
+            ),
+            (
+                "毎朝ではなく、三日に一人ずつ学生が来ます。",
+                "不是每天早上，而是每三天來一位學生。",
+            ),
+            ("三日に二枚ずつ写真を撮ります。", "每三天拍攝兩張照片。"),
+            (
+                "六月二日に一冊だけ本を読みました。",
+                "在六月二日只讀了一本書。",
+            ),
+            (
+                "今月の二日に一冊だけ本を読みました。",
+                "在這個月的二號只讀了一本書。",
+            ),
+            (
+                "六月二日に一人だけお客さんが来ました。",
+                "在六月二日只來了一位客人。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        for source in [
+            "二日に一冊だけ本を読みました。",
+            "何日に一人のお客さんが来ますか。",
+            "二日に一冊ずつ二人が本を読みます。",
+        ] {
+            let output = public_translate(source, &glossary).target_text;
+            assert!(
+                !output.contains('號') && !output.contains("每兩天"),
+                "{source}: {output}"
             );
         }
     }

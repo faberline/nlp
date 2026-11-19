@@ -5205,6 +5205,24 @@ fn try_translate_homework_transfer(
         {
             continue;
         }
+        if desire.is_some()
+            && let [when] = bunsetsu.atoms.as_slice()
+            && when.surface == "いつ"
+            && when.upos == Some(Upos::Pron)
+            && ((when.deprel == "advmod" && when.head == head)
+                || (when.deprel == "compound"
+                    && source.iter().any(|object| {
+                        object.surface == "宿題"
+                            && object.deprel == "obj"
+                            && object.head == head
+                            && when.head == object.doc_tok_idx
+                            && when.span.end_char == object.span.start_char
+                    })))
+        {
+            asks_event_time = true;
+            adjuncts.push("什麼時候".to_owned());
+            continue;
+        }
         if is_event_daypart(bunsetsu, bunsetsus, source)
             || (matches!(bunsetsu.role, BunsetsuRole::Adv | BunsetsuRole::Other)
                 && bunsetsu.case_particle.is_none()
@@ -5251,25 +5269,7 @@ fn try_translate_homework_transfer(
                     && noun.surface == "宿題"
                     && homework.is_none() =>
             {
-                if desire.is_some()
-                    && let [when] = modifiers
-                    && when.surface == "いつ"
-                    && when.upos == Some(Upos::Pron)
-                    && when.deprel == "compound"
-                    && when.head == noun.doc_tok_idx
-                {
-                    asks_event_time = true;
-                    adjuncts.push("什麼時候".to_owned());
-                    homework = Some(render_bunsetsu_np(
-                        &Bunsetsu {
-                            atoms: vec![noun.clone(), marker.clone()],
-                            ..bunsetsu.clone()
-                        },
-                        target,
-                    ));
-                } else {
-                    homework = Some(render_bunsetsu_np(bunsetsu, target));
-                }
+                homework = Some(render_bunsetsu_np(bunsetsu, target));
             }
             _ => return None,
         }

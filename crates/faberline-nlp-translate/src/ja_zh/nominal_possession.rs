@@ -104,7 +104,7 @@ fn choice_phrase(
             "帽子" => "頂",
             "手錶" => "支",
             "證明書" => "份",
-            _ => super::demonstrative_classifier(&word, &original),
+            _ => noun_classifier(&word, &original),
         };
         let text = if noun.is_locked {
             &noun.surface
@@ -426,6 +426,16 @@ pub(super) fn modified_noun(
     chars: &[char],
     time: Option<&str>,
 ) -> Option<Vec<Atom>> {
+    describe_noun(words, doc, chars, time, false)
+}
+
+fn describe_noun(
+    words: &[Atom],
+    doc: &Document,
+    chars: &[char],
+    time: Option<&str>,
+    compact_choice: bool,
+) -> Option<Vec<Atom>> {
     let (head, prefix) = words.split_last()?;
     if !owner_atom(head, doc) || head.doc_tok_idx.is_none() {
         return None;
@@ -454,6 +464,7 @@ pub(super) fn modified_noun(
         }
     }
     let mut descriptions = Vec::new();
+    let mut short = false;
     while !modifiers.is_empty() {
         let (degree, content) = match modifiers {
             [adverb, adj, ..]
@@ -528,6 +539,12 @@ pub(super) fn modified_noun(
             )
         };
         let word = adjective.trim_end_matches('的');
+        short = compact_choice
+            && !adj.is_locked
+            && !past
+            && !negative
+            && degree.is_empty()
+            && word.chars().count() == 1;
         let hue = matches!(
             word,
             "紅" | "黑" | "白" | "藍" | "黃" | "綠" | "紫" | "灰" | "棕"
@@ -577,8 +594,13 @@ pub(super) fn modified_noun(
     } else {
         &word
     };
+    let linker = if short && descriptions.len() == 1 {
+        ""
+    } else {
+        "的"
+    };
     noun.surface = format!(
-        "{demonstrative}{classifier}{}{}的{text}",
+        "{demonstrative}{classifier}{}{}{linker}{text}",
         if descriptions.len() > 1 { "又" } else { "" },
         descriptions.join("又")
     );
@@ -835,11 +857,6 @@ pub(super) fn render(
     }
     if tail.len() > 7
         || tail.iter().any(|a| a.is_locked)
-        || nominals.iter().any(|a| {
-            a.is_locked
-                && a.lemma.as_deref() != Some(PROTECTED_COMPOUND)
-                && !whole_nominal_lock(a, doc)
-        })
         || !body[head_index..]
             .windows(2)
             .all(|p| p[0].span.end_char == p[1].span.start_char)
@@ -904,11 +921,23 @@ pub(super) fn render(
     // An object or adjunct before an instrumental で and する is a different
     // construction. Every atom here must belong to the topic or its nominal complement.
     let nominal_part = |a: &Atom| {
+        if a.is_locked
+            && !matches!(a.lemma.as_deref(), Some(PROTECTED_COMPOUND | MODIFIED_NOUN))
+            && !whole_nominal_lock(a, doc)
+        {
+            return false;
+        }
         matches!(
             a.upos,
             Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Num | Upos::Det)
         ) || (a.surface == "の" && a.deprel == "case")
     };
+    let described_topic = if choice {
+        describe_noun(topic, doc, chars, None, true)
+    } else {
+        None
+    };
+    let topic = described_topic.as_deref().unwrap_or(topic);
     if !topic.iter().all(nominal_part) {
         return None;
     }
@@ -966,6 +995,14 @@ pub(super) fn render(
     let mut alternatives = Vec::new();
     let mut has_owner = false;
     for part in phrase.split(choice_particle) {
+        // Bind adjectives inside this alternative only. A described item
+        // keeps its own source head and must remain explicit in the target.
+        let described = if has_choices {
+            describe_noun(part, doc, chars, None, true)
+        } else {
+            None
+        };
+        let part = described.as_deref().unwrap_or(part);
         // Parse each alternative on its own side of か. A bare owner ends in
         // の, while a full possession must link that owner to its explicit head.
         let bare_owner = match part {
@@ -1093,6 +1130,34 @@ mod tests {
             (
                 "これは妹のか、姉の本ではありませんか。",
                 "這不是妹妹的或是姊姊的書嗎？",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn possessive_choices_keep_the_adjective_with_its_item() {
+        for (source, expected) in [
+            (
+                "これは父の赤い車か、母のですか。",
+                "這是父親的紅色車還是母親的？",
+            ),
+            (
+                "これは父のか、母の赤い車ですか。",
+                "這是父親的還是母親的紅色車？",
+            ),
+            (
+                "この傘は姉の古い傘か弟のですか。",
+                "這把傘是姊姊的舊傘還是弟弟的？",
+            ),
+            (
+                "この傘は弟のか姉の古い傘ですか。",
+                "這把傘是弟弟的還是姊姊的舊傘？",
+            ),
+            (
+                "これは父の赤い車か母のではありません。",
+                "這既不是父親的紅色車，也不是母親的。",
             ),
         ] {
             assert_eq!(translate(source), expected, "{source}");

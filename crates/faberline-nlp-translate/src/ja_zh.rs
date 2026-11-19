@@ -221,7 +221,7 @@ pub(crate) fn translate_ja_sentence(
         .collect();
 
     let report = (target == TargetVariant::ZhHant && direct_quote.is_none())
-        .then(|| calendar::report::take(&mut atoms, doc, lock_table))
+        .then(|| calendar::report::take(&mut atoms, doc, lock_table, chars))
         .flatten();
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
@@ -14817,6 +14817,74 @@ mod clock_rule_tests {
             )
             .target_text,
             "指定發言人回答，不是每天，而是每三天借用了一本書。"
+        );
+    }
+
+    #[test]
+    fn reported_dates_bind_each_actor_time_and_recipient_to_its_predicate() {
+        let mut g = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "六月二日と三日に一人ずつ学生が来たと校長が答えました。",
+                "校長回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "係員は六月二日と三日に一人ずつ学生が来たと答えました。",
+                "係員回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと店員が四日に母に答えました。",
+                "店員在四號向母親回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと誰が答えましたか。",
+                "誰回答說在六月二日和三日各來了一位學生？",
+            ),
+            (
+                "誰が六月二日と三日に一人ずつ学生が来たと答えましたか。",
+                "誰回答說在六月二日和三日各來了一位學生？",
+            ),
+            (
+                "四日に、校長が六月二日と三日に一人ずつ学生が来たと答えました。",
+                "校長在四號回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと校長が何日に答えましたか。",
+                "校長在幾號回答說在六月二日和三日各來了一位學生？",
+            ),
+            (
+                "二日に一冊ずつ本を借りたと先生が母に答えました。",
+                "老師向母親回答，每兩天借用了一本書。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと店員が昨日答えました。",
+                "店員昨天回答，在六月二日和三日各來了一位學生。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &g).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let actual = public_translate(
+            "六月二日と三日に一人ずつ学生が来ると、校長が質問に答えました。",
+            &g,
+        );
+        assert!(!actual.target_text.contains("向質問回答"));
+        g.domain_terms.push(GlossaryEntry {
+            canonical: "四日".to_owned(),
+            surfaces: vec!["四日".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "指定答日".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        assert_eq!(
+            public_translate(
+                "六月二日と三日に一人ずつ学生が来たと校長が四日に母に答えました。",
+                &g
+            )
+            .target_text,
+            "校長在指定答日向母親回答，在六月二日和三日各來了一位學生。"
         );
     }
 

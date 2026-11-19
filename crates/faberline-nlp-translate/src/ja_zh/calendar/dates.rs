@@ -67,6 +67,41 @@ fn render(day: &NumberedDay) -> String {
     )
 }
 
+pub(super) fn report_day(words: &[Atom]) -> Option<String> {
+    if let [wh, rest @ .., day] = words
+        && !wh.is_locked
+        && wh.surface == "何"
+        && wh.head == day.doc_tok_idx
+        && !day.is_locked
+        && day.surface == "日"
+    {
+        return match rest {
+            [] => Some("幾號".to_owned()),
+            [weekday]
+                if !weekday.is_locked
+                    && weekday.surface == "曜"
+                    && weekday.head == day.doc_tok_idx =>
+            {
+                Some("星期幾".to_owned())
+            }
+            _ => None,
+        };
+    }
+    if let [day] = words
+        && super::is_date(day)
+    {
+        return Some(day.surface.clone());
+    }
+    let day = day_at(words, 0)?;
+    (day.end + 1 == words.len()).then(|| {
+        if day.month.is_some() {
+            render(&day)
+        } else {
+            format!("{}號", day.number)
+        }
+    })
+}
+
 fn bind(atoms: &mut Vec<Atom>, start: usize, end: usize, text: String, tag: &str) {
     let mut day = atoms[end].clone();
     day.is_locked = true;

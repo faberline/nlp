@@ -14963,6 +14963,42 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn topical_dated_clocks_keep_the_instant_and_the_deadline_distinct() {
+        let glossary = TranslationGlossary::new();
+        for time in [
+            "五月二日の午前九時",
+            "六月七日の午後三時",
+            "１２月２５日の午後４時半",
+        ] {
+            for event in ["銀行へ行きませんでした。", "銀行へ行きます。"] {
+                let translate = |case: &str| {
+                    public_translate(&format!("{time}{case}{event}"), &glossary).target_text
+                };
+                assert_eq!(translate("には"), translate("に"), "{time}{event}");
+                assert_eq!(translate("までには"), translate("までに"), "{time}{event}");
+                assert_ne!(translate("には"), translate("までには"), "{time}{event}");
+            }
+        }
+        let query = public_translate(
+            "「五月二日の午前九時には銀行へ行きませんでした」と係員が言いました。",
+            &glossary,
+        )
+        .target_text;
+        assert!(
+            query.contains("「在五月二日上午九點")
+                && query.contains("銀行")
+                && query.contains("沒有去")
+                && query.contains("係員"),
+            "{query}"
+        );
+        let unrelated = public_translate("仕事をするには時間が必要です。", &glossary).target_text;
+        assert!(
+            !unrelated.contains("最晚") && !unrelated.contains("點"),
+            "{unrelated}"
+        );
+    }
+
+    #[test]
     fn opaque_date_parts_and_rate_contrasts_keep_their_roles() {
         for (source, term, expected) in [
             (

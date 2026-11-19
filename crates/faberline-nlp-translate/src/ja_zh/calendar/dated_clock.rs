@@ -79,13 +79,13 @@ fn bind_case(
     source: &[char],
     doc: &Document,
     locks: &SpanLockTable,
-) {
+) -> bool {
     let marker = &atoms[case];
     if marker.is_locked
         || marker.deprel != "case"
         || !matches!(marker.surface.as_str(), "まで" | "に" | "から")
     {
-        return;
+        return false;
     }
     let end = marker.span.start_char;
     if !end
@@ -93,36 +93,61 @@ fn bind_case(
         .and_then(|i| source.get(i))
         .is_some_and(|c| matches!(c, '時' | '半'))
     {
-        return;
+        return false;
     }
     let fused_ni = marker.surface == "に"
         && marker
             .doc_tok_idx
             .and_then(|id| doc.tokens.get(id))
-            .is_some_and(|t| t.span.start_char < end && t.span.end_char == marker.span.end_char);
+            .is_some_and(|t| {
+                t.span.start_char < end
+                    && (t.span.end_char == marker.span.end_char
+                        || t.span.end_char == marker.span.end_char + 1
+                            && source.get(marker.span.end_char) == Some(&'は'))
+            });
     let Some(clock_id) = (if fused_ni {
         marker.doc_tok_idx
     } else {
         marker.head
     }) else {
-        return;
+        return false;
     };
     let Some(clock) = doc.syntax.iter().find(|n| n.token == clock_id) else {
-        return;
+        return false;
     };
+    let after_case = case
+        + 1
+        + usize::from(
+            marker.surface == "まで"
+                && atoms.get(case + 1).is_some_and(|ni| {
+                    !ni.is_locked
+                        && ni.surface == "に"
+                        && ni.deprel == "case"
+                        && ni.head == marker.head
+                        && ni.span.start_char == marker.span.end_char
+                }),
+        );
+    let topic = atoms.get(after_case).is_some_and(|wa| {
+        !wa.is_locked
+            && wa.surface == "は"
+            && wa.deprel == "case"
+            && wa.head == Some(clock_id)
+            && wa.span.start_char == atoms[after_case - 1].span.end_char
+    });
     let copular_end = clock.deprel == "root"
         && marker.surface == "まで"
         && atoms[case + 1..]
             .iter()
             .any(|a| a.deprel == "cop" && a.head == Some(clock_id));
     if !copular_end
+        && !(topic && clock.deprel == "nsubj")
         && (!matches!(clock.deprel.as_str(), "obl" | "advmod" | "iobj") || clock.head.is_none())
     {
-        return;
+        return false;
     }
     if case == 0 || atoms[case - 1].span.end_char != end || (!fused_ni && clock.span.end_char > end)
     {
-        return;
+        return false;
     }
     // Genitive 日 modifies the clock. Without の, the adverbial day can
     // modify its period. Do not cross a separate argument or predicate.
@@ -195,18 +220,13 @@ fn bind_case(
         time.deprel = clock.deprel.clone();
         // A comma between the marked time and its governor is a pause.
         // Keep the question word with the verb whose か closes the question.
-        let comma = case
-            + 1
-            + usize::from(
-                marker.surface == "まで"
-                    && atoms.get(case + 1).is_some_and(|ni| {
-                        !ni.is_locked
-                            && ni.surface == "に"
-                            && ni.deprel == "case"
-                            && ni.head == marker.head
-                            && ni.span.start_char == marker.span.end_char
-                    }),
-            );
+        if topic {
+            atoms.remove(after_case);
+            if time.deprel == "nsubj" {
+                time.deprel = "obl".to_owned();
+            }
+        }
+        let comma = after_case;
         if atoms
             .get(comma)
             .is_some_and(|a| !a.is_locked && matches!(a.surface.as_str(), "、" | "，" | ","))
@@ -217,8 +237,9 @@ fn bind_case(
             atoms.remove(comma);
         }
         atoms.splice(i..case, [time]);
-        return;
+        return true;
     }
+    false
 }
 
 pub(super) fn normalize(
@@ -229,6 +250,32 @@ pub(super) fn normalize(
 ) {
     for i in (1..atoms.len()).rev() {
         if i < atoms.len() {
+            let token = &atoms[i];
+            if !token.is_locked
+                && token.deprel == "advmod"
+                && (token.surface.ends_with("時には") || token.surface.ends_with("時半には"))
+            {
+                let mut trial = atoms.clone();
+                let mut hour = token.clone();
+                hour.surface.truncate(hour.surface.len() - "には".len());
+                hour.span.end_char -= 2;
+                let mut ni = token.clone();
+                ni.surface = "に".to_owned();
+                ni.upos = Some(Upos::Adp);
+                ni.deprel = "case".to_owned();
+                ni.span.start_char = hour.span.end_char;
+                ni.span.end_char -= 1;
+                let mut wa = ni.clone();
+                wa.surface = "は".to_owned();
+                wa.span.start_char = ni.span.end_char;
+                wa.span.end_char += 1;
+                wa.head = hour.doc_tok_idx;
+                trial.splice(i..=i, [hour, ni, wa]);
+                if bind_case(&mut trial, i + 1, source, doc, locks) {
+                    *atoms = trial;
+                }
+                continue;
+            }
             bind_case(atoms, i, source, doc, locks);
         }
     }

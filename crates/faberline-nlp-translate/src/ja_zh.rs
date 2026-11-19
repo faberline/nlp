@@ -2343,7 +2343,7 @@ struct ReturnTrip {
 
 // A linked manner and return describe one trip. A second subject, a
 // duration of walking or two destinations can instead distinguish two events.
-fn return_trip_at(atoms: &[Atom], link: usize) -> Option<ReturnTrip> {
+fn return_trip_at(atoms: &[Atom], link: usize, doc: &Document) -> Option<ReturnTrip> {
     let manner = atoms.get(link.checked_sub(1)?)?;
     let te = atoms.get(link)?;
     let action = match manner.lemma.as_deref()? {
@@ -2388,13 +2388,24 @@ fn return_trip_at(atoms: &[Atom], link: usize) -> Option<ReturnTrip> {
     }
     let mut goals = 0;
     let mut origins = 0;
-    let mut times = 0;
+    let mut time_owner = None;
     for (i, a) in clause.iter().take_while(|a| !is_punct_atom(a)).enumerate() {
         if a.lemma.as_deref() == Some(CLOCK_ATOM) && !a.surface.contains("[[PH") {
             if clause.get(i + 1).is_some_and(|p| p.surface == "まで") {
                 return None;
             }
-            times += 1;
+            // A normalized clock can cover several tokens, including part
+            // of 時に. Recover its governing verb from the source span.
+            let owner = doc.syntax.iter().find_map(|node| {
+                node.head.filter(|head| {
+                    (*head == first || *head == last)
+                        && node.span.start_char < a.span.end_char
+                        && a.span.start_char < node.span.end_char
+                })
+            })?;
+            if time_owner.replace(owner).is_some_and(|prev| prev != owner) {
+                return None;
+            }
             continue;
         }
         if (a.is_locked && (a.lemma.as_deref() != Some(CLOCK_ATOM) || a.surface.contains("[[PH")))
@@ -2407,7 +2418,40 @@ fn return_trip_at(atoms: &[Atom], link: usize) -> Option<ReturnTrip> {
         {
             return None;
         }
-        if a.head != Some(first) && a.head != Some(last) {
+        let Some(head) = a.head else { continue };
+        // Nominal adverbs such as 今朝 can appear bare, as a topic or
+        // with a case. Their source role survives even without a time gloss.
+        let time = render_temporal_made_atom(a).is_some();
+        let nominal_adverb = a
+            .doc_tok_idx
+            .and_then(|i| doc.tokens.get(i))
+            .is_some_and(|t| {
+                t.upos_candidates.contains(&Upos::Adv) && t.upos_candidates.contains(&Upos::Noun)
+            });
+        if (time || nominal_adverb)
+            && matches!(a.deprel.as_str(), "advmod" | "obl" | "iobj" | "nsubj")
+        {
+            let mut owner = Some(head);
+            // 昨日ゆっくり歩く can attach 昨日 to ゆっくり first.
+            if a.deprel == "advmod"
+                && doc
+                    .tokens
+                    .get(head)
+                    .is_some_and(|t| t.upos == Some(Upos::Adv))
+            {
+                owner = doc
+                    .syntax
+                    .iter()
+                    .find(|n| n.token == head && n.deprel == "advmod")
+                    .and_then(|n| n.head);
+            }
+            if let Some(owner) = owner.filter(|&owner| owner == first || owner == last)
+                && time_owner.replace(owner).is_some_and(|prev| prev != owner)
+            {
+                return None;
+            }
+        }
+        if head != first && head != last {
             continue;
         }
         if a.deprel == "obj" {
@@ -2415,10 +2459,6 @@ fn return_trip_at(atoms: &[Atom], link: usize) -> Option<ReturnTrip> {
         }
         if a.doc_tok_idx.is_none() {
             continue;
-        }
-        let time = render_temporal_made_atom(a).is_some();
-        if time && matches!(a.deprel.as_str(), "obl" | "advmod" | "iobj") {
-            times += 1;
         }
         let Some(case) = clause
             .get(i + 1)
@@ -2447,7 +2487,7 @@ fn return_trip_at(atoms: &[Atom], link: usize) -> Option<ReturnTrip> {
             }
         }
     }
-    (goals <= 1 && origins <= 1 && times <= 1).then_some(ReturnTrip {
+    (goals <= 1 && origins <= 1).then_some(ReturnTrip {
         manner: first,
         returning: last,
         action,
@@ -2799,7 +2839,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
             && !is_punct_atom(next_atom)
             && next_atom.surface != "初めて"
             && !is_te_subsidiary_atom(next_atom)
-            && return_trip_at(atoms, i).is_none()
+            && return_trip_at(atoms, i, doc).is_none()
             && atoms[i + 1..].iter().any(|later| {
                 !later.is_locked
                     && (matches!(later.upos, Some(Upos::Verb | Upos::Adj))
@@ -3999,7 +4039,7 @@ fn translate_clause_atoms(
         .iter()
         .enumerate()
         .filter(|(_, a)| matches!(a.surface.as_str(), "て" | "で"))
-        .find_map(|(i, _)| return_trip_at(body, i).map(|trip| (i, trip)));
+        .find_map(|(i, _)| return_trip_at(body, i, doc).map(|trip| (i, trip)));
     let trip_source = trip.map(|(link, trip)| {
         body.iter()
             .enumerate()
@@ -13617,6 +13657,13 @@ mod motion_endpoint_tests {
             ("母は泳いで島へ戻りました。", "母親游回島了。"),
             ("私は歩いて店に戻りました。", "我走回商店了。"),
             ("「夕方に歩いて戻ります。」", "「傍晚走回來。」"),
+            ("今朝走って戻りました。", "今朝跑回來了。"),
+            ("妹は走って今朝公園へ戻りました。", "妹妹今朝跑回公園了。"),
+            ("母は昨日夕方に歩いて帰りました。", "母親昨天傍晚走回去了。"),
+            (
+                "父は夕方に歩いてゆっくり家に帰りました。",
+                "父親傍晚慢慢地走回家了。",
+            ),
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
@@ -13635,6 +13682,21 @@ mod motion_endpoint_tests {
             ("私は夕方に歩いて、妹が家に戻りました。", "走", "妹妹"),
             ("私は歩いてから駅へ戻りました。", "走後", "車站"),
             ("私は`昼`に歩いて家に戻りました。", "`昼`", "家"),
+            ("妹は昨日走って今朝家に戻りました。", "昨天跑", "今朝"),
+            ("父は昨夜歩いて明朝病院へ戻ります。", "昨夜走", "明朝"),
+            ("今朝走って今夜戻りました。", "今朝跑", "今夜"),
+            ("昨日は走って今朝家に戻りました。", "昨天跑", "今朝"),
+            (
+                "妹は昨夜から走って今日公園に戻りました。",
+                "從昨夜跑",
+                "今天",
+            ),
+            ("兄は八時に歩いて今朝病院へ戻りました。", "八點走", "今朝"),
+            (
+                "父は昨日ゆっくり歩いて今朝家に帰りました。",
+                "昨天慢慢地走",
+                "今朝",
+            ),
         ] {
             let text = translate(source);
             let (a, b) = text

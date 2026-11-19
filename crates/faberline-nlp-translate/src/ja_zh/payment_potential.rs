@@ -59,6 +59,100 @@ fn answer_noun(atom: &Atom) -> bool {
         )
 }
 
+fn answer_verb(atom: &Atom) -> bool {
+    !atom.is_locked
+        && atom.upos == Some(Upos::Verb)
+        && matches!(
+            atom.lemma.as_deref(),
+            Some("答える" | "返事する" | "返信する" | "返答する" | "回答する" | "応答する")
+        )
+}
+
+fn nominal_answer_report(rest: &[Atom], word: &Atom) -> bool {
+    let rest = &rest[rest
+        .iter()
+        .take_while(|a| !a.is_locked && a.upos == Some(Upos::Adv))
+        .count()..];
+    match rest {
+        // 答えた is a finite reply even when the parser tags the stem as a noun,
+        // including relative clauses such as 答えた声.
+        [stem, past, ..]
+            if !stem.is_locked
+                && stem.surface == "答え"
+                && !past.is_locked
+                && past.upos == Some(Upos::Aux)
+                && past.surface == "た"
+                && past.head == stem.doc_tok_idx =>
+        {
+            true
+        }
+        // The quotation supplies the content of the reply that came or existed.
+        [reply, case, ..]
+            if answer_noun(reply)
+                && !case.is_locked
+                && matches!(case.surface.as_str(), "が" | "は")
+                && case.head == reply.doc_tok_idx =>
+        {
+            rest.iter().any(|v| {
+                !v.is_locked
+                    && v.upos == Some(Upos::Verb)
+                    && v.doc_tok_idx == reply.head
+                    && v.doc_tok_idx == word.head
+                    && matches!(v.lemma.as_deref(), Some("ある" | "来る" | "届く"))
+            })
+        }
+        _ => false,
+    }
+}
+
+// A writing verb can copy characters. An answer field tied to the payment
+// question supplies the missing evidence for the content reading.
+fn payment_answer_field(before: &[Atom], word: &Atom, writing: &Atom) -> bool {
+    let [field_atoms @ .., field, ni] = before else {
+        return false;
+    };
+    if ni.is_locked
+        || ni.surface != "に"
+        || ni.head != field.doc_tok_idx
+        || field.is_locked
+        || field.surface != "欄"
+        || (field.head != word.doc_tok_idx && field.head != writing.doc_tok_idx)
+    {
+        return false;
+    }
+    let Some(answer) = field_atoms
+        .iter()
+        .find(|a| answer_noun(a) && a.head == field.doc_tok_idx)
+    else {
+        return false;
+    };
+    field_atoms.array_windows().any(|[verb, ka, to, question]| {
+        potential(verb)
+            && !ka.is_locked
+            && ka.surface == "か"
+            && ka.head == verb.doc_tok_idx
+            && !to.is_locked
+            && to.surface == "という"
+            && !question.is_locked
+            && matches!(question.surface.as_str(), "質問" | "問い")
+            && (question.head == field.doc_tok_idx || question.head == answer.doc_tok_idx)
+    })
+}
+
+fn modifies_voice(atoms: &[Atom], modifier: &Atom) -> bool {
+    let Some(end) = atoms
+        .iter()
+        .position(|a| !a.is_locked && a.deprel == "obj" && a.head == modifier.doc_tok_idx)
+    else {
+        return false;
+    };
+    let start = compound_start(&atoms[..=end]);
+    matches!(
+        joined(&atoms[start..=end]).as_str(),
+        "声" | "声量" | "語尾" | "語気" | "口調" | "調子"
+    )
+}
+
 // A stop inside the quotation can close a document sentence just before
 // the reporting と. Read only that adjacent report, on the same source line.
 pub(super) fn adjacent_report(
@@ -143,6 +237,9 @@ fn reported_content(word: &Atom, previous: Option<&Segment>, after: &[Segment]) 
     {
         return true;
     }
+    if matches!(marker.surface.as_str(), "と" | "って") && nominal_answer_report(rest, word) {
+        return true;
+    }
     match marker.surface.as_str() {
         "という" => {
             // A quotation gives the content of an answer or its asserted meaning.
@@ -175,6 +272,20 @@ fn reported_content(word: &Atom, previous: Option<&Segment>, after: &[Segment]) 
                 answer_noun(noun)
                     && (noun.head == report.doc_tok_idx || noun.head == word.doc_tok_idx)
             };
+            // In 語尾を強めて答える the first verb takes its own object. The
+            // quotative particle attaches to the reply verb governing this
+            // て-clause. Do not cross another report or a free-standing clause.
+            if report.deprel == "advcl"
+                && report.head == marker.head
+                && modifies_voice(rest, report)
+                && rest.last().is_some_and(|a| {
+                    !a.is_locked && a.surface == "て" && a.head == report.doc_tok_idx
+                })
+                && matches!(after.get(1), Some(Segment::Clause { atoms, .. })
+                    if atoms.first().is_some_and(|a| a.doc_tok_idx == report.head && answer_verb(a)))
+            {
+                return true;
+            }
             if lemma == "する" && rest.iter().any(attached_answer)
                 || (answer_noun(report)
                     && rest.iter().any(|v| {
@@ -188,11 +299,12 @@ fn reported_content(word: &Atom, previous: Option<&Segment>, after: &[Segment]) 
             match lemma {
                 "言う" | "いう" | "答える" | "話す" | "伝える" | "告げる" | "聞く" | "返事する"
                 | "返信する" | "返答する" | "回答する" | "応答する" => true,
-                "書く" => {
+                "書く" | "記入" | "記入する" => {
                     // Writing can either copy characters or communicate a reply.
                     // Look for the answer attached to this writing event (or its
                     // next て-linked verb), not an unrelated later statement.
                     before.iter().chain(rest).any(attached_answer)
+                        || payment_answer_field(before, word, report)
                         || (rest.last().is_some_and(|a| {
                             !a.is_locked && a.surface == "て" && a.head == report.doc_tok_idx
                         }) && matches!(after.get(1), Some(Segment::Clause { atoms, .. })
@@ -325,6 +437,19 @@ fn attention_target(words: &[Atom], target: TargetVariant) -> String {
     nominal(&localized, target)
 }
 
+fn compound_start(words: &[Atom]) -> usize {
+    let mut start = words.len() - 1;
+    let head = &words[start];
+    while start > 0
+        && words[start - 1].deprel == "compound"
+        && words[start - 1].head == head.doc_tok_idx
+        && words[start - 1].span.end_char == words[start].span.start_char
+    {
+        start -= 1;
+    }
+    start
+}
+
 // Only the head and its contiguous compound select a sense. A noun in a
 // modifier of the object cannot supply the reading of the verb.
 fn object(
@@ -333,14 +458,7 @@ fn object(
     explicit_payment: bool,
 ) -> Option<(Sense, String)> {
     let head = words.last()?;
-    let mut start = words.len() - 1;
-    while start > 0
-        && words[start - 1].deprel == "compound"
-        && words[start - 1].head == head.doc_tok_idx
-        && words[start - 1].span.end_char == words[start].span.start_char
-    {
-        start -= 1;
-    }
+    let start = compound_start(words);
     let name = joined(&words[start..]);
     let (sense, zh) = match name.as_str() {
         "家賃" => (Sense::Money, "房租"),
@@ -751,5 +869,35 @@ mod tests {
         let mixed = translate("店長は「支払える」と答え、その単語「支払える」をノートに書いた。");
         let (_, following) = mixed.split_once("「能付款」").expect(&mixed);
         assert!(following.contains("「支払える」"), "{mixed}");
+    }
+
+    #[test]
+    fn quoted_answers_keep_the_governing_predicate_with_modifiers() {
+        for (jp, quote) in [
+            ("受付から「支払える」と回答がありました。", "能付款"),
+            (
+                "録音には、支払いの質問に「支払える」と答えた声が残っていました。",
+                "能付款",
+            ),
+            ("客は「支払える」と語尾を強めて答えました。", "能付款"),
+            (
+                "料金を払えるかという質問の回答欄に「支払える」と記入しました。",
+                "能付款",
+            ),
+            (
+                "送り仮名の質問の回答欄に「支払える」と記入しました。",
+                "支払える",
+            ),
+            ("客は「支払える」と声を落として答えました。", "能付款"),
+            ("生徒は「支払える」と声を落として発音しました。", "支払える"),
+            ("店員は「支払える」とゆっくり答えた。", "能付款"),
+            (
+                "読み方を聞かれた生徒は「支払える」と文字を読んで答えました。",
+                "支払える",
+            ),
+        ] {
+            let actual = translate(jp);
+            assert!(actual.contains(&format!("「{quote}」")), "{jp} -> {actual}");
+        }
     }
 }

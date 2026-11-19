@@ -4,6 +4,46 @@ use super::{
     merge_adnominal_bunsetsus, try_translate_homework_transfer,
 };
 
+fn clock_qualifier<'a>(
+    prefix: &'a [Atom],
+    time: &Atom,
+    interrogative: bool,
+    doc: &Document,
+) -> Option<(usize, &'a Atom)> {
+    match prefix {
+        [.., day, no]
+            if !day.is_locked
+                && !no.is_locked
+                && day.deprel == "nmod"
+                && no.surface == "の"
+                && no.deprel == "case"
+                && no.head == day.doc_tok_idx
+                && day.span.end_char == no.span.start_char
+                && no.span.end_char == time.span.start_char
+                && day
+                    .head
+                    .and_then(|id| doc.tokens.get(id))
+                    .is_some_and(|head| {
+                        (time.span.start_char..time.span.end_char).contains(&head.span.start_char)
+                    }) =>
+        {
+            Some((prefix.len() - 2, day))
+        }
+        // In 午前何時 the analyzer can attach both 午前 and 何時 to 出す.
+        [.., period]
+            if interrogative
+                && !period.is_locked
+                && super::is_daypart_surface(&period.surface)
+                && period.deprel == "advmod"
+                && (period.head == time.head || period.head == time.doc_tok_idx)
+                && period.span.end_char == time.span.start_char =>
+        {
+            Some((prefix.len() - 1, period))
+        }
+        _ => None,
+    }
+}
+
 pub(super) fn render(
     source: &[Atom],
     normalized: &[Atom],
@@ -68,24 +108,21 @@ pub(super) fn render(
     // Merge a date with its own clock before の renders the date as an
     // unattached Chinese modifier. Preserve the source clock and case links.
     let mut end = transfer.len();
-    while end >= 3 {
-        let start = end - 3;
-        let (day, no, time) = (&transfer[start], &transfer[start + 1], &transfer[start + 2]);
-        if !day.is_locked
-            && !no.is_locked
-            && day.deprel == "nmod"
-            && no.surface == "の"
-            && no.deprel == "case"
-            && no.head == day.doc_tok_idx
-            && day.span.end_char == no.span.start_char
-            && no.span.end_char == time.span.start_char
-            && (time.lemma.as_deref() == Some(super::CLOCK_ATOM)
-                || super::is_daypart_surface(&time.surface))
-            && let Some(raw_head) = day.head.and_then(|id| doc.tokens.get(id))
-            && (time.span.start_char..time.span.end_char).contains(&raw_head.span.start_char)
+    let mut asks_qualified_time = false;
+    while end >= 2 {
+        let time = &transfer[end - 1];
+        let interrogative =
+            super::deadline_time_question(time).filter(|_| time.head == verb.doc_tok_idx);
+        if (time.lemma.as_deref() == Some(super::CLOCK_ATOM)
+            || super::is_daypart_surface(&time.surface)
+            || interrogative.is_some())
+            && let Some((start, day)) =
+                clock_qualifier(&transfer[..end - 1], time, interrogative.is_some(), doc)
             && let Some(day_label) = super::render_temporal_made_atom(day)
-            && let Some(clock_label) = super::render_temporal_made_atom(time)
+            && let Some(clock_label) =
+                super::render_temporal_made_atom(time).or_else(|| interrogative.map(str::to_owned))
         {
+            asks_qualified_time |= interrogative.is_some();
             let mut qualified = time.clone();
             qualified.span.start_char = day.span.start_char;
             qualified.surface = format!("{day_label}{clock_label}");
@@ -99,7 +136,13 @@ pub(super) fn render(
     }
     let groups = compose_relative_daypart(group_into_bunsetsus(&transfer, doc, sentence));
     let groups = merge_adnominal_bunsetsus(groups, &clause[..=i], doc, target);
-    try_translate_homework_transfer(&groups, &clause[..=i], doc, target, Some((modal, question)))
+    try_translate_homework_transfer(
+        &groups,
+        &clause[..=i],
+        doc,
+        target,
+        Some((modal, question && !asks_qualified_time)),
+    )
 }
 
 #[cfg(test)]
@@ -140,6 +183,26 @@ mod tests {
             (
                 "生徒は先生に何時に宿題を出したいですか。",
                 "學生想在幾點把作業交給老師？",
+            ),
+            (
+                "生徒は先生に明日の何時に宿題を出したいですか。",
+                "學生想在明天幾點把作業交給老師？",
+            ),
+            (
+                "先生は生徒に日曜日の何時に宿題を出したくなかったですか。",
+                "老師當時不想在星期日幾點出作業給學生？",
+            ),
+            (
+                "生徒は先生に明日の午前何時に宿題を出したいですか。",
+                "學生想在明天上午幾點把作業交給老師？",
+            ),
+            (
+                "先生は明日の宿題を今日の何時に生徒に出したいですか。",
+                "老師想在今天幾點出明天的作業給學生？",
+            ),
+            (
+                "生徒は先生に明日の九時に宿題を出したいですか。",
+                "學生想在明天九點把作業交給老師嗎？",
             ),
             (
                 "生徒は先生にいつ宿題を出したいですか。",

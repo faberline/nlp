@@ -154,8 +154,13 @@ fn protect_sibling_forms(
     let mut labelled = false;
     for (index, quote) in quotes.iter().enumerate() {
         let opening = quote.start_char - 1;
+        let before = &chars[scope.start_char..opening];
         let after = skip_space(&chars[quote.end_char + 1..scope.end_char]);
-        if describes_written_form(after) {
+        let count_question = asks_character_count(after);
+        if count_question
+            || describes_written_form(after)
+            || writes_with_character_count(before, after)
+        {
             protected.push(protection_span(*quote, nested));
         }
         let join = index.checked_sub(1).and_then(|prev| {
@@ -169,7 +174,7 @@ fn protect_sibling_forms(
             if join.is_none() {
                 first_for_count = index;
             }
-            let before = trim_space_end(&chars[scope.start_char..opening]);
+            let before = trim_space_end(before);
             labelled = FORM_LABELS
                 .iter()
                 .any(|label| strip_suffix(before, label).is_some());
@@ -177,11 +182,11 @@ fn protect_sibling_forms(
 
         // The count noun applies to the whole list within this quotation scope,
         // even if terminal marks inside the operands split the analysis sentences.
-        let first = if index > first_for_count
-            && after
-                .strip_prefix(&['の'])
-                .is_some_and(names_character_count)
-        {
+        let shares_count = after
+            .strip_prefix(&['の'])
+            .is_some_and(names_character_count)
+            || count_question;
+        let first = if index > first_for_count && shares_count {
             first_for_count
         } else if index > first_for_comparison {
             let before = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
@@ -205,6 +210,10 @@ fn protect_sibling_forms(
 
 fn names_character_count(chars: &[char]) -> bool {
     let chars = skip_space(chars);
+    let chars = ["合計の", "総計の", "総", "全体の"]
+        .iter()
+        .find_map(|prefix| strip_prefix(chars, prefix))
+        .map_or(chars, skip_space);
     ["文字数", "字数"]
         .iter()
         .any(|name| strip_prefix(chars, name).is_some_and(noun_boundary))
@@ -322,19 +331,6 @@ fn compares_written_forms(after: &[char]) -> bool {
 
 fn describes_written_form(after: &[char]) -> bool {
     let after = skip_space(after);
-    if asks_character_count(after) {
-        return true;
-    }
-    if let Some(object) = after.strip_prefix(&['を']) {
-        return after_character_count(object)
-            .and_then(|rest| rest.strip_prefix(&['で']))
-            .is_some_and(|rest| {
-                let rest = skip_space(rest);
-                ["書く", "書き", "書い", "書か", "書け", "書こ"]
-                    .iter()
-                    .any(|verb| strip_prefix(rest, verb).is_some())
-            });
-    }
     if let Some(topic) = after.strip_prefix(&['は']) {
         // A count asserted about the quoted text is evidence of a literal use.
         // A location followed by は alone is also a normal topic.
@@ -363,14 +359,6 @@ fn describes_written_form(after: &[char]) -> bool {
     }
 
     let nominal = if let Some(nominal) = strip_prefix(after, "という") {
-        let nominal = skip_space(nominal);
-        if WORD_NAMES.iter().any(|word| {
-            strip_prefix(nominal, word)
-                .map(skip_space)
-                .is_some_and(asks_character_count)
-        }) {
-            return true;
-        }
         nominal
     } else if let Some(nominal) = after.strip_prefix(&['の']) {
         let nominal = skip_space(nominal);
@@ -382,12 +370,61 @@ fn describes_written_form(after: &[char]) -> bool {
         return false;
     };
     let nominal = without_count(skip_space(nominal));
-    FORM_NAMES
+    names_character_count(nominal)
+        || FORM_NAMES
+            .iter()
+            .any(|form| strip_prefix(nominal, form).is_some_and(noun_boundary))
+}
+
+fn writes_with_character_count(before: &[char], after: &[char]) -> bool {
+    let Some(object) = after.strip_prefix(&['を']) else {
+        return false;
+    };
+    let writing_particles = ["では", "でも", "で"];
+    if after_character_count(object)
+        .and_then(|tail| {
+            writing_particles
+                .iter()
+                .find_map(|particle| strip_prefix(tail, particle))
+        })
+        .is_some_and(starts_writing)
+    {
+        return true;
+    }
+    if !starts_writing(object) {
+        return false;
+    }
+    let before = trim_space_end(before);
+    let before = before.strip_suffix(&['、']).map_or(before, trim_space_end);
+    writing_particles
         .iter()
-        .any(|form| strip_prefix(nominal, form).is_some_and(noun_boundary))
+        .find_map(|particle| strip_suffix(before, particle))
+        .and_then(|count| strip_suffix(trim_space_end(count), "文字"))
+        .and_then(|number| trim_space_end(number).last())
+        .is_some_and(|&ch| is_count_character(ch))
+}
+
+fn starts_writing(chars: &[char]) -> bool {
+    let chars = skip_space(chars);
+    let chars = chars.strip_prefix(&['、']).map_or(chars, skip_space);
+    ["書く", "書き", "書い", "書か", "書け", "書こ"]
+        .iter()
+        .any(|verb| strip_prefix(chars, verb).is_some())
 }
 
 fn asks_character_count(after: &[char]) -> bool {
+    let after = if let Some(nominal) = strip_prefix(after, "という") {
+        let nominal = skip_space(nominal);
+        let Some(after) = WORD_NAMES
+            .iter()
+            .find_map(|word| strip_prefix(nominal, word))
+        else {
+            return false;
+        };
+        skip_space(after)
+    } else {
+        after
+    };
     let Some(topic) = after
         .strip_prefix(&['は'])
         .or_else(|| strip_prefix(after, "には"))
@@ -406,6 +443,10 @@ fn asks_character_count(after: &[char]) -> bool {
                 .map_or(tail, skip_space)
         });
     let question = question.strip_prefix(&['、']).map_or(question, skip_space);
+    let question = ["合計で", "全部で"]
+        .iter()
+        .find_map(|phrase| strip_prefix(question, phrase))
+        .map_or(question, skip_space);
     let Some(count) = question.strip_prefix(&['何']) else {
         return false;
     };
@@ -416,22 +457,31 @@ fn asks_character_count(after: &[char]) -> bool {
     else {
         return false;
     };
-    matches!(tail.first(), Some('？' | '?'))
+    let has_question_mark = |chars: &[char]| matches!(chars.first(), Some('？' | '?'));
+    has_question_mark(tail)
         || [
-            "ですか",
-            "でしたか",
-            "でしょうか",
-            "ありますか",
-            "あるのですか",
-            "なんですか",
+            "です",
+            "でした",
+            "でしょう",
+            "あります",
+            "ある",
+            "あった",
+            "あるのです",
+            "あるでしょう",
+            "なんです",
+            "なの",
         ]
         .iter()
-        .any(|ending| {
-            strip_prefix(tail, ending).is_some_and(|rest| {
-                matches!(
-                    skip_space(rest).first(),
-                    None | Some('。' | '？' | '?' | '、' | 'ね' | 'と')
-                )
+        .any(|predicate| {
+            strip_prefix(tail, predicate).is_some_and(|rest| {
+                let rest = skip_space(rest);
+                has_question_mark(rest)
+                    || rest.strip_prefix(&['か']).is_some_and(|end| {
+                        matches!(
+                            skip_space(end).first(),
+                            None | Some('。' | '？' | '?' | '、' | 'ね' | 'と')
+                        )
+                    })
             })
         })
 }
@@ -543,6 +593,7 @@ mod tests {
             "「ドイツ」の表記をノートに書きました。",
             "彼は「ドイツ」を三文字で書きました。",
             "彼は「ドイツ」をカタカナ３文字で書いた。",
+            "彼は「ドイツ」を三文字では書きませんでした。",
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -570,6 +621,9 @@ mod tests {
                 false,
             ),
             ("彼は「ドイツ」を三秒で書きました。", false),
+            ("彼は三秒で「ドイツ」を書きました。", false),
+            ("彼は三日で「ドイツ」を回りました。", false),
+            ("彼は三文字で「ドイツ」を書き、ドイツに行きました。", true),
             (
                 "彼は「ドイツ」を書き、その隣に三文字の番号を添えました。",
                 false,
@@ -734,6 +788,7 @@ mod tests {
         let glossary = glossary();
         for (source, raw_quote) in [
             ("「来て」という言葉は何文字ですか。", "「来て」"),
+            ("「来て」という言葉は何文字あるでしょうか。", "「来て」"),
             ("「行く」という単語は何文字ですか。", "「行く」"),
             ("「ドイツ」という言葉は何文字ですか。", "「ドイツ」"),
             ("「ドイツ」はカタカナで何文字ですか。", "「ドイツ」"),
@@ -773,6 +828,22 @@ mod tests {
             ("「A!ドイツ？B」の文字数を数えます。", &["「A!ドイツ？B」"]),
             ("「来て！帰る」の字数を数えました。", &["「来て！帰る」"]),
             ("「来て！帰る」の字数を調べました。", &["「来て！帰る」"]),
+            (
+                "「ドイツ！」と「来て？」の合計の文字数を調べました。",
+                &["「ドイツ！」", "「来て？」"],
+            ),
+            (
+                "「ドイツ！」と「来て？」の総文字数を調べました。",
+                &["「ドイツ！」", "「来て？」"],
+            ),
+            (
+                "「ドイツ！」と「来て？」は合計で何文字ですか。",
+                &["「ドイツ！」", "「来て？」"],
+            ),
+            (
+                "「ドイツ」と「来て」という言葉は、合計で何文字あるでしょうか。",
+                &["「ドイツ」", "「来て」"],
+            ),
             (
                 "「ドイツ！」と「行く？」の文字数をそれぞれ数えました。",
                 &["「ドイツ！」", "「行く？」"],
@@ -875,6 +946,10 @@ mod tests {
             (
                 "先生は『「駅！」、「行く？」の字数をそれぞれ調べてください』と言いました。",
                 ["「駅！」", "「行く？」"],
+            ),
+            (
+                "先生は『「ドイツ！」と「来て？」の合計の文字数を調べなさい』と言いました。",
+                ["「ドイツ！」", "「来て？」"],
             ),
         ] {
             let translated = analyze_and_translate(

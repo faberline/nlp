@@ -10,6 +10,7 @@ const FORM_NAMES: &[&str] = &[
     "字面",
     "綴り",
     "つづり",
+    "文字列",
     "文字",
     "字",
 ];
@@ -176,10 +177,7 @@ fn protect_sibling_forms(
         let before = &chars[scope.start_char..opening];
         let after = skip_space(&chars[quote.end_char + 1..scope.end_char]);
         let measures_form = measures_written_form(after);
-        if measures_form
-            || describes_written_form(after)
-            || writes_with_character_count(before, after)
-        {
+        if measures_form || describes_written_form(after) || acts_on_written_form(before, after) {
             protected.push(protection_span(*quote, nested));
         }
         let join = index.checked_sub(1).and_then(|prev| {
@@ -372,12 +370,31 @@ fn describes_written_form(after: &[char]) -> bool {
             .any(|form| strip_prefix(nominal, form).is_some_and(noun_boundary))
 }
 
-fn writes_with_character_count(before: &[char], after: &[char]) -> bool {
+fn acts_on_written_form(before: &[char], after: &[char]) -> bool {
     let Some(object) = after.strip_prefix(&['を']) else {
         return false;
     };
+    let amount = after_clause_comma(object);
+    let counted = after_character_count(amount);
+    let step = counted.and_then(|tail| {
+        ["ずつ", "ごとに"]
+            .iter()
+            .find_map(|marker| strip_prefix(tail, marker))
+    });
+    let step = step.or_else(|| {
+        ["一字一字", "一文字一文字"]
+            .iter()
+            .find_map(|marker| strip_prefix(amount, marker))
+    });
+    if step.is_some_and(|tail| {
+        ["読", "書", "写", "数", "なぞ"]
+            .iter()
+            .any(|verb| strip_prefix(after_clause_comma(tail), verb).is_some())
+    }) {
+        return true;
+    }
     let writing_particles = ["では", "でも", "で"];
-    if after_character_count(after_clause_comma(object))
+    if counted
         .and_then(|tail| {
             writing_particles
                 .iter()
@@ -740,6 +757,7 @@ mod tests {
                 "「ドイツ」という単語を聞いたあと、別の文に含まれる文字を数えました。",
                 false,
             ),
+            ("「ドイツ」という国の案内を一字ずつ読みました。", false),
             ("「ドイツ」はどこにありますか。", false),
             (
                 "「ドイツ」という言葉をニュースで聞きました。「来て」は何文字ですか。",
@@ -869,6 +887,12 @@ mod tests {
                 "「ドイツ！」と「来て？」はそれぞれ、句読点も含めて何文字ですか。",
                 &["「ドイツ！」", "「来て？」"],
             ),
+            (
+                "「ドイツ」という文字列をそのまま写しました。",
+                &["「ドイツ」"],
+            ),
+            ("「ドイツ」を一字ずつ読みました。", &["「ドイツ」"]),
+            ("「ドイツ」を一字一字読みました。", &["「ドイツ」"]),
         ] {
             let result = analyze_and_translate(
                 source,

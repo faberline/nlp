@@ -160,7 +160,6 @@ fn resolve_noon_endpoint(
     // These forms can continue 昼ま (daytime) with a copula or では even
     // when the lattice selected a separate で. Keep ambiguous readings.
     const DAYTIME_CONTINUATIONS: &[&str] = &[
-        "した",
         "して",
         "しょう",
         "ある",
@@ -196,8 +195,25 @@ fn resolve_noon_endpoint(
             && path
                 .get(index + 1)
                 .is_some_and(|(_, _, edge)| edge.len_chars == 1);
+        // Plain した may be the remainder of the daytime copula でした.
+        // The selected する inflection with たい is a distinct action.
+        let ambiguous_past = suffix.starts_with("した")
+            && !path.get(index + 1).is_some_and(|(next, _, edge)| {
+                *next == end
+                    && matches!(
+                        &edge.kind,
+                        EdgeKind::Inflected {
+                            dict_lemma,
+                            split_morphemes,
+                            stem_chars: 0,
+                            ..
+                        } if dict_lemma == "する"
+                            && split_morphemes.split('+').any(|piece| piece.ends_with("/たい/AUX"))
+                    )
+            });
         if !in_context
             || followed_by_topic_particle
+            || ambiguous_past
             || DAYTIME_CONTINUATIONS
                 .iter()
                 .any(|part| suffix.starts_with(part))
@@ -1058,6 +1074,36 @@ mod noon_endpoint_segmentation_tests {
             }
             assert!(segments.len() >= particles.len());
             assert_eq!(segments[1].decided_upos, Some(Upos::Adp));
+        }
+    }
+
+    #[test]
+    fn noon_endpoint_before_a_desired_action_preserves_the_inflection() {
+        for (source, continuation) in [
+            ("仕事を昼までしたいです。", "たい"),
+            ("仕事を昼までしたかったです。", "たかっ"),
+            ("勉強を昼までしたくないです。", "たく"),
+        ] {
+            let chars: Vec<_> = source.chars().collect();
+            let segments = segment_ja(&chars, 0);
+            let time = source.chars().position(|ch| ch == '昼').unwrap();
+            let part: Vec<_> = segments
+                .iter()
+                .filter(|segment| segment.span.start_char >= time)
+                .take(4)
+                .collect();
+            let surfaces: Vec<String> = part
+                .iter()
+                .map(|segment| {
+                    chars[segment.span.start_char..segment.span.end_char]
+                        .iter()
+                        .collect()
+                })
+                .collect();
+            assert_eq!(surfaces, ["昼", "まで", "し", continuation], "{source}");
+            assert_eq!(part[1].decided_upos, Some(Upos::Adp));
+            assert_eq!(part[2].lemma.as_deref(), Some("する"));
+            assert_eq!(part[3].decided_upos, Some(Upos::Aux));
         }
     }
 

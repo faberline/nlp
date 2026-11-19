@@ -206,7 +206,7 @@ pub(crate) fn translate_ja_sentence(
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
-        dates.normalize(&mut atoms, sentence_idx, chars, doc);
+        dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
     }
 
     if atoms.is_empty() {

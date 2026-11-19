@@ -925,7 +925,10 @@ pub(super) fn companion_label(
         start = i;
     }
     let counted = (start..=end).find_map(|i| {
-        if !person || !matches!(spelling(&source[i], chars).as_str(), "人" | "名") {
+        if !person
+            || source[end].span.end_char > chars.len()
+            || !matches!(spelling(&source[i], chars).as_str(), "人" | "名")
+        {
             return None;
         }
         let (first, last, text) = recipient_description(source, i, chars);

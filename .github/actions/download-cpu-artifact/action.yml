@@ -1,0 +1,49 @@
+name: Download the uploaded CPU artifact
+description: Retrieve this job's upload by ID, allowing one delayed retry before any file arrives.
+inputs:
+  artifact-id:
+    description: ID returned by this job's upload
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Require one upload ID and a fresh destination
+      shell: bash
+      env:
+        ARTIFACT_ID: ${{ inputs.artifact-id }}
+      run: |
+        if ! [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]; then
+          echo "::error::Expected one numeric upload ID."
+          exit 1
+        fi
+        mkdir raw-download
+
+    - id: first
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      continue-on-error: true
+      with:
+        artifact-ids: ${{ inputs.artifact-id }}
+        path: raw-download
+        skip-decompress: true
+        digest-mismatch: error
+
+    - name: Allow a retry only when the failed download left no files
+      if: steps.first.outcome == 'failure'
+      shell: bash
+      run: |
+        shopt -s nullglob dotglob
+        files=(raw-download/*)
+        if [[ ! -d raw-download ]] || (( ${#files[@]} )); then
+          echo "::error::Download failed after writing output. Refusing to retry."
+          exit 1
+        fi
+        sleep 15
+
+    - name: Retry the same ID
+      if: success() && steps.first.outcome == 'failure'
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        artifact-ids: ${{ inputs.artifact-id }}
+        path: raw-download
+        skip-decompress: true
+        digest-mismatch: error

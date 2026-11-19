@@ -1,7 +1,7 @@
 use super::{
-    Atom, DISTRIBUTED_SUBJECT, DayInterval, MEASURED_SUBJECT, ONLY_MEASURED_SUBJECT,
-    ONLY_REPETITIONS, REPETITIONS, Upos, calendar_number, day_interval, is_numeral, linked_case,
-    number_before,
+    Atom, DATE_LIST, DISTRIBUTED_SUBJECT, DayInterval, EACH_COUNT, EACH_SUBJECT, MEASURED_SUBJECT,
+    ONLY_MEASURED_SUBJECT, ONLY_REPETITIONS, REPETITIONS, Upos, calendar_number, countable_day,
+    day_interval, is_numeral, linked_case, number_before,
 };
 use crate::ja_zh::{counted_object, translate_single_ja_term};
 
@@ -16,7 +16,10 @@ fn measure_at(atoms: &[Atom], i: usize, day: &Atom) -> Option<Measure> {
     let unit = &atoms[i];
     let head = unit.head?;
     if unit.is_locked
-        || unit.upos != Some(Upos::Noun)
+        || !(unit.upos == Some(Upos::Noun)
+            || unit.upos == Some(Upos::Adv)
+                && unit.surface.ends_with('杯')
+                && unit.deprel == "advmod")
         || !(Some(head) == day.head
             || atoms.iter().any(|a| {
                 !a.is_locked
@@ -109,8 +112,7 @@ pub(super) fn has_measure(atoms: &[Atom], day: usize) -> bool {
 // a distributive count without a competing recipient gives a recurring event.
 pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
     let day = &atoms[end];
-    if day.is_locked
-        || day.surface != "日"
+    if !countable_day(day)
         || day.upos != Some(Upos::Noun)
         || !matches!(day.deprel.as_str(), "obl" | "iobj")
         || !atoms
@@ -123,7 +125,7 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
         !a.is_locked
             && a.doc_tok_idx == day.head
             && a.upos == Some(Upos::Verb)
-            && a.deprel == "root"
+            && matches!(a.deprel.as_str(), "root" | "acl")
     }) else {
         return;
     };
@@ -154,8 +156,17 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
         !a.is_locked && a.surface == "に" && a.deprel == "case" && a.head != day.doc_tok_idx
     });
     let people = matches!(q.kind, "人" | "名");
-    if !(dated && (only || people && each && !competing_recipient)
-        || !dated && (contrast || each && !competing_recipient))
+    // A floated count after a subject can distribute people within a single
+    // visit. A genitive or relative modifier can likewise select a day.
+    let ambiguous_distribution = atoms[end + 2..q.start]
+        .iter()
+        .any(|a| a.deprel == "nsubj" && a.head == day.head)
+        || start
+            .checked_sub(1)
+            .is_some_and(|p| atoms[p].surface == "の" || atoms[p].deprel == "acl");
+    let list = day.lemma.as_deref() == Some(DATE_LIST);
+    if !(dated && (only || list && each || people && each && !competing_recipient)
+        || !dated && (contrast || each && !competing_recipient && !ambiguous_distribution))
     {
         return;
     }
@@ -183,7 +194,9 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
                 return;
             }
             result.lemma = Some(
-                if each && dated {
+                if each && list {
+                    EACH_SUBJECT
+                } else if each && dated {
                     DISTRIBUTED_SUBJECT
                 } else if only {
                     ONLY_MEASURED_SUBJECT
@@ -193,9 +206,20 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
                 .to_owned(),
             );
             counted_object::push_quantity(&mut amount, &q.number, "位");
+            if dated
+                && !list
+                && each
+                && calendar_number(&q.number) == Some(1)
+                && subject.span.end_char <= unit.span.start_char
+            {
+                result.lemma = Some(super::INDIVIDUALS.to_owned());
+                amount.push_str("接一位地");
+            }
         } else {
             result.lemma = Some(
-                if each && dated {
+                if each && list {
+                    EACH_COUNT
+                } else if each && dated {
                     DISTRIBUTED_SUBJECT
                 } else if only {
                     ONLY_REPETITIONS
@@ -220,7 +244,16 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
             return;
         };
         counted_object::push_quantity(&mut amount, &q.number, classifier);
-        result.lemma = Some(if only { ONLY_REPETITIONS } else { REPETITIONS }.to_owned());
+        result.lemma = Some(
+            if only {
+                ONLY_REPETITIONS
+            } else if list && each {
+                EACH_COUNT
+            } else {
+                REPETITIONS
+            }
+            .to_owned(),
+        );
     }
     // A following の or an unhandled focus particle still belongs to its
     // noun phrase. Leave both it and its quantity on the normal path.
@@ -239,4 +272,46 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
     if !dated {
         atoms.splice(start..end + 2, [interval]);
     }
+}
+
+pub(super) const HABIT: &str = "__ja_habitual_topic";
+
+// 普段は and its kana spelling are time modifiers of the following event.
+// The analyzer can split ふだん into ふ + だ + ん.
+pub(super) fn normalize_habit(atoms: &mut Vec<Atom>) {
+    let end = match atoms.as_slice() {
+        [a, topic, ..] if a.surface == "普段" && topic.surface == "は" => 1,
+        [a, da, n, topic, ..]
+            if a.surface == "ふ"
+                && da.surface == "だ"
+                && n.surface == "ん"
+                && topic.surface == "は" =>
+        {
+            3
+        }
+        _ => return,
+    };
+    let first = &atoms[0];
+    if atoms[..=end].iter().any(|a| a.is_locked)
+        || atoms[..=end]
+            .windows(2)
+            .any(|p| p[0].span.end_char != p[1].span.start_char)
+        || !atoms[1..=end].iter().all(|a| a.head == first.doc_tok_idx)
+        || !atoms[end + 1..]
+            .iter()
+            .any(|a| a.doc_tok_idx == first.head && a.upos == Some(Upos::Verb))
+        || !atoms[end + 1..]
+            .iter()
+            .any(|a| a.surface == "日" && a.head == first.head)
+    {
+        return;
+    }
+    let mut habit = first.clone();
+    habit.upos = Some(Upos::Adv);
+    habit.deprel = "advmod".to_owned();
+    habit.surface = "平常".to_owned();
+    habit.lemma = Some(HABIT.to_owned());
+    habit.span.end_char = atoms[end].span.end_char;
+    habit.is_locked = true;
+    atoms.splice(..=end, [habit]);
 }

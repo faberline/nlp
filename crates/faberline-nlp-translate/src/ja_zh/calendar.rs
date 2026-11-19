@@ -1,9 +1,18 @@
 //! Bind a calendar day to its case particles before noun-phrase grouping.
+mod dates;
 mod quantities;
 use super::{Atom, Upos, normalize_decimal_digits, selects_time_value};
 use crate::opaque::parse_cjk_or_ascii_num;
+pub(crate) use dates::DateContext;
 
 const DATE: &str = "__ja_calendar_day";
+const DATE_LIST: &str = "__ja_calendar_dates";
+const INDIVIDUALS: &str = "__ja_one_person_at_a_time";
+pub(super) fn individual_arrivals(atom: &Atom) -> bool {
+    atom.lemma.as_deref() == Some(INDIVIDUALS)
+}
+const EACH_COUNT: &str = "__ja_calendar_each_count";
+const EACH_SUBJECT: &str = "__ja_calendar_each_subject";
 const INTERVAL: &str = "__ja_day_interval";
 const MEASURED_SUBJECT: &str = "__ja_interval_subject_count";
 const DISTRIBUTED_SUBJECT: &str = "__ja_distributed_subject_count";
@@ -19,7 +28,7 @@ pub(super) fn contrasts_recurrence(atoms: &[Atom]) -> bool {
 pub(super) fn is_counted_subject(atom: &Atom) -> bool {
     matches!(
         atom.lemma.as_deref(),
-        Some(MEASURED_SUBJECT | ONLY_MEASURED_SUBJECT | DISTRIBUTED_SUBJECT)
+        Some(MEASURED_SUBJECT | ONLY_MEASURED_SUBJECT | DISTRIBUTED_SUBJECT | EACH_SUBJECT)
     )
 }
 
@@ -57,12 +66,13 @@ pub(super) fn count_modifier(atom: &Atom) -> Option<&'static str> {
         REPETITIONS | MEASURED_SUBJECT => Some(""),
         ONLY_REPETITIONS | ONLY_MEASURED_SUBJECT => Some("只"),
         DISTRIBUTED_SUBJECT => Some("每次"),
+        EACH_SUBJECT | EACH_COUNT => Some("各"),
         _ => None,
     }
 }
 
 pub(super) fn is_date(atom: &Atom) -> bool {
-    atom.lemma.as_deref() == Some(DATE)
+    matches!(atom.lemma.as_deref(), Some(DATE | DATE_LIST))
 }
 
 pub(super) fn question(atom: &Atom) -> Option<&str> {
@@ -119,6 +129,23 @@ fn number_before(atoms: &[Atom], end: usize) -> Option<(usize, String)> {
     })
 }
 
+fn month_text(surface: &str) -> Option<String> {
+    let number = surface.strip_suffix('月')?;
+    if matches!(
+        surface,
+        "今月" | "先月" | "来月" | "翌月" | "前月" | "同月" | "当月" | "毎月"
+    ) {
+        return Some(super::translate_single_ja_term(
+            surface,
+            None,
+            Some(Upos::Noun),
+        ));
+    }
+    (1..=12)
+        .contains(&calendar_number(number)?)
+        .then(|| format!("{}月", normalize_decimal_digits(number)))
+}
+
 fn month_before(atoms: &[Atom], start: usize, day: &Atom) -> Option<(usize, String)> {
     let i = start.checked_sub(1)?;
     let month = &atoms[i];
@@ -129,31 +156,18 @@ fn month_before(atoms: &[Atom], start: usize, day: &Atom) -> Option<(usize, Stri
     {
         return None;
     }
-    let number = month.surface.strip_suffix('月')?;
-    if matches!(
-        month.surface.as_str(),
-        "今月" | "先月" | "来月" | "毎月" | "翌月" | "前月" | "同月" | "当月"
-    ) {
-        return Some((
-            i,
-            super::translate_single_ja_term(&month.surface, month.lemma.as_deref(), month.upos),
-        ));
+    if month.surface != "月" {
+        return Some((i, month_text(&month.surface)?));
     }
-    let (start, number) = if number.is_empty() {
-        let n = i.checked_sub(1)?;
-        let num = &atoms[n];
-        if !is_numeral(num)
-            || num.span.end_char != month.span.start_char
-            || !(num.head == month.doc_tok_idx || num.head == day.head)
-        {
-            return None;
-        }
-        (n, num.surface.as_str())
-    } else {
-        (i, number)
-    };
-    ((1..=12).contains(&calendar_number(number)?))
-        .then(|| (start, format!("{}月", normalize_decimal_digits(number))))
+    let n = i.checked_sub(1)?;
+    let num = &atoms[n];
+    if !is_numeral(num)
+        || num.span.end_char != month.span.start_char
+        || !(num.head == month.doc_tok_idx || num.head == day.head)
+    {
+        return None;
+    }
+    Some((n, month_text(&format!("{}月", num.surface))?))
 }
 
 fn linked_case(case: &Atom, day: &Atom, adjacent_to: &Atom, surface: &str) -> bool {
@@ -202,8 +216,19 @@ fn genitive_month(atoms: &[Atom], start: usize, day: &Atom) -> bool {
         && month.head == day.doc_tok_idx && linked_case(no, month, month, "の"))
 }
 
+fn countable_day(day: &Atom) -> bool {
+    !day.is_locked && day.surface == "日" || is_date(day)
+}
+
 fn day_interval(atoms: &[Atom], end: usize) -> Option<DayInterval> {
     let day = &atoms[end];
+    if is_date(day) {
+        return Some(DayInterval {
+            start: end,
+            dated: true,
+            atom: day.clone(),
+        });
+    }
     let case = atoms.get(end + 1)?;
     let prev_idx = end.checked_sub(1)?;
     let prev = &atoms[prev_idx];
@@ -231,7 +256,7 @@ fn day_interval(atoms: &[Atom], end: usize) -> Option<DayInterval> {
     } else {
         return None;
     };
-    if matches!(&atoms[..start], [.., opaque] if opaque.is_locked && opaque.span.end_char == atoms[start].span.start_char)
+    if matches!(&atoms[..start], [.., opaque] if opaque.is_locked && opaque.lemma.as_deref()!=Some(quantities::HABIT) && opaque.span.end_char == atoms[start].span.start_char)
         || matches!(&atoms[..start], [.., opaque, no] if opaque.is_locked && no.surface == "の" && no.head == opaque.doc_tok_idx)
     {
         return None;
@@ -257,8 +282,7 @@ fn bind_repetitions(atoms: &mut Vec<Atom>, end: usize) {
     let Some(case) = atoms.get(end + 1) else {
         return;
     };
-    if day.is_locked
-        || day.surface != "日"
+    if !countable_day(day)
         || day.upos != Some(Upos::Noun)
         || !matches!(day.deprel.as_str(), "obl" | "iobj")
         || !linked_case(case, day, day, "に")
@@ -378,6 +402,7 @@ fn dated_month(atoms: &[Atom], start: usize, month: String) -> Option<(usize, St
         return None;
     }
     let relative = match year.surface.as_str() {
+        "毎年" => "每年",
         "去年" => "去年",
         "今年" => "今年",
         "来年" => "明年",
@@ -504,11 +529,15 @@ fn expression(atoms: &[Atom], end: usize, contrasts_recurrence: bool) -> Option<
 pub(super) fn normalize(atoms: &mut Vec<Atom>, contrasts_recurrence: bool) {
     // Work from the right: binding a count can collapse both the counted
     // phrase and its day interval. Start the date pass with the resulting spans.
+    quantities::normalize_habit(atoms);
     for idx in (0..atoms.len()).rev() {
-        let Some(day) = atoms.get(idx).filter(|a| !a.is_locked && a.surface == "日") else {
+        let Some(day) = atoms.get(idx).filter(|a| countable_day(a)) else {
             continue;
         };
         let recurring = contrasts_recurrence
+            || atoms
+                .iter()
+                .any(|a| a.lemma.as_deref() == Some(quantities::HABIT) && a.head == day.head)
             || atoms.iter().any(|a| {
                 !a.is_locked
                     && a.head == day.head
@@ -516,12 +545,17 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, contrasts_recurrence: bool) {
                     && matches!(a.surface.as_str(), "いつも" | "毎回" | "繰り返し")
             });
         quantities::bind(atoms, idx, recurring);
-        if atoms.get(idx).is_some_and(|a| a.surface == "日") {
+        if atoms.get(idx).is_some_and(countable_day) {
             bind_repetitions(atoms, idx);
         }
         // The amount may keep its native の or an unsupported classifier.
         // An explicit contrast still resolves the interval independently.
         if recurring
+            && atoms.get(idx).is_some_and(|d| {
+                atoms.iter().any(|a| {
+                    a.doc_tok_idx == d.head && a.deprel == "root" && a.upos == Some(Upos::Verb)
+                })
+            })
             && atoms
                 .get(idx)
                 .is_some_and(|a| !a.is_locked && a.surface == "日")

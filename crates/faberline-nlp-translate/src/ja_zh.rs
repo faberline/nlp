@@ -8,6 +8,7 @@
 use std::collections::HashMap;
 
 mod calendar;
+pub(crate) use calendar::DateContext;
 mod counted_object;
 
 use faberline_nlp::Span;
@@ -191,11 +192,13 @@ pub(crate) fn translate_ja_sentence(
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
+    dates: &mut DateContext,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
+        dates.normalize(&mut atoms, sentence_idx, chars, doc);
     }
 
     if atoms.is_empty() {
@@ -900,6 +903,7 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
     let chars: Vec<char> = masked.chars().collect();
     let mut out = String::new();
     let mut cursor = 0usize;
+    let mut dates = DateContext::default();
     for (si, sent) in doc.segmentation.sentences.iter().enumerate() {
         if sent.span.start_char > cursor {
             for &c in &chars[cursor..sent.span.start_char] {
@@ -918,6 +922,7 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
             &cond,
             target,
             None,
+            &mut dates,
         );
         out.push_str(&tr);
         cursor = sent.span.end_char;
@@ -7458,6 +7463,10 @@ fn translate_clause_bunsetsus(
             continue;
         }
         if let [atom] = b.atoms.as_slice() {
+            if calendar::individual_arrivals(atom) {
+                adverbs.push(atom.surface.clone());
+                continue;
+            }
             if calendar::is_interval(atom) {
                 temporal_others.push(atom.surface.clone());
                 continue;
@@ -11446,12 +11455,21 @@ fn take_adnominal_arguments(
 ) -> Vec<Bunsetsu> {
     let mut deadlines: Vec<_> = remaining
         .extract_if(.., |arg| {
-            deadline_governor(arg, doc).is_some_and(|head| {
-                predicate
-                    .atoms
-                    .iter()
-                    .any(|a| !a.is_locked && a.doc_tok_idx == Some(head))
-            })
+            deadline_governor(arg, doc)
+                .or_else(|| {
+                    let [a] = arg.atoms.as_slice() else {
+                        return None;
+                    };
+                    (calendar::is_interval(a) || calendar::count_modifier(a).is_some())
+                        .then_some(a.head)
+                        .flatten()
+                })
+                .is_some_and(|head| {
+                    predicate
+                        .atoms
+                        .iter()
+                        .any(|a| !a.is_locked && a.doc_tok_idx == Some(head))
+                })
         })
         .collect();
     let mut arguments = Vec::new();
@@ -13533,6 +13551,93 @@ mod clock_rule_tests {
                 output.target_text
             );
         }
+    }
+
+    #[test]
+    fn coordinated_dates_distribute_one_event_on_each_date() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "六月二日と三日に一人ずつ学生が来ました。",
+                "在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と七月三日に一人ずつ学生が来ました。",
+                "在六月二日和七月三日各來了一位學生。",
+            ),
+            (
+                "七月三日と五日に一冊ずつ本を借りました。",
+                "在七月三日和五日各借用了一本書。",
+            ),
+            (
+                "今月の二日と三日に一冊ずつ本を買いました。",
+                "在這個月二日和三日各買了一本書。",
+            ),
+            (
+                "六月二日と三日、それぞれ一冊ずつ本を借りました。",
+                "在六月二日和三日各借用了一本書。",
+            ),
+            (
+                "毎日ではなく、三日に一人ずつ学生が来ました。",
+                "不是每天，而是每三天來了一位學生。",
+            ),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+    }
+
+    #[test]
+    fn habitual_quantities_stay_with_their_own_predicate() {
+        let glossary = TranslationGlossary::new();
+        for jp in [
+            "普段は三日に一杯コーヒーを飲みます。",
+            "ふだんは三日に一杯コーヒーを飲みます。",
+        ] {
+            assert_eq!(
+                public_translate(jp, &glossary).target_text,
+                "平常每三天喝一杯咖啡。"
+            );
+        }
+        assert_eq!(
+            public_translate(
+                "毎日ではなく、二日に一冊だけ本を返した学生が来ました。",
+                &glossary
+            )
+            .target_text,
+            "不是每天，而是每兩天只還給了一本書的學生來了。"
+        );
+        let ambiguous = public_translate("三日に一杯コーヒーを飲みます。", &glossary);
+        assert!(
+            !ambiguous.target_text.contains("每三天") && !ambiguous.target_text.contains("三號")
+        );
+    }
+
+    #[test]
+    fn a_single_day_restricts_only_the_matching_day_in_the_next_sentence() {
+        let glossary = TranslationGlossary::new();
+        let jp = "試験は六月二日だけです。二日に学生が一人ずつ来ます。";
+        assert_eq!(
+            public_translate(jp, &glossary).target_text,
+            "試驗只在六月二日。學生在六月二日一位接一位地來。"
+        );
+        for jp in [
+            "試験は六月二日だけです。三日に学生が一人ずつ来ます。",
+            "試験は六月二日だけです。二日に一度だけ薬を飲みます。",
+            "試験は六月二日だけです。\n\n二日に学生が一人ずつ来ます。",
+        ] {
+            let text = public_translate(jp, &glossary).target_text;
+            assert_eq!(text.matches("六月二日").count(), 1, "{jp}: {text}");
+        }
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "六月二日".to_owned(),
+            surfaces: vec!["六月二日".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "特別日".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let locked = public_translate(jp, &glossary);
+        assert_eq!(locked.target_text.matches("特別日").count(), 1);
+        assert!(!locked.target_text.contains("六月二日"));
     }
 
     #[test]
@@ -16549,7 +16654,20 @@ fn synthesize_predicate_complex(
             .iter()
             .any(|a| a.upos == Some(Upos::Verb) || a.upos == Some(Upos::Adj))
     {
-        pre.insert(0, if has_locative_floor { "在" } else { "是" }.to_owned());
+        let copula = if all_atoms
+            .iter()
+            .any(|a| calendar::is_date(a) && a.deprel == "root")
+            && all_atoms
+                .iter()
+                .any(|a| !a.is_locked && a.surface == "だけ")
+        {
+            "只在"
+        } else if has_locative_floor {
+            "在"
+        } else {
+            "是"
+        };
+        pre.insert(0, copula.to_owned());
     }
 
     if has_te_shimau {

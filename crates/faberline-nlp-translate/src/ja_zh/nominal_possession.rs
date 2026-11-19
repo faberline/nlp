@@ -235,24 +235,21 @@ fn shared_owner_choices(
     }
     let mut names = Vec::with_capacity(groups.len());
     for (i, group) in groups.iter().enumerate() {
-        let owner = group.last()?;
+        let (modifiers, [owner]) = group.as_chunks::<2>() else {
+            return None;
+        };
         // Multiple nouns may name one owner (学校の先生). Its head can
         // attach to the first modifier in the following owner phrase.
         let governed = groups
             .get(i + 1)
             .copied()
             .unwrap_or(std::slice::from_ref(item));
-        let mut parts = group.chunks_exact(2);
-        if parts.remainder().len() != 1 {
-            return None;
-        }
-        for (j, pair) in parts.by_ref().enumerate() {
-            let (modifier, no) = (&pair[0], &pair[1]);
+        for ([modifier, no], head) in modifiers.iter().zip(group.iter().skip(2).step_by(2)) {
             if no.surface != "の"
                 || no.deprel != "case"
                 || no.head != modifier.doc_tok_idx
                 || modifier.deprel != "nmod"
-                || modifier.head != group[j * 2 + 2].doc_tok_idx
+                || modifier.head != head.doc_tok_idx
             {
                 return None;
             }

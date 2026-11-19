@@ -2387,11 +2387,15 @@ fn return_trip_at(atoms: &[Atom], link: usize) -> Option<ReturnTrip> {
         return None;
     }
     let mut goals = 0;
+    let mut origins = 0;
+    let mut times = 0;
     for (i, a) in clause.iter().take_while(|a| !is_punct_atom(a)).enumerate() {
-        if a.lemma.as_deref() == Some(CLOCK_ATOM)
-            && clause.get(i + 1).is_some_and(|p| p.surface == "まで")
-        {
-            return None;
+        if a.lemma.as_deref() == Some(CLOCK_ATOM) && !a.surface.contains("[[PH") {
+            if clause.get(i + 1).is_some_and(|p| p.surface == "まで") {
+                return None;
+            }
+            times += 1;
+            continue;
         }
         if (a.is_locked && (a.lemma.as_deref() != Some(CLOCK_ATOM) || a.surface.contains("[[PH")))
             || (a.upos == Some(Upos::Verb)
@@ -2409,8 +2413,12 @@ fn return_trip_at(atoms: &[Atom], link: usize) -> Option<ReturnTrip> {
         if a.deprel == "obj" {
             return None;
         }
-        if a.doc_tok_idx.is_none() || !matches!(a.deprel.as_str(), "obl" | "iobj") {
+        if a.doc_tok_idx.is_none() {
             continue;
+        }
+        let time = render_temporal_made_atom(a).is_some();
+        if time && matches!(a.deprel.as_str(), "obl" | "advmod" | "iobj") {
+            times += 1;
         }
         let Some(case) = clause
             .get(i + 1)
@@ -2423,8 +2431,14 @@ fn return_trip_at(atoms: &[Atom], link: usize) -> Option<ReturnTrip> {
         if case.surface == "で" {
             return None;
         }
+        if !matches!(a.deprel.as_str(), "obl" | "iobj") {
+            continue;
+        }
+        if case.surface == "から" {
+            origins += 1;
+        }
         if matches!(case.surface.as_str(), "に" | "へ" | "まで") {
-            if render_temporal_made_atom(a).is_some() || is_clock_atom(a) {
+            if time {
                 if case.surface == "まで" {
                     return None;
                 }
@@ -2433,7 +2447,7 @@ fn return_trip_at(atoms: &[Atom], link: usize) -> Option<ReturnTrip> {
             }
         }
     }
-    (goals <= 1).then_some(ReturnTrip {
+    (goals <= 1 && origins <= 1 && times <= 1).then_some(ReturnTrip {
         manner: first,
         returning: last,
         action,
@@ -7152,6 +7166,12 @@ fn translate_clause_bunsetsus(
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if let Some(trip) = ctx.return_trip
+            && let Some(label) = trip_relative_daypart(&b, source, trip.returning)
+        {
+            temporal_others.push(label);
+            continue;
+        }
         if let Some(trip) = ctx.return_trip
             && let [.., noun, case] = b.atoms.as_slice()
             && noun.head == Some(trip.returning)
@@ -12114,6 +12134,51 @@ enum SettingTime {
     From(usize),
 }
 
+// The ordinary noun fold can join 昨日の夕方 as an attributive phrase.
+// Its final に still belongs to the travel time when the return governs it.
+fn trip_relative_daypart(group: &Bunsetsu, source: &[Atom], returning: usize) -> Option<String> {
+    let [prefix, head, marker] = group.atoms.as_slice() else {
+        return None;
+    };
+    if group.case_particle.as_deref() != Some("に")
+        || !prefix.is_locked
+        || marker.doc_tok_idx.is_none()
+    {
+        return None;
+    }
+    let [date, no, time, ni] = source
+        .windows(4)
+        .find(|w| w[2].doc_tok_idx == head.doc_tok_idx && w[3].doc_tok_idx == marker.doc_tok_idx)?
+    else {
+        return None;
+    };
+    if [date, no, time, ni].iter().any(|a| a.is_locked)
+        || no.surface != "の"
+        || ni.surface != "に"
+        || !is_daypart_surface(&time.surface)
+        || date.deprel != "nmod"
+        || date.doc_tok_idx.is_none()
+        || time.doc_tok_idx.is_none()
+        || date.head != time.doc_tok_idx
+        || source.iter().any(|a| {
+            a.head == date.doc_tok_idx && matches!(a.deprel.as_str(), "nmod" | "acl" | "compound")
+        })
+        || no.head != date.doc_tok_idx
+        || no.deprel != "case"
+        || ni.head != time.doc_tok_idx
+        || ni.deprel != "case"
+        || time.head != Some(returning)
+        || !matches!(time.deprel.as_str(), "obl" | "iobj" | "advmod")
+    {
+        return None;
+    }
+    Some(format!(
+        "{}{}",
+        render_temporal_made_atom(date)?,
+        render_temporal_made_atom(time)?
+    ))
+}
+
 fn render_daypart_np(group: &Bunsetsu, target: TargetVariant) -> String {
     if let [t, _] = group.atoms.as_slice()
         && let Some(label) = after_daypart(t)
@@ -13534,6 +13599,10 @@ mod motion_endpoint_tests {
     fn manner_and_return_share_their_time_and_route() {
         for (source, expected) in [
             (
+                "学生は昨日の夕方に歩いて帰りました。",
+                "學生昨天傍晚走回去了。",
+            ),
+            (
                 "姉は夕方に図書館から駅まで歩いて帰りました。",
                 "姊姊傍晚從圖書館走回車站了。",
             ),
@@ -13556,6 +13625,10 @@ mod motion_endpoint_tests {
     #[test]
     fn return_does_not_absorb_a_distinct_activity_or_endpoint() {
         for (source, first, second) in [
+            ("朝に歩いて夜に駅へ戻りました。", "早上走", "夜晚"),
+            ("八時に歩いて九時に家へ戻りました。", "八點走", "九點"),
+            ("駅から走って公園から家に戻りました。", "從車站跑", "從公園"),
+            ("駅では歩いて家へ戻りました。", "在車站走", "家"),
             ("駅まで走って家に戻りました。", "跑到車站", "家"),
             ("六時まで歩いて家に帰りました。", "走到六點", "家"),
             ("彼は公園で走って家へ戻りました。", "在公園跑", "家"),

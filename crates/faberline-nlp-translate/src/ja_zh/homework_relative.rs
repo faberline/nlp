@@ -85,6 +85,29 @@ pub(super) fn mark_argument_commas(source: &mut [Atom], doc: &Document) {
             start = i + 1;
             continue;
         }
+        // In a reported intention the analyzer can attach yesterday to today's
+        // deadline across the recipient. The topic and a complete time still
+        // form one opening, before the other participant's case phrase.
+        if start == 0
+            && has_desire
+            && let [topic, wa, frame @ ..] = &source[..i]
+            && wa.surface == "は"
+            && dasu_case_link(topic, wa)
+            && super::homework_desire::report_time(frame).is_some_and(|time| !time.is_empty())
+            && super::homework_desire::has_event_deadline(&source[i + 1..], verb)
+            && source
+                .iter()
+                .any(|a| a.lemma.as_deref() == Some("思う") && a.doc_tok_idx == verb.head)
+            && let Some([person, particle]) = source.get(i + 1..i + 3)
+            && person.head == Some(id)
+            && classroom_role(&[], person).is_some()
+            && matches!(particle.surface.as_str(), "に" | "が")
+            && dasu_case_link(person, particle)
+        {
+            separators.push(i);
+            start = i + 1;
+            continue;
+        }
         // Use original tokens here: a normalized clock may contain several
         // tokens and no single dependency head of its own.
         if let Some(first) = source.get(start).filter(|_| start < i) {
@@ -371,7 +394,11 @@ pub(super) fn fold(
         source,
         doc,
         target,
-        modal.map(|m| (m, false)),
+        modal.map(|modal| super::homework_desire::Desire {
+            modal,
+            question: false,
+            within: None,
+        }),
         Some(role),
     ) else {
         return false;

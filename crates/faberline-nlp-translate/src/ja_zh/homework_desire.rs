@@ -75,7 +75,7 @@ pub(super) fn intention_adverb(time: &Atom) -> Option<String> {
     })
 }
 
-fn report_time(args: &[Atom]) -> Option<String> {
+pub(super) fn report_time(args: &[Atom]) -> Option<String> {
     let args = match args {
         [prefix @ .., comma] if super::homework_relative::is_argument_comma(comma) => prefix,
         _ => args,
@@ -84,6 +84,11 @@ fn report_time(args: &[Atom]) -> Option<String> {
     super::calendar::normalize(&mut time, false);
     match time.as_slice() {
         [] => Some(String::new()),
+        [time] if !time.is_locked && time.deprel == "compound" => match time.surface.as_str() {
+            "今朝" => Some("今天早上".to_owned()),
+            "昨夜" | "昨晩" => Some("昨晚".to_owned()),
+            _ => None,
+        },
         [time] => intention_adverb(time),
         [time, ni]
             if ni.surface == "に"
@@ -93,6 +98,89 @@ fn report_time(args: &[Atom]) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// A time between a classroom topic and its recipient can date the intention.
+fn intention_frame(args: &[Atom], transfer: &Atom) -> Option<(usize, String)> {
+    let pos = args.windows(2).position(|w| {
+        matches!(w[0].deprel.as_str(), "obl" | "iobj")
+            && w[0].head == transfer.doc_tok_idx
+            && w[1].surface == "に"
+            && super::dasu_case_link(&w[0], &w[1])
+            && super::classroom_role(&[], &w[0]).is_some()
+    })?;
+    let frame = &args[..pos];
+    let framed = frame
+        .last()
+        .is_some_and(super::homework_relative::is_argument_comma);
+    let relative_past = frame.first().is_some_and(|a| {
+        matches!(
+            a.surface.as_str(),
+            "今" | "昨日" | "今朝" | "昨夜" | "昨晩" | "先週" | "先月" | "去年"
+        )
+    });
+    let dated = frame.iter().any(|a| a.surface == "に");
+    if !(relative_past || dated && (framed || has_event_deadline(&args[pos + 2..], transfer))) {
+        return None;
+    }
+    let time = report_time(frame)?;
+    (!time.is_empty()).then_some((pos, time))
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Desire<'a> {
+    pub(super) modal: &'a str,
+    pub(super) question: bool,
+    pub(super) within: Option<&'a str>,
+}
+
+/// Keep a bounded calendar period attached to 出す. 中に following a place
+/// or a class activity has a different meaning.
+fn within_period(period: &Atom, marker: &Atom, verb: &Atom) -> Option<String> {
+    if period.is_locked
+        || marker.is_locked
+        || period.span.end_char != marker.span.start_char
+        || marker.surface != "中に"
+        || marker.deprel != "advmod"
+        || marker.head != verb.doc_tok_idx
+        || period.head != marker.doc_tok_idx
+        || period.deprel != "advmod"
+        || !matches!(
+            period.surface.as_str(),
+            "今日"
+                | "明日"
+                | "昨日"
+                | "今週"
+                | "来週"
+                | "先週"
+                | "今月"
+                | "来月"
+                | "先月"
+                | "今年"
+                | "来年"
+                | "去年"
+        )
+    {
+        return None;
+    }
+    Some(format!(
+        "在{}之內",
+        super::render_temporal_made_atom(period)?
+    ))
+}
+
+pub(super) fn has_event_deadline(args: &[Atom], verb: &Atom) -> bool {
+    args.windows(2).any(|pair| {
+        let [start, end] = pair else { return false };
+        within_period(start, end, verb).is_some()
+            || (!start.is_locked
+                && !end.is_locked
+                && start.surface == "まで"
+                && end.surface == "に"
+                && start.deprel == "case"
+                && start.head.is_some()
+                && start.head == end.head)
+    })
 }
 
 /// Keep the topic of 思っている and its time outside a separately marked
@@ -182,6 +270,8 @@ pub(super) fn reported(
     let mut matrix = String::new();
     let mut desire = modal;
     let inner;
+    let mut scoped_content;
+    let dated_desire;
     if let Some(second) = second {
         if !super::is_companion_person(topic) {
             return None;
@@ -210,7 +300,15 @@ pub(super) fn reported(
             (false, true) => "沒有打算",
             (true, true) => "當時沒有打算",
         };
-        inner = content;
+        if let Some((length, time)) = intention_frame(after_topic, transfer) {
+            scoped_content = content[..idx + 2].to_vec();
+            scoped_content.extend_from_slice(&content[idx + 2 + length..]);
+            inner = &scoped_content;
+            dated_desire = format!("{time}{}", desire.strip_prefix("當時").unwrap_or(desire));
+            desire = &dated_desire;
+        } else {
+            inner = content;
+        }
     }
     let mut normalized = super::normalize_building_floors(
         super::normalize_ja_atoms(&super::apply_phrase_matches(inner)),
@@ -304,6 +402,14 @@ pub(super) fn render(
             end -= 1;
         }
     }
+    let within = transfer
+        .windows(2)
+        .enumerate()
+        .find_map(|(i, pair)| within_period(&pair[0], &pair[1], verb).map(|label| (i, label)))
+        .map(|(i, label)| {
+            transfer.drain(i..i + 2);
+            label
+        });
     let groups = compose_relative_daypart(group_into_bunsetsus(&transfer, doc, sentence));
     let groups = merge_adnominal_bunsetsus(groups, &clause[..=i], doc, target);
     try_translate_homework_transfer(
@@ -311,7 +417,11 @@ pub(super) fn render(
         &clause[..=i],
         doc,
         target,
-        Some((modal, question && !asks_qualified_time)),
+        Some(Desire {
+            modal,
+            question: question && !asks_qualified_time,
+            within: within.as_deref(),
+        }),
         None,
     )
 }
@@ -331,6 +441,34 @@ mod tests {
                 "學生想在六點把作業交給老師。",
             ),
             ("先生は学生に宿題を出したいです。", "老師想出作業給學生。"),
+            (
+                "生徒は昨日先生に宿題を出したいと思っていました。",
+                "學生昨天想把作業交給老師。",
+            ),
+            (
+                "生徒は昨日、先生に今日中に宿題を出したいと思っていました。",
+                "學生昨天想在今天之內把作業交給老師。",
+            ),
+            (
+                "生徒は六月七日に、先生に六月八日までに宿題を出したいと思っていました。",
+                "學生在六月七日想最晚在六月八日把作業交給老師。",
+            ),
+            (
+                "生徒は昨日先生に今日中に宿題を出したいと思っていませんでしたか。",
+                "學生昨天沒有打算在今天之內把作業交給老師嗎？",
+            ),
+            (
+                "私は昨日先生が生徒に今日中に宿題を出したいと思っていました。",
+                "我昨天覺得老師想在今天之內出作業給學生。",
+            ),
+            (
+                "先生は昨日来た生徒に宿題を出したいと思っていました。",
+                "老師當時想出作業給昨天來的學生。",
+            ),
+            (
+                "先生は昨日、学生に今週中に宿題を出したいと思っていました。",
+                "老師昨天想在這週之內出作業給學生。",
+            ),
             (
                 "私は六時に、先生が生徒に七時までに宿題を出したいと思っていました。",
                 "我在六點覺得老師想最晚在七點出作業給學生。",

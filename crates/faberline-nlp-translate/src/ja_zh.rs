@@ -6169,7 +6169,7 @@ fn try_translate_homework_transfer(
     source: &[Atom],
     doc: &Document,
     target: TargetVariant,
-    desire: Option<(&str, bool)>,
+    desire: Option<homework_desire::Desire<'_>>,
     relative: Option<ClassroomRole>,
 ) -> Option<String> {
     // Inspect the source before nominal groups render protected atoms.
@@ -6428,7 +6428,7 @@ fn try_translate_homework_transfer(
         return None;
     }
     let mut continuation_tail = None;
-    let mut desire_prefix = desire.map(|(modal, _)| modal);
+    let mut desire_prefix = desire.map(|d| d.modal);
     if let Some((position, group)) = deadline {
         if continuation_end.is_some() {
             return None;
@@ -6436,7 +6436,7 @@ fn try_translate_homework_transfer(
         let time = render_bunsetsu_np(group, target);
         // Negation applies to completing the transfer by the deadline.
         let cutoff = match before_verb.as_slice() {
-            [] if desire.is_some_and(|(modal, _)| modal.ends_with("不想")) => {
+            [] if desire.is_some_and(|d| d.modal.ends_with("不想")) => {
                 format!("在{time}前")
             }
             [] => format!("最晚在{time}"),
@@ -6473,6 +6473,7 @@ fn try_translate_homework_transfer(
         parts.push(modal.to_owned());
     }
     parts.extend(adjuncts);
+    parts.extend(desire.and_then(|d| d.within).map(str::to_owned));
     parts.push(action);
     parts.extend(
         after_verb
@@ -6480,7 +6481,7 @@ fn try_translate_homework_transfer(
             .filter(|word| continuation_tail.is_none() || word != "了"),
     );
     parts.extend(continuation_tail);
-    if terminal_ka.is_some() || desire.is_some_and(|(_, question)| question) {
+    if terminal_ka.is_some() || desire.is_some_and(|d| d.question) {
         if desire.is_none()
             && deadline.is_none()
             && !has_time_modifier

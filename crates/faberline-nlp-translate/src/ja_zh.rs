@@ -2394,6 +2394,8 @@ fn te_help_letter_quantity<'a>(
         fused_number.to_owned()
     };
     let numeral = normalize_decimal_digits(&numeral);
+    // A total next to the letter count does not set the whole group's quantity
+    // when the same action also has an explicit per-writer modifier.
     let total = start.checked_sub(1).is_some_and(|index| {
         let marker = &arguments[index];
         !marker.is_locked
@@ -2402,7 +2404,9 @@ fn te_help_letter_quantity<'a>(
             && matches!(marker.deprel.as_str(), "compound" | "nmod")
             && marker.head == Some(counter_id)
             && marker.span.end_char == arguments[start].span.start_char
-    });
+    }) && !arguments
+        .iter()
+        .any(|atom| letter_writer_each_adverb(atom) && atom.head == Some(action_idx));
     start -= usize::from(total);
     let additional = start.checked_sub(1).is_some_and(|index| {
         let more = &arguments[index];
@@ -20976,6 +20980,14 @@ mod existence_rule_tests {
             (
                 "先生方お二人に、校長宛ての手紙を二通ずつ書いていただけますか。",
                 "可以請兩位老師各寫兩封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を合計一通書いていただけますか。",
+                "可以請兩位老師總共寫一封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を各自合計一通書いていただけますか。",
+                "可以請兩位老師各自合計一通寫信給校長嗎？",
             ),
             (
                 "校長宛ての手紙を二人でそれぞれ毎週一通ずつ書いていただけますか。",

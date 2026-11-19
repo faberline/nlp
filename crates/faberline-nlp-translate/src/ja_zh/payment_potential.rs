@@ -127,6 +127,15 @@ fn reported_content(word: &Atom, previous: Option<&Segment>, after: &[Segment]) 
     if marker.is_locked {
         return false;
     }
+    // A continuative answer before a comma can be tagged as an answer noun
+    // instead of the verb stem, as in 「…」と答え、次に… .
+    if marker.surface == "と"
+        && matches!(rest, [reply] if answer_noun(reply))
+        && matches!(after.first(), Some(Segment::Clause { trailing_punct: Some(punct), .. })
+            if matches!(punct.as_str(), "、" | "，"))
+    {
+        return true;
+    }
     if marker.surface == "と"
         && matches!(rest, [no, reply, ..] if !no.is_locked
         && no.surface == "の" && no.head == marker.doc_tok_idx && answer_noun(reply)
@@ -727,5 +736,8 @@ mod tests {
             let actual = translate(jp);
             assert!(actual.contains(quotes), "{jp} -> {actual}");
         }
+        let mixed = translate("店長は「支払える」と答え、その単語「支払える」をノートに書いた。");
+        let (_, following) = mixed.split_once("「能付款」").expect(&mixed);
+        assert!(following.contains("「支払える」"), "{mixed}");
     }
 }

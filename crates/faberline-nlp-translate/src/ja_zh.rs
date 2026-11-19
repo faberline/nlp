@@ -2291,6 +2291,7 @@ fn te_help_letter_quantity(
     arguments: &[Atom],
     letter_idx: usize,
     action_idx: usize,
+    allow_before_object: bool,
 ) -> Option<TeHelpLetterQuantity<'_>> {
     let object = arguments
         .iter()
@@ -2299,28 +2300,37 @@ fn te_help_letter_quantity(
     if case.surface != "を" || !linked_letter_case(&arguments[object], case) {
         return None;
     }
-    let mut counters = arguments
-        .iter()
-        .enumerate()
-        .skip(object + 2)
-        .filter_map(|(index, atom)| {
-            let prefix = atom.surface.strip_suffix('通')?;
-            (!atom.is_locked
-                && atom.upos == Some(Upos::Noun)
-                && atom.deprel == "obl"
-                && atom.head == Some(action_idx)
-                && (prefix.is_empty() || is_japanese_numeral(prefix)))
-            .then_some((index, atom, prefix))
-        });
+    let mut counters = arguments.iter().enumerate().filter_map(|(index, atom)| {
+        let prefix = atom.surface.strip_suffix('通')?;
+        let after_object =
+            index >= object + 2 && atom.deprel == "obl" && atom.head == Some(action_idx);
+        let before_object = allow_before_object
+            && index + 2 == object
+            && atom.deprel == "nmod"
+            && atom.head == Some(letter_idx)
+            && arguments[index + 1].surface == "ずつ"
+            && linked_letter_quantity_qualifier(atom, &arguments[index + 1])
+            && arguments[index + 1].span.end_char == arguments[object].span.start_char;
+        (!atom.is_locked
+            && atom.upos == Some(Upos::Noun)
+            && (after_object || before_object)
+            && (prefix.is_empty() || is_japanese_numeral(prefix)))
+        .then_some((index, atom, prefix))
+    });
     let (counter_index, counter, fused_number) = counters.next()?;
-    let counter_id = counter.doc_tok_idx?;
+    counter.doc_tok_idx?;
     if counters.next().is_some() {
         return None;
     }
 
     let mut start = counter_index;
     let numeral = if fused_number.is_empty() {
-        while start > object + 1 {
+        let first = if counter_index < object {
+            0
+        } else {
+            object + 2
+        };
+        while start > first {
             let part = &arguments[start - 1];
             if part.span.end_char != arguments[start].span.start_char
                 || !is_japanese_numeral(&part.surface)
@@ -2364,14 +2374,9 @@ fn te_help_letter_quantity(
     });
     start -= usize::from(additional);
     let after_counter = counter_index + 1;
-    let qualifier = arguments.get(after_counter).filter(|word| {
-        !word.is_locked
-            && matches!(word.surface.as_str(), "ずつ" | "だけ")
-            && word.upos == Some(Upos::Part)
-            && word.deprel == "discourse"
-            && word.head == Some(counter_id)
-            && counter.span.end_char == word.span.start_char
-    });
+    let qualifier = arguments
+        .get(after_counter)
+        .filter(|word| linked_letter_quantity_qualifier(counter, word));
     let span = start..after_counter + usize::from(qualifier.is_some());
     Some(TeHelpLetterQuantity {
         object,
@@ -2380,6 +2385,16 @@ fn te_help_letter_quantity(
         additional,
         qualifier: qualifier.map(|word| word.surface.as_str()),
     })
+}
+
+fn linked_letter_quantity_qualifier(counter: &Atom, word: &Atom) -> bool {
+    !word.is_locked
+        && matches!(word.surface.as_str(), "ずつ" | "だけ")
+        && word.upos == Some(Upos::Part)
+        && word.deprel == "discourse"
+        && counter.doc_tok_idx.is_some()
+        && word.head == counter.doc_tok_idx
+        && counter.span.end_char == word.span.start_char
 }
 
 fn te_help_letter_count(
@@ -2506,6 +2521,8 @@ fn te_help_letter_count(
             (false, Some("ずつ")) => Some("各"),
             (true, Some("だけ")) => Some("只再"),
             (false, Some("だけ")) => Some("只"),
+            (true, None) if per_recipient => Some("再各"),
+            (false, None) if per_recipient => Some("各"),
             (true, _) => Some("再"),
             (false, _) => None,
         }
@@ -2704,60 +2721,66 @@ fn te_help_letter_each_addressed(
     letter_idx: usize,
     action_idx: usize,
 ) -> Option<TeHelpLetterAddressee<'_>> {
-    let (start, end, members) = if arguments[index].surface == "それぞれに" {
-        let [.., name, no, each] = &arguments[..=index] else {
-            return None;
-        };
-        if each.upos != Some(Upos::Adv)
-            || each.deprel != "advmod"
-            || each.head != Some(action_idx)
-            || no.surface != "の"
-            || !linked_letter_case(name, no)
-            || name.deprel != "nmod"
-            || name.head != Some(letter_idx)
-        {
-            return None;
-        }
-        let (start, members, illustrative) = te_help_letter_address_members(
-            arguments,
-            index - 2,
-            name.doc_tok_idx?,
-            action_idx,
-            true,
-        )?;
-        if illustrative || members.len() < 2 {
-            return None;
-        }
-        (start, index + 1, members)
-    } else {
-        let name = match &arguments[index..] {
-            [name, ..] if name.surface == "受取人" => index,
-            [receive, take, name, ..]
-                if receive.surface == "受"
-                    && take.surface == "取"
-                    && name.surface == "人"
-                    && name.doc_tok_idx.is_some()
-                    && [receive, take].iter().all(|atom| {
-                        atom.upos == Some(Upos::Noun)
-                            && atom.deprel == "compound"
-                            && atom.head == name.doc_tok_idx
-                    }) =>
+    let (start, end, members) =
+        if matches!(arguments[index].surface.as_str(), "それぞれに" | "それぞれ") {
+            let [.., name, case, each] = &arguments[..=index] else {
+                return None;
+            };
+            let linked_name = match (case.surface.as_str(), each.surface.as_str()) {
+                ("の", "それぞれに") => {
+                    name.deprel == "nmod" && name.head == Some(letter_idx)
+                }
+                ("に", "それぞれ") => name.deprel == "obl" && name.head == Some(action_idx),
+                _ => false,
+            };
+            if each.upos != Some(Upos::Adv)
+                || each.deprel != "advmod"
+                || each.head != Some(action_idx)
+                || !linked_name
+                || !linked_letter_case(name, case)
             {
-                index + 2
+                return None;
             }
-            _ => return None,
+            let (start, members, illustrative) = te_help_letter_address_members(
+                arguments,
+                index - 2,
+                name.doc_tok_idx?,
+                action_idx,
+                true,
+            )?;
+            if illustrative || members.len() < 2 {
+                return None;
+            }
+            (start, index + 1, members)
+        } else {
+            let name = match &arguments[index..] {
+                [name, ..] if name.surface == "受取人" => index,
+                [receive, take, name, ..]
+                    if receive.surface == "受"
+                        && take.surface == "取"
+                        && name.surface == "人"
+                        && name.doc_tok_idx.is_some()
+                        && [receive, take].iter().all(|atom| {
+                            atom.upos == Some(Upos::Noun)
+                                && atom.deprel == "compound"
+                                && atom.head == name.doc_tok_idx
+                        }) =>
+                {
+                    index + 2
+                }
+                _ => return None,
+            };
+            let rate = name + 1;
+            let length = te_help_letter_per_person(&arguments[rate..], action_idx)?;
+            let owner = &arguments[name];
+            if owner.upos != Some(Upos::Noun)
+                || owner.deprel != "nmod"
+                || owner.head != arguments[rate + 1].doc_tok_idx
+            {
+                return None;
+            }
+            (index, rate + length, Vec::new())
         };
-        let rate = name + 1;
-        let length = te_help_letter_per_person(&arguments[rate..], action_idx)?;
-        let owner = &arguments[name];
-        if owner.upos != Some(Upos::Noun)
-            || owner.deprel != "nmod"
-            || owner.head != arguments[rate + 1].doc_tok_idx
-        {
-            return None;
-        }
-        (index, rate + length, Vec::new())
-    };
     let phrase = &arguments[start..end];
     if phrase.iter().any(|atom| atom.is_locked)
         || !phrase
@@ -3047,27 +3070,6 @@ fn te_help_request<'a>(
     } else {
         None
     };
-    let letter_quantity =
-        letter_idx.and_then(|index| te_help_letter_quantity(arguments, index, action_idx));
-    let distributes_letters = letter_quantity
-        .as_ref()
-        .is_some_and(|quantity| quantity.qualifier == Some("ずつ"));
-    let each_addressee = if let Some(letter_idx) = letter_idx.filter(|_| distributes_letters) {
-        let mut addresses = arguments
-            .iter()
-            .enumerate()
-            .filter(|(_, atom)| matches!(atom.surface.as_str(), "それぞれに" | "受" | "受取人"))
-            .filter_map(|(index, _)| {
-                te_help_letter_each_addressed(arguments, index, letter_idx, action_idx)
-            });
-        let address = addresses.next();
-        if addresses.next().is_some() {
-            return None;
-        }
-        address
-    } else {
-        None
-    };
     let letter_marker = if let Some(letter_idx) = letter_idx {
         let mut markers = arguments.iter().enumerate().filter(|(_, atom)| {
             matches!(atom.surface.as_str(), "宛" | "宛て")
@@ -3082,6 +3084,42 @@ fn te_help_request<'a>(
     } else {
         None
     };
+    let each_addressee = if let Some(letter_idx) = letter_idx {
+        let mut addresses = arguments
+            .iter()
+            .enumerate()
+            .filter(|(_, atom)| match atom.surface.as_str() {
+                "それぞれ" => letter_marker.is_none(),
+                "それぞれに" | "受" | "受取人" => true,
+                _ => false,
+            })
+            .filter_map(|(index, _)| {
+                te_help_letter_each_addressed(arguments, index, letter_idx, action_idx)
+            });
+        let address = addresses.next();
+        if addresses.next().is_some() {
+            return None;
+        }
+        address
+    } else {
+        None
+    };
+    let letter_quantity = letter_idx.and_then(|index| {
+        te_help_letter_quantity(
+            arguments,
+            index,
+            action_idx,
+            each_addressee.is_some() && letter_marker.is_none(),
+        )
+    });
+    let distributes_letters = letter_quantity
+        .as_ref()
+        .is_some_and(|quantity| quantity.qualifier == Some("ずつ"));
+    let each_addressee = each_addressee.filter(|_| {
+        letter_quantity
+            .as_ref()
+            .is_some_and(|quantity| matches!(quantity.qualifier, None | Some("ずつ")))
+    });
     let letter_writers = if letter_marker.is_some() || each_addressee.is_some() {
         let mut groups = (0..arguments.len())
             .filter_map(|start| te_help_letter_writers(arguments, start, action_idx, helper_idx));
@@ -3151,18 +3189,17 @@ fn te_help_request<'a>(
             bound.start = prior;
         }
     }
-    let per_recipient = distributes_letters
-        && letter_addressee.as_ref().is_some_and(|address| {
-            address.explicit_each
-                || (inferred_each_addressee
-                    && manner.is_none()
-                    && !address.illustrative
-                    && (address.members.len() > 1
-                        || address
-                            .count
-                            .and_then(super::opaque::parse_cjk_or_ascii_num)
-                            .is_some_and(|number| number > 1)))
-        });
+    let per_recipient = letter_addressee.as_ref().is_some_and(|address| {
+        address.explicit_each
+            || (inferred_each_addressee
+                && manner.is_none()
+                && !address.illustrative
+                && (address.members.len() > 1
+                    || address
+                        .count
+                        .and_then(super::opaque::parse_cjk_or_ascii_num)
+                        .is_some_and(|number| number > 1)))
+    });
     let letter_count = letter_quantity.and_then(|quantity| {
         // With one explicit addressee, a counted group can write a letter each.
         let one_addressee = letter_addressee.as_ref().is_some_and(|address| {
@@ -20847,7 +20884,15 @@ mod existence_rule_tests {
                 "可以請您給祖父和祖母各寫一封信嗎？",
             ),
             (
+                "祖父と祖母にそれぞれ一通ずつ手紙を書いていただけますか。",
+                "可以請您給祖父和祖母各寫一封信嗎？",
+            ),
+            (
                 "受取人一人につき手紙を一通ずつ書いていただけますか。",
+                "可以請您給每位收件人各寫一封信嗎？",
+            ),
+            (
+                "受取人一人につき手紙を一通書いていただけますか。",
                 "可以請您給每位收件人各寫一封信嗎？",
             ),
             (

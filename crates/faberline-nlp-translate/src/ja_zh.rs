@@ -116,6 +116,7 @@ enum BunsetsuRole {
         wh: bool,
         only: bool,
     },
+    AdditionalResidencePlace,
     ResidenceDuration,
     ResidenceTogether,
     ResidenceCount,
@@ -6906,7 +6907,8 @@ fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
         if noun.is_locked && !protected_place
             || ni.is_locked
             || !(noun.deprel == "obl"
-                || focus.is_some_and(|f| f.surface == "は") && noun.deprel == "nsubj")
+                || focus.is_some_and(|f| matches!(f.surface.as_str(), "は" | "も"))
+                    && noun.deprel == "nsubj")
             || noun.head != Some(id)
             || ni.surface != "に"
         {
@@ -6915,6 +6917,14 @@ fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
         // The dictionary tags proper place names. Ordinary housing nouns do
         // not all carry that tag. Check the head, never a place in its possessor.
         let wh = noun.surface == "どこ";
+        if wh
+            && focus.is_some_and(|mo| mo.surface == "も")
+            && !tail.iter().any(|a| {
+                a.upos == Some(Upos::Aux) && matches!(a.surface.as_str(), "ん" | "ない" | "なかっ")
+            })
+        {
+            return None;
+        }
         let place = wh
             || protected_place
             || is_place_location_bunsetsu(std::slice::from_ref(noun))
@@ -6943,15 +6953,36 @@ fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
     let Some((i, place, only_place)) = places.next() else {
         return;
     };
-    if places.next().is_some() {
+    // にも repeated on independently marked places applies the same
+    // predicate to each. Two plain に arguments do not prove coordination.
+    let extra_places: Vec<_> = places.map(|(index, _, _)| index).collect();
+    if !extra_places.is_empty()
+        && !std::iter::once(&i).chain(&extra_places).all(|&index| {
+            residence_case(&groups[index]).is_some_and(|(noun, _, focus)| {
+                noun.surface != "どこ" && focus.is_some_and(|f| f.surface == "も")
+            })
+        })
+    {
         return;
     }
-    let wh = source.windows(2).any(|w| {
+    for index in extra_places {
+        groups[index].role = BunsetsuRole::AdditionalResidencePlace;
+    }
+    let wh = source.windows(2).enumerate().any(|(index, w)| {
         let (word, case) = (&w[0], &w[1]);
         !word.is_locked
             && word.head == Some(id)
             && matches!(word.deprel.as_str(), "nsubj" | "obl")
             && matches!(word.surface.as_str(), "誰" | "だれ" | "どこ")
+            && !(word.surface == "どこ"
+                && case.surface == "に"
+                && source.get(index + 2).is_some_and(|mo| {
+                    !mo.is_locked
+                        && mo.surface == "も"
+                        && mo.deprel == "case"
+                        && mo.head == word.doc_tok_idx
+                        && mo.span.start_char == case.span.end_char
+                }))
             && !case.is_locked
             && case.upos == Some(Upos::Adp)
             && case.deprel == "case"
@@ -7147,6 +7178,8 @@ fn translate_clause_bunsetsus(
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
     let mut residence = None;
+    let mut residence_additive = false;
+    let mut additional_residences = Vec::new();
     let mut residence_duration = String::new();
     let mut residence_manners = Vec::new();
     let mut adverbs: Vec<String> = Vec::new();
@@ -7415,10 +7448,22 @@ fn translate_clause_bunsetsus(
                 wh,
                 only,
             } => {
-                if b.atoms.last().is_some_and(|a| a.surface == "も") {
-                    adverbs.push("也".to_owned());
-                }
-                residence = Some((render_bunsetsu_np(&b, target), form, past, wh, only));
+                residence_additive = b.atoms.last().is_some_and(|a| a.surface == "も");
+                // Negative どこにも means nowhere. It does not ask which place.
+                let anywhere = residence_additive
+                    && matches!(b.atoms.as_slice(),
+                    [where_, _, _] if !where_.is_locked && where_.surface == "どこ");
+                residence = Some((
+                    render_bunsetsu_np(&b, target),
+                    form,
+                    past,
+                    wh,
+                    only,
+                    anywhere,
+                ));
+            }
+            BunsetsuRole::AdditionalResidencePlace => {
+                additional_residences.push(render_bunsetsu_np(&b, target))
             }
             BunsetsuRole::ResidenceTogether => residence_manners.push("一起".to_owned()),
             BunsetsuRole::ResidenceCount => {
@@ -7751,9 +7796,9 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
-    if let Some((place, form, past, wh, only)) = residence {
+    if let Some((place, form, past, wh, only, anywhere)) = residence {
         joint_companions.append(&mut residence_manners);
-        verb_core = format!("住在{place}");
+        let mut elapsed_aspect = None;
         pre_verb_mods.retain(|m| m != "正在");
         if form == ResidenceForm::Plan {
             pre_verb_mods.insert(0, "打算".to_owned());
@@ -7764,7 +7809,11 @@ fn translate_clause_bunsetsus(
         if residence_duration.is_empty() {
             if past && (form == ResidenceForm::State || !negative) {
                 post_verb_mods.retain(|m| m != "了");
-                pre_verb_mods.insert(0, if negative { "當時" } else { "曾" }.to_owned());
+                // The past negative already has 沒有. An overt time such as
+                // 当時 belongs in its original modifier or noun phrase.
+                if !negative {
+                    pre_verb_mods.insert(0, "曾".to_owned());
+                }
             }
         } else {
             post_verb_mods.retain(|m| m != "了");
@@ -7779,7 +7828,7 @@ fn translate_clause_bunsetsus(
                         }
                     }
                 }
-                temporal_others.push(residence_duration);
+                temporal_others.push(residence_duration.clone());
             } else {
                 let aspect = if past || form == ResidenceForm::State {
                     "了"
@@ -7789,11 +7838,37 @@ fn translate_clause_bunsetsus(
                 if form == ResidenceForm::State && !past {
                     pre_verb_mods.push("已經".to_owned());
                 }
-                verb_core = format!("在{place}住{aspect}{residence_duration}");
+                elapsed_aspect = Some(aspect);
             }
         }
         if only {
             pre_verb_mods.push("只".to_owned());
+        }
+        let render_place = |location: &str| match elapsed_aspect {
+            Some(aspect) => format!("在{location}住{aspect}{residence_duration}"),
+            None => format!("住在{location}"),
+        };
+        verb_core = render_place(&place);
+        for other in additional_residences {
+            verb_core.push_str("，也");
+            for modifier in &pre_verb_mods {
+                verb_core.push_str(modifier);
+            }
+            verb_core.push_str(&render_place(&other));
+        }
+        let nowhere = anywhere && negative;
+        if nowhere {
+            residence_additive = false;
+            verb_core = "住".to_owned();
+            if let Some(index) = pre_verb_mods
+                .iter()
+                .position(|m| matches!(m.as_str(), "不" | "沒有"))
+            {
+                if form == ResidenceForm::State {
+                    pre_verb_mods[index] = "沒有".to_owned();
+                }
+                pre_verb_mods.insert(index, "哪裡都".to_owned());
+            }
         }
         if wh && sfp_suffix == Some("嗎") {
             sfp_suffix = Some("？");
@@ -7968,7 +8043,10 @@ fn translate_clause_bunsetsus(
     }
 
     // Emit remaining subjects and inclusive `も` (`也`).
-    let mut added_mo_adv = false;
+    let mut added_mo_adv = residence_additive;
+    if residence_additive {
+        adverbs.push("也".to_owned());
+    }
     for s in subj_entries.drain(..) {
         if s.has_mo && !ctx.in_concessive_follow && !added_mo_adv {
             adverbs.insert(0, "也".to_owned());
@@ -14596,7 +14674,7 @@ mod motion_endpoint_tests {
             ("私は東京に住んでいます。", "我住在東京。"),
             ("私は大阪に住んでいました。", "我曾住在大阪。"),
             ("私は京都に住んでいません。", "我不住在京都。"),
-            ("私は東京に住んでいませんでした。", "我當時沒有住在東京。"),
+            ("私は東京に住んでいませんでした。", "我沒有住在東京。"),
             ("先生はアパートに住んでいます。", "老師住在公寓。"),
             ("友達は町に住んでいる。", "朋友住在城鎮。"),
             ("京都には三年住んでいました。", "在京都住了三年。"),
@@ -14612,6 +14690,43 @@ mod motion_endpoint_tests {
         assert!(
             handoff.contains("大阪的老師") && handoff.contains("書") && !handoff.contains("住在")
         );
+    }
+
+    #[test]
+    fn residence_keeps_the_source_scope_of_past_time_and_additive_places() {
+        for (source, expected) in [
+            (
+                "父は当時東京に住んでいませんでした。",
+                "父親當時沒有住在東京。",
+            ),
+            (
+                "当時、父は町に住んでいませんでした。",
+                "當時，父親沒有住在城鎮。",
+            ),
+            (
+                "父は当時の家に住んでいませんでした。",
+                "父親沒有住在當時的家。",
+            ),
+            (
+                "母は去年大阪に住んでいませんでした。",
+                "母親去年沒有住在大阪。",
+            ),
+            ("兄は京都にも住んでいました。", "哥哥也曾住在京都。"),
+            (
+                "妹は当時町にも住んでいませんでした。",
+                "妹妹當時也沒有住在城鎮。",
+            ),
+            ("姉も東京にも住んでいます。", "姊姊也住在東京。"),
+            (
+                "私は東京にも大阪にも住んでいませんでした。",
+                "我也沒有住在東京，也沒有住在大阪。",
+            ),
+            ("私は東京と大阪に住んでいました。", "我曾住在東京和大阪。"),
+            ("どこにも住んでいませんか。", "哪裡都沒有住嗎？"),
+            ("どこにも住みません。", "哪裡都不住。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
     }
 
     #[test]

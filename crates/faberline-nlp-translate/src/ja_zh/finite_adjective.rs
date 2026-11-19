@@ -8,6 +8,7 @@ pub(super) struct Context {
     before_comma: bool,
     time_head: Option<usize>,
     preceding_until: Option<usize>,
+    reported_predicate: Option<usize>,
     coordinate: Option<Coordinate>,
 }
 
@@ -67,6 +68,41 @@ fn coordinated(left: &Segment, right: &Segment) -> bool {
 }
 
 impl Context {
+    pub(super) fn in_quote(segments: &[Segment], idx: usize, sentence: &[Atom]) -> Self {
+        let mut ctx = Self::at(segments, idx);
+        let Some(Segment::Clause { atoms, .. }) = segments.get(idx) else {
+            return ctx;
+        };
+        ctx.reported_predicate = atoms
+            .iter()
+            .rfind(|a| {
+                !a.is_locked
+                    && a.upos == Some(Upos::Adj)
+                    && a.deprel == "advcl"
+                    && a.head.is_some()
+                    && !atoms.iter().any(|inside| inside.doc_tok_idx == a.head)
+                    && sentence.iter().any(|report| {
+                        !report.is_locked
+                            && report.upos == Some(Upos::Verb)
+                            && report.doc_tok_idx == a.head
+                            && matches!(
+                                report.lemma.as_deref().unwrap_or(&report.surface),
+                                "言う"
+                                    | "話す"
+                                    | "述べる"
+                                    | "答える"
+                                    | "伝える"
+                                    | "書く"
+                                    | "聞く"
+                                    | "尋ねる"
+                                    | "思う"
+                            )
+                    })
+            })
+            .and_then(|a| a.doc_tok_idx);
+        ctx
+    }
+
     pub(super) fn at(segments: &[Segment], idx: usize) -> Self {
         let question_mark = matches!(segments.get(idx), Some(Segment::Clause { trailing_punct: Some(p), .. }) if matches!(p.as_str(), "？" | "?"));
         let previous = match idx.checked_sub(1).and_then(|i| segments.get(i)) {
@@ -107,6 +143,7 @@ impl Context {
             question_mark,
             time_head,
             preceding_until,
+            reported_predicate: None,
             before_comma,
             coordinate: if segments
                 .get(idx + 1)
@@ -181,6 +218,10 @@ fn uncertain_sense(lemma: &str, subject: &str) -> bool {
     }
 }
 
+fn weather(lemma: &str) -> bool {
+    matches!(lemma, "暑い" | "寒い" | "涼しい" | "暖かい")
+}
+
 // Before a following clause, が can be tagged as a subject particle despite
 // following a complete i-adjective predicate. Keep the contrast on that clause.
 pub(super) fn concessive(source: &[Atom], ctx: &ClauseDiscourseCtx) -> Option<Vec<Atom>> {
@@ -198,8 +239,19 @@ pub(super) fn concessive(source: &[Atom], ctx: &ClauseDiscourseCtx) -> Option<Ve
     let lemma = adj.lemma.as_deref().unwrap_or(&adj.surface);
     let subject = body[..i]
         .iter()
-        .rfind(|a| a.head == adj.doc_tok_idx && a.deprel == "nsubj")?;
-    if hue(lemma).is_none() && !gradable(lemma) || uncertain_sense(lemma, &subject.surface) {
+        .rfind(|a| a.head == adj.doc_tok_idx && a.deprel == "nsubj");
+    let standalone_weather = weather(lemma)
+        && body[..i].windows(2).any(|p| {
+            p[1].surface == "まで"
+                && !p[1].is_locked
+                && p[1].head == p[0].doc_tok_idx
+                && p[0].head == adj.doc_tok_idx
+                && render_temporal_made_atom(&p[0]).is_some()
+        });
+    if subject.is_none() && !standalone_weather
+        || hue(lemma).is_none() && !gradable(lemma)
+        || uncertain_sense(lemma, subject.map_or("", |s| &s.surface))
+    {
         return None;
     }
     inflection(adj, &body[i + 1..])?;
@@ -645,11 +697,15 @@ pub(super) struct TimeInterval {
 pub(super) fn take_time_interval(
     groups: &mut Vec<Bunsetsu>,
     source: &[Atom],
+    ctx: &Context,
 ) -> Option<TimeInterval> {
     let source = core_non_punct(source);
-    let i = source
-        .iter()
-        .position(|a| !a.is_locked && a.upos == Some(Upos::Adj) && a.deprel == "root")?;
+    let i = source.iter().rposition(|a| {
+        !a.is_locked
+            && a.upos == Some(Upos::Adj)
+            && (a.deprel == "root"
+                || ctx.reported_predicate.is_some() && a.doc_tok_idx == ctx.reported_predicate)
+    })?;
     let (predicate, tail) = source[i..].split_first()?;
     let ending = match tail {
         [body @ .., a] if a.upos == Some(Upos::Part) && a.head == predicate.doc_tok_idx => body,
@@ -865,7 +921,15 @@ pub(super) fn render(
     if !comparative && before.iter().any(|a| !a.is_locked && a.surface == "より") {
         return None;
     }
+    let weather_time = weather(lemma)
+        && subject.is_some_and(|s| {
+            is_daypart_surface(&s.surface)
+                && !before
+                    .iter()
+                    .any(|owner| owner.head == s.doc_tok_idx && owner.deprel == "nmod")
+        });
     let has_time = bounded
+        || weather_time
         || ctx.adjective.time_head == Some(id)
         || before.iter().any(|a| {
             past_anchor(a, before)
@@ -1040,6 +1104,18 @@ mod tests {
             ),
             ("部屋は夜まで寒いですか。", "房間直到晚上都冷嗎？"),
             ("車は何時まで白かったですか。", "車到幾點為止都是白色的？"),
+            (
+                "先生は「この部屋は夜まで寒かった」と言いました。",
+                "老師說「這房間直到晚上都很冷」。",
+            ),
+            (
+                "店員は「この箱は昼まで重かった」と言いました。",
+                "店員說「這個箱子直到中午都很重」。",
+            ),
+            (
+                "夕方まで暑かったが、夜は涼しかった。",
+                "直到傍晚都很熱，但是夜晚很涼爽。",
+            ),
             (
                 "今週の金曜日まで、その車は赤かったです。",
                 "到這週五，那輛車都是紅色的。",

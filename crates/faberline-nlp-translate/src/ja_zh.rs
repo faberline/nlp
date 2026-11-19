@@ -358,7 +358,11 @@ pub(crate) fn translate_ja_sentence(
                                 false,
                                 &ClauseDiscourseCtx {
                                     inside_quote: true,
-                                    adjective: finite_adjective::Context::at(&inner_segs, idx),
+                                    adjective: finite_adjective::Context::in_quote(
+                                        &inner_segs,
+                                        idx,
+                                        &atoms,
+                                    ),
                                     ..Default::default()
                                 },
                                 target,
@@ -421,7 +425,11 @@ pub(crate) fn translate_ja_sentence(
                             false,
                             &ClauseDiscourseCtx {
                                 inside_quote: true,
-                                adjective: finite_adjective::Context::at(&inner_segs, idx),
+                                adjective: finite_adjective::Context::in_quote(
+                                    &inner_segs,
+                                    idx,
+                                    &atoms,
+                                ),
                                 ..Default::default()
                             },
                             target,
@@ -8210,7 +8218,7 @@ fn translate_clause_bunsetsus(
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
     let state_interval = if target == TargetVariant::ZhHant {
-        finite_adjective::take_time_interval(&mut bunsetsus, source)
+        finite_adjective::take_time_interval(&mut bunsetsus, source, &ctx.adjective)
     } else {
         None
     };

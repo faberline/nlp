@@ -314,6 +314,19 @@ pub(crate) fn translate_ja_sentence(
                 let close_zh = localize_close_quote(*close_q, target);
                 out.push(open_zh);
                 let inner_segs = split_atoms_into_segments(inner_atoms, doc, *span);
+                let after_quote = &segments[seg_idx + 1..];
+                let adjacent = if target == TargetVariant::ZhHant && after_quote.is_empty() {
+                    payment_potential::adjacent_report(
+                        inner_atoms,
+                        *span,
+                        doc,
+                        sentence_idx,
+                        chars,
+                        lock_table,
+                    )
+                } else {
+                    None
+                };
                 for iseg in &inner_segs {
                     if let Segment::Clause {
                         atoms: catoms,
@@ -321,29 +334,33 @@ pub(crate) fn translate_ja_sentence(
                         ..
                     } = iseg
                     {
-                        if target == TargetVariant::ZhHant
-                            && payment_potential::word_mention(
-                                inner_atoms,
-                                seg_idx.checked_sub(1).and_then(|i| segments.get(i)),
-                                segments.get(seg_idx + 1),
+                        let quoted = (target == TargetVariant::ZhHant)
+                            .then(|| {
+                                payment_potential::quoted_clause(
+                                    inner_atoms,
+                                    catoms,
+                                    seg_idx.checked_sub(1).and_then(|i| segments.get(i)),
+                                    adjacent.as_deref().unwrap_or(after_quote),
+                                    chars,
+                                    target,
+                                )
+                            })
+                            .flatten();
+                        let rendered = quoted.unwrap_or_else(|| {
+                            translate_clause_atoms(
+                                catoms,
+                                doc,
+                                sentence_idx,
+                                None,
+                                false,
+                                &ClauseDiscourseCtx {
+                                    inside_quote: true,
+                                    ..Default::default()
+                                },
+                                target,
                             )
-                        {
-                            out.push_str(&catoms[0].surface);
-                            continue;
-                        }
-                        let rendered = translate_clause_atoms(
-                            catoms,
-                            doc,
-                            sentence_idx,
-                            None,
-                            false,
-                            &ClauseDiscourseCtx {
-                                inside_quote: true,
-                                ..Default::default()
-                            },
-                            target,
-                        )
-                        .0;
+                            .0
+                        });
                         out.push_str(&rendered);
                         if let Some(p) = trailing_punct {
                             out.push_str(&localize_punct(p));
@@ -3817,7 +3834,7 @@ fn translate_clause_atoms(
     }
 
     if target == TargetVariant::ZhHant
-        && let Some(text) = payment_potential::render(core_non_punct(atoms), target)
+        && let Some(text) = payment_potential::render(core_non_punct(atoms), target, false)
     {
         return (text, false);
     }

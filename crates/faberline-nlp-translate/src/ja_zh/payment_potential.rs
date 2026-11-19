@@ -11,171 +11,84 @@ fn potential(atom: &Atom) -> bool {
         )
 }
 
-// Distinguish a word being discussed from the contents of a reported utterance.
-pub(super) fn word_mention(
+// A quoted conjugation can be either an utterance or the Japanese spelling.
+// Resolve the role from the surrounding report. A bare form has no monetary
+// assertion of its own when its use is unclear.
+pub(super) fn quoted_clause(
     inner: &[Atom],
+    clause: &[Atom],
     previous: Option<&Segment>,
-    next: Option<&Segment>,
-) -> bool {
-    let [word] = inner else { return false };
-    let Some(Segment::Clause { atoms, .. }) = next else {
-        return false;
-    };
-    let [marker, rest @ ..] = atoms.as_slice() else {
-        return false;
-    };
-    if !potential(word) || marker.is_locked {
-        return false;
-    }
-    if marker.surface == "を" {
-        // A word may be named immediately before the opening quotation mark.
-        let named_word = matches!(previous, Some(Segment::Clause { atoms, trailing_punct: None, .. })
-            if atoms.last().is_some_and(|label| !label.is_locked
-                && label.head == word.doc_tok_idx
-                && label.span.end_char + 1 == word.span.start_char
-                && matches!(label.surface.as_str(), "単語" | "語" | "言葉" | "用語" | "動詞" | "表現")));
-        let writing = rest.iter().find(|a| a.upos == Some(Upos::Verb));
-        return named_word
-            || writing.is_some_and(|verb| {
-                !verb.is_locked
-                    && word.head == verb.doc_tok_idx
-                    && matches!(
-                        verb.lemma.as_deref().unwrap_or(&verb.surface),
-                        "書く" | "書き写す" | "書き取る" | "転記する" | "写す"
-                    )
-            })
-            || dictionary_lookup(word, rest, previous);
-    }
-    if marker.surface == "に" {
-        return rest.windows(3).enumerate().any(|(i, triple)| {
-            let [line, case, draw] = triple else {
-                return false;
-            };
-            !line.is_locked
-                && !case.is_locked
-                && !draw.is_locked
-                && matches!(line.surface.as_str(), "線" | "下線" | "傍線")
-                && line.deprel == "obj"
-                && case.surface == "を"
-                && case.head == line.doc_tok_idx
-                && line.head == draw.doc_tok_idx
-                && marker.head == draw.doc_tok_idx
-                && rest[..i].iter().all(|a| {
-                    !a.is_locked && !matches!(a.upos, Some(Upos::Verb | Upos::Aux | Upos::Sconj))
-                })
-                && draw.lemma.as_deref() == Some("引く")
+    after: &[Segment],
+    chars: &[char],
+    target: TargetVariant,
+) -> Option<String> {
+    let word = clause.iter().find(|atom| potential(atom))?;
+    if reported_content(word, previous, after) {
+        let (body, suffix) = match clause.split_last() {
+            Some((p, body)) if !p.is_locked && p.upos == Some(Upos::Part) => {
+                match p.surface.as_str() {
+                    "よ" => (body, "喔"),
+                    "ね" | "よね" => (body, "呢"),
+                    _ => (clause, ""),
+                }
+            }
+            _ => (clause, ""),
+        };
+        return render(body, target, true).map(|mut text| {
+            text.push_str(suffix);
+            text
         });
     }
-    if marker.surface == "の" && written_form(rest) {
-        return true;
+    let (first, tail) = core_non_punct(inner).split_first()?;
+    if !potential(first)
+        || !tail
+            .iter()
+            .all(|a| !a.is_locked && a.upos == Some(Upos::Aux) && a.head == first.doc_tok_idx)
+    {
+        return None;
     }
-    let rest = match (marker.surface.as_str(), rest) {
-        ("という", [no, topic, tail @ ..])
-            if !no.is_locked && !topic.is_locked && no.surface == "の" && topic.surface == "は" =>
-        {
-            tail
-        }
-        ("と", [topic, tail @ ..]) if !topic.is_locked && topic.surface == "は" => tail,
-        ("は" | "が" | "って" | "の" | "という", rest) => rest,
-        _ => return false,
-    };
-    let rest = match rest {
-        [det, tail @ ..]
-            if !det.is_locked && matches!(det.surface.as_str(), "どんな" | "どういう") =>
-        {
-            tail
-        }
-        _ => rest,
-    };
-    let Some(label) = rest.first().filter(|a| !a.is_locked) else {
-        return false;
-    };
-    if marker.surface == "の"
-        && label.deprel == "compound"
-        && let Some(head) = rest.get(1)
-        && !head.is_locked
-        && head.doc_tok_idx.is_some()
-        && head.doc_tok_idx == label.head
-        && label.span.end_char == head.span.start_char
+    let end = tail.last().unwrap_or(first).span.end_char;
+    Some(chars[first.span.start_char..end].iter().collect())
+}
+
+fn answer_noun(atom: &Atom) -> bool {
+    !atom.is_locked
         && matches!(
-            (label.surface.as_str(), head.surface.as_str()),
-            ("用", "例") | ("品", "詞") | ("活", "用")
+            atom.surface.as_str(),
+            "返事" | "返答" | "回答" | "返信" | "応答" | "答え"
         )
+}
+
+// A stop inside the quotation can close a document sentence just before
+// the reporting と. Read only that adjacent report, on the same source line.
+pub(super) fn adjacent_report(
+    inner: &[Atom],
+    span: Span,
+    doc: &Document,
+    sentence_idx: usize,
+    chars: &[char],
+    locks: &SpanLockTable,
+) -> Option<Vec<Segment>> {
+    let next = doc.segmentation.sentences.get(sentence_idx + 1)?.span;
+    if !inner.iter().any(potential)
+        || doc.segmentation.sentences[sentence_idx].span.end_char != span.end_char
+        || !chars[span.end_char..next.start_char]
+            .iter()
+            .all(|c| matches!(c, ' ' | '　'))
+        || !matches!(chars.get(next.start_char), Some('と' | 'っ'))
     {
-        return true;
+        return None;
     }
-    match label.surface.as_str() {
-        "動詞" | "名詞" | "形容詞" | "語" | "単語" | "言葉" | "用語" | "表現" => {
-            true
-        }
-        "発音" | "意味" | "表記" | "読み方" | "読み" | "品詞" | "活用" | "用例" => {
-            marker.surface != "という"
-        }
-        "言い"
-            if rest.get(1).is_some_and(|a| {
-                !a.is_locked && a.surface == "方" && a.doc_tok_idx == label.head
-            }) =>
-        {
-            true
-        }
-        _ => false,
-    }
-}
-
-// Orthographic labels may span several tokens. 送り仮名, for example, starts
-// with what the morphological analysis sees as the verb stem 送り.
-fn written_form(atoms: &[Atom]) -> bool {
-    let forms = [
-        "文字",
-        "漢字",
-        "仮名",
-        "送り仮名",
-        "読み仮名",
-        "振り仮名",
-        "ふりがな",
-        "ひらがな",
-        "カタカナ",
-        "綴り",
-        "つづり",
-        "書き方",
-        "字体",
-        "字形",
-    ];
-    let mut text = String::new();
-    for (i, atom) in atoms.iter().take(4).enumerate() {
-        if atom.is_locked || (i > 0 && atoms[i - 1].span.end_char != atom.span.start_char) {
-            return false;
-        }
-        text.push_str(&atom.surface);
-        if forms.contains(&text.as_str()) {
-            return true;
-        }
-        if !forms.iter().any(|form| form.starts_with(&text)) {
-            return false;
-        }
-    }
-    false
-}
-
-fn dictionary_lookup(word: &Atom, after_object: &[Atom], previous: Option<&Segment>) -> bool {
-    let Some((idx, lookup)) = after_object.iter().enumerate().find(|(i, a)| {
-        !a.is_locked
-            && (matches!(a.lemma.as_deref().unwrap_or(&a.surface), "調べる" | "引く")
-                || (a.surface == "調べ"
-                    && after_object.get(i + 1).is_some_and(|aux| {
-                        !aux.is_locked && aux.upos == Some(Upos::Aux) && aux.head == a.doc_tok_idx
-                    })))
-    }) else {
-        return false;
-    };
-    if after_object[..idx]
+    let tokens = doc
+        .tokens
         .iter()
-        .any(|a| a.is_locked || matches!(a.upos, Some(Upos::Verb | Upos::Aux | Upos::Punct)))
-    {
-        return false;
-    }
-    // A dictionary marked with で can precede the cited word or follow it.
-    // Keep the match within these adjacent parts of the same sentence.
+        .filter(|t| t.sentence == sentence_idx + 1)
+        .collect::<Vec<_>>();
+    let atoms = normalized_sentence_atoms(sentence_idx + 1, chars, doc, &tokens, locks);
+    Some(split_atoms_into_segments(&atoms, doc, next))
+}
+
+fn reported_content(word: &Atom, previous: Option<&Segment>, after: &[Segment]) -> bool {
     let before = match previous {
         Some(Segment::Clause {
             atoms,
@@ -184,33 +97,96 @@ fn dictionary_lookup(word: &Atom, after_object: &[Atom], previous: Option<&Segme
         }) => atoms.as_slice(),
         _ => &[],
     };
-    [before, &after_object[..idx]].into_iter().any(|args| {
-        args.windows(2).enumerate().any(|(i, pair)| {
-            let noun = &pair[0];
-            let case = &pair[1];
-            if noun.is_locked
-                || case.is_locked
-                || case.surface != "で"
-                || case.deprel != "case"
-                || case.head.is_none()
-                || case.head != noun.doc_tok_idx
-            {
+    let next = match after.first() {
+        Some(Segment::Clause { atoms, .. }) => atoms.as_slice(),
+        _ => &[],
+    };
+    if before.last().is_some_and(|n| {
+        !n.is_locked
+            && n.head == word.doc_tok_idx
+            && n.span.end_char + 1 == word.span.start_char
+            && matches!(
+                n.surface.as_str(),
+                "語" | "単語" | "言葉" | "用語" | "動詞" | "表現"
+            )
+    }) {
+        return false;
+    }
+    // In 返信は「…」でした the quotation is the value of the answer topic.
+    let reply_topic = matches!(before, [.., noun, topic] if answer_noun(noun)
+        && !topic.is_locked && matches!(topic.surface.as_str(), "は" | "が")
+        && topic.head == noun.doc_tok_idx);
+    if reply_topic
+        && (next.is_empty() || matches!(joined(next).as_str(), "だ" | "です" | "だった" | "でした"))
+    {
+        return true;
+    }
+    let Some((marker, rest)) = next.split_first() else {
+        return false;
+    };
+    if marker.is_locked {
+        return false;
+    }
+    if marker.surface == "と"
+        && matches!(rest, [no, reply, ..] if !no.is_locked
+        && no.surface == "の" && no.head == marker.doc_tok_idx && answer_noun(reply)
+        && marker.head == reply.doc_tok_idx)
+    {
+        return true;
+    }
+    match marker.surface.as_str() {
+        "という" => {
+            // A quotation gives the content of an answer or its asserted meaning.
+            rest.first().is_some_and(answer_noun)
+                || matches!(rest, [meaning, tail @ ..]
+                if !meaning.is_locked && meaning.surface == "意味" && !tail.is_empty()
+                    && tail.iter().all(|p| !p.is_locked && matches!(p.surface.as_str(), "だ" | "です" | "よ" | "ね")))
+        }
+        "と" | "って" | "を" => {
+            let Some(report) = rest.iter().find(|a| {
+                !a.is_locked
+                    && a.upos == Some(Upos::Verb)
+                    && a.doc_tok_idx.is_some()
+                    && a.doc_tok_idx == word.head.or(marker.head)
+            }) else {
                 return false;
+            };
+            let lemma = report.lemma.as_deref().unwrap_or(&report.surface);
+            if marker.surface == "を" {
+                return lemma == "聞く";
             }
-            let dictionary = matches!(noun.surface.as_str(), "辞書" | "辞典" | "字典")
-                || (noun.surface == "典"
-                    && i > 0
-                    && !args[i - 1].is_locked
-                    && matches!(args[i - 1].surface.as_str(), "辞" | "字")
-                    && args[i - 1].head == noun.doc_tok_idx
-                    && args[i - 1].deprel == "compound");
-            dictionary
-                && noun.head.is_some()
-                && (noun.head == lookup.doc_tok_idx
-                    || noun.head == lookup.head
-                    || noun.head == word.doc_tok_idx)
-        })
-    })
+            let attached_answer = |noun: &Atom| {
+                answer_noun(noun)
+                    && (noun.head == report.doc_tok_idx || noun.head == word.doc_tok_idx)
+            };
+            if lemma == "する" && rest.iter().any(attached_answer)
+                || (answer_noun(report)
+                    && rest.iter().any(|v| {
+                        v.doc_tok_idx == report.head
+                            && !v.is_locked
+                            && v.lemma.as_deref() == Some("する")
+                    }))
+            {
+                return true;
+            }
+            match lemma {
+                "言う" | "いう" | "答える" | "話す" | "伝える" | "告げる" | "聞く" | "返事する"
+                | "返信する" | "返答する" | "回答する" | "応答する" => true,
+                "書く" => {
+                    // Writing can either copy characters or communicate a reply.
+                    // Look for the answer attached to this writing event (or its
+                    // next て-linked verb), not an unrelated later statement.
+                    before.iter().chain(rest).any(attached_answer)
+                        || (rest.last().is_some_and(|a| {
+                            !a.is_locked && a.surface == "て" && a.head == report.doc_tok_idx
+                        }) && matches!(after.get(1), Some(Segment::Clause { atoms, .. })
+                                if atoms.iter().any(|a| answer_noun(a) && a.head == report.head)))
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 pub(super) fn ends_in_question(inner: &[Atom]) -> bool {
@@ -550,7 +526,7 @@ impl<'a> Arguments<'a> {
     }
 }
 
-pub(super) fn render(source: &[Atom], target: TargetVariant) -> Option<String> {
+pub(super) fn render(source: &[Atom], target: TargetVariant, reported: bool) -> Option<String> {
     let verb_index = source.iter().position(potential)?;
     let verb = &source[verb_index];
     let governor = verb.doc_tok_idx?;
@@ -582,7 +558,8 @@ pub(super) fn render(source: &[Atom], target: TargetVariant) -> Option<String> {
     let (sense, obj) = match args.object {
         Some(pair) => pair,
         None if explicit_payment
-            && (args.instrument.is_some()
+            && (reported
+                || args.instrument.is_some()
                 || lookup_ja_lexicon_gloss(&verb.surface, verb.lemma.as_deref(), verb.upos)
                     .is_some()) =>
         {
@@ -702,65 +679,53 @@ mod tests {
         ] {
             assert!(translate(jp).contains("「支払える」"), "{jp}");
         }
-        let gloss = super::lookup_ja_lexicon_gloss("支払える", None, Some(super::Upos::Verb))
-            .unwrap_or_else(|| "支払える".to_owned());
         for jp in [
             "「支払える」という返事を聞きました。",
             "彼は「支払える」と言いました。",
         ] {
-            assert!(translate(jp).contains(&format!("「{gloss}」")), "{jp}");
+            assert!(translate(jp).contains("「能付款」"), "{jp}");
         }
     }
 
     #[test]
     fn written_forms_and_reported_answers_use_different_quotation_rules() {
-        use super::super::{
-            Segment, SpanLockTable, normalized_sentence_atoms, split_atoms_into_segments,
-        };
-        use faberline_nlp::doc::{Options, analyze_document};
-
-        for (jp, expected) in [
-            ("日本語の単語「支払える」をノートに書きました。", true),
-            ("黒板の「支払える」に下線を引きました。", true),
-            ("「支払える」に赤い線を引きました。", true),
-            ("「支払える」の文字を一つずつ読みました。", true),
-            ("私は「支払える」を辞書で引きました。", true),
-            ("編集者は「支払える」の送り仮名を確認しました。", true),
-            ("「支払える」という返事をもらいました。", false),
-            ("彼は紙に「支払える」と書いて返事をしました。", false),
-            ("「支払える」を聞いて安心しました。", false),
+        for (jp, quotes) in [
+            (
+                "日本語の単語「支払える」をノートに書きました。",
+                "「支払える」",
+            ),
+            ("黒板の「支払える」に下線を引きました。", "「支払える」"),
+            (
+                "編集者は「支払える」の送り仮名を確認しました。",
+                "「支払える」",
+            ),
+            (
+                "「支払える」と「支払えない」は、意味が反対です。",
+                "「支払える」「支払えない」",
+            ),
+            (
+                "生徒は「支払える」と「払える」の表記を見比べました。",
+                "「支払える」「払える」",
+            ),
+            ("先生は「支払える」と発音しました。", "「支払える」"),
+            ("先生は単語「支払える」を聞いて覚えました。", "「支払える」"),
+            ("ノートの「支払える」を赤で囲みました。", "「支払える」"),
+            ("紙には「支払えない」。", "「支払えない」"),
+            (
+                "料金について、客は「支払えない」と答えました。",
+                "「不能付款」",
+            ),
+            ("受付は「支払える」とメールで返信しました。", "「能付款」"),
+            ("返事は「支払える」でした。", "「能付款」"),
+            ("「支払える」との回答です。", "「能付款」"),
+            ("彼は「支払える」と返事をしました。", "「能付款」"),
+            ("電話では「支払える」と返答してくれました。", "「能付款」"),
+            ("彼は「支払える。」と答えました。", "「能付款。」"),
+            ("彼は紙に「支払える」と書いて返事をしました。", "「能付款」"),
+            ("「支払える」を聞いて安心しました。", "「能付款」"),
         ] {
-            let doc = analyze_document(
-                jp,
-                &Options {
-                    enrich_morphology: true,
-                    cpu_syntax: true,
-                    ..Default::default()
-                },
-            );
-            let chars = jp.chars().collect::<Vec<_>>();
-            let tokens = doc.tokens.iter().collect::<Vec<_>>();
-            let locks = SpanLockTable::build(Vec::new());
-            let atoms = normalized_sentence_atoms(0, &chars, &doc, &tokens, &locks);
-            let segments =
-                split_atoms_into_segments(&atoms, &doc, doc.segmentation.sentences[0].span);
-            let (i, inner) = segments
-                .iter()
-                .enumerate()
-                .find_map(|(i, s)| match s {
-                    Segment::Quote { inner_atoms, .. } => Some((i, inner_atoms)),
-                    _ => None,
-                })
-                .unwrap();
-            assert_eq!(
-                super::word_mention(
-                    inner,
-                    i.checked_sub(1).and_then(|n| segments.get(n)),
-                    segments.get(i + 1)
-                ),
-                expected,
-                "{jp}"
-            );
+            let actual = translate(jp);
+            assert!(actual.contains(quotes), "{jp} -> {actual}");
         }
     }
 }

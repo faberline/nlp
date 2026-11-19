@@ -823,17 +823,17 @@ pub(super) fn render(
         return Some(text);
     }
     let body = join_choice_compounds(body, doc);
-    let head_index = body
-        .iter()
-        .rposition(|a| matches!(a.upos, Some(Upos::Noun | Upos::Propn)))?;
+    let choice = body.iter().any(choice_particle);
+    let head_index = body.iter().rposition(|a| {
+        matches!(a.upos, Some(Upos::Noun | Upos::Propn)) || choice && a.upos == Some(Upos::Pron)
+    })?;
     let (nominals, tail) = body.split_at(head_index + 1);
     let head = nominals.last()?;
     // 「鳥のことです」 can define what a word refers to. こと is not a possessed item.
     if matches!(head.surface.as_str(), "こと" | "事") {
         return None;
     }
-    if tail.is_empty()
-        || tail.len() > 7
+    if tail.len() > 7
         || tail.iter().any(|a| a.is_locked)
         || nominals.iter().any(|a| {
             a.is_locked
@@ -848,21 +848,35 @@ pub(super) fn render(
     }
     // A final genitive can share a token with the following copula (母／ので／は).
     // Keep that source edge separate from the word that carries tense and negation.
-    let final_genitive = nominals.iter().any(choice_particle)
-        && !tail[0].is_locked
-        && head.doc_tok_idx.is_some()
-        && tail[0].head == head.doc_tok_idx
-        && matches!(
-            (tail[0].surface.as_str(), tail[0].deprel.as_str()),
-            ("の", "case") | ("ので", "mark")
-        );
+    let final_genitive = choice
+        && tail.first().is_some_and(|no| {
+            !no.is_locked
+                && head.doc_tok_idx.is_some()
+                && no.head == head.doc_tok_idx
+                && matches!(
+                    (no.surface.as_str(), no.deprel.as_str()),
+                    ("の", "case") | ("ので", "mark")
+                )
+        });
     let suffix: String = tail.iter().map(|a| a.surface.as_str()).collect();
     let suffix = if final_genitive {
         suffix.strip_prefix('の')?
     } else {
         suffix.as_str()
     };
+    // A bare question mark can replace final か. Only inspect punctuation
+    // immediately after this clause, including when it is inside a quotation.
+    let next_char = chars
+        .get(atoms.last()?.span.end_char..)?
+        .iter()
+        .find(|c| !c.is_whitespace());
+    let question = ending == "嗎" || matches!(next_char, Some('？' | '?'));
+    let omitted_item = final_genitive
+        || nominals
+            .windows(2)
+            .any(|pair| pair[0].surface == "の" && links_choice(&pair[0], &pair[1]));
     let copula = match suffix {
+        "" if omitted_item && question => "是",
         "です" | "だ" if tail[usize::from(final_genitive)].upos == Some(Upos::Aux) => "是",
         "だった" | "でした" => "當時是",
         "じゃない"
@@ -907,7 +921,11 @@ pub(super) fn render(
         }
     };
     let subject = match (topic, split) {
-        ([], None) if !(suffix == "でした" && tail[0].upos == Some(Upos::Adp)) => String::new(),
+        ([], None)
+            if !suffix.is_empty() && !(suffix == "でした" && tail[0].upos == Some(Upos::Adp)) =>
+        {
+            String::new()
+        }
         ([], _) => return None,
         (_, Some(i)) => {
             let noun = topic.last()?;
@@ -945,10 +963,6 @@ pub(super) fn render(
     {
         return None;
     }
-    let omitted_item = final_genitive
-        || phrase
-            .windows(2)
-            .any(|pair| pair[0].surface == "の" && links_choice(&pair[0], &pair[1]));
     let mut alternatives = Vec::new();
     let mut has_owner = false;
     for part in phrase.split(choice_particle) {
@@ -1018,13 +1032,6 @@ pub(super) fn render(
     } else {
         shared_owner_choices(phrase, topic, doc, sentence, target, chars).unwrap_or(alternatives)
     };
-    // A bare question mark can replace final か. Only inspect punctuation
-    // immediately after this clause, including when it is inside a quotation.
-    let next_char = chars
-        .get(atoms.last()?.span.end_char..)?
-        .iter()
-        .find(|c| !c.is_whitespace());
-    let question = ending == "嗎" || matches!(next_char, Some('？' | '?'));
     if alternatives.len() > 1
         && !question
         && let Some(past) = copula.strip_suffix("不是")
@@ -1075,6 +1082,9 @@ mod tests {
             ("これは父のか、母の車ですか。", "這是父親的還是母親的車？"),
             ("この本は兄の本か姉のですか。", "這本書是哥哥的還是姊姊的？"),
             ("これは母のか父の車でした。", "這當時是母親的或是父親的車。"),
+            ("これは彼の本か彼女のですか。", "這是他的書還是她的？"),
+            ("それは父のか母の車？", "那是父親的還是母親的車？"),
+            ("それは母の車か父の？", "那是母親的車還是父親的？"),
             (
                 "これは父の車か母のではありません。",
                 "這既不是父親的車，也不是母親的。",

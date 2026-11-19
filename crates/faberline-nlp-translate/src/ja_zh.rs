@@ -14791,6 +14791,50 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn opaque_date_parts_and_rate_contrasts_keep_their_roles() {
+        for (source, term, expected) in [
+            (
+                "九月九日までに、友だちに写真を送ります。",
+                "友だち",
+                "最晚在九月九日給指定值寄送照片。",
+            ),
+            (
+                "九月九日までに、友だちに写真を送ります。",
+                "九日",
+                "最晚在九月指定值給朋友寄送照片。",
+            ),
+            (
+                "先生は六月四日に母へ、六月二日と三日に学生が来たとは答えませんでした。",
+                "六月二日と三日",
+                "老師在六月四日沒有向母親回答說學生在指定值來了。",
+            ),
+            (
+                "先生は、毎日ではなく三日に一人ずつ患者が来る病院を選びましたか。",
+                "三日",
+                "老師選擇了不是每天，而是每指定值來一位患者的醫院嗎？",
+            ),
+            (
+                "先生は、毎日ではなく三日に一人ずつ患者が来る病院を選びましたか。",
+                "毎日",
+                "老師選擇了不是指定值，而是每三天來一位患者的醫院嗎？",
+            ),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "指定值".to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{term}"
+            );
+        }
+    }
+
+    #[test]
     fn calendar_days_with_a_count_distinguish_a_rate_from_one_dated_event() {
         let glossary = TranslationGlossary::new();
         for (source, expected) in [

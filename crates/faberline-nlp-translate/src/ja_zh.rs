@@ -875,7 +875,12 @@ pub(crate) fn translate_ja_sentence(
                         _ => false,
                     });
                 if let Some(p) = trailing_punct {
+                    let inside_habitual_action = target == TargetVariant::ZhHant
+                        && matches!(p, "、" | "，")
+                        && matches!(segments.get(seg_idx + 1), Some(Segment::Clause { atoms: following, .. })
+                            if calendar::continues_habitual_action(trimmed_atoms, following, chars));
                     if !(suppress_cleft_comma
+                        || inside_habitual_action
                         || (rendered.ends_with('？') && matches!(p, "。" | "？" | "?"))
                         || ((p == "、" || p == ",")
                             && (rendered.ends_with("，就立刻")
@@ -16291,6 +16296,63 @@ mod clock_rule_tests {
             ),
         ] {
             assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+    }
+
+    #[test]
+    fn habitual_time_after_the_subject_stays_with_its_action() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("私は毎朝、水を飲みます。", "我每天早上喝水。"),
+            ("私は毎朝、水を飲みません。", "我每天早上不喝水。"),
+            ("母は毎晩、本を読みます。", "母親每晚讀書。"),
+            ("妹は毎日、学校に行きます。", "妹妹每天去到學校。"),
+            ("毎朝、私は水を飲みます。", "每天早上，我喝水。"),
+            ("私は水を飲み、母は本を読みます。", "我喝水，母親讀書。"),
+            (
+                "私は毎朝、水を飲んで、本を読みます。",
+                "我每天早上喝水，讀書。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn habitual_time_preserves_a_boundary_hidden_by_a_glossary_entry() {
+        for (source, term, replacement, prefix) in [
+            (
+                "母は毎朝、『ありがとう』と言います。",
+                "『ありがとう』",
+                "『謝謝您』",
+                "母親每天早上，",
+            ),
+            (
+                "私は毎晩、水、お茶、牛乳を買います。",
+                "水、お茶、",
+                "飲品甲和",
+                "我每晚，",
+            ),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: [(TargetVariant::ZhHant, replacement.to_owned())].into(),
+                ..Default::default()
+            });
+            let result = public_translate(source, &glossary);
+            assert!(!result.glossary_hits.is_empty());
+            assert!(result.target_text.contains(replacement));
+            assert!(
+                result.target_text.starts_with(prefix),
+                "{}",
+                result.target_text
+            );
         }
     }
 

@@ -201,6 +201,7 @@ pub(crate) fn translate_ja_sentence(
     direct_quote: Option<&DirectQuotePlacement>,
     written_form_continuation: Option<Span>,
     dates: &mut DateContext,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
@@ -249,6 +250,9 @@ pub(crate) fn translate_ja_sentence(
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
     let segments = split_atoms_into_segments(&atoms, doc, sent_span);
+    let prior_letter_distribution = prior_letter_distribution.filter(|_| {
+        direct_quote.is_none() && matches!(segments.as_slice(), [Segment::Clause { .. }])
+    });
 
     let mut out = String::new();
     let mut seg_target_spans: Vec<(Span, Span)> = Vec::with_capacity(segments.len());
@@ -799,6 +803,7 @@ pub(crate) fn translate_ja_sentence(
                     in_proportional_follow,
                     sentence_topic_pronoun,
                     sonomono_antecedent: sonomono_antecedent.clone(),
+                    prior_letter_distribution,
                 };
                 let receiving_request = if target == TargetVariant::ZhHant
                     && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
@@ -1023,6 +1028,7 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
             None,
             None,
             &mut dates,
+            None,
         );
         out.push_str(&tr);
         cursor = sent.span.end_char;
@@ -1931,6 +1937,7 @@ struct TeHelpRequest<'a> {
     person: Option<TeHelpPerson<'a>>,
     letter_addressee: Option<TeHelpLetterAddressee<'a>>,
     letter_writers: Option<(TeHelpPerson<'a>, &'a str)>,
+    letter_count: Option<TeHelpLetterCount>,
     manner: Option<TeHelpManner<'a>>,
     child_suffix: Option<usize>,
     humble: bool,
@@ -1955,8 +1962,47 @@ struct TeHelpLetterAddressee<'a> {
     members: Vec<&'a [Atom]>,
     count: Option<&'a str>,
     illustrative: bool,
+    explicit_each: bool,
+    recipient_noun: bool,
+    counted_person: Option<usize>,
     start: usize,
     end: usize,
+}
+
+struct TeHelpLetterQuantity<'a> {
+    object: usize,
+    span: std::ops::Range<usize>,
+    recipient_pause: Option<usize>,
+    numeral: String,
+    additional: bool,
+    total: bool,
+    qualifier: Option<&'a str>,
+}
+
+enum TeHelpLetterDistribution<'a> {
+    Unresolved,
+    WriterCount(&'a str),
+    Recipients,
+}
+
+struct TeHelpLetterCount {
+    object: usize,
+    span: std::ops::Range<usize>,
+    recipient_pause: Option<usize>,
+    numeral: String,
+    modifier: Option<&'static str>,
+    per_writer: bool,
+    per_recipient: bool,
+    periodic_joint: bool,
+    joint_signature: Option<std::ops::Range<usize>>,
+    writer_each: Option<std::ops::Range<usize>>,
+    occurrence_rate: Option<(std::ops::Range<usize>, String)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PriorLetterDistribution {
+    writers: u32,
+    letters: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2095,12 +2141,550 @@ fn linked_letter_case(noun: &Atom, particle: &Atom) -> bool {
         && noun.span.end_char == particle.span.start_char
 }
 
+fn letter_writer_each_adverb(atom: &Atom) -> bool {
+    !atom.is_locked
+        && matches!(atom.surface.as_str(), "それぞれ" | "各自" | "各人")
+        && atom.upos == Some(Upos::Adv)
+        && atom.deprel == "advmod"
+}
+
+fn linked_letter_people_number(number: &Atom, person: &Atom) -> bool {
+    !number.is_locked
+        && !person.is_locked
+        && (matches!(
+            (number.upos, number.deprel.as_str()),
+            (Some(Upos::Num), "nummod")
+        ) || (number.upos == Some(Upos::Noun)
+            && number.deprel == "compound"
+            && number.surface.chars().all(|ch| matches!(ch, '０'..='９'))))
+        && person.doc_tok_idx.is_some()
+        && number.head == person.doc_tok_idx
+        && number.span.end_char == person.span.start_char
+        && person.surface == "人"
+        && person.upos == Some(Upos::Noun)
+}
+
+fn te_help_letter_per_person(atoms: &[Atom], action: usize) -> Option<usize> {
+    let [one, person, tail @ ..] = atoms else {
+        return None;
+    };
+    if !matches!(normalize_decimal_digits(&one.surface).as_str(), "一" | "1")
+        || !linked_letter_people_number(one, person)
+        || person.deprel != "obl"
+        || person.head != Some(action)
+    {
+        return None;
+    }
+    match tail {
+        [per, ..]
+            if matches!(per.surface.as_str(), "につき" | "あたり")
+                && linked_letter_case(person, per) =>
+        {
+            Some(3)
+        }
+        // This spelling can split into an interjection and its attached particle.
+        [a, tari, ..]
+            if a.surface == "あ"
+                && tari.surface == "たり"
+                && !a.is_locked
+                && !tari.is_locked
+                && a.doc_tok_idx.is_some()
+                && tari.head == a.doc_tok_idx
+                && person.span.end_char == a.span.start_char
+                && a.span.end_char == tari.span.start_char =>
+        {
+            Some(4)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn prior_letter_distribution(
+    sentence_idx: usize,
+    chars: &[char],
+    doc: &Document,
+    locks: &SpanLockTable,
+) -> Option<PriorLetterDistribution> {
+    let tokens: Vec<_> = doc
+        .tokens
+        .iter()
+        .filter(|token| token.sentence == sentence_idx)
+        .collect();
+    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, &tokens, locks);
+    if atoms.last()?.surface != "。" || atoms.iter().any(|atom| atom.is_locked) {
+        return None;
+    }
+    let [number, people, topic, each, tail @ ..] = core_non_punct(&atoms) else {
+        return None;
+    };
+    let (count, qualifier, action, polite) = match tail {
+        [count, qualifier, action] => (count, qualifier, action, None),
+        [count, qualifier, action, polite] => (count, qualifier, action, Some(polite)),
+        _ => return None,
+    };
+    let action_id = action.doc_tok_idx?;
+    if action.lemma.as_deref() != Some("書く")
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "root"
+        || (polite.is_none() && action.surface != "書く")
+        || polite.is_some_and(|atom| {
+            atom.surface != "ます" || atom.deprel != "aux" || atom.head != Some(action_id)
+        })
+        || people.surface != "人"
+        || people.deprel != "nsubj"
+        || people.head != Some(action_id)
+        || !matches!(topic.surface.as_str(), "は" | "が")
+        || !linked_letter_case(people, topic)
+        || number.upos != Some(Upos::Num)
+        || number.deprel != "nummod"
+        || number.head != people.doc_tok_idx
+        || number.span.end_char != people.span.start_char
+        || !letter_writer_each_adverb(each)
+        || each.head != Some(action_id)
+        || count.upos != Some(Upos::Noun)
+        || count.deprel != "obl"
+        || count.head != Some(action_id)
+        || count.doc_tok_idx.is_none()
+        || qualifier.surface != "ずつ"
+        || qualifier.deprel != "discourse"
+        || qualifier.head != count.doc_tok_idx
+        || qualifier.span.start_char != count.span.end_char
+    {
+        return None;
+    }
+    let writers = super::opaque::parse_cjk_or_ascii_num(&number.surface)?;
+    let letters = super::opaque::parse_cjk_or_ascii_num(count.surface.strip_suffix('通')?)?;
+    (writers > 1 && letters > 0).then_some(PriorLetterDistribution { writers, letters })
+}
+
+fn te_help_letter_occurrence_rate(
+    arguments: &[Atom],
+    end: usize,
+    action_idx: usize,
+) -> Option<(std::ops::Range<usize>, String)> {
+    let [.., unit, per] = &arguments[..end] else {
+        return None;
+    };
+    let unit_idx = unit.doc_tok_idx?;
+    let linked_to_action = unit.head == Some(action_idx)
+        || unit.head.is_some_and(|head| {
+            arguments.iter().any(|atom| {
+                atom.doc_tok_idx == Some(head)
+                    && atom.head == Some(action_idx)
+                    && letter_writer_each_adverb(atom)
+            })
+        });
+    if unit.is_locked
+        || per.is_locked
+        || per.surface != "につき"
+        || per.upos != Some(Upos::Adp)
+        || per.deprel != "case"
+        || per.head != Some(unit_idx)
+        || !linked_to_action
+    {
+        return None;
+    }
+    let unit_surface = unit.surface.strip_suffix(['回', '度'])?;
+    let (start, numeral) = if unit_surface.is_empty() {
+        let index = end.checked_sub(3)?;
+        let number = &arguments[index];
+        if number.is_locked
+            || unit.upos != Some(Upos::Noun)
+            || unit.deprel != "obl"
+            || !matches!(
+                (number.upos, number.deprel.as_str()),
+                (Some(Upos::Num), "nummod") | (Some(Upos::Noun), "compound")
+            )
+            || number.head != Some(unit_idx)
+            || number.span.end_char != unit.span.start_char
+            || index.checked_sub(1).is_some_and(|prior| {
+                let earlier = &arguments[prior];
+                earlier.span.end_char == number.span.start_char
+                    && is_japanese_numeral(&earlier.surface)
+            })
+        {
+            return None;
+        }
+        (index, number.surface.as_str())
+    } else {
+        if unit.upos != Some(Upos::Adv) || unit.deprel != "advmod" {
+            return None;
+        }
+        (end - 2, unit_surface)
+    };
+    if !is_japanese_numeral(numeral) {
+        return None;
+    }
+    let numeral = normalize_decimal_digits(numeral);
+    let mut rendered = String::from("每");
+    if matches!(numeral.as_str(), "1" | "一") {
+        rendered.push('次');
+    } else {
+        let numeral = if numeral == "2" { "二" } else { &numeral };
+        counted_object::push_quantity(&mut rendered, numeral, "次");
+    }
+    Some((start..end, rendered))
+}
+
+fn te_help_letter_quantity<'a>(
+    arguments: &'a [Atom],
+    letter_idx: usize,
+    action_idx: usize,
+    direct_addressee: Option<&TeHelpLetterAddressee<'_>>,
+) -> Option<TeHelpLetterQuantity<'a>> {
+    let object = arguments
+        .iter()
+        .position(|atom| atom.doc_tok_idx == Some(letter_idx))?;
+    let case = arguments.get(object + 1)?;
+    if case.surface != "を" || !linked_letter_case(&arguments[object], case) {
+        return None;
+    }
+    let mut counters = arguments.iter().enumerate().filter_map(|(index, atom)| {
+        let prefix = atom.surface.strip_suffix('通')?;
+        let after_object =
+            index >= object + 2 && atom.deprel == "obl" && atom.head == Some(action_idx);
+        let before_object = direct_addressee.is_some()
+            && atom.deprel == "nmod"
+            && atom.head == Some(letter_idx)
+            && match object.checked_sub(index) {
+                Some(1) => atom.span.end_char == arguments[object].span.start_char,
+                Some(2) => {
+                    let qualifier = &arguments[index + 1];
+                    linked_letter_quantity_qualifier(atom, qualifier)
+                        && qualifier.span.end_char == arguments[object].span.start_char
+                }
+                _ => false,
+            };
+        let after_quantity = index
+            + 1
+            + usize::from(
+                arguments
+                    .get(index + 1)
+                    .is_some_and(|word| linked_letter_quantity_qualifier(atom, word)),
+            );
+        let recipient_start = direct_addressee
+            .filter(|address| {
+                index >= object + 2
+                    && address.counted_person.is_some()
+                    && (after_object
+                        || (atom.deprel == "nmod" && atom.head == address.counted_person))
+            })
+            .and_then(|address| {
+                // Only a pause between the linked count and recipient belongs here.
+                let quantity_end = arguments[after_quantity - 1].span.end_char;
+                let recipient_begin = arguments[address.start].span.start_char;
+                let adjacent = match address.start.checked_sub(after_quantity) {
+                    Some(0) => quantity_end == recipient_begin,
+                    Some(1) => {
+                        let comma = &arguments[after_quantity];
+                        !comma.is_locked
+                            && comma.deprel == "punct"
+                            && matches!(comma.surface.as_str(), "、" | "，" | ",")
+                            && quantity_end == comma.span.start_char
+                            && comma.span.end_char == recipient_begin
+                    }
+                    _ => false,
+                };
+                adjacent.then_some(address.start)
+            });
+        let recipient_pause = recipient_start
+            .filter(|&start| start > after_quantity)
+            .map(|_| after_quantity);
+        (!atom.is_locked
+            && atom.upos == Some(Upos::Noun)
+            && (after_object || before_object || recipient_start.is_some())
+            && (prefix.is_empty() || is_japanese_numeral(prefix)))
+        .then_some((
+            index,
+            atom,
+            prefix,
+            !after_object && recipient_start.is_some(),
+            recipient_pause,
+        ))
+    });
+    let (counter_index, counter, fused_number, scoped_to_recipient_group, recipient_pause) =
+        counters.next()?;
+    let counter_id = counter.doc_tok_idx?;
+    if counters.next().is_some() {
+        return None;
+    }
+
+    let mut start = counter_index;
+    let numeral = if fused_number.is_empty() {
+        let first = if counter_index < object {
+            0
+        } else {
+            object + 2
+        };
+        while start > first {
+            let part = &arguments[start - 1];
+            if part.span.end_char != arguments[start].span.start_char
+                || !is_japanese_numeral(&part.surface)
+            {
+                break;
+            }
+            let linked_number = (part.upos == Some(Upos::Num)
+                && matches!(part.deprel.as_str(), "nummod" | "nmod"))
+                || (part.upos == Some(Upos::Noun)
+                    && part.deprel == "compound"
+                    && part.surface.chars().all(|ch| matches!(ch, '０'..='９')));
+            if part.is_locked
+                || !linked_number
+                || !arguments[start..=counter_index]
+                    .iter()
+                    .any(|next| next.doc_tok_idx.is_some() && part.head == next.doc_tok_idx)
+            {
+                return None;
+            }
+            start -= 1;
+        }
+        if start == counter_index {
+            return None;
+        }
+        arguments[start..counter_index]
+            .iter()
+            .map(|part| part.surface.as_str())
+            .collect()
+    } else {
+        fused_number.to_owned()
+    };
+    let numeral = normalize_decimal_digits(&numeral);
+    // A total next to the letter count does not set the whole group's quantity
+    // when the same action also has an explicit per-writer modifier.
+    let total = start.checked_sub(1).is_some_and(|index| {
+        let marker = &arguments[index];
+        !marker.is_locked
+            && matches!(marker.surface.as_str(), "合計" | "総計")
+            && marker.upos == Some(Upos::Noun)
+            && matches!(marker.deprel.as_str(), "compound" | "nmod")
+            && marker.head == Some(counter_id)
+            && marker.span.end_char == arguments[start].span.start_char
+    }) && !arguments
+        .iter()
+        .any(|atom| letter_writer_each_adverb(atom) && atom.head == Some(action_idx));
+    start -= usize::from(total);
+    let additional = start.checked_sub(1).is_some_and(|index| {
+        let more = &arguments[index];
+        !more.is_locked
+            && more.surface == "もう"
+            && more.upos == Some(Upos::Adv)
+            && more.deprel == "advmod"
+            && more.head == Some(action_idx)
+            && more.span.end_char == arguments[start].span.start_char
+    });
+    start -= usize::from(additional);
+    let after_counter = counter_index + 1;
+    let qualifier = arguments
+        .get(after_counter)
+        .filter(|word| linked_letter_quantity_qualifier(counter, word));
+    let distributed = qualifier.is_some_and(|word| word.surface == "ずつ");
+    if (total && distributed)
+        || ((scoped_to_recipient_group || recipient_pause.is_some()) && !distributed && !total)
+    {
+        return None;
+    }
+    let span = start..after_counter + usize::from(qualifier.is_some());
+    Some(TeHelpLetterQuantity {
+        object,
+        span,
+        recipient_pause,
+        numeral,
+        additional,
+        total,
+        qualifier: qualifier.map(|word| word.surface.as_str()),
+    })
+}
+
+fn linked_letter_quantity_qualifier(counter: &Atom, word: &Atom) -> bool {
+    !word.is_locked
+        && matches!(word.surface.as_str(), "ずつ" | "だけ")
+        && word.upos == Some(Upos::Part)
+        && word.deprel == "discourse"
+        && counter.doc_tok_idx.is_some()
+        && word.head == counter.doc_tok_idx
+        && counter.span.end_char == word.span.start_char
+}
+
+fn te_help_letter_count(
+    arguments: &[Atom],
+    action_idx: usize,
+    quantity: TeHelpLetterQuantity<'_>,
+    distribution: TeHelpLetterDistribution<'_>,
+    writers: Option<&TeHelpPerson<'_>>,
+    manner: Option<&TeHelpManner<'_>>,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
+) -> Option<TeHelpLetterCount> {
+    let TeHelpLetterQuantity {
+        object,
+        span,
+        recipient_pause,
+        numeral,
+        additional,
+        total,
+        qualifier: qualifier_text,
+    } = quantity;
+    let writer_count = match distribution {
+        TeHelpLetterDistribution::WriterCount(count) => Some(count),
+        _ => None,
+    };
+    let can_distribute_to_writers = writer_count.is_some();
+    let per_recipient = matches!(distribution, TeHelpLetterDistribution::Recipients);
+    let joint_manner = manner.is_some();
+    let mut signatures = arguments.windows(2).enumerate().filter(|(_, pair)| {
+        let (name, case) = (&pair[0], &pair[1]);
+        name.surface == "連名"
+            && !name.is_locked
+            && name.upos == Some(Upos::Noun)
+            && name.deprel == "obl"
+            && name.head == Some(action_idx)
+            && case.surface == "で"
+            && linked_letter_case(name, case)
+    });
+    let signature = signatures.next().map(|(index, _)| index..index + 2);
+    let mut recurring_periods = arguments.iter().filter(|period| {
+        !period.is_locked
+            && period.surface.strip_prefix('毎').is_some_and(|unit| {
+                matches!(
+                    unit,
+                    "日" | "週" | "月" | "年" | "朝" | "晩" | "時" | "回" | "度"
+                )
+            })
+            && period.upos == Some(Upos::Adv)
+            && period.deprel == "advmod"
+            && period.head == Some(action_idx)
+    });
+    let recurring_period = recurring_periods.next();
+    let mut occurrence_rates = arguments
+        .iter()
+        .enumerate()
+        .filter(|(_, atom)| atom.surface == "につき")
+        .filter_map(|(index, _)| te_help_letter_occurrence_rate(arguments, index + 1, action_idx));
+    let occurrence_rate = occurrence_rates.next();
+    // A count must have a single cadence. Keep multiple possible cadence
+    // scopes on the ordinary path when the sentence also has a joint writer.
+    if qualifier_text == Some("ずつ")
+        && (joint_manner || signature.is_some())
+        && ((recurring_period.is_some() && occurrence_rate.is_some())
+            || recurring_periods.next().is_some()
+            || occurrence_rates.next().is_some())
+    {
+        return None;
+    }
+    let writer_each = if qualifier_text == Some("ずつ") && can_distribute_to_writers {
+        arguments.iter().enumerate().find_map(|(index, atom)| {
+            if letter_writer_each_adverb(atom)
+                && (atom.head == Some(action_idx)
+                    || recurring_period.is_some_and(|period| {
+                        period.doc_tok_idx.is_some() && atom.head == period.doc_tok_idx
+                    })
+                    || occurrence_rate.as_ref().is_some_and(|(span, _)| {
+                        atom.head.is_some()
+                            && arguments[span.clone()]
+                                .iter()
+                                .any(|period| period.doc_tok_idx == atom.head)
+                    }))
+            {
+                Some(index..index + 1)
+            } else if signature.is_none() {
+                let length = te_help_letter_per_person(&arguments[index..], action_idx)?;
+                Some(index..index + length)
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+    let each_in_prior_statement = prior_letter_distribution.is_some_and(|prior| {
+        // Carry the prior count only for the same anonymous group and quantity.
+        signature.is_none()
+            && manner.is_some_and(|group| group.companion.is_none())
+            && writer_count.and_then(super::opaque::parse_cjk_or_ascii_num) == Some(prior.writers)
+            && super::opaque::parse_cjk_or_ascii_num(&numeral) == Some(prior.letters)
+            && !atoms_has_any(arguments, &["合わせる", "合計", "共同", "一緒", "協力"])
+    });
+    let periodic_joint = qualifier_text == Some("ずつ")
+        && (recurring_period.is_some() || occurrence_rate.is_some())
+        && writer_each.is_none()
+        && !per_recipient
+        && !each_in_prior_statement
+        && (joint_manner || signature.is_some())
+        && signatures.next().is_none();
+    // A joint signature does not provide proof that each writer owes a letter.
+    if signature.is_some()
+        && qualifier_text == Some("ずつ")
+        && !periodic_joint
+        && writer_each.is_none()
+    {
+        return None;
+    }
+    let modifier = if total {
+        Some(match (additional, qualifier_text) {
+            (true, Some("だけ")) => "總共只再",
+            (false, Some("だけ")) => "總共只",
+            (true, _) => "總共再",
+            (false, _) => "總共",
+        })
+    } else if periodic_joint {
+        Some(match (signature.is_some(), additional) {
+            (true, true) => "再聯名",
+            (true, false) => "聯名",
+            (false, true) => "再一起",
+            (false, false) => "一起",
+        })
+    } else {
+        match (additional, qualifier_text) {
+            (true, Some("ずつ")) => Some("再各"),
+            (false, Some("ずつ")) => Some("各"),
+            (true, Some("だけ")) => Some("只再"),
+            (false, Some("だけ")) => Some("只"),
+            (true, None) if per_recipient => Some("再各"),
+            (false, None) if per_recipient => Some("各"),
+            (true, _) => Some("再"),
+            (false, _) => None,
+        }
+    };
+    if te_help_has_following_focus(arguments, span.end)
+        || arguments.iter().enumerate().any(|(index, atom)| {
+            // The analyzer can attach the writer group's 方 to the next adverb.
+            // The writer parser has already accounted for this group.
+            let writer_plural = additional
+                && writers.is_some_and(|group| (group.start..group.end).contains(&index))
+                && atom.surface == "方"
+                && atom.deprel == "advmod"
+                && atom.head == arguments[span.start].doc_tok_idx;
+            !span.contains(&index)
+                && !writer_plural
+                && atom.head.is_some()
+                && arguments[span.clone()]
+                    .iter()
+                    .any(|bound| atom.head == bound.doc_tok_idx)
+        })
+    {
+        return None;
+    }
+    Some(TeHelpLetterCount {
+        object,
+        span,
+        recipient_pause,
+        numeral,
+        modifier,
+        per_writer: qualifier_text == Some("ずつ") && can_distribute_to_writers && !periodic_joint,
+        per_recipient,
+        periodic_joint,
+        joint_signature: signature.filter(|_| periodic_joint),
+        writer_each,
+        occurrence_rate,
+    })
+}
+
 fn te_help_letter_addressee(
     arguments: &[Atom],
     marker: usize,
     action_idx: usize,
     letter_idx: usize,
     separate_writers: bool,
+    letter_for_each: bool,
 ) -> Option<TeHelpLetterAddressee<'_>> {
     let [address, tail @ ..] = &arguments[marker..] else {
         return None;
@@ -2127,8 +2711,6 @@ fn te_help_letter_addressee(
 
     let mut start = marker.checked_sub(1)?;
     let mut count = None;
-    let mut members = Vec::new();
-    let mut conjunction = None;
     if let Some(number_idx) = marker.checked_sub(2)
         && let [number, people] = &arguments[number_idx..marker]
         && people.surface == "人"
@@ -2162,38 +2744,19 @@ fn te_help_letter_addressee(
         }
         Some(start)
     };
-    if let Some(last) = last_member {
-        start = letter_address_member_start(arguments, last, address_idx)?;
-        members.push(&arguments[start..=last]);
-        let mut next_head = arguments[last].doc_tok_idx;
-        while let Some(previous) = start.checked_sub(2) {
-            let (name, joint) = (&arguments[previous], &arguments[previous + 1]);
-            if !matches!(joint.surface.as_str(), "と" | "や")
-                || joint.span.end_char != arguments[start].span.start_char
-            {
-                break;
-            }
-            let linked_conjunct =
-                name.deprel == "conj" && (name.head == Some(address_idx) || name.head == next_head);
-            // The parser may attach a と conjunct to 書く. Only extend that
-            // span with a separate writer group or an explicit addressee count.
-            let scoped_conjunct = joint.surface == "と"
-                && (separate_writers || count.is_some())
-                && name.deprel == "obl"
-                && name.head == Some(action_idx);
-            if !(linked_conjunct || scoped_conjunct)
-                || !linked_letter_case(name, joint)
-                || conjunction.is_some_and(|seen| seen != joint.surface.as_str())
-            {
-                return None;
-            }
-            conjunction = Some(joint.surface.as_str());
-            start = letter_address_member_start(arguments, previous, address_idx)?;
-            members.push(&arguments[start..=previous]);
-            next_head = name.doc_tok_idx;
-        }
-        members.reverse();
-    }
+    let (members, illustrative) = if let Some(last) = last_member {
+        let (member_start, members, illustrative) = te_help_letter_address_members(
+            arguments,
+            last,
+            address_idx,
+            action_idx,
+            separate_writers || count.is_some() || letter_for_each,
+        )?;
+        start = member_start;
+        (members, illustrative)
+    } else {
+        (Vec::new(), false)
+    };
     let end = case_index + 1;
     if count.is_some_and(|number| {
         !members.is_empty()
@@ -2222,10 +2785,235 @@ fn te_help_letter_addressee(
     Some(TeHelpLetterAddressee {
         members,
         count,
-        illustrative: conjunction == Some("や"),
+        illustrative,
+        explicit_each: false,
+        recipient_noun: false,
+        counted_person: None,
         start,
         end,
     })
+}
+
+fn te_help_letter_address_members(
+    arguments: &[Atom],
+    last: usize,
+    address_idx: usize,
+    action_idx: usize,
+    allow_action_attachment: bool,
+) -> Option<(usize, Vec<&[Atom]>, bool)> {
+    let mut start = letter_address_member_start(arguments, last, address_idx)?;
+    let mut members = vec![&arguments[start..=last]];
+    let mut next_head = arguments[last].doc_tok_idx;
+    let mut conjunction = None;
+    while let Some(previous) = start.checked_sub(2) {
+        let (name, joint) = (&arguments[previous], &arguments[previous + 1]);
+        if !matches!(joint.surface.as_str(), "と" | "や")
+            || joint.span.end_char != arguments[start].span.start_char
+        {
+            break;
+        }
+        let linked_conjunct =
+            name.deprel == "conj" && (name.head == Some(address_idx) || name.head == next_head);
+        // An explicit distribution or role boundary can resolve a と conjunct
+        // that the analyzer attached to the writing action.
+        let scoped_conjunct = joint.surface == "と"
+            && allow_action_attachment
+            && name.deprel == "obl"
+            && name.head == Some(action_idx);
+        if !(linked_conjunct || scoped_conjunct)
+            || !linked_letter_case(name, joint)
+            || conjunction.is_some_and(|seen| seen != joint.surface.as_str())
+        {
+            return None;
+        }
+        conjunction = Some(joint.surface.as_str());
+        start = letter_address_member_start(arguments, previous, address_idx)?;
+        members.push(&arguments[start..=previous]);
+        next_head = name.doc_tok_idx;
+    }
+    members.reverse();
+    Some((start, members, conjunction == Some("や")))
+}
+
+fn te_help_letter_recipient_noun(arguments: &[Atom], start: usize) -> Option<usize> {
+    let head = match &arguments[start..] {
+        [noun, ..] if noun.surface == "受取人" => start,
+        [receive, take, person, ..]
+            if receive.surface == "受"
+                && take.surface == "取"
+                && person.surface == "人"
+                && [receive, take].iter().all(|atom| {
+                    atom.upos == Some(Upos::Noun)
+                        && atom.deprel == "compound"
+                        && atom.head == person.doc_tok_idx
+                }) =>
+        {
+            start + 2
+        }
+        _ => return None,
+    };
+    let role = &arguments[head];
+    (role.upos == Some(Upos::Noun) && role.doc_tok_idx.is_some()).then_some(head)
+}
+
+fn te_help_letter_recipient_group(
+    arguments: &[Atom],
+    start: usize,
+    role: usize,
+    letter_idx: usize,
+    action_idx: usize,
+) -> Option<(std::ops::Range<usize>, &Atom, bool)> {
+    let recipient = &arguments[role];
+    let before = start.checked_sub(3).and_then(|begin| {
+        let [number, person, no] = &arguments[begin..start] else {
+            return None;
+        };
+        (linked_letter_people_number(number, person)
+            && no.surface == "の"
+            && linked_letter_case(person, no)
+            && person.deprel == "nmod"
+            && person.head == recipient.doc_tok_idx)
+            .then_some((begin, role, number))
+    });
+    let (start, head, number) = before.or_else(|| {
+        let [number, person, ..] = &arguments[role + 1..] else {
+            return None;
+        };
+        (linked_letter_people_number(number, person)
+            && recipient.deprel == "nmod"
+            && recipient.head == person.doc_tok_idx)
+            .then_some((start, role + 2, number))
+    })?;
+    let person = &arguments[head];
+    if super::opaque::parse_cjk_or_ascii_num(&number.surface)? == 0 {
+        return None;
+    }
+    let linked_dative = person.deprel == "obl" && person.head == Some(action_idx);
+    let linked_each = |atom: &Atom, text: &str| {
+        !atom.is_locked
+            && atom.surface == text
+            && atom.upos == Some(Upos::Adv)
+            && atom.deprel == "advmod"
+            && atom.head == Some(action_idx)
+    };
+    let (length, explicit_each) = match &arguments[head + 1..] {
+        [ni, tail @ ..]
+            if linked_dative && ni.surface == "に" && linked_letter_case(person, ni) =>
+        {
+            let each = tail
+                .first()
+                .is_some_and(|atom| linked_each(atom, "それぞれ"));
+            (1 + usize::from(each), each)
+        }
+        [each, ..] if linked_dative && linked_each(each, "それぞれに") => (1, true),
+        [no, each, ..]
+            if person.deprel == "nmod"
+                && person.head == Some(letter_idx)
+                && no.surface == "の"
+                && linked_letter_case(person, no)
+                && linked_each(each, "それぞれに") =>
+        {
+            (2, true)
+        }
+        _ => return None,
+    };
+    Some((start..head + 1 + length, number, explicit_each))
+}
+
+fn te_help_letter_recipient_role(
+    arguments: &[Atom],
+    start: usize,
+    letter_idx: usize,
+    action_idx: usize,
+) -> Option<TeHelpLetterAddressee<'_>> {
+    let role = te_help_letter_recipient_noun(arguments, start)?;
+    let (span, count, explicit_each, counted_person) = if let Some((span, number, explicit_each)) =
+        te_help_letter_recipient_group(arguments, start, role, letter_idx, action_idx)
+    {
+        (
+            span,
+            Some(number.surface.as_str()),
+            explicit_each,
+            number.head,
+        )
+    } else {
+        let rate = role + 1;
+        let length = te_help_letter_per_person(&arguments[rate..], action_idx)?;
+        let owner = &arguments[role];
+        if owner.deprel != "nmod" || owner.head != arguments[rate + 1].doc_tok_idx {
+            return None;
+        }
+        (start..rate + length, None, true, None)
+    };
+    Some(TeHelpLetterAddressee {
+        members: Vec::new(),
+        count,
+        illustrative: false,
+        explicit_each,
+        recipient_noun: true,
+        counted_person,
+        start: span.start,
+        end: span.end,
+    })
+}
+
+fn te_help_letter_direct_addressee(
+    arguments: &[Atom],
+    index: usize,
+    letter_idx: usize,
+    action_idx: usize,
+) -> Option<TeHelpLetterAddressee<'_>> {
+    let address = if matches!(arguments[index].surface.as_str(), "それぞれに" | "それぞれ")
+    {
+        let [.., name, case, each] = &arguments[..=index] else {
+            return None;
+        };
+        let linked_name = match (case.surface.as_str(), each.surface.as_str()) {
+            ("の", "それぞれに") => name.deprel == "nmod" && name.head == Some(letter_idx),
+            ("に", "それぞれ") => name.deprel == "obl" && name.head == Some(action_idx),
+            _ => false,
+        };
+        if each.upos != Some(Upos::Adv)
+            || each.deprel != "advmod"
+            || each.head != Some(action_idx)
+            || !linked_name
+            || !linked_letter_case(name, case)
+        {
+            return None;
+        }
+        let (start, members, illustrative) = te_help_letter_address_members(
+            arguments,
+            index - 2,
+            name.doc_tok_idx?,
+            action_idx,
+            true,
+        )?;
+        if illustrative || members.len() < 2 {
+            return None;
+        }
+        TeHelpLetterAddressee {
+            members,
+            count: None,
+            illustrative: false,
+            explicit_each: true,
+            recipient_noun: false,
+            counted_person: None,
+            start,
+            end: index + 1,
+        }
+    } else {
+        te_help_letter_recipient_role(arguments, index, letter_idx, action_idx)?
+    };
+    let phrase = &arguments[address.start..address.end];
+    if phrase.iter().any(|atom| atom.is_locked)
+        || !phrase
+            .windows(2)
+            .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+        || te_help_has_following_focus(arguments, address.end)
+    {
+        return None;
+    }
+    Some(address)
 }
 
 fn te_help_letter_writers(
@@ -2363,7 +3151,11 @@ fn te_help_has_following_focus(arguments: &[Atom], end: usize) -> bool {
     })
 }
 
-fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpRequest<'a>> {
+fn te_help_request<'a>(
+    atoms: &'a [Atom],
+    doc: &Document,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
+) -> Option<TeHelpRequest<'a>> {
     let (body, helper, polite, question, negative_form) = match atoms {
         [body @ .., helper, mase, n, question] if mase.surface == "ませ" && n.surface == "ん" => {
             (
@@ -2508,7 +3300,52 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
     } else {
         None
     };
-    let letter_writers = if letter_marker.is_some() {
+    let each_addressee = if let Some(letter_idx) = letter_idx {
+        let mut addresses = arguments
+            .iter()
+            .enumerate()
+            .filter(|(_, atom)| match atom.surface.as_str() {
+                "それぞれ" => letter_marker.is_none(),
+                "それぞれに" | "受" | "受取人" => true,
+                _ => false,
+            })
+            .filter_map(|(index, _)| {
+                te_help_letter_direct_addressee(arguments, index, letter_idx, action_idx)
+            });
+        let address = addresses.next();
+        if addresses.next().is_some() {
+            return None;
+        }
+        address
+    } else {
+        None
+    };
+    let letter_quantity = letter_idx.and_then(|index| {
+        te_help_letter_quantity(
+            arguments,
+            index,
+            action_idx,
+            each_addressee.as_ref().filter(|_| letter_marker.is_none()),
+        )
+    });
+    let distributes_letters = letter_quantity
+        .as_ref()
+        .is_some_and(|quantity| quantity.qualifier == Some("ずつ"));
+    let each_addressee = each_addressee.filter(|address| {
+        letter_quantity.as_ref().is_some_and(|quantity| {
+            !address.explicit_each || matches!(quantity.qualifier, None | Some("ずつ"))
+        })
+    });
+    if letter_quantity
+        .as_ref()
+        .is_some_and(|quantity| quantity.total)
+        && each_addressee
+            .as_ref()
+            .is_some_and(|address| address.explicit_each)
+    {
+        return None;
+    }
+    let letter_writers = if letter_marker.is_some() || each_addressee.is_some() {
         let mut groups = (0..arguments.len())
             .filter_map(|start| te_help_letter_writers(arguments, start, action_idx, helper_idx));
         let writers = groups.next();
@@ -2521,16 +3358,28 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
     } else {
         None
     };
+    let inferred_each_addressee = distributes_letters
+        && letter_writers.is_none()
+        && manner.is_none()
+        && !atoms_has_any(arguments, &["連名", "一緒", "共同", "合わせる"])
+        && !arguments.iter().enumerate().any(|(index, atom)| {
+            letter_writer_each_adverb(atom)
+                || te_help_letter_per_person(&arguments[index..], action_idx).is_some()
+        });
     let letter_addressee = if let Some((marker, letter_idx)) = letter_marker {
+        if each_addressee.is_some() {
+            return None;
+        }
         Some(te_help_letter_addressee(
             arguments,
             marker,
             action_idx,
             letter_idx,
             letter_writers.is_some(),
+            inferred_each_addressee,
         )?)
     } else {
-        None
+        each_addressee
     };
     if letter_addressee.is_some() && manner.is_none() && letter_writers.is_none() {
         let mut companions = (0..arguments.len())
@@ -2565,6 +3414,61 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
             bound.start = prior;
         }
     }
+    let addressee_count = letter_addressee
+        .as_ref()
+        .and_then(|address| address.count)
+        .and_then(super::opaque::parse_cjk_or_ascii_num);
+    let multiple_addressees = addressee_count.is_some_and(|number| number > 1);
+    let per_recipient = letter_addressee.as_ref().is_some_and(|address| {
+        address.explicit_each
+            || (inferred_each_addressee
+                && manner.is_none()
+                && !address.illustrative
+                && (address.members.len() > 1 || multiple_addressees))
+    });
+    if distributes_letters
+        && !per_recipient
+        && multiple_addressees
+        && letter_addressee
+            .as_ref()
+            .is_some_and(|address| address.recipient_noun)
+    {
+        return None;
+    }
+    let letter_count = letter_quantity.and_then(|quantity| {
+        // With one explicit addressee, a counted group can write a letter each.
+        let one_addressee = letter_addressee.as_ref().is_some_and(|address| {
+            !address.illustrative
+                && ((address.members.len() == 1 && address.count.is_none())
+                    || (address.recipient_noun && addressee_count == Some(1)))
+        });
+        let writer_count = letter_writers
+            .as_ref()
+            .map(|(_, count)| *count)
+            .or_else(|| manner.as_ref().and_then(|group| group.count))
+            .filter(|_| one_addressee);
+        let distribution = if per_recipient {
+            TeHelpLetterDistribution::Recipients
+        } else {
+            writer_count.map_or(
+                TeHelpLetterDistribution::Unresolved,
+                TeHelpLetterDistribution::WriterCount,
+            )
+        };
+        let writers = letter_writers.as_ref().map(|(person, _)| person);
+        te_help_letter_count(
+            arguments,
+            action_idx,
+            quantity,
+            distribution,
+            writers,
+            manner.as_ref(),
+            prior_letter_distribution,
+        )
+    });
+    if per_recipient && letter_count.is_none() {
+        return None;
+    }
     let is_modifier = |index| {
         manner
             .as_ref()
@@ -2578,6 +3482,9 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
             || letter_writers
                 .as_ref()
                 .is_some_and(|(bound, _)| (bound.start..bound.end).contains(&index))
+            || letter_count
+                .as_ref()
+                .is_some_and(|bound| bound.span.contains(&index))
     };
 
     let child_suffix = te_help_child_suffix(arguments, action_idx);
@@ -2645,12 +3552,18 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
         .filter(|(_, atom)| is_punct_atom(atom))
     {
         let lead = &arguments[lead_start..comma];
+        // The quantity parser already verified the letter and its object particle.
+        let letter_object = letter_count
+            .as_ref()
+            .filter(|count| count.recipient_pause == Some(comma) && count.object >= lead_start)
+            .map(|count| count.object);
         if !matches!(separator.surface.as_str(), "、" | "，" | ",")
             || lead.is_empty()
             || (lead_start > 0 && letter_addressee.is_none())
             || !lead.iter().enumerate().all(|(offset, adverb)| {
                 let index = lead_start + offset;
                 is_modifier(index)
+                    || letter_object.is_some_and(|object| index == object || index == object + 1)
                     || (letter_role.is_some()
                         && person
                             .as_ref()
@@ -2677,6 +3590,7 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
         person,
         letter_addressee,
         letter_writers,
+        letter_count,
         manner,
         child_suffix,
         humble,
@@ -3275,7 +4189,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
     let ending = &atoms[request_atoms.len()..];
     if (ending.is_empty()
         || matches!(ending, [punct] if !punct.is_locked && matches!(punct.surface.as_str(), "。" | "？" | "?")))
-        && te_help_request(request_atoms, doc).is_some()
+        && te_help_request(request_atoms, doc, None).is_some()
     {
         let punctuation = (!ending.is_empty()).then(|| "？".to_owned());
         flush_clause(&mut request_atoms.to_vec(), punctuation, &mut segments);
@@ -4117,6 +5031,7 @@ struct ClauseDiscourseCtx<'a> {
     in_proportional_follow: bool,
     sentence_topic_pronoun: Option<&'static str>,
     sonomono_antecedent: Option<String>,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
 }
 
 fn atoms_has_any(atoms: &[Atom], targets: &[&str]) -> bool {
@@ -4720,7 +5635,8 @@ fn translate_clause_atoms(
         return (text, false);
     }
 
-    if let Some(request) = te_help_request(core_non_punct(atoms), doc)
+    if let Some(request) =
+        te_help_request(core_non_punct(atoms), doc, ctx.prior_letter_distribution)
         && let Some(rendered) = render_te_help_request(request, doc, sentence_idx, ctx, target)
     {
         return (rendered, false);
@@ -4873,7 +5789,13 @@ fn translate_clause_atoms(
     });
     let body = trip_source.as_deref().unwrap_or(body);
     let counted = counted_object::bind(body);
-    let merged_atoms = apply_phrase_matches(counted.as_deref().unwrap_or(body));
+    let phrases = counted.as_deref().unwrap_or(body);
+    let attributed = if target == TargetVariant::ZhHant {
+        finite_adjective::bind_attributives(phrases, doc, ctx.source_chars)
+    } else {
+        std::borrow::Cow::Borrowed(phrases)
+    };
+    let merged_atoms = apply_phrase_matches(&attributed);
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
@@ -5642,6 +6564,76 @@ fn render_te_help_request(
             .as_ref()
             .is_some_and(|person| person.role == TeHelpPersonRole::Performer)
     });
+    let per_writer = request
+        .letter_count
+        .as_ref()
+        .is_some_and(|count| count.per_writer);
+    let periodic_joint = request
+        .letter_count
+        .as_ref()
+        .is_some_and(|count| count.periodic_joint);
+    let render_name = |phrase: &[Atom]| {
+        render_bunsetsu_np(
+            &Bunsetsu {
+                atoms: phrase.to_vec(),
+                role: BunsetsuRole::Other,
+                case_particle: None,
+                sconj_tail: None,
+                sfp_tail: None,
+            },
+            target,
+        )
+    };
+    let render_person = |person: &TeHelpPerson<'_>| render_name(person.phrase);
+    let addressee = if let Some(address) = &request.letter_addressee {
+        let names = address
+            .members
+            .iter()
+            .map(|member| render_name(member))
+            .collect::<Vec<_>>();
+        if address.recipient_noun {
+            Some(match address.count {
+                Some(number) => format!(
+                    "{}位收件人",
+                    render_joint_people(number).trim_end_matches('人')
+                ),
+                None => "每位收件人".to_owned(),
+            })
+        } else if address.illustrative {
+            Some(format!("{}等人", names.join("、")))
+        } else {
+            let mut names = names.join("和");
+            if let Some(count) = address.count {
+                names.push_str(&render_joint_people(count));
+            }
+            Some(names)
+        }
+    } else {
+        // Only the wording chooses an addressee for an unresolved dative.
+        request
+            .person
+            .as_ref()
+            .filter(|person| person.role == TeHelpPersonRole::UnresolvedLetterParticipant)
+            .map(render_person)
+    };
+    let each_addressee = request
+        .letter_count
+        .as_ref()
+        .filter(|count| count.per_recipient)
+        .and(addressee.as_deref());
+    let linked_adverb = |start: usize, end: usize, surface: &str| Atom {
+        span: Span {
+            start_char: request.action[start].span.start_char,
+            end_char: request.action[end - 1].span.end_char,
+        },
+        surface: surface.to_owned(),
+        lemma: None,
+        upos: Some(Upos::Adv),
+        doc_tok_idx: None,
+        head: action_head,
+        deprel: "advmod".to_owned(),
+        is_locked: false,
+    };
     let mut action: Vec<_> = request
         .action
         .iter()
@@ -5667,19 +6659,58 @@ fn render_te_help_request(
             if let Some(manner) = &request.manner
                 && (manner.start..manner.end).contains(&index)
             {
-                return (index == manner.start && performer_count.is_none()).then(|| Atom {
-                    span: Span {
-                        start_char: atom.span.start_char,
-                        end_char: request.action[manner.end - 1].span.end_char,
-                    },
-                    surface: "一起".to_owned(),
-                    lemma: None,
-                    upos: Some(Upos::Adv),
-                    doc_tok_idx: None,
-                    head: action_head,
-                    deprel: "advmod".to_owned(),
-                    is_locked: false,
-                });
+                return (index == manner.start
+                    && performer_count.is_none()
+                    && !periodic_joint
+                    && (!per_writer || manner.count.is_none()))
+                .then(|| linked_adverb(manner.start, manner.end, "一起"));
+            }
+            if let Some(count) = &request.letter_count {
+                if let Some((span, rendered)) = &count.occurrence_rate
+                    && span.contains(&index)
+                {
+                    return (index == span.start)
+                        .then(|| linked_adverb(span.start, span.end, rendered));
+                }
+                if count
+                    .writer_each
+                    .as_ref()
+                    .is_some_and(|span| span.contains(&index))
+                    || count
+                        .joint_signature
+                        .as_ref()
+                        .is_some_and(|span| span.contains(&index))
+                {
+                    return None;
+                }
+                if count.span.contains(&index) {
+                    return count
+                        .modifier
+                        .filter(|_| index == count.span.start)
+                        .map(|surface| {
+                            let addressed =
+                                each_addressee.map(|names| format!("給{names}{surface}"));
+                            linked_adverb(
+                                count.span.start,
+                                count.span.end,
+                                addressed.as_deref().unwrap_or(surface),
+                            )
+                        });
+                }
+                if index == count.object {
+                    let mut object = atom.clone();
+                    let numeral = if count.numeral == "2" {
+                        "二"
+                    } else {
+                        &count.numeral
+                    };
+                    object.surface.clear();
+                    counted_object::push_quantity(&mut object.surface, numeral, "封");
+                    object.surface.push('信');
+                    object.lemma = None;
+                    object.is_locked = true;
+                    return Some(object);
+                }
             }
             if !atom.is_locked && atom.surface == "もう一度" && atom.deprel == "advmod" {
                 repeat = true;
@@ -5742,19 +6773,6 @@ fn render_te_help_request(
             text.to_owned()
         }
     };
-    let render_name = |phrase: &[Atom]| {
-        render_bunsetsu_np(
-            &Bunsetsu {
-                atoms: phrase.to_vec(),
-                role: BunsetsuRole::Other,
-                case_particle: None,
-                sconj_tail: None,
-                sfp_tail: None,
-            },
-            target,
-        )
-    };
-    let render_person = |person: &TeHelpPerson<'_>| render_name(person.phrase);
     let polite = if request.negative_form {
         "可以麻煩"
     } else {
@@ -5766,29 +6784,7 @@ fn render_te_help_request(
         "你"
     };
 
-    let addressee = if let Some(address) = &request.letter_addressee {
-        let names = address
-            .members
-            .iter()
-            .map(|member| render_name(member))
-            .collect::<Vec<_>>();
-        if address.illustrative {
-            Some(format!("{}等人", names.join("、")))
-        } else {
-            let mut names = names.join("和");
-            if let Some(count) = address.count {
-                names.push_str(&render_joint_people(count));
-            }
-            Some(names)
-        }
-    } else {
-        // Only the wording chooses an addressee for an unresolved dative.
-        request
-            .person
-            .as_ref()
-            .filter(|person| person.role == TeHelpPersonRole::UnresolvedLetterParticipant)
-            .map(render_person)
-    };
+    let per_recipient = each_addressee.is_some();
     if let Some(addressee) = addressee {
         let counted_listener = |count: &str| format!("{}位", count.trim_end_matches('人'));
         let mut joint = "";
@@ -5805,7 +6801,9 @@ fn render_te_help_request(
         {
             let name = render_person(writer);
             if let Some(count) = performer_count {
-                joint = "一起";
+                if !per_writer && !periodic_joint {
+                    joint = "一起";
+                }
                 format!("包括{name}在內的{}", counted_listener(count))
             } else {
                 name
@@ -5821,9 +6819,14 @@ fn render_te_help_request(
                 .map(counted_listener)
                 .unwrap_or_else(|| fallback_listener.to_owned())
         };
+        let addressed = if per_recipient {
+            body
+        } else {
+            format!("{body}給{addressee}")
+        };
         return Some(format!(
             "{polite}{listener}{joint}{}嗎",
-            with_repeat(&format!("{body}給{addressee}"))
+            with_repeat(&addressed)
         ));
     }
 
@@ -12498,6 +13501,11 @@ fn is_person_like_bunsetsu(b: &Bunsetsu) -> bool {
 
 fn is_person_like_atom(a: &Atom) -> bool {
     matches!(a.upos, Some(Upos::Pron | Upos::Propn))
+        || a.is_locked
+            && matches!(
+                a.lemma.as_deref(),
+                Some(finite_adjective::ATTRIBUTIVE_PERSON | LOCKED_RESIDENT_ATOM)
+            )
         || matches!(
             a.surface.as_str(),
             "友達"
@@ -19933,6 +20941,341 @@ mod existence_rule_tests {
             (
                 "明日、母と二人で先生宛ての手紙を書いていただけますか。",
                 "可以請您和母親兩人明天一起寫信給老師嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_requests_keep_the_number_of_letters() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "先生方お二人に、校長宛ての手紙を二通書いていただけますか。",
+                "可以請兩位老師寫兩封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を一通ずつ書いていただけますか。",
+                "可以請兩位老師各寫一封信給校長嗎？",
+            ),
+            (
+                "父と母の二人宛ての手紙を一通書いていただけますか。",
+                "可以請您寫一封信給父親和母親兩人嗎？",
+            ),
+            (
+                "二人で校長宛ての手紙を二通書いていただけませんか。",
+                "可以麻煩兩位一起寫兩封信給校長嗎？",
+            ),
+            (
+                "先生宛ての手紙を二人で二通書いていただけますか。",
+                "可以請兩位一起寫兩封信給老師嗎？",
+            ),
+            (
+                "二人で先生宛ての手紙を一通ずつ書いていただけますか。",
+                "可以請兩位各寫一封信給老師嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を一緒に一通ずつ書いていただけますか。",
+                "可以請兩位老師一起各寫一封信給校長嗎？",
+            ),
+            (
+                "手紙を２通書いていただけますか。",
+                "可以請您幫我寫兩封信嗎？",
+            ),
+            (
+                "校長宛ての手紙を二十通書いていただけますか。",
+                "可以請您寫二十封信給校長嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_counter_applies_the_quantity_qualifier() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "手紙をもう一通書いていただけますか。",
+                "可以請您幫我再寫一封信嗎？",
+            ),
+            (
+                "手紙を二通ずつ書いていただけますか。",
+                "可以請您幫我各寫兩封信嗎？",
+            ),
+            (
+                "手紙を二通だけ書いていただけますか。",
+                "可以請您幫我只寫兩封信嗎？",
+            ),
+            (
+                "手紙をもう二通だけ書いていただけませんか。",
+                "可以麻煩您幫我只再寫兩封信嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙をもう一通ずつ書いていただけますか。",
+                "可以請兩位老師再各寫一封信給校長嗎？",
+            ),
+            ("もう手紙を一通書きました。", "已經一通寫了信。"),
+            (
+                "もう一度手紙を書いていただけますか。",
+                "可以請您幫我再寫信一次嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_requests_distinguish_joint_periods_from_each_writer() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "校長宛ての手紙を二人で連名で毎週一通ずつ書いていただけますか。",
+                "可以請兩位每週聯名寫一封信給校長嗎？",
+            ),
+            (
+                "二人で書く手紙は、毎週合わせて一通だけです。校長宛ての手紙を二人で毎週一通ずつ書いていただけますか。",
+                "在二人寫的信，每週對齊，是一通。可以請兩位每週一起寫一封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を毎週一通ずつ書いていただけますか。",
+                "可以請兩位老師每週各寫一封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を二通ずつ書いていただけますか。",
+                "可以請兩位老師各寫兩封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を合計一通書いていただけますか。",
+                "可以請兩位老師總共寫一封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を各自合計一通書いていただけますか。",
+                "可以請兩位老師各自合計一通寫信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人でそれぞれ毎週一通ずつ書いていただけますか。",
+                "可以請兩位每週各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で連名で毎回一通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で連名で一回につき二通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫兩封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で連名で１回につき二通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫兩封信給校長嗎？",
+            ),
+            (
+                "毎週、校長宛ての手紙を二人で一通ずつ書いていただけますか。",
+                "可以請兩位每週一起寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を毎回二人で連名で一通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で各人毎回一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で毎回一人につき一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で一人につき毎回一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で毎回一人あたり一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で一回につき各人一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "二人は各自一通ずつ書きます。校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。",
+                "二人各自一通ずつ寫。可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "二人は各自一通ずつ書きます。校長宛ての手紙を二人で連名で毎回一通ずつ書いていただけますか。",
+                "二人各自一通ずつ寫。可以請兩位每次聯名寫一封信給校長嗎？",
+            ),
+            (
+                "三人は各自一通ずつ書きます。校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。",
+                "三人各自一通ずつ寫。可以請兩位每次一起寫一封信給校長嗎？",
+            ),
+            (
+                "二人は各自一通ずつ書きます。\n\n校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。",
+                "二人各自一通ずつ寫。\n\n可以請兩位每次一起寫一封信給校長嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_request_uses_only_unquoted_prior_distribution() {
+        let glossary = TranslationGlossary::new();
+        let request = "校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。";
+        let quoted_statement = "『二人は各自一通ずつ書く』";
+
+        let plain = public_translate(&format!("二人は各自一通ずつ書きます。{request}"), &glossary);
+        assert!(
+            plain
+                .target_text
+                .ends_with("可以請兩位每次各寫一封信給校長嗎？")
+        );
+
+        let copied = public_translate(
+            &format!("{quoted_statement}と紙に書き写しました。{request}"),
+            &glossary,
+        );
+        assert!(copied.target_text.starts_with(quoted_statement));
+        assert!(
+            copied
+                .target_text
+                .ends_with("可以請兩位每次一起寫一封信給校長嗎？")
+        );
+    }
+
+    #[test]
+    fn te_help_letter_counts_can_be_distributed_to_recipients() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "祖父宛ての手紙を一通書いていただけますか。",
+                "可以請您寫一封信給祖父嗎？",
+            ),
+            (
+                "祖父と祖母宛ての手紙を一通ずつ書いていただけますか。",
+                "可以請您給祖父和祖母各寫一封信嗎？",
+            ),
+            (
+                "祖父と祖母のそれぞれに手紙を一通ずつ書いていただけますか。",
+                "可以請您給祖父和祖母各寫一封信嗎？",
+            ),
+            (
+                "祖父と祖母にそれぞれ一通ずつ手紙を書いていただけますか。",
+                "可以請您給祖父和祖母各寫一封信嗎？",
+            ),
+            (
+                "受取人一人につき手紙を一通ずつ書いていただけますか。",
+                "可以請您給每位收件人各寫一封信嗎？",
+            ),
+            (
+                "受取人一人につき手紙を一通書いていただけますか。",
+                "可以請您給每位收件人各寫一封信嗎？",
+            ),
+            (
+                "二人の受取人に手紙を一通ずつ書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "三人の受取人に手紙を二通ずつ書いていただけますか。",
+                "可以請您給三位收件人各寫兩封信嗎？",
+            ),
+            (
+                "受取人二人に手紙を一通ずつ書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "二人の受取人に一通ずつ手紙を書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "二人の受取人に手紙を一通だけ書いていただけますか。",
+                "可以請您只寫一封信給兩位收件人嗎？",
+            ),
+            (
+                "二人の受取人に手紙を合計一通書いていただけますか。",
+                "可以請您總共寫一封信給兩位收件人嗎？",
+            ),
+            (
+                "二人の受取人に手紙を合計二通書いていただけますか。",
+                "可以請您總共寫兩封信給兩位收件人嗎？",
+            ),
+            (
+                "手紙を合計一通二人の受取人に書いていただけますか。",
+                "可以請您總共寫一封信給兩位收件人嗎？",
+            ),
+            (
+                "手紙を一通ずつ二人の受取人に書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "手紙を一通ずつ、二人の受取人に書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "手紙を合計二通、二人の受取人に書いていただけますか。",
+                "可以請您總共寫兩封信給兩位收件人嗎？",
+            ),
+            (
+                "手紙を二通ずつ三人の受取人に書いていただけますか。",
+                "可以請您給三位收件人各寫兩封信嗎？",
+            ),
+            (
+                "二人の受取人にそれぞれ手紙を一通書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "二人の受取人それぞれに手紙を一通書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "二人の受取人のそれぞれに手紙を一通書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を一通ずつ書いていただけますか。",
+                "可以請兩位老師各寫一封信給校長嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_counter_preserves_other_actions_and_opaque_amounts() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "校長宛ての手紙を二通読んでいただけますか。",
+                "校長宛，二通讀能得到信嗎？",
+            ),
+            (
+                "校長宛ての手紙を`二通`書いていただけますか。",
+                "校長宛，`二通`寫信，能得到嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を二通書かないでいただけますか。",
+                "位給二人老師お，校長宛，二通不寫能得到信嗎？",
             ),
         ] {
             assert_eq!(

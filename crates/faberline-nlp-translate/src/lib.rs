@@ -369,7 +369,7 @@ pub fn translate_document(
                     &compiled_glossary,
                     seq2seq,
                     direct_quote_placements.get(&si),
-                    written_quotes.get(si).map_or(&[], Vec::as_slice),
+                    &written_quotes,
                     &mut dates,
                 );
 
@@ -760,11 +760,14 @@ fn translate_single_sentence(
     compiled_glossary: &CompiledGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
     direct_quote: Option<&ja_zh::DirectQuotePlacement>,
-    written_quotes: &[quote_source::WrittenForm],
+    written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
     dates: &mut ja_zh::DateContext,
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
+    let written_quotes = written_quotes_by_sentence
+        .get(sentence_idx)
+        .map_or(&[], Vec::as_slice);
     let raw_sent: String = chars[sent_span.start_char..sent_span.end_char]
         .iter()
         .collect();
@@ -887,6 +890,42 @@ fn translate_single_sentence(
     );
 
     if is_ja_to_zh {
+        let prior_letter_distribution = sentence_idx.checked_sub(1).and_then(|idx| {
+            let prior = &doc.segmentation.sentences[idx];
+            if !raw_sent.contains("ずつ")
+                || !sent_tokens
+                    .iter()
+                    .any(|token| token.lemma.as_deref() == Some("書く"))
+                || prior.paragraph != sent.paragraph
+                || prior.lang != Lang::Ja
+                || prior.span.end_char > sent_span.start_char
+                || !chars[prior.span.end_char..sent_span.start_char]
+                    .iter()
+                    .all(|ch| ch.is_whitespace())
+                || doc.segmentation.opaque.iter().any(|opaque| {
+                    opaque.span.start_char < prior.span.end_char
+                        && prior.span.start_char < opaque.span.end_char
+                })
+            {
+                return None;
+            }
+            let raw_prior: String = chars[prior.span.start_char..prior.span.end_char]
+                .iter()
+                .collect();
+            let locks = build_sentence_locks(
+                idx,
+                chars,
+                doc,
+                &[],
+                &raw_prior,
+                options,
+                compiled_glossary,
+                written_quotes_by_sentence
+                    .get(idx)
+                    .map_or(&[], Vec::as_slice),
+            );
+            ja_zh::prior_letter_distribution(idx, chars, doc, &locks)
+        });
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
@@ -901,6 +940,7 @@ fn translate_single_sentence(
                 .filter(|quote| quote.continuation)
                 .map(|quote| quote.span),
             dates,
+            prior_letter_distribution,
         );
         let mut clause_spans: Vec<Span> = clause_alignments
             .iter()

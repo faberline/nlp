@@ -52,6 +52,10 @@ pub(super) fn render(
         .rposition(|a| matches!(a.upos, Some(Upos::Noun | Upos::Propn)))?;
     let (nominals, tail) = body.split_at(head_index + 1);
     let head = nominals.last()?;
+    // 「鳥のことです」 can define what a word refers to. こと is not a possessed item.
+    if matches!(head.surface.as_str(), "こと" | "事") {
+        return None;
+    }
     if tail.is_empty()
         || tail.len() > 7
         || body.iter().any(|a| a.is_locked)

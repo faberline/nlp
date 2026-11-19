@@ -870,7 +870,12 @@ pub(crate) fn translate_ja_sentence(
                         _ => false,
                     });
                 if let Some(p) = trailing_punct {
+                    let inside_habitual_action = target == TargetVariant::ZhHant
+                        && matches!(p, "、" | "，")
+                        && matches!(segments.get(seg_idx + 1), Some(Segment::Clause { atoms: following, .. })
+                            if calendar::continues_habitual_action(trimmed_atoms, following));
                     if !(suppress_cleft_comma
+                        || inside_habitual_action
                         || (rendered.ends_with('？') && matches!(p, "。" | "？" | "?"))
                         || ((p == "、" || p == ",")
                             && (rendered.ends_with("，就立刻")
@@ -15283,6 +15288,29 @@ mod clock_rule_tests {
             ),
         ] {
             assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+    }
+
+    #[test]
+    fn habitual_time_after_the_subject_stays_with_its_action() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("私は毎朝、水を飲みます。", "我每天早上喝水。"),
+            ("私は毎朝、水を飲みません。", "我每天早上不喝水。"),
+            ("母は毎晩、本を読みます。", "母親每晚讀書。"),
+            ("妹は毎日、学校に行きます。", "妹妹每天去到學校。"),
+            ("毎朝、私は水を飲みます。", "每天早上，我喝水。"),
+            ("私は水を飲み、母は本を読みます。", "我喝水，母親讀書。"),
+            (
+                "私は毎朝、水を飲んで、本を読みます。",
+                "我每天早上喝水，讀書。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
         }
     }
 

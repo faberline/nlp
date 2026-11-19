@@ -28,6 +28,28 @@ fn regular_rate(surface: &str) -> bool {
     )
 }
 
+// A Japanese pause after the frequency can fall inside a single predicate.
+// Keep a fronted time or a new subject separate from the following clause.
+pub(super) fn continues_habitual_action(prefix: &[Atom], following: &[Atom]) -> bool {
+    let Some((rate, before)) = prefix.split_last() else {
+        return false;
+    };
+    let Some(governor) = rate.head else {
+        return false;
+    };
+    let subject_of_action = |atom: &Atom| atom.deprel == "nsubj" && atom.head == Some(governor);
+    !rate.is_locked
+        && rate.deprel == "advmod"
+        && regular_rate(&rate.surface)
+        && before.iter().any(subject_of_action)
+        && !following.iter().any(subject_of_action)
+        && following.iter().any(|atom| {
+            atom.doc_tok_idx == Some(governor)
+                && atom.upos == Some(Upos::Verb)
+                && matches!(atom.deprel.as_str(), "root" | "advcl" | "conj")
+        })
+}
+
 pub(super) fn contrasts_recurrence(atoms: &[Atom]) -> bool {
     let core = super::core_non_punct(atoms);
     matches!(core, [rate, ..] if matches!(core.len(),3|4) && !rate.is_locked &&

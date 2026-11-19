@@ -10,6 +10,7 @@ use std::collections::HashMap;
 mod application_form;
 mod copular_time;
 mod counted_object;
+mod finite_adjective;
 mod homework_desire;
 mod nominal_possession;
 mod payment_potential;
@@ -334,7 +335,7 @@ pub(crate) fn translate_ja_sentence(
                 } else {
                     None
                 };
-                for iseg in &inner_segs {
+                for (idx, iseg) in inner_segs.iter().enumerate() {
                     if let Segment::Clause {
                         atoms: catoms,
                         trailing_punct,
@@ -363,6 +364,12 @@ pub(crate) fn translate_ja_sentence(
                                 &ClauseDiscourseCtx {
                                     source_chars: chars,
                                     inside_quote: true,
+                                    adjective: finite_adjective::Context::in_quote(
+                                        &inner_segs,
+                                        idx,
+                                        &atoms,
+                                        doc,
+                                    ),
                                     ..Default::default()
                                 },
                                 target,
@@ -410,7 +417,7 @@ pub(crate) fn translate_ja_sentence(
                 }
                 out.push(localize_open_quote(*open_q, target));
                 let inner_segs = split_atoms_into_segments(inner_atoms, doc, *span);
-                for iseg in &inner_segs {
+                for (idx, iseg) in inner_segs.iter().enumerate() {
                     if let Segment::Clause {
                         atoms: catoms,
                         trailing_punct,
@@ -426,6 +433,12 @@ pub(crate) fn translate_ja_sentence(
                             &ClauseDiscourseCtx {
                                 source_chars: chars,
                                 inside_quote: true,
+                                adjective: finite_adjective::Context::in_quote(
+                                    &inner_segs,
+                                    idx,
+                                    &atoms,
+                                    doc,
+                                ),
                                 ..Default::default()
                             },
                             target,
@@ -719,6 +732,7 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
+                    adjective: finite_adjective::Context::at(&segments, seg_idx, doc),
                     source_chars: chars,
                     return_trip: None,
                     inside_quote: ends_continued_quote(
@@ -4029,6 +4043,7 @@ pub(crate) fn direct_quote_end(
 
 #[derive(Clone, Default)]
 struct ClauseDiscourseCtx<'a> {
+    adjective: finite_adjective::Context,
     source_chars: &'a [char],
     return_trip: Option<ReturnTrip>,
     inside_quote: bool,
@@ -4620,6 +4635,28 @@ fn translate_clause_atoms(
     }
 
     if target == TargetVariant::ZhHant
+        && let Some(body) = finite_adjective::concessive(core_non_punct(atoms), ctx)
+    {
+        let (mut text, _) = translate_clause_atoms(
+            &body,
+            doc,
+            sentence_idx,
+            conditioning,
+            allow_pro_drop_inject,
+            ctx,
+            target,
+        );
+        text.push_str("，但是");
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && let Some(text) = finite_adjective::comparison(core_non_punct(atoms), ctx, target)
+    {
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
         && let Some(text) = payment_potential::render(core_non_punct(atoms), target, false)
     {
         return (text, false);
@@ -4811,6 +4848,9 @@ fn translate_clause_atoms(
     mark_residence_place(&mut grouped, body);
     mark_joint_question(&mut grouped, &norm_atoms, body);
     let mut grouped = compose_relative_daypart(grouped);
+    if target == TargetVariant::ZhHant {
+        finite_adjective::fold_reported_modifier(&mut grouped, body, target);
+    }
     if let Some((predicate, _)) = proposal {
         localize_proposal_arguments(&mut grouped, predicate, body, target);
     }
@@ -8281,6 +8321,14 @@ fn translate_clause_bunsetsus(
     let mut subjects: Vec<String> = Vec::new();
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
+    let state_interval = if target == TargetVariant::ZhHant {
+        finite_adjective::take_time_interval(&mut bunsetsus, source, doc, &ctx.adjective)
+    } else {
+        None
+    };
+    if let Some(interval) = &state_interval {
+        temporal_others.push(interval.text.clone());
+    }
     let mut joint_manner = None;
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
@@ -8980,6 +9028,20 @@ fn translate_clause_bunsetsus(
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
     if let Some(office) = filing_office {
         verb_core = format!("向{office}{verb_core}");
+    }
+    if target == TargetVariant::ZhHant
+        && let Some(state) = finite_adjective::render(
+            source,
+            &predicates,
+            ctx,
+            &mut adverbs,
+            &mut temporal_others,
+            state_interval.as_ref(),
+        )
+    {
+        pre_verb_mods.clear();
+        verb_core = state;
+        post_verb_mods.clear();
     }
     if let Some(trip) = ctx.return_trip {
         verb_core = if let Some(place) = trip_destination {
@@ -9839,6 +9901,13 @@ fn translate_clause_bunsetsus(
             .flat_map(|b| &b.atoms)
             .all(|a| !a.is_locked)
         && inner_pre_mods.iter().any(|m| m == "不");
+    if state_interval
+        .as_ref()
+        .is_some_and(|interval| interval.question)
+        && sfp_suffix == Some("嗎")
+    {
+        sfp_suffix = Some("？");
+    }
     let negative_go = verb_core == "去"
         && inner_pre_mods
             .iter()
@@ -12725,7 +12794,11 @@ fn merge_adnominal_bunsetsus(
                     continue;
                 }
 
-                if let Some(pred_b) = res.pop_if(|prev| is_prenominal_pred(prev)) {
+                if let Some(pred_b) = res.pop_if(|prev| {
+                    is_prenominal_pred(prev)
+                        || target == TargetVariant::ZhHant
+                            && finite_adjective::voiced_past_modifier(prev, &b, source)
+                }) {
                     let has_verb = pred_b
                         .atoms
                         .iter()

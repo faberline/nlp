@@ -279,6 +279,7 @@ fn physical_argument(
             });
         match case.surface.as_str() {
             "から" => !temporal && noun.upos != Some(Upos::Verb),
+            "に" if has_recipient && raw == "一緒" => false,
             "に" | "へ" => !temporal && !recipient(atoms, i + 1, verb, chars),
             _ => false,
         }
@@ -751,7 +752,7 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
         let Some(to) = atoms.get(person_idx + 1) else {
             continue;
         };
-        if !matches!(to.surface.as_str(), "に" | "へ") || !dasu_case_link(person, to) {
+        if !matches!(to.surface.as_str(), "に" | "へ" | "と") || !dasu_case_link(person, to) {
             continue;
         }
         let Some(outer) = person.head.filter(|id| {
@@ -761,7 +762,12 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
         }) else {
             continue;
         };
-        if !recipient(atoms, person_idx + 1, outer, chars) {
+        let accompanies = to.surface == "と"
+            && together(atoms, outer)
+                .and_then(|(_, noun)| noun)
+                .is_some_and(|(id, _)| person.doc_tok_idx == Some(id));
+        if (to.surface == "と" && !accompanies) || !recipient(atoms, person_idx + 1, outer, chars)
+        {
             continue;
         }
         let inflection = &atoms[be_idx + 1..start_person];
@@ -788,7 +794,7 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
         let place_first = noun_start(atoms, end_place - 2);
         let (first, before) = relative_time(atoms, place_first, event, doc, chars)
             .unwrap_or((place_first, String::new()));
-        let Some(form) = (0..atoms.len()).find(|&k| {
+        let form = (0..atoms.len()).find(|&k| {
             atoms[k].deprel == "obj"
                 && ((k < first && atoms[k].head == event.doc_tok_idx)
                     || ((k < first || k > person_idx) && atoms[k].head == Some(outer)))
@@ -796,9 +802,29 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
                     .get(k + 1)
                     .is_some_and(|c| c.surface == "を" && dasu_case_link(&atoms[k], c))
                 && (form_start(atoms, k, chars).is_some() || covered_purpose(&atoms[k], chars))
-        }) else {
+        });
+        // The first predicate may link to the relative いる. Keep its
+        // own form and connect the two actions through the recipient.
+        let preceding = (0..first).rev().find(|&v| {
+            let action = &atoms[v];
+            action.deprel == "advcl"
+                && (action.head == event.doc_tok_idx || action.head == Some(outer))
+                && atoms
+                    .get(v + 1)
+                    .is_some_and(|a| matches!(a.surface.as_str(), "て" | "、" | ","))
+                && (0..v).any(|k| {
+                    atoms[k].deprel == "obj"
+                        && atoms[k].head == action.doc_tok_idx
+                        && atoms
+                            .get(k + 1)
+                            .is_some_and(|a| a.surface == "を" && dasu_case_link(&atoms[k], a))
+                        && (form_start(atoms, k, chars).is_some()
+                            || covered_purpose(&atoms[k], chars))
+                })
+        });
+        if form.is_none() && preceding.is_none() {
             continue;
-        };
+        }
         let mut receiver = person.clone();
         let location = noun_text(&atoms[place_first..end_place - 1], chars);
         let time = before + &after;
@@ -822,7 +848,12 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
                 atoms[i].head = Some(outer);
             }
         }
-        atoms[form].head = Some(outer);
+        if let Some(form) = form {
+            atoms[form].head = Some(outer);
+        }
+        if let Some(v) = preceding {
+            atoms[v].head = Some(outer);
+        }
         atoms.splice(first..=person_idx, [receiver]);
     }
 }
@@ -831,6 +862,84 @@ fn filing_recipient(atoms: &[Atom], verb: usize, chars: &[char]) -> Option<usize
     atoms.iter().enumerate().find_map(|(i, a)| {
         (matches!(a.surface.as_str(), "に" | "へ") && recipient(atoms, i, verb, chars))
             .then(|| i - 1)
+    })
+}
+
+// 一緒に belongs to the filing action. An immediately preceding Nと
+// can name the person or item that accompanies the application.
+pub(super) fn together(atoms: &[Atom], verb: usize) -> Option<(usize, Option<(usize, bool)>)> {
+    let i = atoms.windows(2).position(|pair| {
+        let [word, case] = pair else { return false };
+        !word.is_locked
+            && word.surface == "一緒"
+            && word.head == Some(verb)
+            && case.surface == "に"
+            && dasu_case_link(word, case)
+    })?;
+    let companion = i.checked_sub(2).and_then(|start| {
+        let noun = &atoms[start];
+        let to = &atoms[start + 1];
+        (noun.head == Some(verb)
+            && to.surface == "と"
+            && dasu_case_link(noun, to)
+            && to.span.end_char == atoms[i].span.start_char)
+            .then_some((
+                noun.doc_tok_idx?,
+                super::is_companion_person(noun)
+                    || matches!(
+                        noun.lemma.as_deref(),
+                        Some(super::LOCKED_RESIDENT_ATOM | PRESENT_RECIPIENT)
+                    ),
+            ))
+    });
+    Some((atoms[i].doc_tok_idx?, companion))
+}
+
+pub(super) fn companion_label(
+    source: &[Atom],
+    id: usize,
+    person: bool,
+    group: &super::Bunsetsu,
+    target: super::TargetVariant,
+    chars: &[char],
+) -> Option<String> {
+    let end = source.iter().position(|a| a.doc_tok_idx == Some(id))?;
+    let mut start = end;
+    while let Some(i) = start.checked_sub(1) {
+        let before = &source[i];
+        let attached = matches!(
+            before.deprel.as_str(),
+            "nmod" | "amod" | "compound" | "nummod" | "det"
+        ) && source[start..=end]
+            .iter()
+            .any(|a| a.doc_tok_idx == before.head);
+        let genitive = before.surface == "の"
+            && i > 0
+            && dasu_case_link(&source[i - 1], before)
+            && source[start..=end]
+                .iter()
+                .any(|a| a.doc_tok_idx == source[i - 1].head);
+        if !attached && !genitive {
+            break;
+        }
+        start = i;
+    }
+    let counted = (start..=end).find_map(|i| {
+        if !person || !matches!(spelling(&source[i], chars).as_str(), "人" | "名") {
+            return None;
+        }
+        let (first, last, text) = recipient_description(source, i, chars);
+        (first == start && last == end).then_some(text)
+    });
+    let noun = counted.unwrap_or_else(|| {
+        let mut noun = group.clone();
+        noun.atoms = source[start..=end].to_vec();
+        super::render_bunsetsu_np(&noun, target)
+    });
+    Some(if person {
+        format!("和{noun}一起")
+    } else {
+        format!("連同{noun}")
     })
 }
 
@@ -885,25 +994,43 @@ fn mark_shared_form(
             w[0].head == previous.doc_tok_idx
                 && w[1].surface == "と"
                 && dasu_case_link(&w[0], &w[1])
+                && !previous
+                    .doc_tok_idx
+                    .and_then(|v| together(atoms, v))
+                    .and_then(|(_, companion)| companion)
+                    .is_some_and(|(id, _)| w[0].doc_tok_idx == Some(id))
         })
     {
         return None;
     }
-    let next = (first + 1..atoms.len()).find(|&i| atoms[i].doc_tok_idx == previous.head)?;
+    let mut next = (first + 1..atoms.len()).find(|&i| atoms[i].doc_tok_idx == previous.head)?;
+    // An adjective on the accompanying item can become the parser's
+    // next predicate. Its item must link to the same 一緒に filing.
+    if atoms[next].deprel == "amod" {
+        let item = atoms.iter().find(|a| a.doc_tok_idx == atoms[next].head)?;
+        let owner = item.head?;
+        let (_, companion) = together(atoms, owner)?;
+        if companion.map(|(id, _)| id) != item.doc_tok_idx {
+            return None;
+        }
+        next = (next + 1..atoms.len()).find(|&i| atoms[i].doc_tok_idx == Some(owner))?;
+    }
     let reading = filing_reading(&atoms[next], atoms)?;
     let verb = atoms[next].doc_tok_idx?;
+    let office = filing_recipient(atoms, verb, chars)?;
     if atoms[form + 1..next]
         .iter()
         .any(|a| super::is_quote_mark(a) || matches!(a.surface.as_str(), "“" | "”" | "\""))
         || atoms.iter().any(|a| {
             a.head == Some(verb)
                 && (a.deprel == "obj"
-                    || (a.deprel == "nsubj" && a.span.start_char > previous.span.end_char))
+                    || (a.deprel == "nsubj"
+                        && a.doc_tok_idx != atoms[office].doc_tok_idx
+                        && a.span.start_char > previous.span.end_char))
         })
     {
         return None;
     }
-    let office = filing_recipient(atoms, verb, chars)?;
     mark_filing_time(atoms, verb, chars);
     if physical_argument(atoms, verb, chars, doc, true) {
         return None;

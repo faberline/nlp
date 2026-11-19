@@ -9622,6 +9622,7 @@ fn translate_clause_bunsetsus(
         })
         .and_then(|a| a.doc_tok_idx);
     let mut filing_office = None;
+    let filing_together = filing_verb.and_then(|verb| application_form::together(source, verb));
     let mut affected_object = None;
     let mut result_value = None;
     let mut setting_origin = None;
@@ -9631,6 +9632,27 @@ fn translate_clause_bunsetsus(
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if let Some((manner, companion)) = filing_together {
+            if b.atoms.iter().any(|a| a.doc_tok_idx == Some(manner)) {
+                let label = companion.and_then(|(id, person)| {
+                    application_form::companion_label(
+                        source,
+                        id,
+                        person,
+                        &b,
+                        target,
+                        ctx.source_chars,
+                    )
+                });
+                adverbs.push(label.unwrap_or_else(|| "一起".to_owned()));
+                continue;
+            }
+            if let Some((id, _)) = companion
+                && b.atoms.iter().any(|a| a.doc_tok_idx == Some(id))
+            {
+                continue;
+            }
+        }
         if let [reason] = b.atoms.as_slice()
             && reason.lemma.as_deref() == Some(application_form::PURPOSE)
         {
@@ -9651,7 +9673,14 @@ fn translate_clause_bunsetsus(
             continue;
         }
         if filing_verb.is_some()
-            && matches!(b.case_particle.as_deref(), Some("に" | "へ"))
+            && (matches!(
+                b.case_particle.as_deref(),
+                Some("に" | "へ" | "には" | "へは")
+            ) || b.atoms.windows(2).any(|pair| {
+                matches!(pair[0].surface.as_str(), "に" | "へ")
+                    && pair[1].surface == "は"
+                    && pair[0].head == pair[1].head
+            }))
             && let Some(recipient) = b.atoms.iter().find(|a| {
                 matches!(
                     a.lemma.as_deref(),
@@ -15946,6 +15975,26 @@ mod clock_rule_tests {
     fn a_linked_filing_can_share_the_extracted_form() {
         let glossary = TranslationGlossary::new();
         for (jp, zh) in [
+            (
+                "父はかばんから入居申込書を出し、今日受付にいる二人の職員に出しました。",
+                "父親從包包拿出入住申請表，交給今天在櫃檯的兩位職員了。",
+            ),
+            (
+                "私はかばんから入居申込書を出して、管理会社には出しませんでした。",
+                "我從包包拿出入住申請表，沒有交給管理公司。",
+            ),
+            (
+                "私は申込書をかばんから出して、写真と一緒に受付に出しました。",
+                "我從包包拿出申請表，連同照片交給櫃檯了。",
+            ),
+            (
+                "私は申込書をかばんから出して、二人の職員と一緒に受付に出しました。",
+                "我從包包拿出申請表，和兩位職員一起交給櫃檯了。",
+            ),
+            (
+                "私は申込書をかばんから出して、受付にいた母と一緒に窓口に出しました。",
+                "我從包包拿出申請表，和當時在櫃檯的母親一起交給窗口了。",
+            ),
             (
                 "私は講座の申込書をかばんから出して、受付に出しました。",
                 "我從包包拿出課程報名表，交給櫃檯了。",

@@ -1,7 +1,16 @@
 use super::{Atom, Upos, is_daypart_surface, selects_time_value, source_time_head};
 
-pub(super) const GLOSSARY_DAYTIME: &str = "__ja_glossary_daytime";
+const GLOSSARY_DAYTIME: &str = "__ja_glossary_daytime";
+const GLOSSARY_TIME_PHRASE: &str = "__ja_glossary_daytime_phrase";
 const DAYTIME: &str = "__ja_activity_daytime";
+
+pub(super) fn glossary_role(chars: &[char]) -> Option<&'static str> {
+    match chars {
+        ['日', '中'] => Some(GLOSSARY_DAYTIME),
+        ['日', '中', 'に'] | ['日', '中', 'に', 'は' | 'も'] => Some(GLOSSARY_TIME_PHRASE),
+        _ => None,
+    }
+}
 
 pub(super) fn is_modifier(atom: &Atom) -> bool {
     atom.is_locked && atom.lemma.as_deref() == Some(DAYTIME)
@@ -77,6 +86,9 @@ fn selects_participant(stem: &str) -> bool {
             | "頼む"
             | "求める"
             | "要請"
+            | "提案"
+            | "打診"
+            | "勧告"
             | "要求"
             | "依頼"
             | "期待"
@@ -95,6 +107,9 @@ fn selects_participant(stem: &str) -> bool {
 // The analyzer can split 日中にも as 日 + 中にも. Keep both source tokens
 // in the marker's span without manufacturing syntax tokens for に and も.
 fn form(a: &Atom, next: &Atom, following: Option<&Atom>) -> Option<(usize, usize, bool)> {
+    if a.lemma.as_deref() == Some(GLOSSARY_TIME_PHRASE) {
+        return Some((a.span.end_char, a.head?, false));
+    }
     let glossary_day = a.lemma.as_deref() == Some(GLOSSARY_DAYTIME);
     if a.is_locked && !glossary_day
         || next.is_locked
@@ -157,9 +172,30 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
         {
             continue;
         }
-        let Some(verb) = source
+        let Some(mut verb) = source
             .iter()
-            .find(|a| !a.is_locked && a.doc_tok_idx == Some(owner) && a.upos == Some(Upos::Verb))
+            .find(|a| !a.is_locked && a.doc_tok_idx == Some(owner))
+        else {
+            continue;
+        };
+        // A glossary entry that covers に is one tokenizer unit. If it attaches
+        // to a noun as an acl, follow that argument to its own predicate.
+        if word.lemma.as_deref() == Some(GLOSSARY_TIME_PHRASE)
+            && word.deprel == "acl"
+            && matches!(verb.deprel.as_str(), "obj" | "obl" | "nsubj")
+            && verb.upos == Some(Upos::Noun)
+        {
+            let Some(predicate) = source
+                .iter()
+                .find(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == verb.head)
+            else {
+                continue;
+            };
+            verb = predicate;
+        }
+        let Some(owner) = verb
+            .doc_tok_idx
+            .filter(|_| !verb.is_locked && verb.upos == Some(Upos::Verb))
         else {
             continue;
         };
@@ -193,7 +229,7 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
         // A market can be opened to two countries. A shop opening for the
         // day and a meeting being held instead have an event-time modifier.
         let takes_participant = selects_participant(stem)
-            || stem == "開く"
+            || matches!(stem, "開く" | "開放")
                 && source.iter().any(|n| {
                     !n.is_locked
                         && n.head == verb.doc_tok_idx
@@ -217,10 +253,13 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
             continue;
         };
         let range = start..=start + last;
-        if atoms[range.clone()]
-            .iter()
-            .any(|a| a.is_locked && a.lemma.as_deref() != Some(GLOSSARY_DAYTIME))
-        {
+        if atoms[range.clone()].iter().any(|a| {
+            a.is_locked
+                && !matches!(
+                    a.lemma.as_deref(),
+                    Some(GLOSSARY_DAYTIME | GLOSSARY_TIME_PHRASE)
+                )
+        }) {
             continue;
         }
         if takes_participant

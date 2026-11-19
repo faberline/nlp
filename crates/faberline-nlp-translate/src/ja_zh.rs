@@ -1614,11 +1614,10 @@ fn build_sentence_atoms(
                                 ..
                             },
                             true,
-                        ) if chars[lk.source_span.start_char..lk.source_span.end_char]
-                            == ['日', '中'] =>
-                        {
-                            Some(daytime::GLOSSARY_DAYTIME.to_owned())
-                        }
+                        ) => daytime::glossary_role(
+                            &chars[lk.source_span.start_char..lk.source_span.end_char],
+                        )
+                        .map(str::to_owned),
                         (
                             LockOrigin::Glossary {
                                 kind: GlossaryKind::Place,

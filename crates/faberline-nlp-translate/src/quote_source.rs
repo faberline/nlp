@@ -17,6 +17,25 @@ const COMPARED_FORM_NAMES: &[&str] = &["表記", "字形", "字面", "綴り", "
 const FORM_COUNTERS: &[&str] = &["つの", "種類の"];
 const FORM_SCRIPTS: &[&str] = &["カタカナ", "片仮名", "ひらがな", "平仮名", "漢字"];
 const WORD_NAMES: &[&str] = &["言葉", "単語", "語句", "文字列", "語"];
+const CHARACTER_COUNT_PREDICATES: &[&str] = &[
+    "です",
+    "でした",
+    "でしょう",
+    "である",
+    "だった",
+    "ではありません",
+    "ではない",
+    "だ",
+    "あります",
+    "ありません",
+    "ありました",
+    "ある",
+    "あった",
+    "あるのです",
+    "あるでしょう",
+    "なんです",
+    "なの",
+];
 const FORM_LABELS: &[&str] = &[
     "日本語の",
     "英語の",
@@ -327,25 +346,6 @@ fn compares_written_forms(after: &[char]) -> bool {
 
 fn describes_written_form(after: &[char]) -> bool {
     let after = skip_space(after);
-    if let Some(topic) = after.strip_prefix(&['は']) {
-        // A count asserted about the quoted text is evidence of a literal use.
-        // A location followed by は alone is also a normal topic.
-        return after_character_count(topic).is_some_and(|tail| {
-            ["です", "でした", "である", "だった", "だ"]
-                .iter()
-                .any(|copula| {
-                    strip_prefix(tail, copula).is_some_and(|end| {
-                        matches!(
-                            skip_space(end).first(),
-                            None | Some(
-                                '。' | '！' | '？' | 'か' | 'ね' | 'よ' | 'と' | '」' | '』'
-                            )
-                        )
-                    })
-                })
-        });
-    }
-
     if let Some(note) = strip_prefix(after, "と書いてある") {
         let note = skip_space(note);
         return ["メモの", "紙の", "札の", "カードの"]
@@ -437,6 +437,9 @@ fn measures_written_form(after: &[char]) -> bool {
     if after
         .strip_prefix(&['の'])
         .is_some_and(names_character_count)
+        || after
+            .strip_prefix(&['に'])
+            .is_some_and(contains_written_characters)
     {
         return true;
     }
@@ -448,7 +451,7 @@ fn measures_written_form(after: &[char]) -> bool {
         return false;
     };
     let topic = after_total_modifier(after_clause_comma(topic));
-    let question = FORM_SCRIPTS
+    let amount = FORM_SCRIPTS
         .iter()
         .find_map(|script| strip_prefix(topic, script))
         .map_or(topic, |tail| {
@@ -457,32 +460,42 @@ fn measures_written_form(after: &[char]) -> bool {
                 .or_else(|| tail.strip_prefix(&['で']))
                 .map_or(tail, skip_space)
         });
-    let question = after_total_modifier(after_clause_comma(question));
-    let Some(count) = question.strip_prefix(&['何']) else {
+    let amount = after_total_modifier(after_clause_comma(amount));
+    if let Some(tail) = after_character_count(amount) {
+        return matches!(tail.first(), None | Some('。' | '！' | '？' | '?'))
+            || character_composition_predicate(tail)
+            || CHARACTER_COUNT_PREDICATES.iter().any(|predicate| {
+                strip_prefix(tail, predicate).is_some_and(|end| {
+                    matches!(
+                        skip_space(end).first(),
+                        None | Some(
+                            '。' | '！'
+                                | '？'
+                                | '?'
+                                | '、'
+                                | 'か'
+                                | 'ね'
+                                | 'よ'
+                                | 'と'
+                                | '」'
+                                | '』'
+                        )
+                    )
+                })
+            });
+    }
+    if let Some(components) = ["どの", "どんな"]
+        .iter()
+        .find_map(|prefix| strip_prefix(amount, prefix))
+    {
+        return after_character_unit(components).is_some_and(character_composition_predicate);
+    }
+    let Some(tail) = amount.strip_prefix(&['何']).and_then(after_character_unit) else {
         return false;
     };
-    let Some(tail) = ["文字", "字"]
-        .iter()
-        .find_map(|unit| strip_prefix(skip_space(count), unit))
-        .map(skip_space)
-    else {
-        return false;
-    };
-    character_count_is_question(tail)
-        || [
-            "です",
-            "でした",
-            "でしょう",
-            "あります",
-            "ある",
-            "あった",
-            "あるのです",
-            "あるでしょう",
-            "なんです",
-            "なの",
-        ]
-        .iter()
-        .any(|predicate| {
+    character_composition_predicate(tail)
+        || character_count_is_question(tail)
+        || CHARACTER_COUNT_PREDICATES.iter().any(|predicate| {
             strip_prefix(tail, predicate).is_some_and(|question| {
                 let question = skip_space(question);
                 let particle = question.strip_prefix(&['の']).map_or(question, skip_space);
@@ -497,6 +510,27 @@ fn measures_written_form(after: &[char]) -> bool {
                     })
             })
         })
+}
+
+fn contains_written_characters(after: &[char]) -> bool {
+    ["含まれる", "含まれている", "含まれた"]
+        .iter()
+        .find_map(|relation| strip_prefix(skip_space(after), relation))
+        .and_then(after_character_unit)
+        .is_some_and(noun_boundary)
+}
+
+fn character_composition_predicate(after: &[char]) -> bool {
+    let Some(predicate) = after
+        .strip_prefix(&['で'])
+        .or_else(|| strip_prefix(after, "から"))
+        .map(skip_space)
+    else {
+        return false;
+    };
+    ["できて", "できた", "出来て", "出来た", "構成され", "成り立"]
+        .iter()
+        .any(|form| strip_prefix(predicate, form).is_some())
 }
 
 fn character_count_is_question(after: &[char]) -> bool {
@@ -532,7 +566,15 @@ fn after_character_count(chars: &[char]) -> Option<&[char]> {
     if tail.len() == number.len() {
         return None;
     }
-    strip_prefix(tail, "文字").map(skip_space)
+    after_character_unit(tail)
+}
+
+fn after_character_unit(chars: &[char]) -> Option<&[char]> {
+    let chars = skip_space(chars);
+    ["文字", "字"]
+        .iter()
+        .find_map(|unit| strip_prefix(chars, unit))
+        .map(skip_space)
 }
 
 fn strip_prefix<'a>(mut chars: &'a [char], prefix: &str) -> Option<&'a [char]> {
@@ -652,6 +694,14 @@ mod tests {
             ("出身国を聞かれて、「ドイツです」と答えました。", false),
             ("私は「ドイツ」という国を地図で見ました。", false),
             ("「ドイツ」という国に行きました。", false),
+            (
+                "「ドイツ」という国について書いた記事は何文字ですか。",
+                false,
+            ),
+            (
+                "「ドイツ」という単語を聞いたあと、別の文に含まれる文字を数えました。",
+                false,
+            ),
             ("「ドイツ」はどこにありますか。", false),
             (
                 "「ドイツ」という言葉をニュースで聞きました。「来て」は何文字ですか。",
@@ -745,6 +795,43 @@ mod tests {
         .unwrap();
         assert!(!result.target_text.contains("ドイツ"), "{source}");
         assert_eq!(result.target_text.matches("德國").count(), 2, "{source}");
+    }
+
+    #[test]
+    fn preserves_forms_with_an_explicit_written_attribute() {
+        let glossary = glossary();
+        for (source, written) in [
+            ("「来て」という言葉は二文字です。", &["「来て」"][..]),
+            (
+                "「ドイツ」という単語は何文字でできていますか。",
+                &["「ドイツ」"],
+            ),
+            (
+                "「ドイツ」という単語に含まれる文字を数えました。",
+                &["「ドイツ」"],
+            ),
+            (
+                "「ドイツ」という単語はどの文字からできていますか。",
+                &["「ドイツ」"],
+            ),
+            (
+                "「ドイツ」と「来て」は合計で五文字です。",
+                &["「ドイツ」", "「来て」"],
+            ),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            for &original in written {
+                assert_eq!(result.target_text.matches(original).count(), 1, "{source}");
+            }
+            assert!(result.glossary_hits.is_empty(), "{source}");
+        }
     }
 
     #[test]
@@ -863,6 +950,10 @@ mod tests {
             ),
             (
                 "先生は『「来て！」という語が何文字あるか教えて』と言いました。",
+                "「来て！」",
+            ),
+            (
+                "先生は『「来て！」という言葉は三文字です』と説明しました。",
                 "「来て！」",
             ),
         ] {

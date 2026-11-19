@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+mod application_form;
 mod copular_time;
 mod counted_object;
 mod homework_desire;
@@ -201,6 +202,7 @@ pub(crate) fn translate_ja_sentence(
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
+        application_form::normalize(&mut atoms, chars, doc);
     }
 
     if atoms.is_empty() {
@@ -8503,6 +8505,12 @@ fn translate_clause_bunsetsus(
             .doc_tok_idx?;
         (bunsetsus.iter().filter(|b| return_goal(b, root)).count() == 1).then_some(root)
     });
+    let filing_verb = candidates
+        .iter()
+        .flat_map(|b| &b.atoms)
+        .find(|a| a.lemma.as_deref() == Some(application_form::SUBMIT))
+        .and_then(|a| a.doc_tok_idx);
+    let mut filing_office = None;
     let mut affected_object = None;
     let mut result_value = None;
     let mut setting_origin = None;
@@ -8512,6 +8520,15 @@ fn translate_clause_bunsetsus(
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if filing_verb.is_some()
+            && matches!(b.case_particle.as_deref(), Some("に" | "へ"))
+            && b.atoms.iter().any(|a| {
+                a.lemma.as_deref() == Some(application_form::OFFICE) && a.head == filing_verb
+            })
+        {
+            filing_office = Some(render_bunsetsu_np(&b, target));
+            continue;
+        }
         if let Some(trip) = ctx.return_trip
             && let Some(label) = trip_relative_daypart(&b, source, trip.returning)
         {
@@ -8961,6 +8978,9 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if let Some(office) = filing_office {
+        verb_core = format!("向{office}{verb_core}");
+    }
     if let Some(trip) = ctx.return_trip {
         verb_core = if let Some(place) = trip_destination {
             format!("{}回{}", trip.action, place)
@@ -18202,6 +18222,9 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
 }
 
 fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upos>) -> String {
+    if lemma == Some(application_form::SUBMIT) {
+        return "交".to_owned();
+    }
     if lemma == Some(BUILDING_FLOOR)
         && let Some(label) = surface.strip_suffix('階')
     {

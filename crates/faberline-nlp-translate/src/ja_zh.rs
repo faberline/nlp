@@ -105,7 +105,10 @@ enum BunsetsuRole {
     JointCompanion,
     Subj,
     Obl,
-    ExplicitDeadline { modal: &'static str, additive: bool },
+    ExplicitDeadline {
+        modal: &'static str,
+        additive: bool,
+    },
     DeadlineWithDetachedNegation,
     MotionPurpose,
     PurposeModifier,

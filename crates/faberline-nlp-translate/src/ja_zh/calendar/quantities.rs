@@ -22,8 +22,7 @@ fn measure_at(atoms: &[Atom], i: usize, day: &Atom) -> Option<Measure> {
                 && unit.deprel == "advmod")
         || !(Some(head) == day.head
             || atoms.iter().any(|a| {
-                !a.is_locked
-                    && a.doc_tok_idx == Some(head)
+                a.doc_tok_idx == Some(head)
                     && a.head == day.head
                     && matches!(a.upos, Some(Upos::Noun | Upos::Propn))
             }))
@@ -175,8 +174,7 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
     let mut amount = String::new();
     let count_end = q.unit + 1 + usize::from(only || each);
     let related_argument = |arg: &&Atom| {
-        !arg.is_locked
-            && arg.head == verb.doc_tok_idx
+        arg.head == verb.doc_tok_idx
             && (unit.head == verb.doc_tok_idx || unit.head == arg.doc_tok_idx)
     };
     if people {
@@ -190,7 +188,10 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
             .filter(related_argument)
             .filter(|a| a.deprel == "nsubj" && a.doc_tok_idx != unit.doc_tok_idx);
         if let Some(subject) = subjects.next() {
-            if subjects.next().is_some() || subject.upos != Some(Upos::Noun) {
+            if subjects.next().is_some()
+                || !(subject.upos == Some(Upos::Noun)
+                    || subject.is_locked && subject.upos == Some(Upos::Propn))
+            {
                 return;
             }
             result.lemma = Some(
@@ -239,7 +240,11 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
         if objects.next().is_some() {
             return;
         }
-        let noun = translate_single_ja_term(&object.surface, object.lemma.as_deref(), object.upos);
+        let noun = if object.is_locked {
+            String::new()
+        } else {
+            translate_single_ja_term(&object.surface, object.lemma.as_deref(), object.upos)
+        };
         let Some(classifier) = counted_object::classifier(q.kind, &noun) else {
             return;
         };

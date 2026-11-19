@@ -12470,6 +12470,7 @@ fn take_adnominal_arguments(
     let mut deadlines: Vec<_> = remaining
         .extract_if(.., |arg| {
             deadline_governor(arg, doc)
+                .or_else(|| calendar::share_governor(&arg.atoms, doc))
                 .or_else(|| match arg.atoms.as_slice() {
                     [a] if calendar::is_interval(a)
                         || calendar::count_modifier(a).is_some()
@@ -14771,6 +14772,35 @@ mod clock_rule_tests {
         assert!(
             conditional.target_text.starts_with("當")
                 && conditional.target_text.ends_with("老師高興了。")
+        );
+    }
+
+    #[test]
+    fn opaque_participants_keep_their_role_in_counted_relative_and_reported_events() {
+        let mut glossary = TranslationGlossary::new();
+        for (source, name) in [("学生", "指定學生"), ("先生", "指定發言人")] {
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: source.to_owned(),
+                surfaces: vec![source.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, name.to_owned())]),
+                ..GlossaryEntry::default()
+            });
+        }
+        assert_eq!(
+            public_translate(
+                "六月二日と三日に一人ずつ学生が来る学校を選びました。",
+                &glossary
+            )
+            .target_text,
+            "選擇了在六月二日和三日各來一位指定學生的學校。"
+        );
+        assert_eq!(
+            public_translate(
+                "毎日ではなく、三日に一冊ずつ本を借りたと先生が答えました。",
+                &glossary
+            )
+            .target_text,
+            "指定發言人回答，不是每天，而是每三天借用了一本書。"
         );
     }
 

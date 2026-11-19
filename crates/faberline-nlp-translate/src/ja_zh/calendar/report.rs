@@ -1,6 +1,6 @@
 //! Keep an unquoted と complement with its reporting verb. The subordinate
 //! event gets a local root so its day, subject and quantity render together.
-use super::{adjacent_count, is_date, linked_case, quantities};
+use super::{is_date, linked_case, number_before};
 use crate::ja_zh::{
     Atom, Document, Span, SpanLockTable, Upos, core_non_punct, is_punct_atom,
     render_direct_quote_person,
@@ -25,6 +25,11 @@ fn speaker(
             .any(|a| a.doc_tok_idx == case.head && a.head == head && a.deprel == "nsubj")
     {
         return None;
+    }
+    if let [person] = noun
+        && person.is_locked
+    {
+        return Some(person.surface.clone());
     }
     if let [modifiers @ .., person] = noun
         && noun.iter().all(|a| !a.is_locked)
@@ -115,8 +120,10 @@ pub(in crate::ja_zh) fn take(
                 .get(i + 1)
                 .is_some_and(|ni| linked_case(ni, day, day, "に"))
             && (is_date(day)
-                || adjacent_count(core, i + 1).is_some()
-                || quantities::has_measure(&core[..marker], i))
+                || number_before(core, i).is_some()
+                || i.checked_sub(1).is_some_and(|p| {
+                    !core[p].is_locked && core[p].surface == "何" && core[p].head == day.doc_tok_idx
+                }))
     }) {
         return None;
     }

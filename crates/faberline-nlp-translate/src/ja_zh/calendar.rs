@@ -58,6 +58,24 @@ pub(super) fn is_habit(atom: &Atom) -> bool {
     atom.lemma.as_deref() == Some(quantities::HABIT)
 }
 
+// A protected count cannot supply a translated classifier. Its visible
+// distributive ずつ still belongs to the verb of the counted noun phrase.
+pub(super) fn share_governor(atoms: &[Atom], doc: &super::Document) -> Option<usize> {
+    let marker = atoms
+        .iter()
+        .find(|a| !a.is_locked && a.surface == "ずつ" && a.deprel == "discourse")?;
+    let unit = doc.syntax.iter().find(|n| Some(n.token) == marker.head)?;
+    let head = unit.head?;
+    if doc.tokens.get(head)?.upos == Some(Upos::Verb) {
+        return Some(head);
+    }
+    if unit.deprel == "nmod" && matches!(doc.tokens.get(head)?.upos, Some(Upos::Noun | Upos::Propn))
+    {
+        return doc.syntax.iter().find(|n| n.token == head)?.head;
+    }
+    None
+}
+
 pub(super) fn is_interval(atom: &Atom) -> bool {
     atom.lemma.as_deref() == Some(INTERVAL)
 }

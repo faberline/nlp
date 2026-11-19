@@ -7,8 +7,11 @@
 
 use std::collections::HashMap;
 
+mod calendar;
+pub(crate) use calendar::DateContext;
 mod copular_time;
 mod counted_object;
+mod finite_adjective;
 mod homework_desire;
 mod nominal_possession;
 mod payment_potential;
@@ -161,6 +164,7 @@ struct Bunsetsu {
 pub(crate) struct DirectQuoteOpening {
     prefix_span: Span,
     roles: DirectQuoteRoles,
+    elapsed_question: bool,
     pub(crate) close: Option<char>,
 }
 
@@ -196,11 +200,16 @@ pub(crate) fn translate_ja_sentence(
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
+    written_form_continuation: Option<Span>,
+    dates: &mut DateContext,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
+        dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
+        nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target, chars);
     }
 
     if atoms.is_empty() {
@@ -219,11 +228,54 @@ pub(crate) fn translate_ja_sentence(
         .map(|(i, c)| (i, c.span))
         .collect();
 
+    // A written form can cross an analysis sentence boundary. Emit the
+    // continuation before syntax can put a translated particle in front of it.
+    let continuation = atoms
+        .first()
+        .is_some_and(|atom| {
+            written_form_continuation == Some(atom.span)
+                && atom.is_locked
+                && lock_table.locks.first().is_some_and(|lock| {
+                    lock.source_span == atom.span && lock.origin == LockOrigin::QuotedSource
+                })
+        })
+        .then(|| atoms.remove(0));
+    let report =
+        (target == TargetVariant::ZhHant && direct_quote.is_none() && continuation.is_none())
+            .then(|| calendar::report::take(&mut atoms, doc, lock_table, chars))
+            .flatten();
+
+    if target == TargetVariant::ZhHant {
+        calendar::bind_relative_contrast(&mut atoms, chars);
+    }
+
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
     let segments = split_atoms_into_segments(&atoms, doc, sent_span);
+    let prior_letter_distribution = prior_letter_distribution.filter(|_| {
+        direct_quote.is_none() && matches!(segments.as_slice(), [Segment::Clause { .. }])
+    });
 
     let mut out = String::new();
     let mut seg_target_spans: Vec<(Span, Span)> = Vec::with_capacity(segments.len());
+    if let Some(continuation) = continuation {
+        out.push_str(&continuation.surface);
+        seg_target_spans.push((
+            continuation.span,
+            Span {
+                start_char: 0,
+                end_char: out.chars().count(),
+            },
+        ));
+    }
+    if let Some(report) = report {
+        let start = out.chars().count();
+        out.push_str(&report.text);
+        let target_span = Span {
+            start_char: start,
+            end_char: out.chars().count(),
+        };
+        seg_target_spans.extend(report.spans.into_iter().map(|span| (span, target_span)));
+    }
     let mut is_first_non_quote_clause = true;
     let mut prev_was_quote = false;
     let mut emitted_pre_quote_verb = false;
@@ -294,9 +346,18 @@ pub(crate) fn translate_ja_sentence(
                 close_q,
                 span,
             } => {
+                let asked_elapsed = target == TargetVariant::ZhHant
+                    && moved_report.is_none()
+                    && sentence_has_overt_topic
+                    && segments
+                        .get(seg_idx + 1)
+                        .is_some_and(|s| elapsed_quoted_question_report(inner_atoms, s));
+                let elapsed_modal_applied =
+                    asked_elapsed.then(|| std::rc::Rc::new(std::cell::Cell::new(false)));
                 if let Some(prefix) = opening.filter(|quote| quote.span == *span) {
                     out.push_str(&prefix.text);
                 }
+                let quote_start = out.len();
                 emitted_pre_quote_verb = false;
                 if let Some((is_kagon, post_kind)) = next_post_quote {
                     if is_kagon {
@@ -332,7 +393,7 @@ pub(crate) fn translate_ja_sentence(
                 } else {
                     None
                 };
-                for iseg in &inner_segs {
+                for (idx, iseg) in inner_segs.iter().enumerate() {
                     if let Segment::Clause {
                         atoms: catoms,
                         trailing_punct,
@@ -361,6 +422,14 @@ pub(crate) fn translate_ja_sentence(
                                 &ClauseDiscourseCtx {
                                     source_chars: chars,
                                     inside_quote: true,
+                                    elapsed_modal_applied: elapsed_modal_applied.clone(),
+                                    following: &inner_segs[idx + 1..],
+                                    adjective: finite_adjective::Context::in_quote(
+                                        &inner_segs,
+                                        idx,
+                                        &atoms,
+                                        doc,
+                                    ),
                                     ..Default::default()
                                 },
                                 target,
@@ -374,6 +443,16 @@ pub(crate) fn translate_ja_sentence(
                     } else if let Segment::Punct(p, _) = iseg {
                         out.push_str(&localize_punct(p));
                     }
+                }
+                let localized_question = elapsed_modal_applied.as_ref().is_some_and(|a| a.get());
+                if localized_question {
+                    out.insert_str(quote_start, "問：");
+                    if let Some(Segment::Clause { span, .. }) = segments.get(seg_idx + 1) {
+                        moved_report = Some(*span);
+                    }
+                }
+                if localized_question && !out.chars().last().is_some_and(is_quote_terminal) {
+                    out.push('？');
                 }
                 if moved_report.is_some()
                     && out.ends_with('嗎')
@@ -408,7 +487,7 @@ pub(crate) fn translate_ja_sentence(
                 }
                 out.push(localize_open_quote(*open_q, target));
                 let inner_segs = split_atoms_into_segments(inner_atoms, doc, *span);
-                for iseg in &inner_segs {
+                for (idx, iseg) in inner_segs.iter().enumerate() {
                     if let Segment::Clause {
                         atoms: catoms,
                         trailing_punct,
@@ -424,6 +503,13 @@ pub(crate) fn translate_ja_sentence(
                             &ClauseDiscourseCtx {
                                 source_chars: chars,
                                 inside_quote: true,
+                                following: &inner_segs[idx + 1..],
+                                adjective: finite_adjective::Context::in_quote(
+                                    &inner_segs,
+                                    idx,
+                                    &atoms,
+                                    doc,
+                                ),
                                 ..Default::default()
                             },
                             target,
@@ -716,15 +802,27 @@ pub(crate) fn translate_ja_sentence(
                     false
                 };
                 let cond_opt = Some(conditioning);
+                let inside_quote =
+                    ends_continued_quote(segments.get(seg_idx + 1), doc, sentence_idx, chars);
                 let ctx = ClauseDiscourseCtx {
+                    adjective: finite_adjective::Context::at(&segments, seg_idx, doc),
+                    contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
+                        matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
+                    following: &segments[seg_idx + 1..],
                     return_trip: None,
-                    inside_quote: ends_continued_quote(
-                        segments.get(seg_idx + 1),
-                        doc,
-                        sentence_idx,
-                        chars,
-                    ),
+                    parallel_elapsed_te: if target == TargetVariant::ZhHant
+                        && !prev_was_quote
+                        && !inside_quote
+                        && matches!(trailing_punct.as_deref(), None | Some("、" | "，"))
+                    {
+                        match segments.get(seg_idx + 1) {
+                            Some(Segment::Clause { atoms: next, .. }) => parallel_elapsed_te(trimmed_atoms, next),
+                            _ => None,
+                        }
+                    } else { None },
+                    elapsed_modal_applied: None,
+                    inside_quote,
                     in_nagara_follow: prev_was_nagara,
                     in_concessive_follow: prev_concessive_dou,
                     in_kuseni_follow,
@@ -737,6 +835,7 @@ pub(crate) fn translate_ja_sentence(
                     in_proportional_follow,
                     sentence_topic_pronoun,
                     sonomono_antecedent: sonomono_antecedent.clone(),
+                    prior_letter_distribution,
                 };
                 let receiving_request = if target == TargetVariant::ZhHant
                     && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
@@ -833,7 +932,12 @@ pub(crate) fn translate_ja_sentence(
                         _ => false,
                     });
                 if let Some(p) = trailing_punct {
+                    let inside_habitual_action = target == TargetVariant::ZhHant
+                        && matches!(p, "、" | "，")
+                        && matches!(segments.get(seg_idx + 1), Some(Segment::Clause { atoms: following, .. })
+                            if calendar::continues_habitual_action(trimmed_atoms, following, chars));
                     if !(suppress_cleft_comma
+                        || inside_habitual_action
                         || (rendered.ends_with('？') && matches!(p, "。" | "？" | "?"))
                         || ((p == "、" || p == ",")
                             && (rendered.ends_with("，就立刻")
@@ -940,6 +1044,7 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
     let chars: Vec<char> = masked.chars().collect();
     let mut out = String::new();
     let mut cursor = 0usize;
+    let mut dates = DateContext::default();
     for (si, sent) in doc.segmentation.sentences.iter().enumerate() {
         if sent.span.start_char > cursor {
             for &c in &chars[cursor..sent.span.start_char] {
@@ -957,6 +1062,9 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
             &lock_table,
             &cond,
             target,
+            None,
+            None,
+            &mut dates,
             None,
         );
         out.push_str(&tr);
@@ -1001,9 +1109,13 @@ fn normalize_decimal_digits(text: &str) -> String {
 }
 
 fn clock_number(text: &str) -> Option<u32> {
+    bounded_clock_number(text, 24)
+}
+
+fn bounded_clock_number(text: &str, maximum: u32) -> Option<u32> {
     let normalized = normalize_decimal_digits(text);
     if normalized.chars().all(|ch| ch.is_ascii_digit()) {
-        return normalized.parse::<u32>().ok().filter(|&n| n <= 24);
+        return normalized.parse::<u32>().ok().filter(|&n| n <= maximum);
     }
     fn digit(s: &str) -> Option<u32> {
         match s {
@@ -1029,9 +1141,10 @@ fn clock_number(text: &str) -> Option<u32> {
         if tens == 0 || ones == 0 && !normalized.ends_with('十') {
             return None;
         }
-        return (tens * 10 + ones <= 24).then_some(tens * 10 + ones);
+        let number = tens * 10 + ones;
+        return (number <= maximum).then_some(number);
     }
-    digit(&normalized)
+    digit(&normalized).filter(|&n| n <= maximum)
 }
 
 fn clock_hour_text(hour: u32) -> String {
@@ -1780,6 +1893,88 @@ enum Segment {
     Punct(String, Span),
 }
 
+// Move only a source-linked quoted question about an elapsed necessity before
+// its reporting 聞く. The outer verb asks; it does not mean hearing a sound.
+fn elapsed_quoted_question_report(inner: &[Atom], following: &Segment) -> bool {
+    let Segment::Clause { atoms: report, .. } = following else {
+        return false;
+    };
+    let [marker, verb, aux @ ..] = report.as_slice() else {
+        return false;
+    };
+    if marker.is_locked
+        || marker.surface != "と"
+        || verb.is_locked
+        || verb.lemma.as_deref() != Some("聞く")
+        || verb.doc_tok_idx.is_none()
+        || marker.head != verb.doc_tok_idx
+        || aux
+            .iter()
+            .any(|a| a.is_locked || a.head != verb.doc_tok_idx || a.upos != Some(Upos::Aux))
+    {
+        return false;
+    }
+    let Some(finite) = elapsed_question_finite(inner) else {
+        return false;
+    };
+    finite.head == verb.doc_tok_idx && finite.deprel == "advcl"
+}
+
+fn elapsed_question_finite(inner: &[Atom]) -> Option<&Atom> {
+    let inner = core_non_punct(inner);
+    let question = inner.last()?;
+    if question.is_locked
+        || question.surface != "か"
+        || question.upos != Some(Upos::Part)
+        || question.deprel != "discourse"
+    {
+        return None;
+    }
+    let finite = inner.iter().find(|a| a.doc_tok_idx == question.head)?;
+    if finite.is_locked || finite.lemma.as_deref() != Some("ある") {
+        return None;
+    }
+    inner
+        .windows(2)
+        .any(|pair| {
+            let action = &pair[0];
+            let modal = &pair[1];
+            if action.is_locked
+                || modal.is_locked
+                || action.upos != Some(Upos::Verb)
+                || action.head != modal.doc_tok_idx
+                || modal.surface != "必要"
+                || modal.head != finite.doc_tok_idx
+                || action.span.end_char != modal.span.start_char
+            {
+                return false;
+            }
+            let Some(index) = inner.iter().position(|a| a.span == action.span) else {
+                return false;
+            };
+            (0..index).any(|start| {
+                let amount = &inner[start..index];
+                !amount.is_empty()
+                    && amount.iter().all(|a| !a.is_locked)
+                    && amount
+                        .windows(2)
+                        .all(|w| w[0].span.end_char == w[1].span.start_char)
+                    && amount
+                        .last()
+                        .is_some_and(|a| a.span.end_char == action.span.start_char)
+                    && amount.iter().any(|a| a.head == action.doc_tok_idx)
+                    && elapsed_duration_surface(
+                        &amount
+                            .iter()
+                            .map(|a| a.surface.as_str())
+                            .collect::<String>(),
+                    )
+                    .is_some()
+            })
+        })
+        .then_some(finite)
+}
+
 fn localize_open_quote(open_q: char, target: TargetVariant) -> char {
     if target == TargetVariant::ZhHans {
         if open_q == '『' { '‘' } else { '“' }
@@ -1866,6 +2061,7 @@ struct TeHelpRequest<'a> {
     person: Option<TeHelpPerson<'a>>,
     letter_addressee: Option<TeHelpLetterAddressee<'a>>,
     letter_writers: Option<(TeHelpPerson<'a>, &'a str)>,
+    letter_count: Option<TeHelpLetterCount>,
     manner: Option<TeHelpManner<'a>>,
     child_suffix: Option<usize>,
     humble: bool,
@@ -1890,8 +2086,47 @@ struct TeHelpLetterAddressee<'a> {
     members: Vec<&'a [Atom]>,
     count: Option<&'a str>,
     illustrative: bool,
+    explicit_each: bool,
+    recipient_noun: bool,
+    counted_person: Option<usize>,
     start: usize,
     end: usize,
+}
+
+struct TeHelpLetterQuantity<'a> {
+    object: usize,
+    span: std::ops::Range<usize>,
+    recipient_pause: Option<usize>,
+    numeral: String,
+    additional: bool,
+    total: bool,
+    qualifier: Option<&'a str>,
+}
+
+enum TeHelpLetterDistribution<'a> {
+    Unresolved,
+    WriterCount(&'a str),
+    Recipients,
+}
+
+struct TeHelpLetterCount {
+    object: usize,
+    span: std::ops::Range<usize>,
+    recipient_pause: Option<usize>,
+    numeral: String,
+    modifier: Option<&'static str>,
+    per_writer: bool,
+    per_recipient: bool,
+    periodic_joint: bool,
+    joint_signature: Option<std::ops::Range<usize>>,
+    writer_each: Option<std::ops::Range<usize>>,
+    occurrence_rate: Option<(std::ops::Range<usize>, String)>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PriorLetterDistribution {
+    writers: u32,
+    letters: u32,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2030,12 +2265,550 @@ fn linked_letter_case(noun: &Atom, particle: &Atom) -> bool {
         && noun.span.end_char == particle.span.start_char
 }
 
+fn letter_writer_each_adverb(atom: &Atom) -> bool {
+    !atom.is_locked
+        && matches!(atom.surface.as_str(), "それぞれ" | "各自" | "各人")
+        && atom.upos == Some(Upos::Adv)
+        && atom.deprel == "advmod"
+}
+
+fn linked_letter_people_number(number: &Atom, person: &Atom) -> bool {
+    !number.is_locked
+        && !person.is_locked
+        && (matches!(
+            (number.upos, number.deprel.as_str()),
+            (Some(Upos::Num), "nummod")
+        ) || (number.upos == Some(Upos::Noun)
+            && number.deprel == "compound"
+            && number.surface.chars().all(|ch| matches!(ch, '０'..='９'))))
+        && person.doc_tok_idx.is_some()
+        && number.head == person.doc_tok_idx
+        && number.span.end_char == person.span.start_char
+        && person.surface == "人"
+        && person.upos == Some(Upos::Noun)
+}
+
+fn te_help_letter_per_person(atoms: &[Atom], action: usize) -> Option<usize> {
+    let [one, person, tail @ ..] = atoms else {
+        return None;
+    };
+    if !matches!(normalize_decimal_digits(&one.surface).as_str(), "一" | "1")
+        || !linked_letter_people_number(one, person)
+        || person.deprel != "obl"
+        || person.head != Some(action)
+    {
+        return None;
+    }
+    match tail {
+        [per, ..]
+            if matches!(per.surface.as_str(), "につき" | "あたり")
+                && linked_letter_case(person, per) =>
+        {
+            Some(3)
+        }
+        // This spelling can split into an interjection and its attached particle.
+        [a, tari, ..]
+            if a.surface == "あ"
+                && tari.surface == "たり"
+                && !a.is_locked
+                && !tari.is_locked
+                && a.doc_tok_idx.is_some()
+                && tari.head == a.doc_tok_idx
+                && person.span.end_char == a.span.start_char
+                && a.span.end_char == tari.span.start_char =>
+        {
+            Some(4)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn prior_letter_distribution(
+    sentence_idx: usize,
+    chars: &[char],
+    doc: &Document,
+    locks: &SpanLockTable,
+) -> Option<PriorLetterDistribution> {
+    let tokens: Vec<_> = doc
+        .tokens
+        .iter()
+        .filter(|token| token.sentence == sentence_idx)
+        .collect();
+    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, &tokens, locks);
+    if atoms.last()?.surface != "。" || atoms.iter().any(|atom| atom.is_locked) {
+        return None;
+    }
+    let [number, people, topic, each, tail @ ..] = core_non_punct(&atoms) else {
+        return None;
+    };
+    let (count, qualifier, action, polite) = match tail {
+        [count, qualifier, action] => (count, qualifier, action, None),
+        [count, qualifier, action, polite] => (count, qualifier, action, Some(polite)),
+        _ => return None,
+    };
+    let action_id = action.doc_tok_idx?;
+    if action.lemma.as_deref() != Some("書く")
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "root"
+        || (polite.is_none() && action.surface != "書く")
+        || polite.is_some_and(|atom| {
+            atom.surface != "ます" || atom.deprel != "aux" || atom.head != Some(action_id)
+        })
+        || people.surface != "人"
+        || people.deprel != "nsubj"
+        || people.head != Some(action_id)
+        || !matches!(topic.surface.as_str(), "は" | "が")
+        || !linked_letter_case(people, topic)
+        || number.upos != Some(Upos::Num)
+        || number.deprel != "nummod"
+        || number.head != people.doc_tok_idx
+        || number.span.end_char != people.span.start_char
+        || !letter_writer_each_adverb(each)
+        || each.head != Some(action_id)
+        || count.upos != Some(Upos::Noun)
+        || count.deprel != "obl"
+        || count.head != Some(action_id)
+        || count.doc_tok_idx.is_none()
+        || qualifier.surface != "ずつ"
+        || qualifier.deprel != "discourse"
+        || qualifier.head != count.doc_tok_idx
+        || qualifier.span.start_char != count.span.end_char
+    {
+        return None;
+    }
+    let writers = super::opaque::parse_cjk_or_ascii_num(&number.surface)?;
+    let letters = super::opaque::parse_cjk_or_ascii_num(count.surface.strip_suffix('通')?)?;
+    (writers > 1 && letters > 0).then_some(PriorLetterDistribution { writers, letters })
+}
+
+fn te_help_letter_occurrence_rate(
+    arguments: &[Atom],
+    end: usize,
+    action_idx: usize,
+) -> Option<(std::ops::Range<usize>, String)> {
+    let [.., unit, per] = &arguments[..end] else {
+        return None;
+    };
+    let unit_idx = unit.doc_tok_idx?;
+    let linked_to_action = unit.head == Some(action_idx)
+        || unit.head.is_some_and(|head| {
+            arguments.iter().any(|atom| {
+                atom.doc_tok_idx == Some(head)
+                    && atom.head == Some(action_idx)
+                    && letter_writer_each_adverb(atom)
+            })
+        });
+    if unit.is_locked
+        || per.is_locked
+        || per.surface != "につき"
+        || per.upos != Some(Upos::Adp)
+        || per.deprel != "case"
+        || per.head != Some(unit_idx)
+        || !linked_to_action
+    {
+        return None;
+    }
+    let unit_surface = unit.surface.strip_suffix(['回', '度'])?;
+    let (start, numeral) = if unit_surface.is_empty() {
+        let index = end.checked_sub(3)?;
+        let number = &arguments[index];
+        if number.is_locked
+            || unit.upos != Some(Upos::Noun)
+            || unit.deprel != "obl"
+            || !matches!(
+                (number.upos, number.deprel.as_str()),
+                (Some(Upos::Num), "nummod") | (Some(Upos::Noun), "compound")
+            )
+            || number.head != Some(unit_idx)
+            || number.span.end_char != unit.span.start_char
+            || index.checked_sub(1).is_some_and(|prior| {
+                let earlier = &arguments[prior];
+                earlier.span.end_char == number.span.start_char
+                    && is_japanese_numeral(&earlier.surface)
+            })
+        {
+            return None;
+        }
+        (index, number.surface.as_str())
+    } else {
+        if unit.upos != Some(Upos::Adv) || unit.deprel != "advmod" {
+            return None;
+        }
+        (end - 2, unit_surface)
+    };
+    if !is_japanese_numeral(numeral) {
+        return None;
+    }
+    let numeral = normalize_decimal_digits(numeral);
+    let mut rendered = String::from("每");
+    if matches!(numeral.as_str(), "1" | "一") {
+        rendered.push('次');
+    } else {
+        let numeral = if numeral == "2" { "二" } else { &numeral };
+        counted_object::push_quantity(&mut rendered, numeral, "次");
+    }
+    Some((start..end, rendered))
+}
+
+fn te_help_letter_quantity<'a>(
+    arguments: &'a [Atom],
+    letter_idx: usize,
+    action_idx: usize,
+    direct_addressee: Option<&TeHelpLetterAddressee<'_>>,
+) -> Option<TeHelpLetterQuantity<'a>> {
+    let object = arguments
+        .iter()
+        .position(|atom| atom.doc_tok_idx == Some(letter_idx))?;
+    let case = arguments.get(object + 1)?;
+    if case.surface != "を" || !linked_letter_case(&arguments[object], case) {
+        return None;
+    }
+    let mut counters = arguments.iter().enumerate().filter_map(|(index, atom)| {
+        let prefix = atom.surface.strip_suffix('通')?;
+        let after_object =
+            index >= object + 2 && atom.deprel == "obl" && atom.head == Some(action_idx);
+        let before_object = direct_addressee.is_some()
+            && atom.deprel == "nmod"
+            && atom.head == Some(letter_idx)
+            && match object.checked_sub(index) {
+                Some(1) => atom.span.end_char == arguments[object].span.start_char,
+                Some(2) => {
+                    let qualifier = &arguments[index + 1];
+                    linked_letter_quantity_qualifier(atom, qualifier)
+                        && qualifier.span.end_char == arguments[object].span.start_char
+                }
+                _ => false,
+            };
+        let after_quantity = index
+            + 1
+            + usize::from(
+                arguments
+                    .get(index + 1)
+                    .is_some_and(|word| linked_letter_quantity_qualifier(atom, word)),
+            );
+        let recipient_start = direct_addressee
+            .filter(|address| {
+                index >= object + 2
+                    && address.counted_person.is_some()
+                    && (after_object
+                        || (atom.deprel == "nmod" && atom.head == address.counted_person))
+            })
+            .and_then(|address| {
+                // Only a pause between the linked count and recipient belongs here.
+                let quantity_end = arguments[after_quantity - 1].span.end_char;
+                let recipient_begin = arguments[address.start].span.start_char;
+                let adjacent = match address.start.checked_sub(after_quantity) {
+                    Some(0) => quantity_end == recipient_begin,
+                    Some(1) => {
+                        let comma = &arguments[after_quantity];
+                        !comma.is_locked
+                            && comma.deprel == "punct"
+                            && matches!(comma.surface.as_str(), "、" | "，" | ",")
+                            && quantity_end == comma.span.start_char
+                            && comma.span.end_char == recipient_begin
+                    }
+                    _ => false,
+                };
+                adjacent.then_some(address.start)
+            });
+        let recipient_pause = recipient_start
+            .filter(|&start| start > after_quantity)
+            .map(|_| after_quantity);
+        (!atom.is_locked
+            && atom.upos == Some(Upos::Noun)
+            && (after_object || before_object || recipient_start.is_some())
+            && (prefix.is_empty() || is_japanese_numeral(prefix)))
+        .then_some((
+            index,
+            atom,
+            prefix,
+            !after_object && recipient_start.is_some(),
+            recipient_pause,
+        ))
+    });
+    let (counter_index, counter, fused_number, scoped_to_recipient_group, recipient_pause) =
+        counters.next()?;
+    let counter_id = counter.doc_tok_idx?;
+    if counters.next().is_some() {
+        return None;
+    }
+
+    let mut start = counter_index;
+    let numeral = if fused_number.is_empty() {
+        let first = if counter_index < object {
+            0
+        } else {
+            object + 2
+        };
+        while start > first {
+            let part = &arguments[start - 1];
+            if part.span.end_char != arguments[start].span.start_char
+                || !is_japanese_numeral(&part.surface)
+            {
+                break;
+            }
+            let linked_number = (part.upos == Some(Upos::Num)
+                && matches!(part.deprel.as_str(), "nummod" | "nmod"))
+                || (part.upos == Some(Upos::Noun)
+                    && part.deprel == "compound"
+                    && part.surface.chars().all(|ch| matches!(ch, '０'..='９')));
+            if part.is_locked
+                || !linked_number
+                || !arguments[start..=counter_index]
+                    .iter()
+                    .any(|next| next.doc_tok_idx.is_some() && part.head == next.doc_tok_idx)
+            {
+                return None;
+            }
+            start -= 1;
+        }
+        if start == counter_index {
+            return None;
+        }
+        arguments[start..counter_index]
+            .iter()
+            .map(|part| part.surface.as_str())
+            .collect()
+    } else {
+        fused_number.to_owned()
+    };
+    let numeral = normalize_decimal_digits(&numeral);
+    // A total next to the letter count does not set the whole group's quantity
+    // when the same action also has an explicit per-writer modifier.
+    let total = start.checked_sub(1).is_some_and(|index| {
+        let marker = &arguments[index];
+        !marker.is_locked
+            && matches!(marker.surface.as_str(), "合計" | "総計")
+            && marker.upos == Some(Upos::Noun)
+            && matches!(marker.deprel.as_str(), "compound" | "nmod")
+            && marker.head == Some(counter_id)
+            && marker.span.end_char == arguments[start].span.start_char
+    }) && !arguments
+        .iter()
+        .any(|atom| letter_writer_each_adverb(atom) && atom.head == Some(action_idx));
+    start -= usize::from(total);
+    let additional = start.checked_sub(1).is_some_and(|index| {
+        let more = &arguments[index];
+        !more.is_locked
+            && more.surface == "もう"
+            && more.upos == Some(Upos::Adv)
+            && more.deprel == "advmod"
+            && more.head == Some(action_idx)
+            && more.span.end_char == arguments[start].span.start_char
+    });
+    start -= usize::from(additional);
+    let after_counter = counter_index + 1;
+    let qualifier = arguments
+        .get(after_counter)
+        .filter(|word| linked_letter_quantity_qualifier(counter, word));
+    let distributed = qualifier.is_some_and(|word| word.surface == "ずつ");
+    if (total && distributed)
+        || ((scoped_to_recipient_group || recipient_pause.is_some()) && !distributed && !total)
+    {
+        return None;
+    }
+    let span = start..after_counter + usize::from(qualifier.is_some());
+    Some(TeHelpLetterQuantity {
+        object,
+        span,
+        recipient_pause,
+        numeral,
+        additional,
+        total,
+        qualifier: qualifier.map(|word| word.surface.as_str()),
+    })
+}
+
+fn linked_letter_quantity_qualifier(counter: &Atom, word: &Atom) -> bool {
+    !word.is_locked
+        && matches!(word.surface.as_str(), "ずつ" | "だけ")
+        && word.upos == Some(Upos::Part)
+        && word.deprel == "discourse"
+        && counter.doc_tok_idx.is_some()
+        && word.head == counter.doc_tok_idx
+        && counter.span.end_char == word.span.start_char
+}
+
+fn te_help_letter_count(
+    arguments: &[Atom],
+    action_idx: usize,
+    quantity: TeHelpLetterQuantity<'_>,
+    distribution: TeHelpLetterDistribution<'_>,
+    writers: Option<&TeHelpPerson<'_>>,
+    manner: Option<&TeHelpManner<'_>>,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
+) -> Option<TeHelpLetterCount> {
+    let TeHelpLetterQuantity {
+        object,
+        span,
+        recipient_pause,
+        numeral,
+        additional,
+        total,
+        qualifier: qualifier_text,
+    } = quantity;
+    let writer_count = match distribution {
+        TeHelpLetterDistribution::WriterCount(count) => Some(count),
+        _ => None,
+    };
+    let can_distribute_to_writers = writer_count.is_some();
+    let per_recipient = matches!(distribution, TeHelpLetterDistribution::Recipients);
+    let joint_manner = manner.is_some();
+    let mut signatures = arguments.windows(2).enumerate().filter(|(_, pair)| {
+        let (name, case) = (&pair[0], &pair[1]);
+        name.surface == "連名"
+            && !name.is_locked
+            && name.upos == Some(Upos::Noun)
+            && name.deprel == "obl"
+            && name.head == Some(action_idx)
+            && case.surface == "で"
+            && linked_letter_case(name, case)
+    });
+    let signature = signatures.next().map(|(index, _)| index..index + 2);
+    let mut recurring_periods = arguments.iter().filter(|period| {
+        !period.is_locked
+            && period.surface.strip_prefix('毎').is_some_and(|unit| {
+                matches!(
+                    unit,
+                    "日" | "週" | "月" | "年" | "朝" | "晩" | "時" | "回" | "度"
+                )
+            })
+            && period.upos == Some(Upos::Adv)
+            && period.deprel == "advmod"
+            && period.head == Some(action_idx)
+    });
+    let recurring_period = recurring_periods.next();
+    let mut occurrence_rates = arguments
+        .iter()
+        .enumerate()
+        .filter(|(_, atom)| atom.surface == "につき")
+        .filter_map(|(index, _)| te_help_letter_occurrence_rate(arguments, index + 1, action_idx));
+    let occurrence_rate = occurrence_rates.next();
+    // A count must have a single cadence. Keep multiple possible cadence
+    // scopes on the ordinary path when the sentence also has a joint writer.
+    if qualifier_text == Some("ずつ")
+        && (joint_manner || signature.is_some())
+        && ((recurring_period.is_some() && occurrence_rate.is_some())
+            || recurring_periods.next().is_some()
+            || occurrence_rates.next().is_some())
+    {
+        return None;
+    }
+    let writer_each = if qualifier_text == Some("ずつ") && can_distribute_to_writers {
+        arguments.iter().enumerate().find_map(|(index, atom)| {
+            if letter_writer_each_adverb(atom)
+                && (atom.head == Some(action_idx)
+                    || recurring_period.is_some_and(|period| {
+                        period.doc_tok_idx.is_some() && atom.head == period.doc_tok_idx
+                    })
+                    || occurrence_rate.as_ref().is_some_and(|(span, _)| {
+                        atom.head.is_some()
+                            && arguments[span.clone()]
+                                .iter()
+                                .any(|period| period.doc_tok_idx == atom.head)
+                    }))
+            {
+                Some(index..index + 1)
+            } else if signature.is_none() {
+                let length = te_help_letter_per_person(&arguments[index..], action_idx)?;
+                Some(index..index + length)
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+    let each_in_prior_statement = prior_letter_distribution.is_some_and(|prior| {
+        // Carry the prior count only for the same anonymous group and quantity.
+        signature.is_none()
+            && manner.is_some_and(|group| group.companion.is_none())
+            && writer_count.and_then(super::opaque::parse_cjk_or_ascii_num) == Some(prior.writers)
+            && super::opaque::parse_cjk_or_ascii_num(&numeral) == Some(prior.letters)
+            && !atoms_has_any(arguments, &["合わせる", "合計", "共同", "一緒", "協力"])
+    });
+    let periodic_joint = qualifier_text == Some("ずつ")
+        && (recurring_period.is_some() || occurrence_rate.is_some())
+        && writer_each.is_none()
+        && !per_recipient
+        && !each_in_prior_statement
+        && (joint_manner || signature.is_some())
+        && signatures.next().is_none();
+    // A joint signature does not provide proof that each writer owes a letter.
+    if signature.is_some()
+        && qualifier_text == Some("ずつ")
+        && !periodic_joint
+        && writer_each.is_none()
+    {
+        return None;
+    }
+    let modifier = if total {
+        Some(match (additional, qualifier_text) {
+            (true, Some("だけ")) => "總共只再",
+            (false, Some("だけ")) => "總共只",
+            (true, _) => "總共再",
+            (false, _) => "總共",
+        })
+    } else if periodic_joint {
+        Some(match (signature.is_some(), additional) {
+            (true, true) => "再聯名",
+            (true, false) => "聯名",
+            (false, true) => "再一起",
+            (false, false) => "一起",
+        })
+    } else {
+        match (additional, qualifier_text) {
+            (true, Some("ずつ")) => Some("再各"),
+            (false, Some("ずつ")) => Some("各"),
+            (true, Some("だけ")) => Some("只再"),
+            (false, Some("だけ")) => Some("只"),
+            (true, None) if per_recipient => Some("再各"),
+            (false, None) if per_recipient => Some("各"),
+            (true, _) => Some("再"),
+            (false, _) => None,
+        }
+    };
+    if te_help_has_following_focus(arguments, span.end)
+        || arguments.iter().enumerate().any(|(index, atom)| {
+            // The analyzer can attach the writer group's 方 to the next adverb.
+            // The writer parser has already accounted for this group.
+            let writer_plural = additional
+                && writers.is_some_and(|group| (group.start..group.end).contains(&index))
+                && atom.surface == "方"
+                && atom.deprel == "advmod"
+                && atom.head == arguments[span.start].doc_tok_idx;
+            !span.contains(&index)
+                && !writer_plural
+                && atom.head.is_some()
+                && arguments[span.clone()]
+                    .iter()
+                    .any(|bound| atom.head == bound.doc_tok_idx)
+        })
+    {
+        return None;
+    }
+    Some(TeHelpLetterCount {
+        object,
+        span,
+        recipient_pause,
+        numeral,
+        modifier,
+        per_writer: qualifier_text == Some("ずつ") && can_distribute_to_writers && !periodic_joint,
+        per_recipient,
+        periodic_joint,
+        joint_signature: signature.filter(|_| periodic_joint),
+        writer_each,
+        occurrence_rate,
+    })
+}
+
 fn te_help_letter_addressee(
     arguments: &[Atom],
     marker: usize,
     action_idx: usize,
     letter_idx: usize,
     separate_writers: bool,
+    letter_for_each: bool,
 ) -> Option<TeHelpLetterAddressee<'_>> {
     let [address, tail @ ..] = &arguments[marker..] else {
         return None;
@@ -2062,8 +2835,6 @@ fn te_help_letter_addressee(
 
     let mut start = marker.checked_sub(1)?;
     let mut count = None;
-    let mut members = Vec::new();
-    let mut conjunction = None;
     if let Some(number_idx) = marker.checked_sub(2)
         && let [number, people] = &arguments[number_idx..marker]
         && people.surface == "人"
@@ -2097,38 +2868,19 @@ fn te_help_letter_addressee(
         }
         Some(start)
     };
-    if let Some(last) = last_member {
-        start = letter_address_member_start(arguments, last, address_idx)?;
-        members.push(&arguments[start..=last]);
-        let mut next_head = arguments[last].doc_tok_idx;
-        while let Some(previous) = start.checked_sub(2) {
-            let (name, joint) = (&arguments[previous], &arguments[previous + 1]);
-            if !matches!(joint.surface.as_str(), "と" | "や")
-                || joint.span.end_char != arguments[start].span.start_char
-            {
-                break;
-            }
-            let linked_conjunct =
-                name.deprel == "conj" && (name.head == Some(address_idx) || name.head == next_head);
-            // The parser may attach a と conjunct to 書く. Only extend that
-            // span with a separate writer group or an explicit addressee count.
-            let scoped_conjunct = joint.surface == "と"
-                && (separate_writers || count.is_some())
-                && name.deprel == "obl"
-                && name.head == Some(action_idx);
-            if !(linked_conjunct || scoped_conjunct)
-                || !linked_letter_case(name, joint)
-                || conjunction.is_some_and(|seen| seen != joint.surface.as_str())
-            {
-                return None;
-            }
-            conjunction = Some(joint.surface.as_str());
-            start = letter_address_member_start(arguments, previous, address_idx)?;
-            members.push(&arguments[start..=previous]);
-            next_head = name.doc_tok_idx;
-        }
-        members.reverse();
-    }
+    let (members, illustrative) = if let Some(last) = last_member {
+        let (member_start, members, illustrative) = te_help_letter_address_members(
+            arguments,
+            last,
+            address_idx,
+            action_idx,
+            separate_writers || count.is_some() || letter_for_each,
+        )?;
+        start = member_start;
+        (members, illustrative)
+    } else {
+        (Vec::new(), false)
+    };
     let end = case_index + 1;
     if count.is_some_and(|number| {
         !members.is_empty()
@@ -2157,10 +2909,235 @@ fn te_help_letter_addressee(
     Some(TeHelpLetterAddressee {
         members,
         count,
-        illustrative: conjunction == Some("や"),
+        illustrative,
+        explicit_each: false,
+        recipient_noun: false,
+        counted_person: None,
         start,
         end,
     })
+}
+
+fn te_help_letter_address_members(
+    arguments: &[Atom],
+    last: usize,
+    address_idx: usize,
+    action_idx: usize,
+    allow_action_attachment: bool,
+) -> Option<(usize, Vec<&[Atom]>, bool)> {
+    let mut start = letter_address_member_start(arguments, last, address_idx)?;
+    let mut members = vec![&arguments[start..=last]];
+    let mut next_head = arguments[last].doc_tok_idx;
+    let mut conjunction = None;
+    while let Some(previous) = start.checked_sub(2) {
+        let (name, joint) = (&arguments[previous], &arguments[previous + 1]);
+        if !matches!(joint.surface.as_str(), "と" | "や")
+            || joint.span.end_char != arguments[start].span.start_char
+        {
+            break;
+        }
+        let linked_conjunct =
+            name.deprel == "conj" && (name.head == Some(address_idx) || name.head == next_head);
+        // An explicit distribution or role boundary can resolve a と conjunct
+        // that the analyzer attached to the writing action.
+        let scoped_conjunct = joint.surface == "と"
+            && allow_action_attachment
+            && name.deprel == "obl"
+            && name.head == Some(action_idx);
+        if !(linked_conjunct || scoped_conjunct)
+            || !linked_letter_case(name, joint)
+            || conjunction.is_some_and(|seen| seen != joint.surface.as_str())
+        {
+            return None;
+        }
+        conjunction = Some(joint.surface.as_str());
+        start = letter_address_member_start(arguments, previous, address_idx)?;
+        members.push(&arguments[start..=previous]);
+        next_head = name.doc_tok_idx;
+    }
+    members.reverse();
+    Some((start, members, conjunction == Some("や")))
+}
+
+fn te_help_letter_recipient_noun(arguments: &[Atom], start: usize) -> Option<usize> {
+    let head = match &arguments[start..] {
+        [noun, ..] if noun.surface == "受取人" => start,
+        [receive, take, person, ..]
+            if receive.surface == "受"
+                && take.surface == "取"
+                && person.surface == "人"
+                && [receive, take].iter().all(|atom| {
+                    atom.upos == Some(Upos::Noun)
+                        && atom.deprel == "compound"
+                        && atom.head == person.doc_tok_idx
+                }) =>
+        {
+            start + 2
+        }
+        _ => return None,
+    };
+    let role = &arguments[head];
+    (role.upos == Some(Upos::Noun) && role.doc_tok_idx.is_some()).then_some(head)
+}
+
+fn te_help_letter_recipient_group(
+    arguments: &[Atom],
+    start: usize,
+    role: usize,
+    letter_idx: usize,
+    action_idx: usize,
+) -> Option<(std::ops::Range<usize>, &Atom, bool)> {
+    let recipient = &arguments[role];
+    let before = start.checked_sub(3).and_then(|begin| {
+        let [number, person, no] = &arguments[begin..start] else {
+            return None;
+        };
+        (linked_letter_people_number(number, person)
+            && no.surface == "の"
+            && linked_letter_case(person, no)
+            && person.deprel == "nmod"
+            && person.head == recipient.doc_tok_idx)
+            .then_some((begin, role, number))
+    });
+    let (start, head, number) = before.or_else(|| {
+        let [number, person, ..] = &arguments[role + 1..] else {
+            return None;
+        };
+        (linked_letter_people_number(number, person)
+            && recipient.deprel == "nmod"
+            && recipient.head == person.doc_tok_idx)
+            .then_some((start, role + 2, number))
+    })?;
+    let person = &arguments[head];
+    if super::opaque::parse_cjk_or_ascii_num(&number.surface)? == 0 {
+        return None;
+    }
+    let linked_dative = person.deprel == "obl" && person.head == Some(action_idx);
+    let linked_each = |atom: &Atom, text: &str| {
+        !atom.is_locked
+            && atom.surface == text
+            && atom.upos == Some(Upos::Adv)
+            && atom.deprel == "advmod"
+            && atom.head == Some(action_idx)
+    };
+    let (length, explicit_each) = match &arguments[head + 1..] {
+        [ni, tail @ ..]
+            if linked_dative && ni.surface == "に" && linked_letter_case(person, ni) =>
+        {
+            let each = tail
+                .first()
+                .is_some_and(|atom| linked_each(atom, "それぞれ"));
+            (1 + usize::from(each), each)
+        }
+        [each, ..] if linked_dative && linked_each(each, "それぞれに") => (1, true),
+        [no, each, ..]
+            if person.deprel == "nmod"
+                && person.head == Some(letter_idx)
+                && no.surface == "の"
+                && linked_letter_case(person, no)
+                && linked_each(each, "それぞれに") =>
+        {
+            (2, true)
+        }
+        _ => return None,
+    };
+    Some((start..head + 1 + length, number, explicit_each))
+}
+
+fn te_help_letter_recipient_role(
+    arguments: &[Atom],
+    start: usize,
+    letter_idx: usize,
+    action_idx: usize,
+) -> Option<TeHelpLetterAddressee<'_>> {
+    let role = te_help_letter_recipient_noun(arguments, start)?;
+    let (span, count, explicit_each, counted_person) = if let Some((span, number, explicit_each)) =
+        te_help_letter_recipient_group(arguments, start, role, letter_idx, action_idx)
+    {
+        (
+            span,
+            Some(number.surface.as_str()),
+            explicit_each,
+            number.head,
+        )
+    } else {
+        let rate = role + 1;
+        let length = te_help_letter_per_person(&arguments[rate..], action_idx)?;
+        let owner = &arguments[role];
+        if owner.deprel != "nmod" || owner.head != arguments[rate + 1].doc_tok_idx {
+            return None;
+        }
+        (start..rate + length, None, true, None)
+    };
+    Some(TeHelpLetterAddressee {
+        members: Vec::new(),
+        count,
+        illustrative: false,
+        explicit_each,
+        recipient_noun: true,
+        counted_person,
+        start: span.start,
+        end: span.end,
+    })
+}
+
+fn te_help_letter_direct_addressee(
+    arguments: &[Atom],
+    index: usize,
+    letter_idx: usize,
+    action_idx: usize,
+) -> Option<TeHelpLetterAddressee<'_>> {
+    let address = if matches!(arguments[index].surface.as_str(), "それぞれに" | "それぞれ")
+    {
+        let [.., name, case, each] = &arguments[..=index] else {
+            return None;
+        };
+        let linked_name = match (case.surface.as_str(), each.surface.as_str()) {
+            ("の", "それぞれに") => name.deprel == "nmod" && name.head == Some(letter_idx),
+            ("に", "それぞれ") => name.deprel == "obl" && name.head == Some(action_idx),
+            _ => false,
+        };
+        if each.upos != Some(Upos::Adv)
+            || each.deprel != "advmod"
+            || each.head != Some(action_idx)
+            || !linked_name
+            || !linked_letter_case(name, case)
+        {
+            return None;
+        }
+        let (start, members, illustrative) = te_help_letter_address_members(
+            arguments,
+            index - 2,
+            name.doc_tok_idx?,
+            action_idx,
+            true,
+        )?;
+        if illustrative || members.len() < 2 {
+            return None;
+        }
+        TeHelpLetterAddressee {
+            members,
+            count: None,
+            illustrative: false,
+            explicit_each: true,
+            recipient_noun: false,
+            counted_person: None,
+            start,
+            end: index + 1,
+        }
+    } else {
+        te_help_letter_recipient_role(arguments, index, letter_idx, action_idx)?
+    };
+    let phrase = &arguments[address.start..address.end];
+    if phrase.iter().any(|atom| atom.is_locked)
+        || !phrase
+            .windows(2)
+            .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+        || te_help_has_following_focus(arguments, address.end)
+    {
+        return None;
+    }
+    Some(address)
 }
 
 fn te_help_letter_writers(
@@ -2298,7 +3275,11 @@ fn te_help_has_following_focus(arguments: &[Atom], end: usize) -> bool {
     })
 }
 
-fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpRequest<'a>> {
+fn te_help_request<'a>(
+    atoms: &'a [Atom],
+    doc: &Document,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
+) -> Option<TeHelpRequest<'a>> {
     let (body, helper, polite, question, negative_form) = match atoms {
         [body @ .., helper, mase, n, question] if mase.surface == "ませ" && n.surface == "ん" => {
             (
@@ -2443,7 +3424,52 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
     } else {
         None
     };
-    let letter_writers = if letter_marker.is_some() {
+    let each_addressee = if let Some(letter_idx) = letter_idx {
+        let mut addresses = arguments
+            .iter()
+            .enumerate()
+            .filter(|(_, atom)| match atom.surface.as_str() {
+                "それぞれ" => letter_marker.is_none(),
+                "それぞれに" | "受" | "受取人" => true,
+                _ => false,
+            })
+            .filter_map(|(index, _)| {
+                te_help_letter_direct_addressee(arguments, index, letter_idx, action_idx)
+            });
+        let address = addresses.next();
+        if addresses.next().is_some() {
+            return None;
+        }
+        address
+    } else {
+        None
+    };
+    let letter_quantity = letter_idx.and_then(|index| {
+        te_help_letter_quantity(
+            arguments,
+            index,
+            action_idx,
+            each_addressee.as_ref().filter(|_| letter_marker.is_none()),
+        )
+    });
+    let distributes_letters = letter_quantity
+        .as_ref()
+        .is_some_and(|quantity| quantity.qualifier == Some("ずつ"));
+    let each_addressee = each_addressee.filter(|address| {
+        letter_quantity.as_ref().is_some_and(|quantity| {
+            !address.explicit_each || matches!(quantity.qualifier, None | Some("ずつ"))
+        })
+    });
+    if letter_quantity
+        .as_ref()
+        .is_some_and(|quantity| quantity.total)
+        && each_addressee
+            .as_ref()
+            .is_some_and(|address| address.explicit_each)
+    {
+        return None;
+    }
+    let letter_writers = if letter_marker.is_some() || each_addressee.is_some() {
         let mut groups = (0..arguments.len())
             .filter_map(|start| te_help_letter_writers(arguments, start, action_idx, helper_idx));
         let writers = groups.next();
@@ -2456,16 +3482,28 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
     } else {
         None
     };
+    let inferred_each_addressee = distributes_letters
+        && letter_writers.is_none()
+        && manner.is_none()
+        && !atoms_has_any(arguments, &["連名", "一緒", "共同", "合わせる"])
+        && !arguments.iter().enumerate().any(|(index, atom)| {
+            letter_writer_each_adverb(atom)
+                || te_help_letter_per_person(&arguments[index..], action_idx).is_some()
+        });
     let letter_addressee = if let Some((marker, letter_idx)) = letter_marker {
+        if each_addressee.is_some() {
+            return None;
+        }
         Some(te_help_letter_addressee(
             arguments,
             marker,
             action_idx,
             letter_idx,
             letter_writers.is_some(),
+            inferred_each_addressee,
         )?)
     } else {
-        None
+        each_addressee
     };
     if letter_addressee.is_some() && manner.is_none() && letter_writers.is_none() {
         let mut companions = (0..arguments.len())
@@ -2500,6 +3538,61 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
             bound.start = prior;
         }
     }
+    let addressee_count = letter_addressee
+        .as_ref()
+        .and_then(|address| address.count)
+        .and_then(super::opaque::parse_cjk_or_ascii_num);
+    let multiple_addressees = addressee_count.is_some_and(|number| number > 1);
+    let per_recipient = letter_addressee.as_ref().is_some_and(|address| {
+        address.explicit_each
+            || (inferred_each_addressee
+                && manner.is_none()
+                && !address.illustrative
+                && (address.members.len() > 1 || multiple_addressees))
+    });
+    if distributes_letters
+        && !per_recipient
+        && multiple_addressees
+        && letter_addressee
+            .as_ref()
+            .is_some_and(|address| address.recipient_noun)
+    {
+        return None;
+    }
+    let letter_count = letter_quantity.and_then(|quantity| {
+        // With one explicit addressee, a counted group can write a letter each.
+        let one_addressee = letter_addressee.as_ref().is_some_and(|address| {
+            !address.illustrative
+                && ((address.members.len() == 1 && address.count.is_none())
+                    || (address.recipient_noun && addressee_count == Some(1)))
+        });
+        let writer_count = letter_writers
+            .as_ref()
+            .map(|(_, count)| *count)
+            .or_else(|| manner.as_ref().and_then(|group| group.count))
+            .filter(|_| one_addressee);
+        let distribution = if per_recipient {
+            TeHelpLetterDistribution::Recipients
+        } else {
+            writer_count.map_or(
+                TeHelpLetterDistribution::Unresolved,
+                TeHelpLetterDistribution::WriterCount,
+            )
+        };
+        let writers = letter_writers.as_ref().map(|(person, _)| person);
+        te_help_letter_count(
+            arguments,
+            action_idx,
+            quantity,
+            distribution,
+            writers,
+            manner.as_ref(),
+            prior_letter_distribution,
+        )
+    });
+    if per_recipient && letter_count.is_none() {
+        return None;
+    }
     let is_modifier = |index| {
         manner
             .as_ref()
@@ -2513,6 +3606,9 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
             || letter_writers
                 .as_ref()
                 .is_some_and(|(bound, _)| (bound.start..bound.end).contains(&index))
+            || letter_count
+                .as_ref()
+                .is_some_and(|bound| bound.span.contains(&index))
     };
 
     let child_suffix = te_help_child_suffix(arguments, action_idx);
@@ -2580,12 +3676,18 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
         .filter(|(_, atom)| is_punct_atom(atom))
     {
         let lead = &arguments[lead_start..comma];
+        // The quantity parser already verified the letter and its object particle.
+        let letter_object = letter_count
+            .as_ref()
+            .filter(|count| count.recipient_pause == Some(comma) && count.object >= lead_start)
+            .map(|count| count.object);
         if !matches!(separator.surface.as_str(), "、" | "，" | ",")
             || lead.is_empty()
             || (lead_start > 0 && letter_addressee.is_none())
             || !lead.iter().enumerate().all(|(offset, adverb)| {
                 let index = lead_start + offset;
                 is_modifier(index)
+                    || letter_object.is_some_and(|object| index == object || index == object + 1)
                     || (letter_role.is_some()
                         && person
                             .as_ref()
@@ -2612,6 +3714,7 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
         person,
         letter_addressee,
         letter_writers,
+        letter_count,
         manner,
         child_suffix,
         humble,
@@ -3210,7 +4313,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
     let ending = &atoms[request_atoms.len()..];
     if (ending.is_empty()
         || matches!(ending, [punct] if !punct.is_locked && matches!(punct.surface.as_str(), "。" | "？" | "?")))
-        && te_help_request(request_atoms, doc).is_some()
+        && te_help_request(request_atoms, doc, None).is_some()
     {
         let punctuation = (!ending.is_empty()).then(|| "？".to_owned());
         flush_clause(&mut request_atoms.to_vec(), punctuation, &mut segments);
@@ -3219,6 +4322,14 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
 
     while i < atoms.len() {
         let a = &atoms[i];
+        if a.upos == Some(Upos::Num)
+            && atoms
+                .get(i + 1)
+                .is_some_and(|day| !day.is_locked && day.surface == "日")
+            && calendar::contrasts_recurrence(&current)
+        {
+            flush_clause(&mut current, None, &mut segments);
+        }
         if !a.is_locked && matches!(a.surface.as_str(), "「" | "『") {
             flush_clause(&mut current, None, &mut segments);
             let open_q = a.surface.chars().next().unwrap_or('「');
@@ -3909,6 +5020,27 @@ fn complete_cross_sentence_direct_quote(
     doc: &Document,
     locks: &SpanLockTable,
 ) -> Option<DirectQuotePrefix> {
+    if opening.elapsed_question
+        && let [marker, verb, aux @ ..] = report
+        && !marker.is_locked
+        && marker.surface == "と"
+        && !verb.is_locked
+        && verb.lemma.as_deref() == Some("聞く")
+        && verb.deprel == "root"
+        && verb.doc_tok_idx.is_some()
+        && marker.head == verb.doc_tok_idx
+        && aux
+            .iter()
+            .all(|a| !a.is_locked && a.upos == Some(Upos::Aux) && a.head == verb.doc_tok_idx)
+        && let Some(speaker) = &opening.roles.speaker
+        && opening.roles.listener.is_none()
+        && opening.roles.time.is_none()
+    {
+        return Some(DirectQuotePrefix {
+            span: opening.prefix_span,
+            text: format!("{speaker}問："),
+        });
+    }
     let (after, verb) = direct_quote_report_parts(report)?;
     if after.iter().any(|atom| atom.is_locked) {
         // A placeholder from the reporting sentence cannot move to the opening
@@ -3971,6 +5103,8 @@ pub(crate) fn direct_quote_opening(
     Some(DirectQuoteOpening {
         prefix_span,
         roles,
+        elapsed_question: elapsed_question_finite(inner_atoms)
+            .is_some_and(|finite| finite.deprel == "root"),
         close,
     })
 }
@@ -4027,9 +5161,14 @@ pub(crate) fn direct_quote_end(
 
 #[derive(Clone, Default)]
 struct ClauseDiscourseCtx<'a> {
+    adjective: finite_adjective::Context,
+    contrasts_recurrence: bool,
     source_chars: &'a [char],
+    following: &'a [Segment],
     return_trip: Option<ReturnTrip>,
+    parallel_elapsed_te: Option<usize>,
     inside_quote: bool,
+    elapsed_modal_applied: Option<std::rc::Rc<std::cell::Cell<bool>>>,
     in_nagara_follow: bool,
     in_concessive_follow: bool,
     in_kuseni_follow: bool,
@@ -4042,6 +5181,146 @@ struct ClauseDiscourseCtx<'a> {
     in_proportional_follow: bool,
     sentence_topic_pronoun: Option<&'static str>,
     sonomono_antecedent: Option<String>,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
+}
+
+// The segmenter has already separated the two clauses. Prove the terminal て
+// belongs to the first action and that action reaches the second lexical event.
+fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
+    if first
+        .iter()
+        .chain(next)
+        .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+        || next.first().is_some_and(|a| a.surface == "から")
+    {
+        return None;
+    }
+    let [.., terminal, te] = first else {
+        return None;
+    };
+    if terminal.upos != Some(Upos::Verb)
+        || terminal.deprel != "advcl"
+        || te.upos != Some(Upos::Sconj)
+        || !matches!(te.surface.as_str(), "て" | "で")
+        || te.deprel != "mark"
+        || te.head != terminal.doc_tok_idx
+        || terminal.span.end_char != te.span.start_char
+    {
+        return None;
+    }
+    let first_verbs: Vec<_> = first
+        .iter()
+        .filter(|a| a.upos == Some(Upos::Verb))
+        .collect();
+    let action = match first_verbs.as_slice() {
+        [only] if only.doc_tok_idx == terminal.doc_tok_idx => *only,
+        [lexical, finite]
+            if finite.doc_tok_idx == terminal.doc_tok_idx
+                && finite.lemma.as_deref() == Some("する")
+                && lexical.deprel == "advcl"
+                && lexical.head == finite.doc_tok_idx
+                && lexical.span.end_char == finite.span.start_char =>
+        {
+            *lexical
+        }
+        _ => return None,
+    };
+    let action_id = action.doc_tok_idx?;
+    if !elapsed_owned_by(first, action_id) {
+        return None;
+    }
+    if next.first().is_some_and(|a| {
+        te.span.end_char == a.span.start_char
+            && (is_te_subsidiary_atom(a)
+                || matches!(
+                    a.lemma.as_deref(),
+                    Some("いる" | "おく" | "あげる" | "もらう" | "くれる" | "しまう")
+                ))
+    }) {
+        return None;
+    }
+    let root = next
+        .iter()
+        .find(|a| a.upos == Some(Upos::Verb) && a.deprel == "root")?;
+    let root_id = root.doc_tok_idx?;
+    let other_verbs: Vec<_> = next
+        .iter()
+        .filter(|a| a.upos == Some(Upos::Verb) && a.doc_tok_idx != Some(root_id))
+        .collect();
+    let sahen = match other_verbs.as_slice() {
+        [] => None,
+        [part]
+            if root.lemma.as_deref() == Some("する")
+                && part.deprel == "advcl"
+                && part.head == Some(root_id)
+                && part.span.end_char == root.span.start_char =>
+        {
+            Some(part.doc_tok_idx?)
+        }
+        _ => return None,
+    };
+    let reaches_root = |mut head: Option<usize>| {
+        for _ in 0..next.len() {
+            if head == Some(root_id) {
+                return true;
+            }
+            let Some(part) = next.iter().find(|a| a.doc_tok_idx == head) else {
+                return false;
+            };
+            if part.deprel != "advcl"
+                || !(part.upos == Some(Upos::Adj) || part.doc_tok_idx == sahen)
+            {
+                return false;
+            }
+            head = part.head;
+        }
+        false
+    };
+    if !reaches_root(terminal.head) {
+        return None;
+    }
+    fn subjects(atoms: &[Atom]) -> Vec<&Atom> {
+        atoms
+            .windows(2)
+            .filter_map(|w| {
+                let noun = &w[0];
+                let case = &w[1];
+                (matches!(noun.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+                    && noun.deprel == "nsubj"
+                    && case.upos == Some(Upos::Adp)
+                    && matches!(case.surface.as_str(), "は" | "が")
+                    && case.deprel == "case"
+                    && noun.doc_tok_idx == case.head
+                    && noun.span.end_char == case.span.start_char)
+                    .then_some(noun)
+            })
+            .collect()
+    }
+    let left = subjects(first);
+    let right = subjects(next);
+    let reaches_first = |head: Option<usize>| {
+        head == Some(action_id)
+            || head == terminal.doc_tok_idx
+            || first.iter().any(|part| {
+                part.doc_tok_idx == head
+                    && part.upos == Some(Upos::Adj)
+                    && part.deprel == "advcl"
+                    && part.head == Some(action_id)
+            })
+            || reaches_root(head)
+    };
+    if left.len() > 1
+        || right.len() > 1
+        || left
+            .first()
+            .is_some_and(|subject| !reaches_first(subject.head))
+        || right
+            .first()
+            .is_some_and(|subject| !reaches_root(subject.head))
+    {
+        return None;
+    }
+    Some(action_id)
 }
 
 fn atoms_has_any(atoms: &[Atom], targets: &[&str]) -> bool {
@@ -4591,6 +5870,103 @@ fn try_translate_nominal_receiving_request(
     Some(format!("可以給我{amount_text}{object}嗎"))
 }
 
+// A final yes/no question can ask whether someone asked an embedded duration
+// question. Translate the embedded event separately so its amount cannot be
+// attached to the reporting verb.
+fn translate_elapsed_embedded_question(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence_idx: usize,
+    ctx: &ClauseDiscourseCtx,
+    target: TargetVariant,
+) -> Option<String> {
+    let source = core_non_punct(atoms);
+    if ctx.return_trip.is_some()
+        || source
+            .iter()
+            .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+        || source
+            .windows(2)
+            .any(|w| w[0].span.end_char != w[1].span.start_char)
+    {
+        return None;
+    }
+    let outer = source.last()?;
+    if outer.surface != "か" || outer.upos != Some(Upos::Part) || outer.deprel != "discourse" {
+        return None;
+    }
+    let report_index = source.iter().position(|a| a.doc_tok_idx == outer.head)?;
+    let report = &source[report_index];
+    if report.lemma.as_deref() != Some("聞く")
+        || report.deprel != "root"
+        || report.upos != Some(Upos::Verb)
+        || report_index < 2
+        || source[report_index + 1..source.len() - 1]
+            .iter()
+            .any(|a| a.upos != Some(Upos::Aux) || a.head != report.doc_tok_idx)
+        || source[report_index + 1..source.len() - 1]
+            .iter()
+            .map(|a| a.surface.as_str())
+            .collect::<String>()
+            != "ました"
+    {
+        return None;
+    }
+    let question = &source[report_index - 1];
+    let action = &source[report_index - 2];
+    if question.surface != "か"
+        || question.upos != Some(Upos::Part)
+        || question.deprel != "discourse"
+        || question.head != action.doc_tok_idx
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "advcl"
+        || action.head != report.doc_tok_idx
+    {
+        return None;
+    }
+    let inner = &source[..report_index - 1];
+    let action_id = action.doc_tok_idx?;
+    if inner.iter().filter(|a| a.deprel == "nsubj").count() > 1
+        || !elapsed_owned_by(inner, action_id)
+    {
+        return None;
+    }
+    // Every argument in this small clause must belong to the embedded event.
+    for atom in inner {
+        let mut current = atom.doc_tok_idx;
+        let mut linked = false;
+        for _ in 0..inner.len() {
+            if current == Some(action_id) {
+                linked = true;
+                break;
+            }
+            let next = inner.iter().find(|a| a.doc_tok_idx == current)?;
+            if matches!(next.deprel.as_str(), "conj" | "cc" | "punct")
+                || next.upos == Some(Upos::Verb)
+            {
+                return None;
+            }
+            current = next.head;
+        }
+        if !linked {
+            return None;
+        }
+    }
+    let has_hour_question = inner.windows(2).any(|w| {
+        w[0].surface == "何"
+            && w[1].surface == "時間"
+            && w[0].head == Some(action_id)
+            && (w[1].head == Some(action_id) || w[1].head == w[0].doc_tok_idx)
+    }) || inner
+        .iter()
+        .any(|a| a.surface == "何時間" && a.head == Some(action_id));
+    if !has_hour_question {
+        return None;
+    }
+    let (question, _) = translate_clause_atoms(inner, doc, sentence_idx, None, false, ctx, target);
+    (!question.is_empty()).then(|| format!("有問{question}嗎"))
+}
+
 /// Core clause translator:
 /// 1. Matches multi-token idioms/collocations if the clause is a known idiom or contains one.
 /// 2. Normalizes passive `さ+れ`, adj-`そう`, `そんなに`, and adverbial `-く` forms.
@@ -4612,7 +5988,37 @@ fn translate_clause_atoms(
     }
 
     if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let Some(text) =
+            translate_elapsed_embedded_question(atoms, doc, sentence_idx, ctx, target)
+    {
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
         && let Some(text) = copular_time::render(core_non_punct(atoms), doc, sentence_idx, target)
+    {
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && let Some(body) = finite_adjective::concessive(core_non_punct(atoms), ctx)
+    {
+        let (mut text, _) = translate_clause_atoms(
+            &body,
+            doc,
+            sentence_idx,
+            conditioning,
+            allow_pro_drop_inject,
+            ctx,
+            target,
+        );
+        text.push_str("，但是");
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && let Some(text) = finite_adjective::comparison(core_non_punct(atoms), ctx, target)
     {
         return (text, false);
     }
@@ -4623,7 +6029,8 @@ fn translate_clause_atoms(
         return (text, false);
     }
 
-    if let Some(request) = te_help_request(core_non_punct(atoms), doc)
+    if let Some(request) =
+        te_help_request(core_non_punct(atoms), doc, ctx.prior_letter_distribution)
         && let Some(rendered) = render_te_help_request(request, doc, sentence_idx, ctx, target)
     {
         return (rendered, false);
@@ -4776,11 +6183,18 @@ fn translate_clause_atoms(
     });
     let body = trip_source.as_deref().unwrap_or(body);
     let counted = counted_object::bind(body);
-    let merged_atoms = apply_phrase_matches(counted.as_deref().unwrap_or(body));
+    let phrases = counted.as_deref().unwrap_or(body);
+    let attributed = if target == TargetVariant::ZhHant {
+        finite_adjective::bind_attributives(phrases, doc, ctx.source_chars)
+    } else {
+        std::borrow::Cow::Borrowed(phrases)
+    };
+    let merged_atoms = apply_phrase_matches(&attributed);
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
     }
+    calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
         && let Some(text) = homework_desire::render(body, &norm_atoms, doc, sentence_idx, target)
@@ -4808,7 +6222,16 @@ fn translate_clause_atoms(
     }
     mark_residence_place(&mut grouped, body);
     mark_joint_question(&mut grouped, &norm_atoms, body);
+    if target == TargetVariant::ZhHant
+        && localize_elapsed_modal(&mut grouped, body, doc, ctx.inside_quote)
+        && let Some(applied) = &ctx.elapsed_modal_applied
+    {
+        applied.set(true);
+    }
     let mut grouped = compose_relative_daypart(grouped);
+    if target == TargetVariant::ZhHant {
+        finite_adjective::fold_reported_modifier(&mut grouped, body, target);
+    }
     if let Some((predicate, _)) = proposal {
         localize_proposal_arguments(&mut grouped, predicate, body, target);
     }
@@ -5541,6 +6964,76 @@ fn render_te_help_request(
             .as_ref()
             .is_some_and(|person| person.role == TeHelpPersonRole::Performer)
     });
+    let per_writer = request
+        .letter_count
+        .as_ref()
+        .is_some_and(|count| count.per_writer);
+    let periodic_joint = request
+        .letter_count
+        .as_ref()
+        .is_some_and(|count| count.periodic_joint);
+    let render_name = |phrase: &[Atom]| {
+        render_bunsetsu_np(
+            &Bunsetsu {
+                atoms: phrase.to_vec(),
+                role: BunsetsuRole::Other,
+                case_particle: None,
+                sconj_tail: None,
+                sfp_tail: None,
+            },
+            target,
+        )
+    };
+    let render_person = |person: &TeHelpPerson<'_>| render_name(person.phrase);
+    let addressee = if let Some(address) = &request.letter_addressee {
+        let names = address
+            .members
+            .iter()
+            .map(|member| render_name(member))
+            .collect::<Vec<_>>();
+        if address.recipient_noun {
+            Some(match address.count {
+                Some(number) => format!(
+                    "{}位收件人",
+                    render_joint_people(number).trim_end_matches('人')
+                ),
+                None => "每位收件人".to_owned(),
+            })
+        } else if address.illustrative {
+            Some(format!("{}等人", names.join("、")))
+        } else {
+            let mut names = names.join("和");
+            if let Some(count) = address.count {
+                names.push_str(&render_joint_people(count));
+            }
+            Some(names)
+        }
+    } else {
+        // Only the wording chooses an addressee for an unresolved dative.
+        request
+            .person
+            .as_ref()
+            .filter(|person| person.role == TeHelpPersonRole::UnresolvedLetterParticipant)
+            .map(render_person)
+    };
+    let each_addressee = request
+        .letter_count
+        .as_ref()
+        .filter(|count| count.per_recipient)
+        .and(addressee.as_deref());
+    let linked_adverb = |start: usize, end: usize, surface: &str| Atom {
+        span: Span {
+            start_char: request.action[start].span.start_char,
+            end_char: request.action[end - 1].span.end_char,
+        },
+        surface: surface.to_owned(),
+        lemma: None,
+        upos: Some(Upos::Adv),
+        doc_tok_idx: None,
+        head: action_head,
+        deprel: "advmod".to_owned(),
+        is_locked: false,
+    };
     let mut action: Vec<_> = request
         .action
         .iter()
@@ -5566,19 +7059,58 @@ fn render_te_help_request(
             if let Some(manner) = &request.manner
                 && (manner.start..manner.end).contains(&index)
             {
-                return (index == manner.start && performer_count.is_none()).then(|| Atom {
-                    span: Span {
-                        start_char: atom.span.start_char,
-                        end_char: request.action[manner.end - 1].span.end_char,
-                    },
-                    surface: "一起".to_owned(),
-                    lemma: None,
-                    upos: Some(Upos::Adv),
-                    doc_tok_idx: None,
-                    head: action_head,
-                    deprel: "advmod".to_owned(),
-                    is_locked: false,
-                });
+                return (index == manner.start
+                    && performer_count.is_none()
+                    && !periodic_joint
+                    && (!per_writer || manner.count.is_none()))
+                .then(|| linked_adverb(manner.start, manner.end, "一起"));
+            }
+            if let Some(count) = &request.letter_count {
+                if let Some((span, rendered)) = &count.occurrence_rate
+                    && span.contains(&index)
+                {
+                    return (index == span.start)
+                        .then(|| linked_adverb(span.start, span.end, rendered));
+                }
+                if count
+                    .writer_each
+                    .as_ref()
+                    .is_some_and(|span| span.contains(&index))
+                    || count
+                        .joint_signature
+                        .as_ref()
+                        .is_some_and(|span| span.contains(&index))
+                {
+                    return None;
+                }
+                if count.span.contains(&index) {
+                    return count
+                        .modifier
+                        .filter(|_| index == count.span.start)
+                        .map(|surface| {
+                            let addressed =
+                                each_addressee.map(|names| format!("給{names}{surface}"));
+                            linked_adverb(
+                                count.span.start,
+                                count.span.end,
+                                addressed.as_deref().unwrap_or(surface),
+                            )
+                        });
+                }
+                if index == count.object {
+                    let mut object = atom.clone();
+                    let numeral = if count.numeral == "2" {
+                        "二"
+                    } else {
+                        &count.numeral
+                    };
+                    object.surface.clear();
+                    counted_object::push_quantity(&mut object.surface, numeral, "封");
+                    object.surface.push('信');
+                    object.lemma = None;
+                    object.is_locked = true;
+                    return Some(object);
+                }
             }
             if !atom.is_locked && atom.surface == "もう一度" && atom.deprel == "advmod" {
                 repeat = true;
@@ -5641,19 +7173,6 @@ fn render_te_help_request(
             text.to_owned()
         }
     };
-    let render_name = |phrase: &[Atom]| {
-        render_bunsetsu_np(
-            &Bunsetsu {
-                atoms: phrase.to_vec(),
-                role: BunsetsuRole::Other,
-                case_particle: None,
-                sconj_tail: None,
-                sfp_tail: None,
-            },
-            target,
-        )
-    };
-    let render_person = |person: &TeHelpPerson<'_>| render_name(person.phrase);
     let polite = if request.negative_form {
         "可以麻煩"
     } else {
@@ -5665,29 +7184,7 @@ fn render_te_help_request(
         "你"
     };
 
-    let addressee = if let Some(address) = &request.letter_addressee {
-        let names = address
-            .members
-            .iter()
-            .map(|member| render_name(member))
-            .collect::<Vec<_>>();
-        if address.illustrative {
-            Some(format!("{}等人", names.join("、")))
-        } else {
-            let mut names = names.join("和");
-            if let Some(count) = address.count {
-                names.push_str(&render_joint_people(count));
-            }
-            Some(names)
-        }
-    } else {
-        // Only the wording chooses an addressee for an unresolved dative.
-        request
-            .person
-            .as_ref()
-            .filter(|person| person.role == TeHelpPersonRole::UnresolvedLetterParticipant)
-            .map(render_person)
-    };
+    let per_recipient = each_addressee.is_some();
     if let Some(addressee) = addressee {
         let counted_listener = |count: &str| format!("{}位", count.trim_end_matches('人'));
         let mut joint = "";
@@ -5704,7 +7201,9 @@ fn render_te_help_request(
         {
             let name = render_person(writer);
             if let Some(count) = performer_count {
-                joint = "一起";
+                if !per_writer && !periodic_joint {
+                    joint = "一起";
+                }
                 format!("包括{name}在內的{}", counted_listener(count))
             } else {
                 name
@@ -5720,9 +7219,14 @@ fn render_te_help_request(
                 .map(counted_listener)
                 .unwrap_or_else(|| fallback_listener.to_owned())
         };
+        let addressed = if per_recipient {
+            body
+        } else {
+            format!("{body}給{addressee}")
+        };
         return Some(format!(
             "{polite}{listener}{joint}{}嗎",
-            with_repeat(&format!("{body}給{addressee}"))
+            with_repeat(&addressed)
         ));
     }
 
@@ -8231,6 +9735,459 @@ fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
     }
 }
 
+// A bare elapsed quantity must touch its action and retain a dependency to it.
+fn elapsed_duration_surface(text: &str) -> Option<String> {
+    if text == "何時間" {
+        return Some("幾個小時".to_owned());
+    }
+    if text == "半時間" {
+        return Some("半個小時".to_owned());
+    }
+    if let Some((hours, tail)) = text.split_once("時間") {
+        let hour_value = elapsed_number(hours)?;
+        let hour = if hour_value == 2 {
+            "兩".to_owned()
+        } else {
+            normalize_decimal_digits(hours)
+        };
+        return match tail {
+            "" => Some(format!("{hour}個小時")),
+            "半" => Some(format!("{hour}個半小時")),
+            _ => Some(format!("{hour}個小時{}分鐘", elapsed_minutes(tail, 60)?)),
+        };
+    }
+    Some(format!("{}分鐘", elapsed_minutes(text, 10_000)?))
+}
+
+fn elapsed_minutes(text: &str, limit: u32) -> Option<String> {
+    let number = text.strip_suffix('分')?;
+    let normalized = normalize_decimal_digits(number);
+    (elapsed_number(number)? < limit).then_some(normalized)
+}
+
+// Elapsed quantities do not share the clock's 24-hour limit. Restrict the
+// accepted spelling before using the shared CJK number parser.
+fn elapsed_number(text: &str) -> Option<u32> {
+    let normalized = normalize_decimal_digits(text);
+    if normalized.is_empty() {
+        return None;
+    }
+    if !normalized.chars().all(|c| c.is_ascii_digit()) {
+        let mut previous_unit = 10_000;
+        let mut previous_digit = false;
+        let mut previous_zero = false;
+        for ch in normalized.chars() {
+            if matches!(
+                ch,
+                '零' | '〇' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九'
+            ) {
+                if previous_digit && !previous_zero {
+                    return None;
+                }
+                previous_digit = true;
+                previous_zero = matches!(ch, '零' | '〇');
+            } else {
+                let unit = match ch {
+                    '十' => 10,
+                    '百' => 100,
+                    '千' => 1000,
+                    _ => return None,
+                };
+                if unit >= previous_unit {
+                    return None;
+                }
+                previous_unit = unit;
+                previous_digit = false;
+                previous_zero = false;
+            }
+        }
+    }
+    super::opaque::parse_cjk_or_ascii_num(&normalized).filter(|n| (1..=9999).contains(n))
+}
+
+fn starts_inside_elapsed_number(source: &[Atom], start: usize) -> bool {
+    start > 0 && source[start - 1].span.end_char == source[start].span.start_char
+        && (source[start - 1].is_locked
+            || source[start - 1].surface.chars().last().is_some_and(|c|
+                matches!(c, '零' | '〇' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '百' | '千' | '万' | '萬' | '時' | '間' | '半' | '分' | '0'..='9' | '０'..='９')))
+}
+
+// Keep a finite modal outside the event it governs. Work on a copy until the
+// original duration can also be bound to that event.
+fn localize_elapsed_modal(
+    groups: &mut Vec<Bunsetsu>,
+    source: &[Atom],
+    doc: &Document,
+    inside_quote: bool,
+) -> bool {
+    let source = core_non_punct(source);
+    let finite_owned = |a: &Atom| {
+        a.deprel == "root"
+            || inside_quote
+                && a.deprel == "advcl"
+                && a.head.is_some()
+                && !source.iter().any(|other| other.doc_tok_idx == a.head)
+                && a.head
+                    .and_then(|head| doc.tokens.get(head))
+                    .is_some_and(|head| {
+                        head.lemma.as_deref() == Some("聞く")
+                            && head.span.start_char
+                                > source.last().map_or(0, |last| last.span.end_char)
+                    })
+    };
+    for (index, action) in source.iter().enumerate() {
+        let Some(modal) = source.get(index + 1) else {
+            continue;
+        };
+        if action.is_locked
+            || modal.is_locked
+            || action.upos != Some(Upos::Verb)
+            || action.doc_tok_idx.is_none()
+            || action.head != modal.doc_tok_idx
+            || action.span.end_char != modal.span.start_char
+        {
+            continue;
+        }
+        let full_tail = &source[index + 1..];
+        let (tail, question) = match full_tail.last() {
+            Some(q) if q.surface == "か" => (&full_tail[..full_tail.len() - 1], Some(q)),
+            _ => (full_tail, None),
+        };
+        if tail.is_empty()
+            || full_tail.iter().any(|a| a.is_locked)
+            || full_tail
+                .windows(2)
+                .any(|w| w[0].span.end_char != w[1].span.start_char)
+        {
+            continue;
+        }
+        if let Some(q) = question {
+            let Some(finite) = tail.iter().find(|a| finite_owned(a)) else {
+                continue;
+            };
+            if q.upos != Some(Upos::Part)
+                || q.deprel != "discourse"
+                || finite.doc_tok_idx.is_none()
+                || q.head != finite.doc_tok_idx
+            {
+                continue;
+            }
+        }
+        let spelling: String = tail.iter().map(|a| a.surface.as_str()).collect();
+        let prefix = if modal.surface == "予定"
+            && spelling == "予定ではありません"
+            && modal.deprel == "nsubj"
+            && tail
+                .get(1)
+                .is_some_and(|a| a.surface == "で" && a.head == modal.doc_tok_idx)
+            && tail
+                .get(2)
+                .is_some_and(|a| a.surface == "は" && a.head == modal.doc_tok_idx)
+            && tail.get(3).is_some_and(|a| {
+                a.lemma.as_deref() == Some("ある")
+                    && a.deprel == "root"
+                    && modal.head == a.doc_tok_idx
+                    && tail[4..].iter().all(|aux| aux.head == a.doc_tok_idx)
+            }) {
+            "沒有預計"
+        } else if modal.surface == "予定" && modal.deprel == "root" {
+            match spelling.as_str() {
+                "予定です" | "予定だ" => "預計",
+                "予定でした" | "予定だった" => "曾經預計",
+                _ => continue,
+            }
+        } else if modal.surface == "必要"
+            && tail.get(1).is_some_and(|case| {
+                matches!(case.surface.as_str(), "が" | "は") && case.head == modal.doc_tok_idx
+            })
+            && tail.get(2).is_some_and(|finite| {
+                (finite.lemma.as_deref() == Some("ある")
+                    || matches!(finite.surface.as_str(), "ある" | "ない" | "なかっ"))
+                    && finite_owned(finite)
+                    && modal.head == finite.doc_tok_idx
+            })
+        {
+            match spelling.as_str() {
+                "必要があります" | "必要がある" => "需要",
+                "必要がありました" | "必要があった" => "曾經需要",
+                "必要はありません" | "必要がありません" | "必要はない" | "必要がない" => {
+                    "不需要"
+                }
+                "必要はありませんでした"
+                | "必要がありませんでした"
+                | "必要はなかった"
+                | "必要がなかった" => "曾經不需要",
+                _ => continue,
+            }
+        } else {
+            continue;
+        };
+        let modal_start = modal.span.start_char;
+        let modal_end = full_tail
+            .last()
+            .expect("modal tail is nonempty")
+            .span
+            .end_char;
+        let mut candidate = groups.clone();
+        if candidate.iter().flat_map(|g| &g.atoms).any(|a| {
+            a.span.start_char < modal_end
+                && a.span.end_char > modal_start
+                && (a.is_locked || a.span.start_char < modal_start || a.span.end_char > modal_end)
+        }) {
+            continue;
+        }
+        for group in &mut candidate {
+            group
+                .atoms
+                .retain(|a| !(a.span.start_char >= modal_start && a.span.end_char <= modal_end));
+        }
+        candidate.retain(|g| !g.atoms.is_empty());
+        let Some(event) = candidate
+            .iter_mut()
+            .find(|g| g.atoms.iter().any(|a| a.span == action.span))
+        else {
+            continue;
+        };
+        if event.sconj_tail.is_some() || event.case_particle.is_some() || event.sfp_tail.is_some() {
+            continue;
+        }
+        event.role = BunsetsuRole::Predicate;
+        if question.is_some() {
+            event.sfp_tail = Some("か".to_owned());
+        }
+        prepend_locked_atom(event, prefix.to_owned());
+        if take_elapsed_duration(&mut candidate.clone(), source, None).is_some() {
+            *groups = candidate;
+            return true;
+        }
+    }
+    false
+}
+
+// Accept only a complete object subtree, including its own modifiers, between
+// the duration and the action. Opaque material cannot establish attachment.
+fn elapsed_interposed_object(atoms: &[Atom], action: usize) -> bool {
+    let Some(case) = atoms.last() else {
+        return false;
+    };
+    if case.surface != "を" || case.deprel != "case" || case.upos != Some(Upos::Adp) {
+        return false;
+    }
+    if atoms
+        .iter()
+        .any(|a| a.is_locked || a.doc_tok_idx.is_none() || is_punct_atom(a))
+        || atoms
+            .windows(2)
+            .any(|w| w[0].span.end_char != w[1].span.start_char)
+    {
+        return false;
+    }
+    let Some(noun) = atoms.iter().find(|a| {
+        a.doc_tok_idx == case.head
+            && a.deprel == "obj"
+            && a.head == Some(action)
+            && matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+    }) else {
+        return false;
+    };
+    let Some(noun_id) = noun.doc_tok_idx else {
+        return false;
+    };
+    atoms.iter().all(|atom| {
+        let mut current = atom.doc_tok_idx;
+        for _ in 0..atoms.len() {
+            if current == Some(noun_id) {
+                return true;
+            }
+            let Some(part) = atoms.iter().find(|a| a.doc_tok_idx == current) else {
+                return false;
+            };
+            if matches!(part.deprel.as_str(), "conj" | "cc" | "punct") {
+                return false;
+            }
+            current = part.head;
+        }
+        false
+    })
+}
+
+fn take_elapsed_duration(
+    groups: &mut Vec<Bunsetsu>,
+    source: &[Atom],
+    parallel_te: Option<usize>,
+) -> Option<(String, bool, usize)> {
+    for (action_index, action) in source.iter().enumerate() {
+        if action.is_locked || action.doc_tok_idx.is_none() || action.upos != Some(Upos::Verb) {
+            continue;
+        }
+        let action_id = action.doc_tok_idx?;
+        // A verbal noun and its adjacent する can be split by the parser.
+        let sahen = source.get(action_index + 1).filter(|next| {
+            !next.is_locked
+                && next.lemma.as_deref() == Some("する")
+                && next.upos == Some(Upos::Verb)
+                && action.head == next.doc_tok_idx
+                && action.span.end_char == next.span.start_char
+        });
+        let Some(predicate) = groups.iter().find(|g| {
+            g.role == BunsetsuRole::Predicate
+                && g.atoms.iter().any(|a| {
+                    a.span.start_char <= action.span.start_char
+                        && a.span.end_char >= action.span.end_char
+                        || sahen.is_some_and(|s| {
+                            a.span.start_char <= s.span.start_char
+                                && a.span.end_char >= s.span.end_char
+                        })
+                })
+        }) else {
+            continue;
+        };
+        // A separately assembled てから clause has its own predicate and
+        // places 後 after that predicate. Other connective scopes stay intact.
+        let temporal_after = predicate.sconj_tail.as_deref() == Some("てから")
+            && has_temporal_te_kara_tail(&predicate.atoms)
+            && groups
+                .iter()
+                .filter(|g| g.role == BunsetsuRole::Predicate)
+                .count()
+                == 1;
+        let progressive_relative = progressive_acl_action(predicate)
+            .is_some_and(|(verb, _)| verb.doc_tok_idx == Some(action_id));
+        let progressive_negative = progressive_relative && progressive_acl_is_negative(predicate);
+        let past_negative = elapsed_past_negative_action(predicate)
+            .is_some_and(|verb| verb.doc_tok_idx == Some(action_id));
+        let terminal_marker = core_non_punct(source).last();
+        let separate_te = parallel_te == Some(action_id)
+            && matches!(core_non_punct(source), [.., verb, marker]
+                if (verb.doc_tok_idx == Some(action_id)
+                    || sahen.is_some_and(|part| part.doc_tok_idx == verb.doc_tok_idx))
+                    && !marker.is_locked
+                    && matches!(marker.surface.as_str(), "て" | "で")
+                    && marker.upos == Some(Upos::Sconj) && marker.deprel == "mark"
+                    && marker.head == verb.doc_tok_idx && verb.span.end_char == marker.span.start_char);
+        // Negation can change the quantifier's scope.
+        if predicate.sconj_tail.is_some()
+            && !temporal_after
+            && !progressive_relative
+            && !separate_te
+            || predicate.atoms.iter().any(|a| {
+                (!progressive_negative
+                    && !past_negative
+                    && matches!(a.lemma.as_deref(), Some("ない" | "ぬ")))
+                    || matches!(a.surface.as_str(), "ながら" | "ので")
+                    || (!past_negative && a.surface == "ませ")
+                    || !temporal_after
+                        && !progressive_relative
+                        && !separate_te
+                        && matches!(a.surface.as_str(), "て" | "で" | "から")
+            })
+        {
+            continue;
+        }
+        let mut ends = vec![action_index];
+        if source
+            .get(action_index.wrapping_sub(1))
+            .is_some_and(|case| {
+                !case.is_locked
+                    && case.surface == "を"
+                    && case.upos == Some(Upos::Adp)
+                    && case.deprel == "case"
+                    && case.span.end_char == action.span.start_char
+            })
+        {
+            ends.extend(
+                (0..action_index).rev().filter(|&end| {
+                    elapsed_interposed_object(&source[end..action_index], action_id)
+                }),
+            );
+        }
+        for end in ends {
+            for start in 0..end {
+                if starts_inside_elapsed_number(source, start) {
+                    continue;
+                }
+                let slice = &source[start..end];
+                let between = &source[end..action_index];
+                if slice.is_empty()
+                    || slice.iter().any(|a| a.is_locked || a.doc_tok_idx.is_none())
+                    || slice
+                        .windows(2)
+                        .any(|w| w[0].span.end_char != w[1].span.start_char)
+                    || slice.last()?.span.end_char
+                        != between
+                            .first()
+                            .map_or(action.span.start_char, |a| a.span.start_char)
+                    || between
+                        .last()
+                        .is_some_and(|a| a.span.end_char != action.span.start_char)
+                    || !slice.iter().any(|a| a.head == Some(action_id))
+                    || slice.iter().any(|a| {
+                        !slice.iter().any(|b| b.doc_tok_idx == a.head)
+                            && a.head != Some(action_id)
+                            && a.head != action.head
+                    })
+                {
+                    continue;
+                }
+                let surface: String = slice.iter().map(|a| a.surface.as_str()).collect();
+                let Some(rendered) = elapsed_duration_surface(&surface) else {
+                    continue;
+                };
+                let first = slice.first()?.span.start_char;
+                let end = slice.last()?.span.end_char;
+                if (progressive_relative || past_negative || separate_te)
+                    && groups
+                        .iter()
+                        .filter(|g| g.role == BunsetsuRole::Predicate)
+                        .any(|g| {
+                            !g.atoms.iter().any(|a| a.doc_tok_idx == Some(action_id))
+                                && !g
+                                    .atoms
+                                    .iter()
+                                    .all(|a| a.span.start_char >= first && a.span.end_char <= end)
+                                && !(separate_te
+                                    && sahen.is_some_and(|part| {
+                                        g.atoms.iter().all(|a| {
+                                            a.doc_tok_idx == part.doc_tok_idx
+                                                || terminal_marker.is_some_and(|marker| {
+                                                    a.doc_tok_idx == marker.doc_tok_idx
+                                                })
+                                        })
+                                    }))
+                        })
+                {
+                    continue;
+                }
+                let overlapping: Vec<&Atom> = groups
+                    .iter()
+                    .flat_map(|g| &g.atoms)
+                    .filter(|a| a.span.start_char < end && a.span.end_char > first)
+                    .collect();
+                if overlapping.is_empty()
+                    || overlapping.first()?.span.start_char != first
+                    || overlapping.last()?.span.end_char != end
+                    || overlapping
+                        .iter()
+                        .any(|a| a.is_locked || a.span.start_char < first || a.span.end_char > end)
+                    || overlapping
+                        .windows(2)
+                        .any(|w| w[0].span.end_char != w[1].span.start_char)
+                {
+                    continue;
+                }
+                for group in groups.iter_mut() {
+                    group
+                        .atoms
+                        .retain(|a| !(a.span.start_char >= first && a.span.end_char <= end));
+                }
+                groups.retain(|g| !g.atoms.is_empty());
+                return Some((rendered, surface == "何時間", action_id));
+            }
+        }
+    }
+    None
+}
+
 #[allow(clippy::too_many_arguments)]
 fn translate_clause_bunsetsus(
     mut bunsetsus: Vec<Bunsetsu>,
@@ -8242,11 +10199,61 @@ fn translate_clause_bunsetsus(
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> (String, bool) {
+    let elapsed = if target == TargetVariant::ZhHant {
+        take_elapsed_duration(&mut bunsetsus, source, ctx.parallel_elapsed_te)
+    } else {
+        None
+    };
+    let elapsed_progressive_relative = elapsed.as_ref().is_some_and(|(_, _, id)| {
+        bunsetsus.iter().any(|g| {
+            progressive_acl_action(g).is_some_and(|(action, _)| action.doc_tok_idx == Some(*id))
+        })
+    });
+    let elapsed_progressive_negative = elapsed.as_ref().is_some_and(|(_, _, id)| {
+        bunsetsus.iter().any(|g| {
+            progressive_acl_is_negative(g)
+                && progressive_acl_action(g)
+                    .is_some_and(|(action, _)| action.doc_tok_idx == Some(*id))
+        })
+    });
+    let elapsed_wh = elapsed.as_ref().is_some_and(|(_, wh, action_id)| {
+        if !*wh {
+            return false;
+        }
+        let Some(question) = core_non_punct(source).last() else {
+            return false;
+        };
+        if question.is_locked
+            || question.surface != "か"
+            || question.upos != Some(Upos::Part)
+            || question.deprel != "discourse"
+            || question.head.is_none()
+        {
+            return false;
+        }
+        if question.head == Some(*action_id) {
+            return true;
+        }
+        let Some(action) = source.iter().find(|a| a.doc_tok_idx == Some(*action_id)) else {
+            return false;
+        };
+        let Some(modal) = source.iter().find(|a| {
+            a.doc_tok_idx == action.head
+                && !a.is_locked
+                && matches!(a.surface.as_str(), "必要" | "予定")
+                && action.span.end_char == a.span.start_char
+        }) else {
+            return false;
+        };
+        question.head == modal.doc_tok_idx || question.head == modal.head
+    });
+    let mut elapsed_duration = elapsed.map(|(text, _, _)| text);
+
     #[derive(Clone, Copy)]
     enum DeadlineEndpoint {
         Calendar,
         ClockOrDaypart,
-        Question,
+        Question { calendar: bool },
     }
 
     // Track extra bunsetsu-level metadata for `に`/`で` localization.
@@ -8257,11 +10264,11 @@ fn translate_clause_bunsetsus(
         is_instrument_de: bool,
         is_spatial_made: bool,
         temporal_made_time: Option<String>,
-        is_clock: bool,
+        is_event_time: bool,
         is_building_floor: bool,
         deadline_endpoint: DeadlineEndpoint,
         deadline_has_detached_negation: bool,
-        is_plain_clock_ni: bool,
+        is_event_time_ni: bool,
         transfer_dative: bool,
         physical_goal_head: Option<usize>,
     }
@@ -8279,6 +10286,22 @@ fn translate_clause_bunsetsus(
     let mut subjects: Vec<String> = Vec::new();
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
+    let state_interval = if target == TargetVariant::ZhHant {
+        finite_adjective::take_time_interval(&mut bunsetsus, source, doc, &ctx.adjective)
+    } else {
+        None
+    };
+    if let Some(interval) = &state_interval {
+        temporal_others.push(interval.text.clone());
+    }
+    let mut event_counts = Vec::new();
+    let mut counted_arrival = None;
+    let arrival_head = bunsetsus
+        .iter()
+        .flat_map(|b| &b.atoms)
+        .find(|a| calendar::is_counted_subject(a))
+        .and_then(|a| a.head);
+    let mut count_modifier = None;
     let mut joint_manner = None;
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
@@ -8454,19 +10477,24 @@ fn translate_clause_bunsetsus(
         }
     }
 
-    let asks_deadline_time = source.last().is_some_and(|ka| {
+    let asks_event_question = source.last().is_some_and(|ka| {
         !ka.is_locked
             && ka.surface == "か"
             && ka.upos == Some(Upos::Part)
             && ka.deprel == "discourse"
             && ka.head.is_some()
-            && bunsetsus.iter().any(|group| {
-                group.case_particle.as_deref() == Some("までに")
-                    && group
-                        .atoms
-                        .iter()
-                        .any(|time| time.head == ka.head && deadline_time_question(time).is_some())
-            })
+            && (calendar::asks_event_argument(&bunsetsus, source, ka)
+                || bunsetsus.iter().any(|group| {
+                    group.atoms.iter().any(|time| {
+                        time.head == ka.head
+                            && (calendar::asks_interval(time)
+                                || match group.case_particle.as_deref() {
+                                    Some("までに") => deadline_time_question(time).is_some(),
+                                    Some("に") => calendar::question(time).is_some(),
+                                    _ => false,
+                                })
+                    })
+                }))
     });
     let explicit_deadline = bunsetsus.iter().find_map(|b| match b.role {
         BunsetsuRole::ExplicitDeadline { modal, additive } => Some((modal, additive)),
@@ -8478,8 +10506,25 @@ fn translate_clause_bunsetsus(
         None
     };
     // Resolve time and result roles while the other arguments of the predicate are available.
-    let timed_result = timed_result_frame(&bunsetsus, source);
-    let endpoint = if ctx.return_trip.is_none() {
+    let hand_return = if ctx.return_trip.is_none() && target == TargetVariant::ZhHant {
+        return_endpoint::clock_hand_return(
+            &bunsetsus,
+            &candidates,
+            source,
+            doc,
+            ctx.following,
+            ctx.source_chars,
+            target,
+        )
+    } else {
+        None
+    };
+    let timed_result = if hand_return.is_none() {
+        timed_result_frame(&bunsetsus, source)
+    } else {
+        None
+    };
+    let endpoint = if ctx.return_trip.is_none() && hand_return.is_none() {
         return_endpoint::resolve(&bunsetsus, &candidates, source, doc, target)
     } else {
         None
@@ -8512,11 +10557,56 @@ fn translate_clause_bunsetsus(
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if arrival_head.is_some()
+            && b.role == BunsetsuRole::Subj
+            && b.case_particle.as_deref() == Some("が")
+            && b.atoms
+                .iter()
+                .any(|a| a.deprel == "nsubj" && a.head == arrival_head)
+        {
+            counted_arrival = Some(calendar::arrival_noun(&b, target));
+            continue;
+        }
+        if let [atom] = b.atoms.as_slice() {
+            if calendar::individual_arrivals(atom) {
+                adverbs.push(atom.surface.clone());
+                continue;
+            }
+            if calendar::is_interval(atom) || calendar::is_habit(atom) {
+                temporal_others.push(atom.surface.clone());
+                continue;
+            }
+            if let Some(modifier) = calendar::count_modifier(atom) {
+                if !modifier.is_empty() {
+                    count_modifier = Some(modifier);
+                }
+                event_counts.push(atom.surface.clone());
+                continue;
+            }
+        }
         if let Some(trip) = ctx.return_trip
             && let Some(label) = trip_relative_daypart(&b, source, trip.returning)
         {
             temporal_others.push(label);
             continue;
+        }
+        if let Some(frame) = &hand_return {
+            if b.atoms
+                .iter()
+                .all(|atom| return_endpoint::contains_span(frame.dial, atom.span))
+            {
+                if b.atoms
+                    .iter()
+                    .any(|a| !a.is_locked && a.surface == "も" && a.deprel == "case")
+                {
+                    adverbs.push("也".to_owned());
+                }
+                continue;
+            }
+            if frame.object == Some(idx) {
+                affected_object = Some(render_bunsetsu_np(&b, target));
+                continue;
+            }
         }
         if endpoint.as_ref().is_some_and(|(index, _)| *index == idx) {
             if b.atoms
@@ -8551,6 +10641,9 @@ fn translate_clause_bunsetsus(
         }
         if daypart_groups.contains(&idx)
             || timed_result.is_some_and(|f| f.time == SettingTime::At(idx))
+            || hand_return
+                .as_ref()
+                .is_some_and(|frame| frame.event_time == Some(idx))
         {
             if matches!(b.atoms.as_slice(), [_, _, focus] if !focus.is_locked && focus.surface == "も")
             {
@@ -8593,7 +10686,7 @@ fn translate_clause_bunsetsus(
         }
         if let Some(sfp) = b.sfp_tail.as_deref() {
             sfp_suffix = match sfp {
-                "か" if asks_deadline_time => None,
+                "か" if asks_event_question => None,
                 "か" | "かな" => Some("嗎"),
                 "よ" => Some("喔"),
                 "ね" | "よね" => Some("呢"),
@@ -8758,14 +10851,19 @@ fn translate_clause_bunsetsus(
                         is_instrument_de: is_inst,
                         is_spatial_made: is_spatial_made_bunsetsu(&b),
                         temporal_made_time: temporal_made_time(&b),
-                        is_clock: b.atoms.iter().any(is_clock_atom),
+                        is_event_time: b
+                            .atoms
+                            .iter()
+                            .any(|a| is_clock_atom(a) || calendar::is_date(a)),
                         is_building_floor: b.atoms.iter().any(is_building_floor),
                         deadline_endpoint: if b
                             .atoms
                             .iter()
-                            .any(|a| deadline_time_question(a).is_some())
+                            .any(|a| calendar::question(a).is_some())
                         {
-                            DeadlineEndpoint::Question
+                            DeadlineEndpoint::Question { calendar: true }
+                        } else if b.atoms.iter().any(|a| deadline_time_question(a).is_some()) {
+                            DeadlineEndpoint::Question { calendar: false }
                         } else if b.atoms.iter().any(|a| {
                             is_clock_atom(a) || !a.is_locked && is_daypart_surface(&a.surface)
                         }) {
@@ -8775,7 +10873,9 @@ fn translate_clause_bunsetsus(
                         },
                         deadline_has_detached_negation: b.role
                             == BunsetsuRole::DeadlineWithDetachedNegation,
-                        is_plain_clock_ni: is_plain_clock_ni(&b),
+                        is_event_time_ni: is_plain_clock_ni(&b)
+                            || (b.case_particle.as_deref() == Some("に")
+                                && b.atoms.iter().any(calendar::is_date)),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
@@ -8818,11 +10918,11 @@ fn translate_clause_bunsetsus(
                         is_instrument_de: false,
                         is_spatial_made: false,
                         temporal_made_time: None,
-                        is_clock: false,
+                        is_event_time: false,
                         is_building_floor: b.atoms.iter().any(is_building_floor),
                         deadline_endpoint: DeadlineEndpoint::Calendar,
                         deadline_has_detached_negation: false,
-                        is_plain_clock_ni: false,
+                        is_event_time_ni: false,
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
@@ -8869,6 +10969,9 @@ fn translate_clause_bunsetsus(
         }
     }
 
+    if elapsed_wh && sfp_suffix == Some("嗎") {
+        sfp_suffix = None;
+    }
     if saw_to_sconj && (raw_clause.ends_with("とすぐ") || raw_clause.ends_with("とすぐに")) {
         if let Some(pos) = adverbs.iter().rposition(|a| a == "馬上") {
             adverbs.remove(pos);
@@ -8961,12 +11064,35 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if elapsed_progressive_relative && !elapsed_progressive_negative {
+        pre_verb_mods.retain(|m| m != "正在");
+        pre_verb_mods.push("已經".to_owned());
+        if !post_verb_mods.iter().any(|m| m == "了") {
+            post_verb_mods.push("了".to_owned());
+        }
+    }
+    if target == TargetVariant::ZhHant
+        && let Some(state) = finite_adjective::render(
+            source,
+            &predicates,
+            ctx,
+            &mut adverbs,
+            &mut temporal_others,
+            state_interval.as_ref(),
+        )
+    {
+        pre_verb_mods.clear();
+        verb_core = state;
+        post_verb_mods.clear();
+    }
     if let Some(trip) = ctx.return_trip {
         verb_core = if let Some(place) = trip_destination {
             format!("{}回{}", trip.action, place)
         } else {
             format!("{}{verb_core}", trip.action)
         };
+    } else if let Some(frame) = hand_return {
+        verb_core = frame.action;
     } else if let Some((_, action)) = endpoint {
         verb_core = action;
     } else if let Some(place) = trip_destination {
@@ -9313,11 +11439,11 @@ fn translate_clause_bunsetsus(
                     is_instrument_de: false,
                     is_spatial_made: false,
                     temporal_made_time: None,
-                    is_clock: false,
+                    is_event_time: false,
                     is_building_floor: false,
                     deadline_endpoint: DeadlineEndpoint::Calendar,
                     deadline_has_detached_negation: false,
-                    is_plain_clock_ni: false,
+                    is_event_time_ni: false,
                     transfer_dative: false,
                     physical_goal_head: None,
                 });
@@ -9477,7 +11603,7 @@ fn translate_clause_bunsetsus(
 
         let mut kept_obls = Vec::new();
         for o in obliques.drain(..) {
-            if o.case_particle.as_deref() == Some("に") && !o.is_clock {
+            if o.case_particle.as_deref() == Some("に") && !o.is_event_time {
                 let raw_np = o
                     .text
                     .strip_prefix('在')
@@ -9535,9 +11661,10 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
-    let mut marked_goals = obliques.iter().chain(&iobjs).filter(|o| {
-        matches!(o.case_particle.as_deref(), Some("に" | "へ")) && !o.is_plain_clock_ni
-    });
+    let mut marked_goals = obliques
+        .iter()
+        .chain(&iobjs)
+        .filter(|o| matches!(o.case_particle.as_deref(), Some("に" | "へ")) && !o.is_event_time_ni);
     let only_goal = marked_goals.next();
     let direct_negative_physical_go = negative_go_head.is_some()
         && only_goal.is_some_and(|o| o.physical_goal_head == negative_go_head)
@@ -9561,7 +11688,7 @@ fn translate_clause_bunsetsus(
     if is_goal_verb {
         let mut kept_obls = Vec::new();
         for o in obliques.drain(..) {
-            if o.case_particle.as_deref() == Some("に") && !o.is_clock {
+            if o.case_particle.as_deref() == Some("に") && !o.is_event_time {
                 let raw_np = o
                     .text
                     .strip_prefix('在')
@@ -9819,6 +11946,13 @@ fn translate_clause_bunsetsus(
             .flat_map(|b| &b.atoms)
             .all(|a| !a.is_locked)
         && inner_pre_mods.iter().any(|m| m == "不");
+    if state_interval
+        .as_ref()
+        .is_some_and(|interval| interval.question)
+        && sfp_suffix == Some("嗎")
+    {
+        sfp_suffix = Some("？");
+    }
     let negative_go = verb_core == "去"
         && inner_pre_mods
             .iter()
@@ -9986,7 +12120,7 @@ fn translate_clause_bunsetsus(
                 explicit_deadline.or(deadline_modal.map(|m| (m, false)))
             {
                 let also = if additive { "也" } else { "" };
-                if matches!(o.deadline_endpoint, DeadlineEndpoint::Question)
+                if matches!(o.deadline_endpoint, DeadlineEndpoint::Question { .. })
                     && matches!(modal, "可以" | "得以")
                 {
                     // 幾點前 followed by 往 can read as the departure time (前往).
@@ -9998,12 +12132,17 @@ fn translate_clause_bunsetsus(
                         DeadlineEndpoint::Calendar => "截止前",
                         DeadlineEndpoint::ClockOrDaypart if has_direction_he => "之前",
                         DeadlineEndpoint::ClockOrDaypart => "前",
-                        DeadlineEndpoint::Question => "之前",
+                        DeadlineEndpoint::Question { .. } => "之前",
                     };
                     parts.push(format!("{also}{modal}在{}{cutoff}", o.text));
                 }
             } else if predicate_is_negative && !o.deadline_has_detached_negation {
                 parts.push(format!("到{}為止", o.text));
+            } else if matches!(
+                o.deadline_endpoint,
+                DeadlineEndpoint::Question { calendar: true }
+            ) {
+                parts.push(format!("最晚{}", o.text));
             } else {
                 parts.push(format!("最晚在{}", o.text));
             }
@@ -10038,6 +12177,9 @@ fn translate_clause_bunsetsus(
         }
     }
     parts.extend(cause_prefixes);
+    if let Some(modifier) = count_modifier {
+        parts.push(modifier.to_owned());
+    }
     if ctx.in_concessive_follow
         && !manner_adverbs.iter().any(|x| x == "都")
         && !inner_pre_mods.iter().any(|x| x == "都")
@@ -10092,6 +12234,23 @@ fn translate_clause_bunsetsus(
     if has_spatial_made && verb_core == "去" && !preserve_go {
         verb_core.clear();
     }
+    // The repeated verb makes the elapsed reading natural without claiming
+    // that the whole object was read. Restrict this to an ordinary past read.
+    if elapsed_duration.is_some()
+        && verb_core == "讀"
+        && !passive_agent_needed
+        && post_verb_mods.len() == 1
+        && post_verb_mods[0] == "了"
+        && objs.len() == 1
+        && purpose.is_none()
+        && !has_front_modal
+        && goal_tails.is_empty()
+        && made_endpoints.is_empty()
+        && result_value.is_none()
+    {
+        parts.push(verb_core.clone());
+        parts.push(objs.remove(0));
+    }
     if !verb_core.is_empty() {
         parts.push(verb_core);
     }
@@ -10125,6 +12284,11 @@ fn translate_clause_bunsetsus(
     } else {
         parts.extend(post_verb_mods);
     }
+    // A duration follows an explicit object: 動詞了 + 物件 + 時長.
+    // A separate purpose has its own verb and must not take this duration.
+    if objs.is_empty() || purpose.is_some() {
+        parts.extend(elapsed_duration.take());
+    }
     parts.extend(purpose_partners);
     if let Some(lemma) = purpose {
         // Bare transitive purposes use the ordinary Mandarin verb before the object.
@@ -10146,7 +12310,10 @@ fn translate_clause_bunsetsus(
         parts.push(action);
     }
     parts.extend(transfer_recipient);
+    parts.extend(event_counts);
+    parts.extend(counted_arrival);
     parts.extend(objs);
+    parts.extend(elapsed_duration);
     parts.extend(purpose_recipients);
     parts.extend(route_endpoints);
     parts.extend(temporal_made_tails);
@@ -12310,6 +14477,11 @@ fn is_person_like_bunsetsu(b: &Bunsetsu) -> bool {
 
 fn is_person_like_atom(a: &Atom) -> bool {
     matches!(a.upos, Some(Upos::Pron | Upos::Propn))
+        || a.is_locked
+            && matches!(
+                a.lemma.as_deref(),
+                Some(finite_adjective::ATTRIBUTIVE_PERSON | LOCKED_RESIDENT_ATOM)
+            )
         || matches!(
             a.surface.as_str(),
             "友達"
@@ -12357,6 +14529,200 @@ fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
                 Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Num)
             )
     })
+}
+
+fn elapsed_owned_by(source: &[Atom], owner: usize) -> bool {
+    let Some(action_index) = source
+        .iter()
+        .position(|a| a.doc_tok_idx == Some(owner) && !a.is_locked && a.upos == Some(Upos::Verb))
+    else {
+        return false;
+    };
+    let mut ends = vec![action_index];
+    if source[..action_index].last().is_some_and(|a| {
+        !a.is_locked && a.surface == "を" && a.upos == Some(Upos::Adp) && a.deprel == "case"
+    }) {
+        ends.extend(
+            (0..action_index)
+                .rev()
+                .filter(|&end| elapsed_interposed_object(&source[end..action_index], owner)),
+        );
+    }
+    ends.into_iter().any(|end| {
+        (0..end).any(|start| {
+            if starts_inside_elapsed_number(source, start) {
+                return false;
+            }
+            let amount = &source[start..end];
+            let next = &source[end];
+            if amount
+                .iter()
+                .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+                || amount
+                    .windows(2)
+                    .any(|w| w[0].span.end_char != w[1].span.start_char)
+                || amount
+                    .last()
+                    .is_none_or(|a| a.span.end_char != next.span.start_char)
+                || !amount.iter().any(|a| a.head == Some(owner))
+                || amount.iter().any(|a| {
+                    a.head != Some(owner) && !amount.iter().any(|other| other.doc_tok_idx == a.head)
+                })
+            {
+                return false;
+            }
+            elapsed_duration_surface(
+                &amount
+                    .iter()
+                    .map(|a| a.surface.as_str())
+                    .collect::<String>(),
+            )
+            .is_some()
+        })
+    })
+}
+
+// A finite progressive relative has a lexical action linked through て to
+// いる, which modifies the following noun. Do not treat other て clauses as ACLs.
+fn progressive_acl_action(predicate: &Bunsetsu) -> Option<(&Atom, &Atom)> {
+    let (action, te, iru, negative, past) = match predicate.atoms.as_slice() {
+        [action, te, iru, past] => (action, te, iru, None, past),
+        [action, te, iru, negative, past] => (action, te, iru, Some(negative), past),
+        _ => return None,
+    };
+    if predicate
+        .atoms
+        .iter()
+        .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "advcl"
+        || te.upos != Some(Upos::Sconj)
+        || !matches!(te.surface.as_str(), "て" | "で")
+        || te.deprel != "mark"
+        || te.head != action.doc_tok_idx
+        || iru.upos != Some(Upos::Verb)
+        || iru.lemma.as_deref() != Some("いる")
+        || iru.deprel != "acl"
+        || iru.head.is_none()
+        || action.head != iru.doc_tok_idx
+        || past.upos != Some(Upos::Aux)
+        || past.surface != "た"
+        || past.head != iru.doc_tok_idx
+        || negative.is_some_and(|a| {
+            a.upos != Some(Upos::Aux)
+                || a.surface != "なかっ"
+                || a.lemma.as_deref() != Some("ない")
+                || a.head != iru.doc_tok_idx
+                || a.deprel != "aux"
+        })
+        || predicate
+            .atoms
+            .windows(2)
+            .any(|w| w[0].span.end_char != w[1].span.start_char)
+    {
+        return None;
+    }
+    Some((action, iru))
+}
+
+fn progressive_acl_is_negative(predicate: &Bunsetsu) -> bool {
+    progressive_acl_action(predicate).is_some()
+        && matches!(predicate.atoms.as_slice(), [_, _, _, negative, _] if negative.surface == "なかっ")
+}
+
+// Only bare, linked finite past negation is safe to combine with an elapsed
+// amount here. Focus, deadlines, and other negation stay on their own paths.
+fn elapsed_past_negative_action(predicate: &Bunsetsu) -> Option<&Atom> {
+    let (action, auxiliaries) = predicate.atoms.split_first()?;
+    let recognized = match auxiliaries {
+        [negative, past] => {
+            negative.surface == "なかっ"
+                && negative.lemma.as_deref() == Some("ない")
+                && past.surface == "た"
+        }
+        [mase, n, deshi, past] => {
+            [
+                mase.surface.as_str(),
+                n.surface.as_str(),
+                deshi.surface.as_str(),
+                past.surface.as_str(),
+            ] == ["ませ", "ん", "でし", "た"]
+        }
+        _ => false,
+    };
+    if predicate.sconj_tail.is_some()
+        || predicate.case_particle.is_some()
+        || predicate
+            .atoms
+            .iter()
+            .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "root"
+        || !recognized
+        || auxiliaries
+            .iter()
+            .any(|a| a.upos != Some(Upos::Aux) || a.deprel != "aux" || a.head != action.doc_tok_idx)
+        || predicate
+            .atoms
+            .windows(2)
+            .any(|w| w[0].span.end_char != w[1].span.start_char)
+    {
+        return None;
+    }
+    Some(action)
+}
+
+fn is_elapsed_progressive_relative(predicate: &Bunsetsu, noun: &Bunsetsu, source: &[Atom]) -> bool {
+    let Some((action, iru)) = progressive_acl_action(predicate) else {
+        return false;
+    };
+    noun.atoms
+        .iter()
+        .any(|a| !a.is_locked && a.doc_tok_idx == iru.head)
+        && action
+            .doc_tok_idx
+            .is_some_and(|id| elapsed_owned_by(source, id))
+}
+
+// Keep the ordinary past-copula guard unless this exact ACL or its containing
+// noun's matrix action owns a source-linked elapsed quantity.
+fn is_elapsed_past_relative(predicate: &Bunsetsu, noun: &Bunsetsu, source: &[Atom]) -> bool {
+    let Some(verb) = predicate.atoms.iter().find(|a| {
+        !a.is_locked
+            && a.upos == Some(Upos::Verb)
+            && a.deprel == "acl"
+            && a.doc_tok_idx.is_some()
+            && noun
+                .atoms
+                .iter()
+                .any(|n| n.doc_tok_idx.is_some() && a.head == n.doc_tok_idx)
+    }) else {
+        return false;
+    };
+    let Some(past) = predicate.atoms.iter().find(|a| {
+        !a.is_locked
+            && a.surface == "だ"
+            && a.upos == Some(Upos::Aux)
+            && a.lemma.as_deref() == Some("た")
+            && a.head == verb.doc_tok_idx
+            && verb.span.end_char == a.span.start_char
+    }) else {
+        return false;
+    };
+    let mut probe = predicate.clone();
+    if let Some(atom) = probe.atoms.iter_mut().find(|a| a.span == past.span) {
+        atom.surface = "た".to_owned();
+    }
+    is_prenominal_pred(&probe)
+        && (verb
+            .doc_tok_idx
+            .is_some_and(|id| elapsed_owned_by(source, id))
+            || noun
+                .atoms
+                .iter()
+                .find(|n| n.doc_tok_idx == verb.head)
+                .and_then(|n| n.head)
+                .is_some_and(|id| elapsed_owned_by(source, id)))
 }
 
 fn is_prenominal_pred(b: &Bunsetsu) -> bool {
@@ -12516,14 +14882,76 @@ fn take_adnominal_arguments(
     doc: &Document,
     allow_bare_duration: bool,
 ) -> Vec<Bunsetsu> {
+    // A split numeric duration is one argument of the ACL predicate. Move it
+    // as a whole before translating the relative clause; never move a topic.
+    let owned_duration = progressive_acl_action(&predicate)
+        .map(|(action, _)| action)
+        .or_else(|| {
+            predicate.atoms.iter().find(|a| {
+                !a.is_locked
+                    && a.upos == Some(Upos::Verb)
+                    && a.deprel == "acl"
+                    && a.doc_tok_idx.is_some()
+            })
+        })
+        .and_then(|verb| {
+            (0..remaining.len()).find(|&start| {
+                let groups = &remaining[start..];
+                if groups.iter().any(|g| g.case_particle.is_some()) {
+                    return false;
+                }
+                let atoms: Vec<_> = groups.iter().flat_map(|g| &g.atoms).collect();
+                if atoms.is_empty()
+                    || atoms.iter().any(|a| a.is_locked || a.doc_tok_idx.is_none())
+                    || atoms
+                        .windows(2)
+                        .any(|w| w[0].span.end_char != w[1].span.start_char)
+                    || atoms
+                        .last()
+                        .is_none_or(|a| a.span.end_char != verb.span.start_char)
+                    || !atoms.iter().any(|a| a.head == verb.doc_tok_idx)
+                    || atoms.iter().any(|a| {
+                        a.head != verb.doc_tok_idx
+                            && !atoms.iter().any(|other| other.doc_tok_idx == a.head)
+                    })
+                {
+                    return false;
+                }
+                elapsed_duration_surface(
+                    &atoms.iter().map(|a| a.surface.as_str()).collect::<String>(),
+                )
+                .is_some()
+            })
+        })
+        .map(|start| remaining.split_off(start))
+        .unwrap_or_default();
     let mut deadlines: Vec<_> = remaining
         .extract_if(.., |arg| {
-            deadline_governor(arg, doc).is_some_and(|head| {
-                predicate
-                    .atoms
-                    .iter()
-                    .any(|a| !a.is_locked && a.doc_tok_idx == Some(head))
-            })
+            deadline_governor(arg, doc)
+                .or_else(|| calendar::share_governor(&arg.atoms, doc))
+                .or_else(|| match arg.atoms.as_slice() {
+                    [a] if calendar::is_interval(a)
+                        || calendar::count_modifier(a).is_some()
+                        || calendar::individual_arrivals(a) =>
+                    {
+                        a.head
+                    }
+                    [date, marker @ ..]
+                        if calendar::is_date(date)
+                            && marker.iter().all(|m| {
+                                !m.is_locked && m.deprel == "case" && m.head == date.doc_tok_idx
+                            }) =>
+                    {
+                        date.head
+                    }
+                    _ => None,
+                })
+                .is_some_and(|head| {
+                    predicate
+                        .atoms
+                        .iter()
+                        .any(|a| !a.is_locked && a.doc_tok_idx == Some(head))
+                })
         })
         .collect();
     let mut arguments = Vec::new();
@@ -12544,12 +14972,280 @@ fn take_adnominal_arguments(
         arguments.push(remaining.pop().unwrap());
     }
     arguments.reverse();
+    arguments.extend(owned_duration);
     if !deadlines.is_empty() {
         arguments.append(&mut deadlines);
         arguments.sort_by_key(|arg| arg.atoms.first().map(|a| a.span.start_char));
     }
     arguments.push(predicate);
     arguments
+}
+
+fn both_genitive_matrix(noun: &Atom, case: &Atom, source: &[Atom]) -> Option<usize> {
+    if noun.is_locked
+        || noun.deprel != "nmod"
+        || noun.doc_tok_idx.is_none()
+        || case.is_locked
+        || case.surface != "の"
+        || case.upos != Some(Upos::Adp)
+        || case.deprel != "case"
+        || case.head != noun.doc_tok_idx
+        || noun.span.end_char != case.span.start_char
+    {
+        return None;
+    }
+    let index = source.iter().position(|a| {
+        a.doc_tok_idx == case.doc_tok_idx && a.doc_tok_idx.is_some() && a.span == case.span
+    })?;
+    let both = source.get(index + 1)?;
+    let object = source.get(index + 2)?;
+    if both.is_locked
+        || both.surface != "両方"
+        || both.upos != Some(Upos::Noun)
+        || both.deprel != "obj"
+        || both.doc_tok_idx.is_none()
+        || noun.head != both.doc_tok_idx
+        || case.span.end_char != both.span.start_char
+        || object.is_locked
+        || object.surface != "を"
+        || object.upos != Some(Upos::Adp)
+        || object.deprel != "case"
+        || object.head != both.doc_tok_idx
+        || both.span.end_char != object.span.start_char
+    {
+        return None;
+    }
+    let matrix = source.iter().find(|a| {
+        !a.is_locked
+            && a.doc_tok_idx == both.head
+            && a.doc_tok_idx.is_some()
+            && a.upos == Some(Upos::Verb)
+            && a.deprel == "root"
+    })?;
+    matrix.doc_tok_idx
+}
+
+// A number after と/や may start the next noun's relative clause rather
+// than name a coordinated item. Prove the whole amount and its right noun
+// before postponing the ordinary noun coordination fold.
+fn elapsed_relative_after_coord(
+    left: &Bunsetsu,
+    number: &Bunsetsu,
+    source: &[Atom],
+    expected_noun: Option<usize>,
+) -> bool {
+    let Some(marker) = left.atoms.last() else {
+        return false;
+    };
+    let Some(first) = number.atoms.first() else {
+        return false;
+    };
+    if marker.is_locked
+        || !matches!(marker.surface.as_str(), "と" | "や")
+        || marker.upos != Some(Upos::Adp)
+        || marker.deprel != "case"
+        || first.is_locked
+        || !(first.upos == Some(Upos::Num)
+            || first.upos == Some(Upos::Noun) && first.surface == "半時間")
+        || marker.span.end_char != first.span.start_char
+    {
+        return false;
+    }
+    let Some(left_noun) = left
+        .atoms
+        .iter()
+        .find(|a| !a.is_locked && a.doc_tok_idx.is_some() && a.doc_tok_idx == marker.head)
+    else {
+        return false;
+    };
+    let Some(start) = source.iter().position(|a| {
+        a.doc_tok_idx == first.doc_tok_idx && a.doc_tok_idx.is_some() && a.span == first.span
+    }) else {
+        return false;
+    };
+    if starts_inside_elapsed_number(source, start) {
+        return false;
+    }
+    for end in start + 1..source.len() {
+        let amount = &source[start..end];
+        let action = &source[end];
+        if amount
+            .iter()
+            .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+            || amount
+                .windows(2)
+                .any(|w| w[0].span.end_char != w[1].span.start_char)
+            || amount
+                .last()
+                .is_none_or(|a| a.span.end_char != action.span.start_char)
+        {
+            break;
+        }
+        if action.is_locked
+            || action.upos != Some(Upos::Verb)
+            || action.doc_tok_idx.is_none()
+            || !amount.iter().any(|a| a.head == action.doc_tok_idx)
+            || amount.iter().any(|a| {
+                a.head != action.doc_tok_idx
+                    && !amount.iter().any(|other| other.doc_tok_idx == a.head)
+            })
+            || elapsed_duration_surface(
+                &amount
+                    .iter()
+                    .map(|a| a.surface.as_str())
+                    .collect::<String>(),
+            )
+            .is_none()
+        {
+            continue;
+        }
+        // The following predicate must modify a source noun, with its entire
+        // progressive or finite auxiliary sequence adjacent and unlocked.
+        let noun_id = if action.deprel == "acl" {
+            action.head
+        } else if action.deprel == "advcl" {
+            source
+                .iter()
+                .find(|a| {
+                    a.doc_tok_idx == action.head
+                        && !a.is_locked
+                        && a.lemma.as_deref() == Some("いる")
+                        && a.deprel == "acl"
+                })
+                .and_then(|a| a.head)
+        } else {
+            None
+        };
+        let Some(noun_index) = (end + 1..source.len()).find(|&i| {
+            noun_id.is_some()
+                && source[i].doc_tok_idx == noun_id
+                && !source[i].is_locked
+                && matches!(source[i].upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+        }) else {
+            continue;
+        };
+        let phrase = &source[end..noun_index];
+        if phrase
+            .windows(2)
+            .any(|w| w[0].span.end_char != w[1].span.start_char)
+            || phrase
+                .last()
+                .is_none_or(|a| a.span.end_char != source[noun_index].span.start_char)
+            || phrase.iter().skip(1).any(|a| {
+                a.is_locked
+                    || !(a.upos == Some(Upos::Aux)
+                        && a.deprel == "aux"
+                        && (a.head == action.doc_tok_idx || a.head == action.head)
+                        || a.upos == Some(Upos::Sconj)
+                            && matches!(a.surface.as_str(), "て" | "で")
+                            && a.deprel == "mark"
+                            && a.head == action.doc_tok_idx
+                        || a.upos == Some(Upos::Verb)
+                            && a.lemma.as_deref() == Some("いる")
+                            && a.doc_tok_idx == action.head
+                            && a.deprel == "acl"
+                            && a.head == noun_id)
+            })
+        {
+            continue;
+        }
+        let noun = &source[noun_index];
+        if expected_noun.is_some_and(|id| noun.doc_tok_idx != Some(id)) {
+            continue;
+        }
+        let Some(case) = source.get(noun_index + 1) else {
+            continue;
+        };
+        if case.is_locked
+            || case.upos != Some(Upos::Adp)
+            || case.deprel != "case"
+            || case.head != noun.doc_tok_idx
+            || noun.span.end_char != case.span.start_char
+            || noun.head.is_none()
+            || left_noun.head.is_none()
+        {
+            continue;
+        }
+        let matrix_id = if matches!(case.surface.as_str(), "が" | "は" | "を")
+            && matches!(noun.deprel.as_str(), "nsubj" | "obj")
+        {
+            source
+                .iter()
+                .find(|a| {
+                    a.doc_tok_idx == noun.head
+                        && !a.is_locked
+                        && a.upos == Some(Upos::Verb)
+                        && a.deprel == "root"
+                })
+                .and_then(|a| a.doc_tok_idx)
+        } else {
+            both_genitive_matrix(noun, case, source)
+        };
+        let Some(matrix_id) = matrix_id else {
+            continue;
+        };
+        let mut head = left_noun.head;
+        for _ in 0..source.len() {
+            if head == noun.doc_tok_idx || head == Some(matrix_id) {
+                return true;
+            }
+            let Some(part) = source[start..noun_index]
+                .iter()
+                .find(|a| a.doc_tok_idx == head && !a.is_locked)
+            else {
+                break;
+            };
+            head = part.head;
+        }
+    }
+    false
+}
+
+// Let the right genitive noun finish its elapsed modifier before the normal
+// の両方を fold. Require the same proven left coordination as the number gate.
+fn coordinated_elapsed_both_genitive(
+    remaining: &[Bunsetsu],
+    noun_group: &Bunsetsu,
+    source: &[Atom],
+) -> bool {
+    let Some(case) = noun_group.atoms.last() else {
+        return false;
+    };
+    let Some(noun) = noun_group
+        .atoms
+        .iter()
+        .find(|a| !a.is_locked && a.doc_tok_idx.is_some() && a.doc_tok_idx == case.head)
+    else {
+        return false;
+    };
+    if both_genitive_matrix(noun, case, source).is_none() {
+        return false;
+    }
+    let Some(predicate) = remaining.last() else {
+        return false;
+    };
+    let owner = progressive_acl_action(predicate)
+        .filter(|(_, iru)| iru.head == noun.doc_tok_idx)
+        .and_then(|(action, _)| action.doc_tok_idx)
+        .or_else(|| {
+            predicate
+                .atoms
+                .iter()
+                .find(|a| {
+                    !a.is_locked
+                        && a.upos == Some(Upos::Verb)
+                        && a.deprel == "acl"
+                        && a.head == noun.doc_tok_idx
+                })
+                .and_then(|a| a.doc_tok_idx)
+        });
+    if !owner.is_some_and(|id| elapsed_owned_by(source, id)) {
+        return false;
+    }
+    remaining.windows(2).any(|pair| {
+        (ends_in_coord_to(&pair[0]) || ends_in_coord_ya(&pair[0]))
+            && elapsed_relative_after_coord(&pair[0], &pair[1], source, noun.doc_tok_idx)
+    })
 }
 
 fn merge_adnominal_bunsetsus(
@@ -12570,7 +15266,11 @@ fn merge_adnominal_bunsetsus(
             // Keep the original atoms, syntactic role, and any following の or case particle.
             b.atoms.splice(0..0, modifier.atoms);
         }
-        if is_noun_bunsetsu(&b) {
+        if is_noun_bunsetsu(&b)
+            || target == TargetVariant::ZhHant
+                && ends_in_genitive_no(&b)
+                && coordinated_elapsed_both_genitive(&res, &b, source)
+        {
             let is_sue_ni = b.case_particle.as_deref() == Some("に")
                 && b.atoms
                     .first()
@@ -12678,7 +15378,11 @@ fn merge_adnominal_bunsetsus(
                     continue;
                 }
 
-                if let Some(mut ya_b) = res.pop_if(|prev| ends_in_coord_ya(prev)) {
+                if let Some(mut ya_b) = res.pop_if(|prev| {
+                    ends_in_coord_ya(prev)
+                        && !(target == TargetVariant::ZhHant
+                            && elapsed_relative_after_coord(prev, &b, source, None))
+                }) {
                     ya_b.atoms.pop();
                     let ya_str = render_bunsetsu_np(&ya_b, target);
                     if !ya_str.is_empty() {
@@ -12689,6 +15393,8 @@ fn merge_adnominal_bunsetsus(
 
                 if let Some(mut to_b) = res.pop_if(|prev| {
                     ends_in_coord_to(prev)
+                        && !(target == TargetVariant::ZhHant
+                            && elapsed_relative_after_coord(prev, &b, source, None))
                         && !matches!(
                             b.role,
                             BunsetsuRole::ResidenceTogether | BunsetsuRole::ResidenceCount
@@ -12705,7 +15411,13 @@ fn merge_adnominal_bunsetsus(
                     continue;
                 }
 
-                if let Some(pred_b) = res.pop_if(|prev| is_prenominal_pred(prev)) {
+                if let Some(pred_b) = res.pop_if(|prev| {
+                    is_prenominal_pred(prev)
+                        || target == TargetVariant::ZhHant
+                            && (finite_adjective::voiced_past_modifier(prev, &b, source)
+                                || is_elapsed_past_relative(prev, &b, source)
+                                || is_elapsed_progressive_relative(prev, &b, source))
+                }) {
                     let has_verb = pred_b
                         .atoms
                         .iter()
@@ -12864,7 +15576,10 @@ fn deadline_weekday(surface: &str) -> Option<&'static str> {
 }
 
 // A time question can fill the endpoint slot just like a specified date or clock.
-fn deadline_time_question(atom: &Atom) -> Option<&'static str> {
+fn deadline_time_question(atom: &Atom) -> Option<&str> {
+    if let Some(day) = calendar::question(atom) {
+        return Some(day);
+    }
     if atom.is_locked
         || atom.upos != Some(Upos::Pron)
         || !matches!(atom.deprel.as_str(), "obl" | "iobj")
@@ -12922,6 +15637,7 @@ fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
         }
     });
     is_clock_atom(time)
+        || calendar::is_date(time)
         || deadline_time_question(time).is_some()
         || (!time.is_locked
             && (time.upos == Some(Upos::Noun)
@@ -12990,6 +15706,9 @@ fn has_detached_voice_negation(source: &[Atom], timed: usize) -> bool {
 fn deadline_governor(group: &Bunsetsu, doc: &Document) -> Option<usize> {
     if group.case_particle.as_deref() != Some("までに") {
         return None;
+    }
+    if let Some(date) = group.atoms.iter().find(|a| calendar::is_date(a)) {
+        return date.head;
     }
     deadline_case_governor(group.atoms.last()?, doc)
 }
@@ -13527,7 +16246,9 @@ fn is_payment_medium(method: &Atom, modifier: Option<&Atom>) -> bool {
 }
 
 fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
-    atoms.iter().any(is_clock_atom)
+    atoms
+        .iter()
+        .any(|a| is_clock_atom(a) || calendar::is_date(a))
         || is_place_location_bunsetsu(atoms)
         || atoms.iter().any(|a| {
             matches!(
@@ -14389,6 +17110,49 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn elapsed_surface_keeps_duration_and_near_forms_separate() {
+        assert_eq!(
+            super::elapsed_duration_surface("二時間半").as_deref(),
+            Some("兩個半小時")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("二時間").as_deref(),
+            Some("兩個小時")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("一時間十五分").as_deref(),
+            Some("一個小時十五分鐘")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("半時間").as_deref(),
+            Some("半個小時")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("九十分").as_deref(),
+            Some("九十分鐘")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("百二十分").as_deref(),
+            Some("百二十分鐘")
+        );
+        for prefix in ["百", "千", "万", "萬"] {
+            let source = [atom(prefix, 0, false), atom("二十分", 1, false)];
+            assert!(super::starts_inside_elapsed_number(&source, 1), "{prefix}");
+        }
+        assert_eq!(
+            super::elapsed_duration_surface("二十五時間半").as_deref(),
+            Some("二十五個半小時")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("４８時間").as_deref(),
+            Some("48個小時")
+        );
+        for near in ["二時半", "二時間前", "二時間の", "半分", "二時間六十分"] {
+            assert_eq!(super::elapsed_duration_surface(near), None, "{near}");
+        }
+    }
+
+    #[test]
     fn clock_numbers_and_half_are_bounded() {
         assert_eq!(clock_number("二十三"), Some(23));
         assert_eq!(clock_number("２４"), Some(24));
@@ -14593,6 +17357,715 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn elapsed_duration_follows_its_action_and_preserves_clock_and_deadline() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("会議は二時間半続きます。"),
+            "會議持續兩個半小時。"
+        );
+        assert_eq!(translate("会議は二時間続きます。"), "會議持續兩個小時。");
+        let study = translate("今日は二時間勉強しました。");
+        assert!(study.contains("學習了兩個小時"), "{study}");
+        let clock = translate("会議は二時半まで続きました。");
+        assert!(
+            clock.contains("到兩點半") && !clock.contains("個小時"),
+            "{clock}"
+        );
+        let deadline = translate("二時間で仕事が終わりました。");
+        assert!(!deadline.contains("個小時"), "{deadline}");
+    }
+
+    #[test]
+    fn elapsed_duration_stays_with_the_required_or_planned_event() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("私は二時間休む必要があります。"),
+            "我需要休息兩個小時。"
+        );
+        assert_eq!(
+            translate("私は二時間待つ必要はありません。"),
+            "我不需要等待兩個小時。"
+        );
+        assert_eq!(
+            translate("私は二時間休む必要がある。"),
+            "我需要休息兩個小時。"
+        );
+        assert_eq!(
+            translate("私は二時間待つ必要はない。"),
+            "我不需要等待兩個小時。"
+        );
+        assert_eq!(
+            translate("会議は二時間続く予定です。"),
+            "會議預計持續兩個小時。"
+        );
+        assert_eq!(
+            translate("会議は二時間続く予定ではありません。"),
+            "會議沒有預計持續兩個小時。"
+        );
+        let train = translate("三時に着く電車を二時間待ちました。");
+        assert!(
+            train.contains("三點") && train.contains("抵達") && train.contains("電車兩個小時"),
+            "{train}"
+        );
+        let sequence = translate("電車を一時間待ってから、駅で昼ご飯を食べました。");
+        let elapsed = sequence.find("一個小時後").expect(&sequence);
+        let lunch = sequence.find('吃').expect(&sequence);
+        assert!(elapsed < lunch, "{sequence}");
+        let clock = translate("会議は二時半まで続きました。");
+        assert!(
+            clock.contains("到兩點半") && !clock.contains("個小時"),
+            "{clock}"
+        );
+    }
+
+    #[test]
+    fn elapsed_modal_questions_keep_question_scope() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("私は二時間休む必要がありますか。"),
+            "我需要休息兩個小時嗎？"
+        );
+        assert_eq!(
+            translate("私は二時間休む必要がありましたか。"),
+            "我曾經需要休息兩個小時嗎？"
+        );
+        assert_eq!(
+            translate("授業は二時間続く予定ですか。"),
+            "授業預計持續兩個小時嗎？"
+        );
+        assert_eq!(
+            translate("会議は二時間続く予定ではありませんか。"),
+            "會議沒有預計持續兩個小時嗎？"
+        );
+        let embedded = translate("私は二時間休む必要があるか確認しました。");
+        assert!(
+            embedded.contains("確認") && embedded.ends_with('。'),
+            "{embedded}"
+        );
+    }
+
+    #[test]
+    fn elapsed_hour_questions_keep_their_own_question_scope() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(translate("会議は何時間続きますか。"), "會議持續幾個小時？");
+        assert_eq!(
+            translate("私は何時間休む必要がありますか。"),
+            "我需要休息幾個小時？"
+        );
+        assert_eq!(
+            translate("授業は何時間続く予定ですか。"),
+            "授業預計持續幾個小時？"
+        );
+        assert_eq!(
+            translate("会議は二時間続きますか。"),
+            "會議持續兩個小時嗎？"
+        );
+        let outer = translate("会議は何時間続くか聞きましたか。");
+        assert!(outer.ends_with("嗎？"), "{outer}");
+    }
+
+    #[test]
+    fn reported_question_keeps_the_elapsed_necessity_inside_the_quote() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        let text = translate("先生は「二時間休む必要がありますか」と聞きました。");
+        assert!(
+            text.contains("老師問") && text.contains("「需要休息兩個小時嗎？」"),
+            "{text}"
+        );
+        let punctuated = translate("先生は「二時間休む必要がありますか？」と聞きました。");
+        assert!(
+            punctuated.contains("老師問")
+                && punctuated.contains("「需要休息兩個小時嗎？」")
+                && !punctuated.contains("？？"),
+            "{punctuated}"
+        );
+        let minutes = translate("先生は「三十分休む必要がありますか」と聞きました。");
+        assert!(
+            minutes.contains("老師問") && minutes.contains("三十分鐘") && minutes.contains("嗎？"),
+            "{minutes}"
+        );
+        let ordinary = translate("先生は「音楽を聞きました」と言いました。");
+        assert!(
+            ordinary.contains("「") && ordinary.contains("」"),
+            "{ordinary}"
+        );
+    }
+
+    #[test]
+    fn relative_and_matrix_elapsed_amounts_stay_with_their_own_actions() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        let relative = translate("先生は二時間半泳いだ子どもをほめました。");
+        assert!(
+            relative.contains("游泳了兩個半小時的孩子") && relative.contains("誇獎"),
+            "{relative}"
+        );
+        let matrix = translate("先生は泳いだ子どもを二時間半ほめました。");
+        assert!(
+            matrix.contains("游泳的孩子兩個半小時") && matrix.contains("誇獎"),
+            "{matrix}"
+        );
+        let clock = translate("三時に着く電車を二時間待ちました。");
+        assert!(
+            clock.contains("三點") && clock.contains("電車兩個小時"),
+            "{clock}"
+        );
+    }
+
+    #[test]
+    fn progressive_relative_keeps_each_duration_on_its_own_event() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        let wait_then_speak = translate("二時間待っていた客は三十分話しました。");
+        assert!(
+            wait_then_speak.contains("已經等待了兩個小時的客")
+                && wait_then_speak.contains("說了三十分鐘"),
+            "{wait_then_speak}"
+        );
+        let speak_then_wait = translate("三十分話していた客は二時間待ちました。");
+        assert!(
+            speak_then_wait.contains("已經說了三十分鐘的客")
+                && speak_then_wait.contains("等待了兩個小時"),
+            "{speak_then_wait}"
+        );
+        let one = translate("二時間待っていた客は話しました。");
+        assert!(
+            one.contains("已經等待了兩個小時的客") && one.contains('說'),
+            "{one}"
+        );
+        assert_eq!(
+            translate("先生は二時間走った子どもを待ちました。"),
+            "老師等待了跑了兩個小時的孩子。"
+        );
+    }
+
+    #[test]
+    fn elapsed_te_clause_keeps_its_own_subject_action_and_amount() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("父は一時間歩いて、母は三時間泳ぎました。"),
+            "父親走一個小時，母親游泳了三個小時。"
+        );
+        assert_eq!(
+            translate("父は一時間歩き、母は三時間泳ぎました。"),
+            "父親走一個小時，母親游泳了三個小時。"
+        );
+        assert_eq!(
+            translate("客は二時間待って、先生は三十分話しました。"),
+            "客等待兩個小時，老師說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("客は二時間待ち、先生は三十分話しました。"),
+            "客等待兩個小時，老師說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("父は一時間泳いで、母は三時間歩きました。"),
+            "父親游泳一個小時，母親走了三個小時。"
+        );
+        assert_eq!(
+            translate("父は一時間歩いて、母は泳ぎました。"),
+            "父親走一個小時，母親游泳了。"
+        );
+        assert_eq!(
+            translate("父は一時間歩いて母は三時間泳ぎました。"),
+            "父親走一個小時，母親游泳了三個小時。"
+        );
+        assert_eq!(
+            translate("父は一時間歩いて母は泳ぎました。"),
+            "父親走一個小時，母親游泳了。"
+        );
+        assert_eq!(
+            translate("父は一時間歩いて、母は三時間泳ぎませんでした。"),
+            "父親走一個小時，母親沒有游泳三個小時。"
+        );
+    }
+
+    #[test]
+    fn elapsed_te_clause_does_not_reinterpret_other_uses_of_te() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間待っていて、三十分話しました。"),
+            "時間二等待，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("二時間待ってから帰りました。"),
+            "等待兩個小時後，回去了。"
+        );
+        assert_eq!(
+            translate("父は二時間待ってから、母は三時間泳ぎました。"),
+            "父親等待兩個小時後，母親游泳了三個小時。"
+        );
+        assert_eq!(
+            translate("私は二時間待っていました。"),
+            "我時間二正在等待。"
+        );
+        assert_eq!(
+            translate("私は二時間待っておきました。"),
+            "我時間二等待，おき了。"
+        );
+        assert_eq!(
+            translate("私は二時間待ってあげました。"),
+            "我時間二幫忙等待了。"
+        );
+        assert_eq!(
+            translate("「二時間待って」と先生は言いました。"),
+            "「時間二等待」老師說了。"
+        );
+    }
+
+    #[test]
+    fn elapsed_te_clause_keeps_amount_with_shared_or_implicit_subject() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("私は二時間待って、三十分話しました。"),
+            "我等待兩個小時，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("私は二時間待ち、三十分話しました。"),
+            "我等待兩個小時，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("私は三十分話して、二時間待ちました。"),
+            "我說三十分鐘，等待了兩個小時。"
+        );
+        assert_eq!(
+            translate("二時間待って、三十分話しました。"),
+            "等待兩個小時，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("私は二時間待って三十分話しました。"),
+            "我等待兩個小時，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("二時間待って三十分話しました。"),
+            "等待兩個小時，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("父は一時間歩いて、三時間泳ぎました。"),
+            "父親走一個小時，游泳了三個小時。"
+        );
+    }
+
+    #[test]
+    fn elapsed_te_clause_needs_no_duration_on_the_following_event() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間待って、先生に電話しました。"),
+            "等待兩個小時，給老師打電話了。"
+        );
+        assert_eq!(
+            translate("二時間待ち、先生に電話しました。"),
+            "等待兩個小時，給老師打電話了。"
+        );
+        assert_eq!(
+            translate("二時間待って、電話しました。"),
+            "等待兩個小時，打電話了。"
+        );
+        assert_eq!(
+            translate("私は二時間待って、家に帰りました。"),
+            "我等待兩個小時，回到家了。"
+        );
+        assert_eq!(
+            translate("私は二時間待って、帰りました。"),
+            "我等待兩個小時，回去了。"
+        );
+        assert_eq!(
+            translate("一時間電話して、家に帰りました。"),
+            "打電話一個小時，回到家了。"
+        );
+        assert_eq!(
+            translate("一時間電話し、家に帰りました。"),
+            "打電話一個小時，回到家了。"
+        );
+        assert_eq!(
+            translate("一時間電話して家に帰りました。"),
+            "打電話一個小時，回到家了。"
+        );
+        assert_eq!(
+            translate("一時間散歩して、先生に電話しました。"),
+            "散步一個小時，給老師打電話了。"
+        );
+        assert_eq!(
+            translate("一時間散歩して先生に電話しました。"),
+            "散步一個小時，給老師打電話了。"
+        );
+        assert_eq!(translate("先生と三十分話しました。"), "老師和三十分說了。");
+    }
+
+    #[test]
+    fn coordinated_elapsed_relatives_keep_both_quantities_and_their_order() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間待っていた客が帰りました。"),
+            "已經等待了兩個小時的客回去了。"
+        );
+        assert_eq!(
+            translate("三十分話していた先生が帰りました。"),
+            "已經說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と三十分話していた先生が帰りました。"),
+            "已經等待了兩個小時的客和已經說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("三十分話していた先生と二時間待っていた客が帰りました。"),
+            "已經說了三十分鐘的老師和已經等待了兩個小時的客回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と三十分話していた客が帰りました。"),
+            "已經等待了兩個小時的客和已經說了三十分鐘的客回去了。"
+        );
+        assert_eq!(
+            translate("三十分話していた客と二時間待っていた客が帰りました。"),
+            "已經說了三十分鐘的客和已經等待了兩個小時的客回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と半時間話していた先生が帰りました。"),
+            "已經等待了兩個小時的客和已經說了半個小時的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と一時間半話していた先生が帰りました。"),
+            "已經等待了兩個小時的客和已經說了一個半小時的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と一時間十五分話していた先生が帰りました。"),
+            "已經等待了兩個小時的客和已經說了一個小時十五分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待った客と三十分話した先生が帰りました。"),
+            "等待了兩個小時的客和說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("三十分話した先生と二時間待った客が帰りました。"),
+            "說了三十分鐘的老師和等待了兩個小時的客回去了。"
+        );
+        assert_eq!(
+            translate("客と三十分話していた先生が帰りました。"),
+            "客和已經說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客や三十分話していた先生が帰りました。"),
+            "已經等待了兩個小時的客與已經說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていなかった客と三十分話していた先生が帰りました。"),
+            "沒有等待兩個小時的客和已經說了三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と三十分話していなかった先生が帰りました。"),
+            "已經等待了兩個小時的客和沒有說三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていなかった客と三十分話していなかった先生が帰りました。"),
+            "沒有等待兩個小時的客和沒有說三十分鐘的老師回去了。"
+        );
+        assert_eq!(
+            translate("三十分話していなかった先生と二時間待っていなかった客が帰りました。"),
+            "沒有說三十分鐘的老師和沒有等待兩個小時的客回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていて、三十分話しました。"),
+            "時間二等待，說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("二時間待っていなかった客は三十分話しました。"),
+            "沒有等待兩個小時的客說了三十分鐘。"
+        );
+        assert_eq!(translate("先生と客が帰りました。"), "老師和客回去了。");
+        assert_eq!(
+            translate("二時間待っていた客と先生が一緒に帰りました。"),
+            "已經等待了兩個小時的客和老師一起回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客と一緒に帰りました。"),
+            "跟已經等待了兩個小時的客一起回去了。"
+        );
+        assert_eq!(
+            translate("二時間待っていた客が三十分話していた先生に会いました。"),
+            "給已經等待了兩個小時的客已經說了三十分鐘的老師見面了。"
+        );
+        assert_eq!(
+            translate("「二時間待ちました」と先生が言いました。"),
+            "「等待了兩個小時」老師說了。"
+        );
+    }
+
+    #[test]
+    fn coordinated_elapsed_modifiers_stay_inside_the_both_object() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        let first = translate("母は三十分話していた先生と二時間待っていた客の両方を見ました。");
+        assert!(
+            first.starts_with("母親")
+                && first.contains('看')
+                && first.contains("已經說了三十分鐘的老師和已經等待了兩個小時的客")
+                && first.contains("的兩方"),
+            "{first}"
+        );
+        let reversed = translate("母は二時間待っていた客と三十分話していた先生の両方を見ました。");
+        assert!(
+            reversed.starts_with("母親")
+                && reversed.contains('看')
+                && reversed.contains("已經等待了兩個小時的客和已經說了三十分鐘的老師")
+                && reversed.contains("的兩方"),
+            "{reversed}"
+        );
+        let negative =
+            translate("母は二時間待っていなかった客と三十分話していなかった先生の両方を見ました。");
+        assert!(
+            negative.contains("沒有等待兩個小時的客和沒有說三十分鐘的老師")
+                && negative.contains("的兩方"),
+            "{negative}"
+        );
+        assert_eq!(
+            translate("母は客と先生の両方を見ました。"),
+            "母親看了客和老師的兩方。"
+        );
+        assert_eq!(
+            translate("母は先生と客の両方を見ました。"),
+            "母親跟老師看了客的兩方。"
+        );
+        assert_eq!(translate("母は客の写真を見ました。"), "母親看了客的照片。");
+        assert_eq!(
+            translate("二時間待っていた客と三十分話していた先生が帰りました。"),
+            "已經等待了兩個小時的客和已經說了三十分鐘的老師回去了。"
+        );
+    }
+
+    #[test]
+    fn progressive_elapsed_rule_does_not_cross_other_clause_shapes() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("十分に待っていた客は三十分話しました。"),
+            "客正在十分在等待說三十分鐘。"
+        );
+        assert_eq!(
+            translate("待っていた客は三十分話しました。"),
+            "客正在等待說三十分鐘。"
+        );
+        assert_eq!(
+            translate("二時間待っていて、三十分話しました。"),
+            "時間二等待，說了三十分鐘。"
+        );
+        assert_eq!(translate("会議は二時間までです。"), "會議是二時間到。");
+    }
+
+    #[test]
+    fn negative_elapsed_scope_stays_with_each_source_action() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間待っていなかった客は三十分話しました。"),
+            "沒有等待兩個小時的客說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("三十分話していなかった客は二時間待ちました。"),
+            "沒有說三十分鐘的客等待了兩個小時。"
+        );
+        assert_eq!(
+            translate("二時間泳いでいた学生は三十分休みませんでした。"),
+            "已經游泳了兩個小時的學生沒有休息三十分鐘。"
+        );
+        assert_eq!(
+            translate("三十分休んでいた学生は二時間泳ぎませんでした。"),
+            "已經休息了三十分鐘的學生沒有游泳兩個小時。"
+        );
+        assert_eq!(translate("二時間待ちませんでした。"), "沒有等待兩個小時。");
+        assert_eq!(
+            translate("二時間待っていた客は三十分話しました。"),
+            "已經等待了兩個小時的客說了三十分鐘。"
+        );
+    }
+
+    #[test]
+    fn plain_past_negative_keeps_the_duration_with_its_action() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間泳いでいた学生は三十分休まなかった。"),
+            "已經游泳了兩個小時的學生沒有休息三十分鐘。"
+        );
+        assert_eq!(
+            translate("三十分休んでいた学生は二時間泳がなかった。"),
+            "已經休息了三十分鐘的學生沒有游泳兩個小時。"
+        );
+        assert_eq!(
+            translate("二時間待っていなかった客は三十分話しませんでした。"),
+            "沒有等待兩個小時的客沒有說三十分鐘。"
+        );
+        assert_eq!(
+            translate("三十分話していなかった客は二時間待ちませんでした。"),
+            "沒有說三十分鐘的客沒有等待兩個小時。"
+        );
+        assert_eq!(
+            translate("二時間待っていなかった客は三十分話さなかった。"),
+            "沒有等待兩個小時的客沒有說三十分鐘。"
+        );
+        let book = translate("私は二時間本を読まなかった。");
+        assert!(
+            book.contains("沒有讀") && book.contains('書') && book.contains("兩個小時"),
+            "{book}"
+        );
+        assert_eq!(
+            translate("私は二時間は休まなかった。"),
+            "我二時間沒有休息。"
+        );
+        assert_eq!(
+            translate("私は三時まで休まなかった。"),
+            "我到三點為止沒有休息。"
+        );
+    }
+
+    #[test]
+    fn negative_elapsed_does_not_reinterpret_focus_or_cutoffs() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("私は二時間は待ちませんでした。"),
+            "我二時間沒有等待。"
+        );
+        assert_eq!(
+            translate("私は二時間も待ちませんでした。"),
+            "我二時間也沒有等待。"
+        );
+        assert_eq!(
+            translate("私は三時まで休みませんでした。"),
+            "我到三點為止沒有休息。"
+        );
+        assert_eq!(
+            translate("私は三時までに休みませんでした。"),
+            "我到三點為止沒有休息。"
+        );
+        assert_eq!(
+            translate("私は二時間以上待ちませんでした。"),
+            "我時間二以上面沒有等待。"
+        );
+    }
+
+    #[test]
+    fn elapsed_passive_keeps_its_patient_action_and_relative_scope() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間半泳いだ子どもは先生にほめられました。"),
+            "游泳了兩個半小時的孩子被老師誇獎了。"
+        );
+        assert_eq!(
+            translate("泳いだ子どもは先生に二時間半ほめられました。"),
+            "游泳的孩子被老師誇獎了兩個半小時。"
+        );
+        assert_eq!(
+            translate("子どもは先生に何時間ほめられましたか。"),
+            "孩子被老師誇獎了幾個小時？"
+        );
+        assert_eq!(
+            translate("本は先生に二時間読まれました。"),
+            "書被老師讀了兩個小時。"
+        );
+        assert_eq!(
+            translate("先生は本を二時間読みました。"),
+            "老師讀書讀了兩個小時。"
+        );
+        let indirect = translate("私は先生に本を二時間読まれました。");
+        assert_eq!(indirect.matches('讀').count(), 1, "{indirect}");
+        assert!(
+            indirect.contains('被')
+                && indirect.contains('書')
+                && indirect.contains("兩個小時")
+                && !indirect.contains("我的"),
+            "{indirect}"
+        );
+    }
+
+    #[test]
+    fn elapsed_question_remains_inside_its_reporting_question() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("会議は何時間続くか聞きましたか。"),
+            "有問會議持續幾個小時嗎？"
+        );
+        let unasked = translate("会議は何時間続くか聞きました。");
+        assert!(!unasked.starts_with("有問"), "{unasked}");
+    }
+
+    #[test]
+    fn nonelapsed_past_relative_keeps_existing_translation() {
+        let text = public_translate(
+            "安全確認が済んだ時点で、現場責任者は作業の再開を許可しなければならない。",
+            &TranslationGlossary::new(),
+        )
+        .target_text;
+        assert_eq!(
+            text,
+            "安全的確認在時點了結了，現場責任者必須允許作業的再開。"
+        );
+    }
+
+    #[test]
+    fn elapsed_amount_can_precede_its_source_linked_object() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("私は本を一時間読みました。"),
+            "我讀書讀了一個小時。"
+        );
+        assert_eq!(
+            translate("私は一時間本を読みました。"),
+            "我讀書讀了一個小時。"
+        );
+        assert_eq!(
+            translate("私は一時間本を読みましたか。"),
+            "我讀書讀了一個小時嗎？"
+        );
+        assert_eq!(
+            translate("私は一時間本を読む必要がありますか。"),
+            "我需要讀書一個小時嗎？"
+        );
+        let clock = translate("三時に着く電車を二時間待ちました。");
+        assert!(
+            clock.contains("三點") && clock.contains("抵達") && clock.contains("電車兩個小時"),
+            "{clock}"
+        );
+        let opaque = translate("私は一時間`本`を読みました。");
+        assert!(opaque.contains("`本`"), "{opaque}");
+    }
+
+    #[test]
+    fn elapsed_interposed_object_needs_complete_source_attachment() {
+        let mut noun = atom("本", 0, false);
+        noun.doc_tok_idx = Some(3);
+        noun.head = Some(5);
+        noun.deprel = "obj".to_owned();
+        let mut case = atom("を", 1, false);
+        case.doc_tok_idx = Some(4);
+        case.head = Some(3);
+        case.upos = Some(Upos::Adp);
+        case.deprel = "case".to_owned();
+        assert!(super::elapsed_interposed_object(
+            &[noun.clone(), case.clone()],
+            5
+        ));
+        assert!(!super::elapsed_interposed_object(
+            &[noun.clone(), case.clone()],
+            6
+        ));
+        noun.is_locked = true;
+        assert!(!super::elapsed_interposed_object(&[noun, case], 5));
+    }
+
+    #[test]
     fn clock_is_not_a_motion_destination() {
         let output =
             public_translate("午後二時に教室に行きます。", &TranslationGlossary::new()).target_text;
@@ -14601,6 +18074,654 @@ mod clock_rule_tests {
             "{output}"
         );
         assert!(!output.contains("到下午兩點"), "{output}");
+    }
+
+    #[test]
+    fn calendar_days_preserve_deadlines_instants_and_question_scope() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("何日までに本を読みますか。", "最晚幾號讀書？"),
+            ("何曜日に本を読みますか。", "星期幾讀書？"),
+            ("五月五日までに本を読みますか。", "最晚在五月五日讀書嗎？"),
+            (
+                "十二月二十五日に本を読みますか。",
+                "在十二月二十五日讀書嗎？",
+            ),
+            ("５月２５日に本を読みます。", "在5月25日讀書。"),
+            ("五日間、毎日本を読みます。", "五天，每天讀書。"),
+            (
+                "二〇二四年四月一日に入社した。",
+                "在二〇二四年四月一日進入公司了。",
+            ),
+            (
+                "私は四月五日に駅に行きませんでした。",
+                "我在四月五日沒有去車站。",
+            ),
+            (
+                "四月五日までに手紙を書きませんでした。",
+                "到四月五日為止沒有寫信。",
+            ),
+            (
+                "何曜日までに駅に着くことを決めましたか。",
+                "決定了最晚星期幾抵達到車站嗎？",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn detached_calendar_cases_preserve_their_event_and_its_scope() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "九月九日までに、友だちに写真を送ります。",
+                "最晚在九月九日給朋友寄送照片。",
+            ),
+            (
+                "九月九日に、友だちに写真を送ります。",
+                "在九月九日給朋友寄送照片。",
+            ),
+            (
+                "九月九日までに、誰に写真を送りますか。",
+                "最晚在九月九日給誰寄送照片？",
+            ),
+            (
+                "九月九日までに、友だちに写真を送った先生が来ました。",
+                "最晚在九月九日給朋友寄送了照片的老師來了。",
+            ),
+            (
+                "九月九日までに、友だちに送る写真を選びました。",
+                "選擇了最晚在九月九日給朋友寄送的照片。",
+            ),
+            (
+                "先生は六月四日に母へ、六月二日と三日に学生が来たとは答えませんでした。",
+                "老師在六月四日沒有向母親回答說學生在六月二日和三日來了。",
+            ),
+            (
+                "先生は六月四日に母へ、六月二日と三日に学生が来なかったとは答えませんでした。",
+                "老師在六月四日沒有向母親回答說學生在六月二日和三日沒有來。",
+            ),
+            (
+                "六月七日と九日に一人ずつ学生が来たと先生は答えなかったのですか。",
+                "老師是否沒有回答說在六月七日和九日各來了一位學生？",
+            ),
+            (
+                "先生は、毎日ではなく三日に一人ずつ患者が来る病院を選びましたか。",
+                "老師選擇了不是每天，而是每三天來一位患者的醫院嗎？",
+            ),
+            (
+                "父は、毎週ではなく四日に二人ずつ学生が来る学校を選びました。",
+                "父親選擇了不是每週，而是每四天來兩位學生的學校。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn opaque_date_parts_and_rate_contrasts_keep_their_roles() {
+        for (source, term, expected) in [
+            (
+                "九月九日までに、友だちに写真を送ります。",
+                "友だち",
+                "最晚在九月九日給指定值寄送照片。",
+            ),
+            (
+                "九月九日までに、友だちに写真を送ります。",
+                "九日",
+                "最晚在九月指定值給朋友寄送照片。",
+            ),
+            (
+                "先生は六月四日に母へ、六月二日と三日に学生が来たとは答えませんでした。",
+                "六月二日と三日",
+                "老師在六月四日沒有向母親回答說學生在指定值來了。",
+            ),
+            (
+                "先生は、毎日ではなく三日に一人ずつ患者が来る病院を選びましたか。",
+                "三日",
+                "老師選擇了不是每天，而是每指定值來一位患者的醫院嗎？",
+            ),
+            (
+                "先生は、毎日ではなく三日に一人ずつ患者が来る病院を選びましたか。",
+                "毎日",
+                "老師選擇了不是指定值，而是每三天來一位患者的醫院嗎？",
+            ),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "指定值".to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{term}"
+            );
+        }
+    }
+
+    #[test]
+    fn calendar_days_with_a_count_distinguish_a_rate_from_one_dated_event() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "毎日ではなく、二日に一度だけ薬を飲みます。",
+                "不是每天，而是每兩天只喝一次藥。",
+            ),
+            ("三日に一回だけ走ります。", "每三天只跑一次。"),
+            ("一日に三回薬を飲みました。", "每天喝了三次藥。"),
+            ("何日に一度だけ駅へ行きますか。", "每隔幾天往車站只去一次？"),
+            ("二日に一度だけ駅へ行きますか。", "每兩天往車站只去一次嗎？"),
+            ("二日に一度、郵便局へ行きます。", "每兩天一次，往郵局去。"),
+            (
+                "六月二日に一度だけ手紙を書きました。",
+                "在六月二日只寫了一次信。",
+            ),
+            (
+                "五月の二日に一度だけ駅へ行きます。",
+                "在五月的二號往車站只去一次。",
+            ),
+            ("二日間、家で休みました。", "兩天，在家休息了。"),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn counted_rates_keep_the_amount_with_the_book_or_arriving_person() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "毎日ではなく、二日に一冊だけ本を読みます。",
+                "不是每天，而是每兩天只讀一本書。",
+            ),
+            (
+                "毎日ではなく、二日に本を一冊だけ読みます。",
+                "不是每天，而是每兩天只讀一本書。",
+            ),
+            (
+                "毎日ではなく、二日に一人ずつお客さんが来ます。",
+                "不是每天，而是每兩天來一位客人。",
+            ),
+            (
+                "毎朝ではなく、三日に一人ずつ学生が来ます。",
+                "不是每天早上，而是每三天來一位學生。",
+            ),
+            ("三日に二枚ずつ写真を撮ります。", "每三天拍攝兩張照片。"),
+            (
+                "六月二日に一冊だけ本を読みました。",
+                "在六月二日只讀了一本書。",
+            ),
+            (
+                "今月の二日に一冊だけ本を読みました。",
+                "在這個月的二號只讀了一本書。",
+            ),
+            (
+                "六月二日に一人だけお客さんが来ました。",
+                "在六月二日只來了一位客人。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        for source in [
+            "二日に一冊だけ本を読みました。",
+            "何日に一人のお客さんが来ますか。",
+            "二日に一冊ずつ二人が本を読みます。",
+        ] {
+            let output = public_translate(source, &glossary).target_text;
+            assert!(
+                !output.contains('號') && !output.contains("每兩天"),
+                "{source}: {output}"
+            );
+        }
+    }
+
+    #[test]
+    fn opaque_count_keeps_the_day_ambiguous_unless_a_month_is_present() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "一度".to_owned(),
+            surfaces: vec!["一度".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "保留次數".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        for (source, dated) in [
+            ("二日に一度だけ薬を飲みます。", false),
+            ("六月二日に一度だけ薬を飲みます。", true),
+        ] {
+            let output = public_translate(source, &glossary);
+            assert_eq!(output.glossary_hits.len(), 1, "{source}");
+            assert_eq!(output.target_text.matches("保留次數").count(), 1);
+            assert_eq!(output.target_text.contains("在六月二日"), dated);
+            assert!(
+                !output.target_text.contains("二號") && !output.target_text.contains("每兩天"),
+                "{}",
+                output.target_text
+            );
+        }
+    }
+
+    #[test]
+    fn counted_arrivals_modify_the_relative_noun_and_keep_the_matrix_subject() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "六月二日と三日に一人ずつ学生が来る教室を先生が選びました。",
+                "老師選擇了在六月二日和三日各來一位學生的教室。",
+            ),
+            (
+                "七月三日と五日に二人ずつ患者が来る病院を見学しました。",
+                "參觀了在七月三日和五日各來兩位患者的醫院。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来ました。",
+                "在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と三日にそれぞれ一冊ずつ本を読んだ学生が来ました。",
+                "在六月二日和三日各讀了一本書的學生來了。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn reported_calendar_events_keep_the_speaker_separate_from_their_subject() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "六月二日と三日に一人ずつ学生が来たと先生が答えました。",
+                "老師回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "先生は六月二日と三日に一人ずつ学生が来たと答えました。",
+                "老師回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "毎日ではなく、三日に一冊ずつ本を借りたと先生が答えました。",
+                "老師回答，不是每天，而是每三天借用了一本書。",
+            ),
+            (
+                "学生は、毎日ではなく二日に一冊だけ本を読んだと答えました。",
+                "學生回答，不是每天，而是每兩天只讀了一本書。",
+            ),
+            (
+                "二日に一冊ずつ本を借りたと先生は答えませんでした。",
+                "老師沒有回答說每兩天借用了一本書。",
+            ),
+            (
+                "二日に一冊ずつ本を借りたと先生が答えましたか。",
+                "老師是否回答說每兩天借用了一本書？",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let conditional = public_translate(
+            "六月二日と三日に一人ずつ学生が来ると先生が喜びました。",
+            &glossary,
+        );
+        assert!(
+            conditional.target_text.starts_with("當")
+                && conditional.target_text.ends_with("老師高興了。")
+        );
+    }
+
+    #[test]
+    fn opaque_participants_keep_their_role_in_counted_relative_and_reported_events() {
+        let mut glossary = TranslationGlossary::new();
+        for (source, name) in [("学生", "指定學生"), ("先生", "指定發言人")] {
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: source.to_owned(),
+                surfaces: vec![source.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, name.to_owned())]),
+                ..GlossaryEntry::default()
+            });
+        }
+        assert_eq!(
+            public_translate(
+                "六月二日と三日に一人ずつ学生が来る学校を選びました。",
+                &glossary
+            )
+            .target_text,
+            "選擇了在六月二日和三日各來一位指定學生的學校。"
+        );
+        assert_eq!(
+            public_translate(
+                "毎日ではなく、三日に一冊ずつ本を借りたと先生が答えました。",
+                &glossary
+            )
+            .target_text,
+            "指定發言人回答，不是每天，而是每三天借用了一本書。"
+        );
+    }
+
+    #[test]
+    fn reported_dates_bind_each_actor_time_and_recipient_to_its_predicate() {
+        let mut g = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "六月二日と三日に一人ずつ学生が来たと学校の校長が六月七日に答えました。",
+                "學校的校長在六月七日回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "八月四日と六日に一人ずつ学生が来たと先生は七日に答えませんでした。",
+                "老師在七號沒有回答說在八月四日和六日各來了一位學生。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと校長が学生の母に七日に答えました。",
+                "校長在七號向學生的母親回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "四日に先生が母に、六月二日と三日に一人ずつ学生が来たと答えました。",
+                "老師在四號向母親回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "八月四日と六日に二人ずつ患者が来たと看護師が七日に医師に答えました。",
+                "看護師在七號向醫師回答，在八月四日和六日各來了兩位患者。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと校長と先生が四日に答えました。",
+                "校長和老師在四號回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと校長が答えました。",
+                "校長回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "係員は六月二日と三日に一人ずつ学生が来たと答えました。",
+                "係員回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと店員が四日に母に答えました。",
+                "店員在四號向母親回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと誰が答えましたか。",
+                "誰回答說在六月二日和三日各來了一位學生？",
+            ),
+            (
+                "誰が六月二日と三日に一人ずつ学生が来たと答えましたか。",
+                "誰回答說在六月二日和三日各來了一位學生？",
+            ),
+            (
+                "四日に、校長が六月二日と三日に一人ずつ学生が来たと答えました。",
+                "校長在四號回答，在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと校長が何日に答えましたか。",
+                "校長在幾號回答說在六月二日和三日各來了一位學生？",
+            ),
+            (
+                "二日に一冊ずつ本を借りたと先生が母に答えました。",
+                "老師向母親回答，每兩天借用了一本書。",
+            ),
+            (
+                "六月二日と三日に一人ずつ学生が来たと店員が昨日答えました。",
+                "店員昨天回答，在六月二日和三日各來了一位學生。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &g).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let actual = public_translate(
+            "六月二日と三日に一人ずつ学生が来ると、校長が質問に答えました。",
+            &g,
+        );
+        assert!(!actual.target_text.contains("向質問回答"));
+        g.domain_terms.push(GlossaryEntry {
+            canonical: "四日".to_owned(),
+            surfaces: vec!["四日".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "指定答日".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        assert_eq!(
+            public_translate(
+                "六月二日と三日に一人ずつ学生が来たと校長が四日に母に答えました。",
+                &g
+            )
+            .target_text,
+            "校長在指定答日向母親回答，在六月二日和三日各來了一位學生。"
+        );
+    }
+
+    #[test]
+    fn coordinated_dates_distribute_one_event_on_each_date() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "六月二日と三日に一人ずつ学生が来ました。",
+                "在六月二日和三日各來了一位學生。",
+            ),
+            (
+                "六月二日と七月三日に一人ずつ学生が来ました。",
+                "在六月二日和七月三日各來了一位學生。",
+            ),
+            (
+                "六月七日と九日に一人ずつ学生が来ました。",
+                "在六月七日和九日各來了一位學生。",
+            ),
+            (
+                "六月九日と七月七日に一人ずつ学生が来ました。",
+                "在六月九日和七月七日各來了一位學生。",
+            ),
+            (
+                "六月七日と九日に一人ずつ学生が来たと校長が七月七日に答えました。",
+                "校長在七月七日回答，在六月七日和九日各來了一位學生。",
+            ),
+            ("九日に一人ずつ学生が来ます。", "每九天來一位學生。"),
+            (
+                "六月七日に一度だけ学生が来ました。",
+                "學生在六月七日只來了一次。",
+            ),
+            (
+                "七月三日と五日に一冊ずつ本を借りました。",
+                "在七月三日和五日各借用了一本書。",
+            ),
+            (
+                "今月の二日と三日に一冊ずつ本を買いました。",
+                "在這個月二日和三日各買了一本書。",
+            ),
+            (
+                "六月二日と三日、それぞれ一冊ずつ本を借りました。",
+                "在六月二日和三日各借用了一本書。",
+            ),
+            (
+                "毎日ではなく、三日に一人ずつ学生が来ました。",
+                "不是每天，而是每三天來了一位學生。",
+            ),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+    }
+
+    #[test]
+    fn habitual_time_after_the_subject_stays_with_its_action() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("私は毎朝、水を飲みます。", "我每天早上喝水。"),
+            ("私は毎朝、水を飲みません。", "我每天早上不喝水。"),
+            ("母は毎晩、本を読みます。", "母親每晚讀書。"),
+            ("妹は毎日、学校に行きます。", "妹妹每天去到學校。"),
+            ("毎朝、私は水を飲みます。", "每天早上，我喝水。"),
+            ("私は水を飲み、母は本を読みます。", "我喝水，母親讀書。"),
+            (
+                "私は毎朝、水を飲んで、本を読みます。",
+                "我每天早上喝水，讀書。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn habitual_time_preserves_a_boundary_hidden_by_a_glossary_entry() {
+        for (source, term, replacement, prefix) in [
+            (
+                "母は毎朝、『ありがとう』と言います。",
+                "『ありがとう』",
+                "『謝謝您』",
+                "母親每天早上，",
+            ),
+            (
+                "私は毎晩、水、お茶、牛乳を買います。",
+                "水、お茶、",
+                "飲品甲和",
+                "我每晚，",
+            ),
+            (
+                r#"私は毎朝、"おはよう"と言います。"#,
+                r#""おはよう""#,
+                "「早安」",
+                "我每天早上，",
+            ),
+            (
+                "私は毎朝、水,お茶,牛乳を買います。",
+                "水,お茶,",
+                "水、茶、",
+                "我每天早上，",
+            ),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: [(TargetVariant::ZhHant, replacement.to_owned())].into(),
+                ..Default::default()
+            });
+            let result = public_translate(source, &glossary);
+            let plain = public_translate(source, &TranslationGlossary::new());
+            assert!(
+                plain.target_text.starts_with(prefix),
+                "{}",
+                plain.target_text
+            );
+            assert!(!result.glossary_hits.is_empty());
+            assert!(result.target_text.contains(replacement));
+            assert!(
+                result.target_text.starts_with(prefix),
+                "{}",
+                result.target_text
+            );
+        }
+    }
+
+    #[test]
+    fn habitual_quantities_stay_with_their_own_predicate() {
+        let glossary = TranslationGlossary::new();
+        for jp in [
+            "普段は三日に一杯コーヒーを飲みます。",
+            "ふだんは三日に一杯コーヒーを飲みます。",
+        ] {
+            assert_eq!(
+                public_translate(jp, &glossary).target_text,
+                "平常每三天喝一杯咖啡。"
+            );
+        }
+        assert_eq!(
+            public_translate(
+                "毎日ではなく、二日に一冊だけ本を返した学生が来ました。",
+                &glossary
+            )
+            .target_text,
+            "不是每天，而是每兩天只還給了一本書的學生來了。"
+        );
+        assert_eq!(
+            public_translate(
+                "毎日ではなく、三日に二冊だけ本を読んだ学生が来ました。",
+                &glossary
+            )
+            .target_text,
+            "不是每天，而是每三天只讀了兩本書的學生來了。"
+        );
+        let ambiguous = public_translate("三日に一杯コーヒーを飲みます。", &glossary);
+        assert!(
+            !ambiguous.target_text.contains("每三天") && !ambiguous.target_text.contains("三號")
+        );
+    }
+
+    #[test]
+    fn a_single_day_restricts_only_the_matching_day_in_the_next_sentence() {
+        let glossary = TranslationGlossary::new();
+        let jp = "試験は六月二日だけです。二日に学生が一人ずつ来ます。";
+        assert_eq!(
+            public_translate(jp, &glossary).target_text,
+            "試驗只在六月二日。學生在六月二日一位接一位地來。"
+        );
+        for jp in [
+            "試験は六月二日だけです。三日に学生が一人ずつ来ます。",
+            "試験は六月二日だけです。二日に一度だけ薬を飲みます。",
+            "試験は六月二日だけです。\n\n二日に学生が一人ずつ来ます。",
+        ] {
+            let text = public_translate(jp, &glossary).target_text;
+            assert_eq!(text.matches("六月二日").count(), 1, "{jp}: {text}");
+        }
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "六月二日".to_owned(),
+            surfaces: vec!["六月二日".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "特別日".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let locked = public_translate(jp, &glossary);
+        assert_eq!(locked.target_text.matches("特別日").count(), 1);
+        assert!(!locked.target_text.contains("六月二日"));
+        let coordinated = public_translate("六月二日と三日に一人ずつ学生が来ました。", &glossary);
+        assert_eq!(coordinated.target_text.matches("特別日").count(), 1);
+        assert!(!coordinated.target_text.contains("每三天"));
+    }
+
+    #[test]
+    fn duration_and_selected_values_do_not_become_calendar_dates() {
+        let glossary = TranslationGlossary::new();
+        for source in [
+            "何日に一回走りますか。",
+            "二日に一回走ります。",
+            "一日に三人来ます。",
+            "何日で本を読みますか。",
+            "五日後に行きます。",
+            "彼は何日に設定しましたか。",
+        ] {
+            let text = public_translate(source, &glossary).target_text;
+            assert!(
+                !text.contains('號') && !text.contains("最晚"),
+                "{source}: {text}"
+            );
+        }
     }
 
     #[test]
@@ -15217,6 +19338,279 @@ mod motion_endpoint_tests {
                 && transfer.contains("遞給"),
             "{transfer}"
         );
+    }
+
+    #[test]
+    fn clock_hand_returns_distinguish_the_dial_position_from_the_event_time() {
+        for (source, expected) in [
+            ("時計の長針が十二の位置に戻りました。", "長針回到12的位置"),
+            ("時計の長針は十二時に戻りました。", "長針回到十二點鐘的位置"),
+            ("時計の針が正午に元の位置に戻りました。", "正午回到原位"),
+            (
+                "正午に時計の針が六時の位置に戻りました。",
+                "正午回到6點鐘的位置",
+            ),
+            (
+                "私は正午に時計の針を六時の位置に戻しました。",
+                "正午把手錶的針撥回6點鐘的位置",
+            ),
+            (
+                "昨日六時に時計の針は十二の位置に戻りました。",
+                "昨天六點回到12的位置",
+            ),
+            (
+                "時計の秒針は正午に五秒の位置に戻りました。",
+                "秒針正午回到5秒的位置",
+            ),
+            (
+                "時計の秒針は正午に五十五秒の位置に戻りました。",
+                "秒針正午回到55秒的位置",
+            ),
+            (
+                "私は正午に時計の秒針を五秒の位置に戻しました。",
+                "正午把手錶的秒針撥回5秒的位置",
+            ),
+            (
+                "時計の針は十二時の位置には戻りませんでした。",
+                "沒有回到12點鐘的位置",
+            ),
+            ("時計の針は六時に戻りましたか。", "回到六點鐘的位置了嗎"),
+            ("時計の針は十二の位置に戻る予定です。", "預定回到12的位置"),
+        ] {
+            let text = translate(source);
+            assert!(text.contains(expected), "{source}: {text}");
+        }
+        for (source, expected) in [
+            (
+                "時計の針は毎日六時に戻りました。",
+                "手錶的針每天在六點回來了。",
+            ),
+            (
+                "時計の針は昨日六時に戻りました。",
+                "手錶的針昨天在六點回來了。",
+            ),
+            (
+                "時計の針が戻った時刻を聞きました。時計の針は昨日六時に戻りました。",
+                "聽了手錶的針回來的時刻。手錶的針昨天在六點回來了。",
+            ),
+            (
+                "時計の秒針は正午に五秒だけ戻りました。",
+                "手錶的秒針五秒只回來到正午了。",
+            ),
+            (
+                "看護師は正午に針を箱に戻しました。",
+                "看護師正午把針放回箱子裡了。",
+            ),
+            ("彼は学校で針を箱に戻しました。", "他在學校給箱放回了針。"),
+            (
+                "時計の針を持った客は正午に店に戻りました。",
+                "拿著了手錶的針的客正午回到商店了。",
+            ),
+            ("放送時間は夕方に戻りました。", "廣播時間恢復到傍晚了。"),
+            (
+                "時計の針は正午に`元の位置`に戻りました。",
+                "手錶的針回來到正午到`元の位置`了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn clock_hand_returns_keep_qualified_clock_times_with_the_return() {
+        for (source, expected) in [
+            (
+                "時計の針が戻った時刻を調べました。時計の針は今朝六時に戻りました。",
+                "調查了手錶的針回來的時刻。手錶的針在六點今朝回來了。",
+            ),
+            (
+                "時計の針は昨夜九時に戻りました。戻った先は十二の位置です。",
+                "手錶的針在九點昨夜回來了。回來的先十二的位置。",
+            ),
+            (
+                "時計の針は翌朝六時に戻りました。",
+                "手錶的針在六點隔天早上回來了。",
+            ),
+            (
+                "時計の針は先週六時に戻りました。",
+                "手錶的針在六點上週回來了。",
+            ),
+            (
+                "時計の針は月曜日六時に戻りました。",
+                "手錶的針在六點月曜日回來了。",
+            ),
+            (
+                "時計の針は今朝の六時に戻りました。",
+                "手錶的針在今朝的六點回來了。",
+            ),
+            (
+                "時計の針は今朝六時に十二の位置に戻りました。",
+                "手錶的針六點今朝回到12的位置了。",
+            ),
+            (
+                "今朝買った時計の針は六時に戻りました。",
+                "今朝買的手錶的針回到六點鐘的位置了。",
+            ),
+            (
+                "時計の針は突然六時に戻りました。",
+                "手錶的針突然回到六點鐘的位置了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn clock_hand_returns_use_the_time_when_the_same_hand_indicates_another_number() {
+        for (source, expected) in [
+            (
+                "時計の針は六時に戻り、そのとき三を指していました。",
+                "手錶的針在六點回來，那時正在指著三。",
+            ),
+            (
+                "時計の長針は八時に戻り、そのとき九を指していました。",
+                "手錶的長針在八點回來，那時正在指著九。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for (source, expected) in [
+            (
+                "時計の針は六時に戻り、その時、三時を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の針は六時に戻り、同時に三を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき針は三を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき十二の位置を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、そのとき、文字盤の九を指していました。",
+                "在八點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、そのときに、九を指していました。",
+                "在八點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、その時点では九を指していました。",
+                "在八點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、その時点で、九を指していました。",
+                "在八點回來",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき時計の文字盤の二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき腕時計の文字盤の二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき同じ時計の短針は二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の長針は四時に戻り、ちょうどそのとき、六を指していました。",
+                "在四點回來",
+            ),
+            (
+                "時計の長針は六時に戻り、ちょうどそのとき四を指していました。",
+                "在六點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、その瞬間、九を指していました。",
+                "在八點回來",
+            ),
+            (
+                "時計の短針は十時に戻り、その時点では、その時計の文字盤の三を指していました。",
+                "在十點回來",
+            ),
+            (
+                "腕時計の短針は七時に戻り、その時点では、その腕時計の文字盤の二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の短針は七時に戻り、そのときその時計の短針は二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の長針は四時に戻り、ちょうどそのとき、短針は六を指していました。",
+                "回到四點鐘的位置",
+            ),
+            (
+                "時計の長針は八時に戻り、その直後、九を指していました。",
+                "回到八點鐘的位置",
+            ),
+            (
+                "時計の短針は七時に戻り、その時に二を指していました。",
+                "在七點回來",
+            ),
+            (
+                "時計の長針は八時に戻り、そのとき八を指していませんでした。",
+                "在八點回來",
+            ),
+            (
+                "長針は六時に戻り、そのとき短針は三を指していました。",
+                "長針回到六點鐘的位置",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき別の時計の短針は二を指していました。",
+                "回到七點鐘的位置",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき同じ時計の長針は二を指していました。",
+                "回到七點鐘的位置",
+            ),
+            (
+                "時計の短針は七時に戻り、そのとき別の時計の文字盤の二を指していました。",
+                "回到七點鐘的位置",
+            ),
+            (
+                "時計の短針は七時に戻り、そのときに、別の時計の短針は二を指していました。",
+                "回到七點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、その後、三を指していました。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき六を指していました。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき三を指していましたか。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき三を指していませんでした。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき三を指していたでしょう。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時に戻り、そのとき三を指していたなら、写真に残っています。",
+                "回到六點鐘的位置",
+            ),
+            (
+                "時計の針は六時の位置に戻り、その後、三時の位置に進みました。",
+                "回到6點鐘的位置",
+            ),
+        ] {
+            let text = translate(source);
+            assert!(text.contains(expected), "{source}: {text}");
+        }
     }
 
     #[test]
@@ -17383,6 +21777,30 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut i = 0usize;
     while i < b.atoms.len() {
         let a = &b.atoms[i];
+        if !a.is_locked
+            && a.surface == "子"
+            && a.upos == Some(Upos::Noun)
+            && a.doc_tok_idx.is_some()
+            && b.atoms.get(i + 1).is_some_and(|suffix| {
+                !suffix.is_locked
+                    && suffix.surface == "ども"
+                    && suffix.upos == Some(Upos::Sconj)
+                    && suffix.deprel == "mark"
+                    && suffix.head == a.doc_tok_idx
+                    && a.span.end_char == suffix.span.start_char
+            })
+            && b.atoms.get(i + 2).is_some_and(|case| {
+                !case.is_locked
+                    && case.upos == Some(Upos::Adp)
+                    && case.deprel == "case"
+                    && case.head == a.doc_tok_idx
+                    && b.atoms[i + 1].span.end_char == case.span.start_char
+            })
+        {
+            out.push_str("孩子");
+            i += 2;
+            continue;
+        }
         if b.case_particle.as_deref() == Some("までに")
             && !a.is_locked
             && let Some(time) = deadline_time_question(a).or_else(|| deadline_weekday(&a.surface))
@@ -17473,6 +21891,7 @@ fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool)
                 format!("用{core}")
             }
         }
+        Some("に") if b.atoms.iter().any(|a| calendar::question(a).is_some()) => core,
         Some("に") | Some("で") => {
             if core.starts_with('在')
                 || (core.starts_with("[[PH") && b.atoms.iter().any(is_clock_atom))
@@ -17940,7 +22359,20 @@ fn synthesize_predicate_complex(
             .iter()
             .any(|a| a.upos == Some(Upos::Verb) || a.upos == Some(Upos::Adj))
     {
-        pre.insert(0, if has_locative_floor { "在" } else { "是" }.to_owned());
+        let copula = if all_atoms
+            .iter()
+            .any(|a| calendar::is_date(a) && a.deprel == "root")
+            && all_atoms
+                .iter()
+                .any(|a| !a.is_locked && a.surface == "だけ")
+        {
+            "只在"
+        } else if has_locative_floor {
+            "在"
+        } else {
+            "是"
+        };
+        pre.insert(0, copula.to_owned());
     }
 
     if has_te_shimau {
@@ -19126,6 +23558,343 @@ mod existence_rule_tests {
             (
                 "明日、母と二人で先生宛ての手紙を書いていただけますか。",
                 "可以請您和母親兩人明天一起寫信給老師嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_requests_keep_the_number_of_letters() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "先生方お二人に、校長宛ての手紙を二通書いていただけますか。",
+                "可以請兩位老師寫兩封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を一通ずつ書いていただけますか。",
+                "可以請兩位老師各寫一封信給校長嗎？",
+            ),
+            (
+                "父と母の二人宛ての手紙を一通書いていただけますか。",
+                "可以請您寫一封信給父親和母親兩人嗎？",
+            ),
+            (
+                "二人で校長宛ての手紙を二通書いていただけませんか。",
+                "可以麻煩兩位一起寫兩封信給校長嗎？",
+            ),
+            (
+                "先生宛ての手紙を二人で二通書いていただけますか。",
+                "可以請兩位一起寫兩封信給老師嗎？",
+            ),
+            (
+                "二人で先生宛ての手紙を一通ずつ書いていただけますか。",
+                "可以請兩位各寫一封信給老師嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を一緒に一通ずつ書いていただけますか。",
+                "可以請兩位老師一起各寫一封信給校長嗎？",
+            ),
+            (
+                "手紙を２通書いていただけますか。",
+                "可以請您幫我寫兩封信嗎？",
+            ),
+            (
+                "校長宛ての手紙を二十通書いていただけますか。",
+                "可以請您寫二十封信給校長嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_counter_applies_the_quantity_qualifier() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "手紙をもう一通書いていただけますか。",
+                "可以請您幫我再寫一封信嗎？",
+            ),
+            (
+                "手紙を二通ずつ書いていただけますか。",
+                "可以請您幫我各寫兩封信嗎？",
+            ),
+            (
+                "手紙を二通だけ書いていただけますか。",
+                "可以請您幫我只寫兩封信嗎？",
+            ),
+            (
+                "手紙をもう二通だけ書いていただけませんか。",
+                "可以麻煩您幫我只再寫兩封信嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙をもう一通ずつ書いていただけますか。",
+                "可以請兩位老師再各寫一封信給校長嗎？",
+            ),
+            ("もう手紙を一通書きました。", "已經一通寫了信。"),
+            (
+                "もう一度手紙を書いていただけますか。",
+                "可以請您幫我再寫信一次嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_requests_distinguish_joint_periods_from_each_writer() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "校長宛ての手紙を二人で連名で毎週一通ずつ書いていただけますか。",
+                "可以請兩位每週聯名寫一封信給校長嗎？",
+            ),
+            (
+                "二人で書く手紙は、毎週合わせて一通だけです。校長宛ての手紙を二人で毎週一通ずつ書いていただけますか。",
+                "在二人寫的信，每週對齊，是一通。可以請兩位每週一起寫一封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を毎週一通ずつ書いていただけますか。",
+                "可以請兩位老師每週各寫一封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を二通ずつ書いていただけますか。",
+                "可以請兩位老師各寫兩封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を合計一通書いていただけますか。",
+                "可以請兩位老師總共寫一封信給校長嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を各自合計一通書いていただけますか。",
+                "可以請兩位老師各自合計一通寫信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人でそれぞれ毎週一通ずつ書いていただけますか。",
+                "可以請兩位每週各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で連名で毎回一通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で連名で一回につき二通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫兩封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で連名で１回につき二通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫兩封信給校長嗎？",
+            ),
+            (
+                "毎週、校長宛ての手紙を二人で一通ずつ書いていただけますか。",
+                "可以請兩位每週一起寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を毎回二人で連名で一通ずつ書いていただけますか。",
+                "可以請兩位每次聯名寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で各人毎回一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で毎回一人につき一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で一人につき毎回一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で毎回一人あたり一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "校長宛ての手紙を二人で一回につき各人一通ずつ書いていただけますか。",
+                "可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "二人は各自一通ずつ書きます。校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。",
+                "二人各自一通ずつ寫。可以請兩位每次各寫一封信給校長嗎？",
+            ),
+            (
+                "二人は各自一通ずつ書きます。校長宛ての手紙を二人で連名で毎回一通ずつ書いていただけますか。",
+                "二人各自一通ずつ寫。可以請兩位每次聯名寫一封信給校長嗎？",
+            ),
+            (
+                "三人は各自一通ずつ書きます。校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。",
+                "三人各自一通ずつ寫。可以請兩位每次一起寫一封信給校長嗎？",
+            ),
+            (
+                "二人は各自一通ずつ書きます。\n\n校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。",
+                "二人各自一通ずつ寫。\n\n可以請兩位每次一起寫一封信給校長嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_request_uses_only_unquoted_prior_distribution() {
+        let glossary = TranslationGlossary::new();
+        let request = "校長宛ての手紙を二人で毎回一通ずつ書いていただけますか。";
+        let quoted_statement = "『二人は各自一通ずつ書く』";
+
+        let plain = translate(&format!("二人は各自一通ずつ書きます。{request}"), &glossary);
+        assert!(
+            plain
+                .target_text
+                .ends_with("可以請兩位每次各寫一封信給校長嗎？")
+        );
+
+        for copied_statement in [
+            format!("{quoted_statement}と紙に書き写しました。"),
+            format!("紙に{quoted_statement}とそのまま書き写しました。"),
+        ] {
+            let copied = translate(&format!("{copied_statement}{request}"), &glossary);
+            assert!(copied.target_text.contains(quoted_statement));
+            assert!(
+                copied
+                    .target_text
+                    .ends_with("可以請兩位每次一起寫一封信給校長嗎？")
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_counts_can_be_distributed_to_recipients() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "祖父宛ての手紙を一通書いていただけますか。",
+                "可以請您寫一封信給祖父嗎？",
+            ),
+            (
+                "祖父と祖母宛ての手紙を一通ずつ書いていただけますか。",
+                "可以請您給祖父和祖母各寫一封信嗎？",
+            ),
+            (
+                "祖父と祖母のそれぞれに手紙を一通ずつ書いていただけますか。",
+                "可以請您給祖父和祖母各寫一封信嗎？",
+            ),
+            (
+                "祖父と祖母にそれぞれ一通ずつ手紙を書いていただけますか。",
+                "可以請您給祖父和祖母各寫一封信嗎？",
+            ),
+            (
+                "受取人一人につき手紙を一通ずつ書いていただけますか。",
+                "可以請您給每位收件人各寫一封信嗎？",
+            ),
+            (
+                "受取人一人につき手紙を一通書いていただけますか。",
+                "可以請您給每位收件人各寫一封信嗎？",
+            ),
+            (
+                "二人の受取人に手紙を一通ずつ書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "三人の受取人に手紙を二通ずつ書いていただけますか。",
+                "可以請您給三位收件人各寫兩封信嗎？",
+            ),
+            (
+                "受取人二人に手紙を一通ずつ書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "二人の受取人に一通ずつ手紙を書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "二人の受取人に手紙を一通だけ書いていただけますか。",
+                "可以請您只寫一封信給兩位收件人嗎？",
+            ),
+            (
+                "二人の受取人に手紙を合計一通書いていただけますか。",
+                "可以請您總共寫一封信給兩位收件人嗎？",
+            ),
+            (
+                "二人の受取人に手紙を合計二通書いていただけますか。",
+                "可以請您總共寫兩封信給兩位收件人嗎？",
+            ),
+            (
+                "手紙を合計一通二人の受取人に書いていただけますか。",
+                "可以請您總共寫一封信給兩位收件人嗎？",
+            ),
+            (
+                "手紙を一通ずつ二人の受取人に書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "手紙を一通ずつ、二人の受取人に書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "手紙を合計二通、二人の受取人に書いていただけますか。",
+                "可以請您總共寫兩封信給兩位收件人嗎？",
+            ),
+            (
+                "手紙を二通ずつ三人の受取人に書いていただけますか。",
+                "可以請您給三位收件人各寫兩封信嗎？",
+            ),
+            (
+                "二人の受取人にそれぞれ手紙を一通書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "二人の受取人それぞれに手紙を一通書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "二人の受取人のそれぞれに手紙を一通書いていただけますか。",
+                "可以請您給兩位收件人各寫一封信嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を一通ずつ書いていただけますか。",
+                "可以請兩位老師各寫一封信給校長嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_letter_counter_preserves_other_actions_and_opaque_amounts() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "校長宛ての手紙を二通読んでいただけますか。",
+                "校長宛，二通讀能得到信嗎？",
+            ),
+            (
+                "校長宛ての手紙を`二通`書いていただけますか。",
+                "校長宛，`二通`寫信，能得到嗎？",
+            ),
+            (
+                "先生方お二人に、校長宛ての手紙を二通書かないでいただけますか。",
+                "位給二人老師お，校長宛，二通不寫能得到信嗎？",
             ),
         ] {
             assert_eq!(

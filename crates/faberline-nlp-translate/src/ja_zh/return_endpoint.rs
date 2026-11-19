@@ -1,10 +1,911 @@
 //! Distinguish a restored time setting from a physical destination of 戻る.
 use super::{
-    Atom, Bunsetsu, BunsetsuRole, Document, TargetVariant, Upos, clock_case_governor,
-    explicit_clock_case, is_building_floor, is_daypart_surface, is_existing_spatial_head,
-    is_motion_actor, is_plain_clock_ni, is_time_setting, linked_joint_case, predicates_has_passive,
+    Atom, Bunsetsu, BunsetsuRole, Document, Segment, Span, TargetVariant, Upos,
+    bounded_clock_number, clock_case_governor, clock_number, deadline_weekday, explicit_clock_case,
+    is_building_floor, is_daypart_surface, is_existing_spatial_head, is_motion_actor,
+    is_plain_clock_ni, is_time_setting, linked_joint_case, predicates_has_passive,
     render_bunsetsu_np, setting_time_label,
 };
+
+pub(super) struct ClockHandReturn {
+    pub(super) dial: Span,
+    pub(super) action: String,
+    pub(super) object: Option<usize>,
+    pub(super) event_time: Option<usize>,
+}
+
+fn attached_case(noun: &Atom, marker: &Atom) -> bool {
+    !noun.is_locked
+        && !marker.is_locked
+        && noun.doc_tok_idx.is_some()
+        && marker.head == noun.doc_tok_idx
+        && marker.deprel == "case"
+        && marker.upos == Some(Upos::Adp)
+        && noun.span.end_char == marker.span.start_char
+}
+
+fn has_hand_prefix(noun: &Atom, source: &[Atom], prefixes: &[&str]) -> bool {
+    noun.surface == "針"
+        && noun.doc_tok_idx.is_some()
+        && source.iter().any(|prefix| {
+            !prefix.is_locked
+                && prefix.head == noun.doc_tok_idx
+                && prefix.deprel == "compound"
+                && prefix.span.end_char == noun.span.start_char
+                && prefixes.contains(&prefix.surface.as_str())
+        })
+}
+
+fn clock_name(atom: &Atom) -> bool {
+    matches!(
+        atom.surface.as_str(),
+        "時計" | "腕時計" | "掛け時計" | "置き時計"
+    )
+}
+
+fn clock_owner<'a>(hand: &Atom, source: &'a [Atom]) -> Option<&'a Atom> {
+    let id = hand.doc_tok_idx?;
+    source.windows(2).find_map(|pair| {
+        let [clock, marker] = pair else { return None };
+        (clock.head == Some(id)
+            && clock.deprel == "nmod"
+            && clock_name(clock)
+            && marker.surface == "の"
+            && attached_case(clock, marker))
+        .then_some(clock)
+    })
+}
+
+fn clock_hand(noun: &Atom, source: &[Atom]) -> bool {
+    if noun.is_locked || noun.doc_tok_idx.is_none() || noun.upos != Some(Upos::Noun) {
+        return false;
+    }
+    if matches!(
+        noun.surface.as_str(),
+        "長針" | "短針" | "時針" | "分針" | "秒針"
+    ) {
+        return true;
+    }
+    has_hand_prefix(noun, source, &["長", "短", "時", "分", "秒"])
+        || noun.surface == "針" && clock_owner(noun, source).is_some()
+}
+
+fn whole_dial_number(source: &[Atom], last: usize, final_part: &str) -> Option<(usize, u32)> {
+    let atom = &source[last];
+    if atom.is_locked {
+        return None;
+    }
+    let mut first = last;
+    while first > 0 {
+        let previous = &source[first - 1];
+        let next = &source[first];
+        if previous.is_locked
+            || previous.upos != Some(Upos::Num)
+            || !matches!(previous.deprel.as_str(), "nmod" | "nummod")
+            || next.doc_tok_idx.is_none()
+            || previous.head != next.doc_tok_idx
+            || previous.span.end_char != next.span.start_char
+        {
+            break;
+        }
+        first -= 1;
+    }
+    let mut text: String = source[first..last]
+        .iter()
+        .map(|a| a.surface.as_str())
+        .collect();
+    text.push_str(final_part);
+    let number = clock_number(&text)?;
+    (1..=12).contains(&number).then_some((first, number))
+}
+
+fn dial_hour(label: &str) -> Option<u32> {
+    let numeral = label.strip_suffix('點')?;
+    let hour = if numeral == "兩" {
+        2
+    } else {
+        clock_number(numeral)?
+    };
+    (1..=12).contains(&hour).then_some(hour)
+}
+
+fn second_count(source: &[Atom], unit: usize) -> Option<(usize, u32)> {
+    let mark = &source[unit];
+    let suffix = mark.surface.strip_suffix('秒')?;
+    let head = mark.doc_tok_idx?;
+    let mut first = unit;
+    while let Some(index) = first.checked_sub(1) {
+        let number = &source[index];
+        let next = &source[first];
+        if number.is_locked
+            || number.span.end_char != next.span.start_char
+            || !matches!(number.deprel.as_str(), "nmod" | "nummod" | "compound")
+            || !number
+                .head
+                .is_some_and(|token| token == head || Some(token) == next.doc_tok_idx)
+            || bounded_clock_number(&number.surface, u32::MAX).is_none()
+        {
+            break;
+        }
+        first = index;
+    }
+    let number: String = source[first..unit]
+        .iter()
+        .map(|atom| atom.surface.as_str())
+        .chain(std::iter::once(suffix))
+        .collect();
+    Some((first, bounded_clock_number(&number, u32::MAX)?))
+}
+
+fn is_clock_time_qualifier(time: &Atom) -> bool {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+
+    let word = time.surface.as_str();
+    is_daypart_surface(word)
+        || word
+            .strip_suffix(['前', '後'])
+            .is_some_and(is_daypart_surface)
+        || word
+            .strip_prefix(['今', '昨', '明', '翌', '毎'])
+            .is_some_and(|part| matches!(part, "朝" | "晩" | "夕" | "夜"))
+        || word
+            .strip_prefix(['前', '先', '今', '昨', '来', '翌', '毎'])
+            .is_some_and(|period| matches!(period, "週" | "月" | "年"))
+        || deadline_weekday(word).is_some()
+        || matches!(
+            word,
+            "一昨日"
+                | "昨日"
+                | "今日"
+                | "明日"
+                | "明後日"
+                | "本日"
+                | "当日"
+                | "前日"
+                | "翌日"
+                | "先日"
+                | "毎日"
+                | "いつも"
+                | "普段"
+        )
+        || lookup_ja(word).is_some_and(|entry| entry.sem_class == Some(SemanticClass::Time))
+}
+
+fn exact_time_point(word: &str) -> bool {
+    let head = ["では", "には", "で", "に", "は"]
+        .into_iter()
+        .find_map(|case| word.strip_suffix(case))
+        .unwrap_or(word);
+    matches!(head, "とき" | "時" | "時点" | "瞬間")
+}
+
+fn simultaneous_prefix(atoms: &[Atom], pointing: usize) -> Option<(&Atom, &[Atom])> {
+    let (adverb, atoms) = match atoms {
+        [adverb, rest @ ..]
+            if !adverb.is_locked
+                && adverb.upos == Some(Upos::Adv)
+                && adverb.deprel == "advmod"
+                && matches!(adverb.surface.as_str(), "ちょうど" | "丁度") =>
+        {
+            (Some(adverb), rest)
+        }
+        _ => (None, atoms),
+    };
+    let (when, tail) = match atoms {
+        [time, rest @ ..] if !time.is_locked && time.surface == "同時に" => (time, rest),
+        [time, ni, rest @ ..]
+            if time.surface == "同時" && ni.surface == "に" && attached_case(time, ni) =>
+        {
+            (time, rest)
+        }
+        [time, rest @ ..]
+            if !time.is_locked
+                && time
+                    .surface
+                    .strip_prefix("その")
+                    .is_some_and(exact_time_point) =>
+        {
+            (time, rest)
+        }
+        [first, time, rest @ ..]
+            if !first.is_locked
+                && !time.is_locked
+                && first.surface == "その"
+                && first.span.end_char == time.span.start_char
+                && exact_time_point(&time.surface) =>
+        {
+            (time, rest)
+        }
+        _ => return None,
+    };
+    if adverb.is_some_and(|adverb| {
+        !adverb
+            .head
+            .is_some_and(|head| head == pointing || Some(head) == when.doc_tok_idx)
+    }) {
+        return None;
+    }
+    let [particle, rest @ ..] = tail else {
+        return Some((when, tail));
+    };
+    if !attached_case(when, particle) {
+        return Some((when, tail));
+    }
+    if !matches!(
+        particle.surface.as_str(),
+        "に" | "で" | "では" | "には" | "は"
+    ) {
+        return None;
+    }
+    let rest = match rest {
+        [focus, body @ ..]
+            if matches!(particle.surface.as_str(), "に" | "で")
+                && !focus.is_locked
+                && focus.surface == "は"
+                && focus.upos == Some(Upos::Adp)
+                && focus.deprel == "case"
+                && focus.head == when.doc_tok_idx
+                && focus.span.start_char == particle.span.end_char =>
+        {
+            body
+        }
+        _ => rest,
+    };
+    Some((when, rest))
+}
+
+fn dial_case_governor(noun: &Atom, marker: &Atom, relation: &str, doc: &Document) -> Option<usize> {
+    if noun.lemma.as_deref() == Some(super::CLOCK_ATOM) {
+        let head = marker.head?;
+        if marker.is_locked
+            || marker.upos != Some(Upos::Adp)
+            || noun.span.end_char != marker.span.start_char
+            || !doc
+                .syntax
+                .iter()
+                .any(|node| node.token == head && node.deprel == relation)
+        {
+            return None;
+        }
+        clock_case_governor(noun, marker, doc)
+    } else if noun.deprel == relation && attached_case(noun, marker) {
+        noun.head
+    } else {
+        None
+    }
+}
+
+fn indicated_hour(atoms: &[Atom], end: usize, doc: &Document) -> Option<(usize, u32)> {
+    let value_index = if atoms[end].surface == "位置" {
+        let [.., number, no, position] = &atoms[..=end] else {
+            return None;
+        };
+        if no.surface != "の"
+            || position.doc_tok_idx.is_none()
+            || dial_case_governor(number, no, "nmod", doc) != position.doc_tok_idx
+            || no.span.end_char != position.span.start_char
+        {
+            return None;
+        }
+        end - 2
+    } else {
+        end
+    };
+    let value = &atoms[value_index];
+    if value.lemma.as_deref() == Some(super::CLOCK_ATOM) {
+        return Some((value_index, dial_hour(&value.surface)?));
+    }
+    if value.surface == "時" {
+        let index = value_index.checked_sub(1)?;
+        let number = &atoms[index];
+        if value.doc_tok_idx.is_none()
+            || !matches!(number.deprel.as_str(), "nmod" | "nummod")
+            || number.head != value.doc_tok_idx
+            || number.span.end_char != value.span.start_char
+        {
+            return None;
+        }
+        return whole_dial_number(atoms, index, &number.surface);
+    }
+    whole_dial_number(
+        atoms,
+        value_index,
+        value.surface.strip_suffix('時').unwrap_or(&value.surface),
+    )
+}
+
+fn hand_kind(hand: &Atom, source: &[Atom]) -> Option<&'static str> {
+    ["長", "短", "時", "分", "秒"].into_iter().find(|&kind| {
+        hand.surface.strip_suffix('針') == Some(kind) || has_hand_prefix(hand, source, &[kind])
+    })
+}
+
+fn refers_to_clock(
+    determiner: &Atom,
+    clock: &Atom,
+    previous_clock: Option<&Atom>,
+    doc: &Document,
+) -> bool {
+    if determiner.is_locked || determiner.surface != "その" || determiner.upos != Some(Upos::Det)
+    {
+        return false;
+    }
+    let (Some(start), Some(current), Some(previous)) = (
+        determiner.doc_tok_idx,
+        clock.doc_tok_idx,
+        previous_clock.and_then(|clock| clock.doc_tok_idx),
+    ) else {
+        return false;
+    };
+    // Match both clock heads. Use the mention start so a clock name can
+    // begin with a separate compound token, as in その腕時計.
+    doc.coref.iter().any(|chain| {
+        chain.iter().any(|mention| mention.head_token == previous)
+            && chain
+                .iter()
+                .any(|mention| mention.head_token == current && mention.start_token == start)
+    })
+}
+
+fn repeated_clock_owner(
+    clock: &Atom,
+    marker: &Atom,
+    clause: &[Atom],
+    previous_clock: Option<&Atom>,
+    doc: &Document,
+) -> bool {
+    if clock.deprel != "nmod"
+        || !clock_name(clock)
+        || marker.surface != "の"
+        || !attached_case(clock, marker)
+    {
+        return false;
+    }
+    let mut modifiers = clause.iter().filter(|atom| {
+        atom.head == clock.doc_tok_idx
+            && matches!(atom.deprel.as_str(), "det" | "nmod" | "acl" | "amod")
+    });
+    modifiers.next().is_some_and(|atom| {
+        !atom.is_locked
+            && atom.deprel == "det"
+            && (atom.surface == "同じ" && atom.span.end_char <= clock.span.start_char
+                || refers_to_clock(atom, clock, previous_clock, doc))
+    }) && modifiers.next().is_none()
+}
+
+fn same_pointing_hand(
+    subject: &Atom,
+    clause: &[Atom],
+    hand: &Atom,
+    source: &[Atom],
+    doc: &Document,
+) -> bool {
+    let kind = hand_kind(subject, clause);
+    if subject.is_locked
+        || !(subject.surface == "針" && kind.is_none()
+            || kind.is_some() && kind == hand_kind(hand, source))
+    {
+        return false;
+    }
+    let mut modifiers = clause.iter().enumerate().filter(|(_, atom)| {
+        atom.head == subject.doc_tok_idx && matches!(atom.deprel.as_str(), "nmod" | "acl" | "amod")
+    });
+    match modifiers.next() {
+        None => true,
+        Some((index, clock)) => {
+            modifiers.next().is_none()
+                && clause.get(index + 1).is_some_and(|marker| {
+                    repeated_clock_owner(clock, marker, clause, clock_owner(hand, source), doc)
+                })
+        }
+    }
+}
+
+fn dial_face_start(source: &[Atom], first: usize) -> Option<usize> {
+    let [prefix @ .., dial, particle] = &source[..first] else {
+        return None;
+    };
+    if particle.surface != "の"
+        || particle.span.end_char != source[first].span.start_char
+        || !attached_case(dial, particle)
+        || dial.head.is_none()
+        || dial.head != source[first].doc_tok_idx
+    {
+        return None;
+    }
+    if dial.surface == "文字盤" {
+        return Some(first - 2);
+    }
+    let stem = prefix.last()?;
+    (stem.surface == "文字"
+        && dial.surface == "盤"
+        && !stem.is_locked
+        && stem.head == dial.doc_tok_idx
+        && stem.deprel == "compound"
+        && stem.span.end_char == dial.span.start_char)
+        .then_some(first - 3)
+}
+
+fn dial_object_start(
+    source: &[Atom],
+    first: usize,
+    previous_clock: Option<&Atom>,
+    doc: &Document,
+) -> Option<usize> {
+    let Some(face) = dial_face_start(source, first) else {
+        return Some(first);
+    };
+    let [.., clock, no] = &source[..face] else {
+        return Some(face);
+    };
+    let dial = &source[first - 2];
+    if no.surface != "の"
+        || no.span.end_char != source[face].span.start_char
+        || dial.doc_tok_idx.is_none()
+        || clock.head != dial.doc_tok_idx
+        || clock.deprel != "nmod"
+        || !attached_case(clock, no)
+    {
+        return Some(face);
+    }
+    if !clock_name(clock) {
+        return None;
+    }
+    let mut start = face - 2;
+    for (index, atom) in source.iter().enumerate().filter(|(_, atom)| {
+        atom.head == clock.doc_tok_idx
+            && matches!(atom.deprel.as_str(), "det" | "nmod" | "acl" | "amod")
+    }) {
+        match atom.deprel.as_str() {
+            "det" if atom.surface == "同じ" => {}
+            "det" if index < start && refers_to_clock(atom, clock, previous_clock, doc) => {
+                start = index;
+            }
+            _ => return None,
+        }
+    }
+    Some(start)
+}
+
+fn indication_polarity(tail: &[Atom], source: &[char], after_verb: usize) -> Option<bool> {
+    // Suffix tokenization can split a modal across two rendering clauses.
+    let raw_tail: String = source
+        .get(after_verb..)?
+        .iter()
+        .copied()
+        .take_while(|&ch| {
+            !matches!(
+                ch,
+                '、' | '，' | '。' | '！' | '？' | '!' | '?' | '」' | '』' | '\n'
+            )
+        })
+        .collect();
+    if [
+        "でしょう",
+        "でしょうか",
+        "だろう",
+        "だろうか",
+        "なら",
+        "たら",
+        "ならば",
+    ]
+    .iter()
+    .any(|&suffix| raw_tail.ends_with(suffix))
+    {
+        return None;
+    }
+    let mut points_at = true;
+    for atom in tail {
+        let word = atom.lemma.as_deref().unwrap_or(&atom.surface);
+        if atom.surface == "か" && atom.deprel == "discourse"
+            || matches!(atom.surface.as_str(), "なら" | "たら" | "ば")
+                && atom.upos == Some(Upos::Sconj)
+            || matches!(
+                atom.surface.as_str(),
+                "だろ" | "だろう" | "でしょ" | "でしょう"
+            )
+            || atom.upos == Some(Upos::Verb) && !matches!(word, "いる" | "おる")
+        {
+            return None;
+        }
+        if (matches!(word, "ない" | "ぬ" | "ず")
+            && matches!(atom.deprel.as_str(), "aux" | "advmod" | "mark"))
+            || word == "ん" && atom.upos == Some(Upos::Aux) && atom.deprel == "aux"
+        {
+            if !points_at {
+                return None;
+            }
+            points_at = false;
+        }
+    }
+    Some(points_at)
+}
+
+fn reading_at_return(
+    following: &[Segment],
+    returning: &Atom,
+    hand: &Atom,
+    source: &[Atom],
+    doc: &Document,
+    chars: &[char],
+) -> Option<(u32, bool)> {
+    let [
+        Segment::Clause {
+            atoms,
+            trailing_punct,
+            ..
+        },
+        next @ ..,
+    ] = following
+    else {
+        return None;
+    };
+    let pointing = returning.head?;
+    let (when, rest) = simultaneous_prefix(atoms, pointing)?;
+    let (rest, end_punct) =
+        if rest.is_empty() && matches!(trailing_punct.as_deref(), Some("、" | "，")) {
+            let [
+                Segment::Clause {
+                    atoms,
+                    trailing_punct,
+                    ..
+                },
+                ..,
+            ] = next
+            else {
+                return None;
+            };
+            (atoms.as_slice(), trailing_punct.as_deref())
+        } else {
+            (rest, trailing_punct.as_deref())
+        };
+    let indicator = rest.iter().position(|atom| {
+        !atom.is_locked
+            && atom.doc_tok_idx == Some(pointing)
+            && atom.upos == Some(Upos::Verb)
+            && atom.lemma.as_deref() == Some("指す")
+    })?;
+    if matches!(end_punct, Some("？" | "?")) || returning.deprel != "advcl" {
+        return None;
+    }
+    let points_at =
+        indication_polarity(&rest[indicator + 1..], chars, rest[indicator].span.end_char)?;
+    let mut subjects = rest.iter().filter(|atom| atom.deprel == "nsubj");
+    let subject = subjects.next();
+    if subjects.next().is_some()
+        || subject.is_some_and(|subject| {
+            subject.head != Some(pointing) || !same_pointing_hand(subject, rest, hand, source, doc)
+        })
+    {
+        return None;
+    }
+    let mut readings = rest.windows(2).enumerate().filter(|(_, pair)| {
+        let [noun, marker] = pair else { return false };
+        marker.surface == "を" && dial_case_governor(noun, marker, "obj", doc) == Some(pointing)
+    });
+    let (index, _) = readings.next()?;
+    if readings.next().is_some() {
+        return None;
+    }
+    let (first, hour) = indicated_hour(rest, index, doc)?;
+    let first = dial_object_start(rest, first, clock_owner(hand, source), doc)?;
+    let reading_span = Span {
+        start_char: rest[first].span.start_char,
+        end_char: rest[index].span.end_char,
+    };
+    when.head
+        .is_some_and(|owner| {
+            owner == pointing
+                || subject.is_some_and(|subject| subject.doc_tok_idx == Some(owner))
+                || doc
+                    .tokens
+                    .get(owner)
+                    .is_some_and(|token| contains_span(reading_span, token.span))
+        })
+        .then_some((hour, points_at))
+}
+
+fn stated_dial_position(
+    source: &[Atom],
+    doc: &Document,
+    head: usize,
+    at: usize,
+    second_hand: bool,
+) -> Option<(Span, String)> {
+    let [prefix @ .., modifier, no, position] = &source[..=at] else {
+        return None;
+    };
+    let case = source.get(at + 1)?;
+    let focus = source.get(at + 2).filter(|focus| {
+        !focus.is_locked
+            && matches!(focus.surface.as_str(), "は" | "も")
+            && focus.upos == Some(Upos::Adp)
+            && focus.deprel == "case"
+            && focus.head == case.head
+            && focus.span.start_char == case.span.end_char
+    });
+    if position.is_locked
+        || position.surface != "位置"
+        || position.head != Some(head)
+        || !(matches!(position.deprel.as_str(), "obl" | "advmod")
+            || position.deprel == "nsubj" && focus.is_some())
+        || !matches!(case.surface.as_str(), "に" | "へ")
+        || !attached_case(position, case)
+        || no.is_locked
+        || no.surface != "の"
+        || no.upos != Some(Upos::Adp)
+        || no.deprel != "case"
+        || modifier.span.end_char != no.span.start_char
+        || no.span.end_char != position.span.start_char
+    {
+        return None;
+    }
+    // Clock normalization joins 六時 before rendering. Verify its original
+    // nominal head through the source genitive marker and dependency.
+    let normalized_hour = if modifier.lemma.as_deref() == Some(super::CLOCK_ATOM) {
+        let head = no.head?;
+        let node = doc.syntax.iter().find(|node| node.token == head)?;
+        if node.head != position.doc_tok_idx
+            || node.deprel != "nmod"
+            || !contains_span(modifier.span, doc.tokens.get(head)?.span)
+        {
+            return None;
+        }
+        Some(dial_hour(&modifier.surface)?)
+    } else {
+        if modifier.head != position.doc_tok_idx
+            || modifier.deprel != "nmod"
+            || !attached_case(modifier, no)
+        {
+            return None;
+        }
+        None
+    };
+    let (mut first, mut label) = if let Some(hour) = normalized_hour {
+        (at - 2, format!("{hour}點鐘的位置"))
+    } else if modifier.surface == "元" {
+        (at - 2, "原位".to_owned())
+    } else if second_hand && modifier.surface.ends_with('秒') {
+        let (begin, second) = second_count(source, at - 2).filter(|&(_, value)| value < 60)?;
+        (begin, format!("{second}秒的位置"))
+    } else if modifier.surface == "時" {
+        let last = prefix.len().checked_sub(1)?;
+        let value = &source[last];
+        if value.upos != Some(Upos::Num)
+            || value.head != modifier.doc_tok_idx
+            || value.span.end_char != modifier.span.start_char
+        {
+            return None;
+        }
+        let (begin, number) = whole_dial_number(source, last, &value.surface)?;
+        (begin, format!("{number}點鐘的位置"))
+    } else if let Some(hour) = modifier.surface.strip_suffix('時') {
+        let (begin, number) = whole_dial_number(source, at - 2, hour)?;
+        (begin, format!("{number}點鐘的位置"))
+    } else {
+        if modifier.upos != Some(Upos::Num) {
+            return None;
+        }
+        let (begin, number) = whole_dial_number(source, at - 2, &modifier.surface)?;
+        (begin, format!("{number}的位置"))
+    };
+    if let Some(start) = dial_face_start(source, first) {
+        first = start;
+        label = format!("鐘面上{label}");
+    }
+    Some((
+        Span {
+            start_char: source[first].span.start_char,
+            end_char: focus.unwrap_or(case).span.end_char,
+        },
+        label,
+    ))
+}
+
+pub(super) fn clock_hand_return(
+    groups: &[Bunsetsu],
+    predicates: &[Bunsetsu],
+    source: &[Atom],
+    doc: &Document,
+    following: &[Segment],
+    chars: &[char],
+    target: TargetVariant,
+) -> Option<ClockHandReturn> {
+    let mut verbs = predicates
+        .iter()
+        .flat_map(|predicate| &predicate.atoms)
+        .filter(|a| a.upos == Some(Upos::Verb));
+    let verb = verbs.next()?;
+    if verb.is_locked
+        || predicates_has_passive(predicates)
+        || predicates
+            .iter()
+            .flat_map(|predicate| &predicate.atoms)
+            .any(|a| matches!(a.lemma.as_deref(), Some("せる" | "させる")))
+    {
+        return None;
+    }
+    let (role, relation, action) = match verb.lemma.as_deref().unwrap_or(&verb.surface) {
+        "戻る" => (BunsetsuRole::Subj, "nsubj", "回到"),
+        "戻す" => (BunsetsuRole::Obj, "obj", "撥回"),
+        _ => return None,
+    };
+    let head = verb.doc_tok_idx?;
+    let action = match verbs.next() {
+        None => action,
+        Some(plan)
+            if role == BunsetsuRole::Subj
+                && !plan.is_locked
+                && plan.surface == "予定"
+                && plan.doc_tok_idx.is_some()
+                && verb.head == plan.doc_tok_idx
+                && verb.deprel == "advcl"
+                && verb.span.end_char == plan.span.start_char
+                && verbs.next().is_none()
+                && source.windows(2).any(|pair| {
+                    pair[0].doc_tok_idx == plan.doc_tok_idx
+                        && !pair[1].is_locked
+                        && matches!(pair[1].surface.as_str(), "です" | "だ")
+                        && pair[1].head == plan.doc_tok_idx
+                        && pair[1].deprel == "aux"
+                        && pair[0].span.end_char == pair[1].span.start_char
+                }) =>
+        {
+            "預定回到"
+        }
+        _ => return None,
+    };
+    let mut hands = groups
+        .iter()
+        .enumerate()
+        .filter(|(_, group)| group.role == role)
+        .filter_map(|(index, group)| {
+            source
+                .iter()
+                .find(|noun| {
+                    noun.head == Some(head)
+                        && noun.deprel == relation
+                        && clock_hand(noun, source)
+                        && group
+                            .atoms
+                            .iter()
+                            .any(|part| contains_span(part.span, noun.span))
+                })
+                .map(|noun| (index, noun))
+        });
+    let (hand, hand_noun) = hands.next()?;
+    if hands.next().is_some() {
+        return None;
+    }
+    let second_hand = hand_noun.surface == "秒針" || has_hand_prefix(hand_noun, source, &["秒"]);
+    let mut positions = source.iter().enumerate().filter_map(|(idx, _)| {
+        let (span, label) = stated_dial_position(source, doc, head, idx, second_hand)?;
+        let mut parts = groups
+            .iter()
+            .filter(|group| {
+                group
+                    .atoms
+                    .iter()
+                    .any(|a| a.span.start_char < span.end_char && span.start_char < a.span.end_char)
+            })
+            .peekable();
+        (parts.peek().is_some()
+            && parts.all(|group| {
+                group
+                    .atoms
+                    .iter()
+                    .all(|atom| contains_span(span, atom.span))
+            }))
+        .then_some((span, label))
+    });
+    let point = |group: &Bunsetsu| {
+        (is_plain_clock_ni(group)
+            && explicit_clock_case(group)
+                .is_some_and(|(clock, case)| clock_case_governor(clock, case, doc) == Some(head)))
+            || nominal_case(group, head)
+                .is_some_and(|(time, case)| case == "に" && is_daypart_surface(&time.surface))
+    };
+    let competing_destination = |group: &Bunsetsu| {
+        matches!(group.case_particle.as_deref(), Some("に" | "へ")) && !point(group)
+    };
+    let (dial, label, event_time) = if let Some((span, label)) = positions.next() {
+        if positions.next().is_some() {
+            return None;
+        }
+        let outside = groups.iter().enumerate().filter(|(_, group)| {
+            !group
+                .atoms
+                .iter()
+                .all(|atom| contains_span(span, atom.span))
+        });
+        if outside
+            .clone()
+            .any(|(_, group)| competing_destination(group))
+        {
+            return None;
+        }
+        let mut events = outside.filter_map(|(idx, group)| point(group).then_some(idx));
+        let when = events.next();
+        if events.next().is_some() {
+            return None;
+        }
+        (span, label, when)
+    } else {
+        // A second destination may be a physical place or locked text.
+        // Either way it prevents treating a clock reading as the dial setting.
+        if groups.iter().any(|group| {
+            group.case_particle.as_deref() == Some("から") || competing_destination(group)
+        }) {
+            return None;
+        }
+        let mut points = groups.iter().filter(|group| point(group));
+        let value = points.next()?;
+        if points.next().is_some() {
+            return None;
+        }
+        let span = Span {
+            start_char: value.atoms.first()?.span.start_char,
+            end_char: value.atoms.last()?.span.end_char,
+        };
+        // A date, daypart or frequency can qualify the clock time of the return.
+        // Preserve that reading when there is no stated dial position.
+        if source.iter().any(|time| {
+            !time.is_locked
+                && matches!(time.deprel.as_str(), "advmod" | "obl")
+                && matches!(time.upos, Some(Upos::Adv | Upos::Noun))
+                && time.head.is_some_and(|token| {
+                    token == head
+                        || doc
+                            .tokens
+                            .get(token)
+                            .is_some_and(|token| contains_span(span, token.span))
+                })
+                && is_clock_time_qualifier(time)
+        }) {
+            return None;
+        }
+        if second_hand
+            && source.iter().enumerate().any(|(index, amount)| {
+                !amount.is_locked
+                    && amount.head == Some(head)
+                    && matches!(amount.deprel.as_str(), "obl" | "advmod")
+                    && second_count(source, index).is_some()
+            })
+        {
+            // A standalone count describes the return, outside any dial position.
+            return None;
+        }
+        let label = setting_time_label(value, target);
+        let hour = if label == "正午" {
+            12
+        } else {
+            dial_hour(&label)?
+        };
+        // A separately stated reading can rule out a destination on the dial.
+        if role == BunsetsuRole::Subj
+            && reading_at_return(following, verb, hand_noun, source, doc, chars)
+                .is_some_and(|(reading, points_at)| points_at != (reading == hour))
+        {
+            return None;
+        }
+        let label = if label == "正午" {
+            "正午的位置".to_owned()
+        } else {
+            format!("{label}鐘的位置")
+        };
+        (span, label, None)
+    };
+    Some(ClockHandReturn {
+        dial,
+        action: format!("{action}{label}"),
+        object: (role == BunsetsuRole::Obj).then_some(hand),
+        event_time,
+    })
+}
+
+pub(super) fn contains_span(outer: Span, inner: Span) -> bool {
+    outer.start_char <= inner.start_char && inner.end_char <= outer.end_char
+}
 
 pub(super) fn is_place(noun: &Atom) -> bool {
     use faberline_nlp::lexicon::{SemanticClass, lookup_ja};

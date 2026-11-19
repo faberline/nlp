@@ -103,6 +103,7 @@ enum BunsetsuRole {
         wh_question: bool,
     },
     JointCompanion,
+    TravelCompanion,
     Subj,
     Obl,
     ExplicitDeadline {
@@ -2341,18 +2342,177 @@ struct ReturnTrip {
     action: &'static str,
 }
 
+fn is_nominal_adverb(a: &Atom, doc: &Document) -> bool {
+    a.doc_tok_idx
+        .and_then(|i| doc.tokens.get(i))
+        .is_some_and(|t| {
+            t.upos_candidates.contains(&Upos::Adv) && t.upos_candidates.contains(&Upos::Noun)
+        })
+}
+
+// A final と can mark a travelling companion. An earlier と can instead
+// share the next person's case, as in 私と妹は or 母と妹と.
+fn return_companion_owner(source: &[Atom], marker: usize) -> Option<usize> {
+    let case = &source[marker];
+    if case.surface != "と"
+        || case.is_locked
+        || case.deprel != "case"
+        || case.upos != Some(Upos::Adp)
+    {
+        return None;
+    }
+    let noun = source[..marker]
+        .iter()
+        .rev()
+        .take(2)
+        .find(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == case.head)?;
+    let mut owner = noun.head?;
+    if noun.is_locked
+        || noun.deprel != "obl"
+        || !(linked_joint_case(noun, case)
+            || marker >= 2 && indefinite_argument(&source[marker - 2..=marker], owner).is_some())
+    {
+        return None;
+    }
+    // In 妹と古い家へ the parser can attach 妹 to the adjective of the
+    // destination. Its own direction marker identifies the motion verb.
+    if let Some(adj) = source.get(marker + 1)
+        && adj.doc_tok_idx == Some(owner)
+        && !adj.is_locked
+        && adj.upos == Some(Upos::Adj)
+        && adj.deprel == "amod"
+        && let Some([place, direction]) = source.get(marker + 2..marker + 4)
+        && adj.head == place.doc_tok_idx
+        && linked_joint_case(place, direction)
+        && matches!(direction.surface.as_str(), "へ" | "に" | "まで")
+        && is_existing_spatial_head(place)
+    {
+        owner = place.head?;
+    }
+    let next = source[marker + 1..]
+        .windows(2)
+        .take_while(|p| !is_punct_atom(&p[0]) && p[0].upos != Some(Upos::Verb))
+        .find(|p| {
+            !p[0].is_locked
+                && p[0].head == Some(owner)
+                && p[0].doc_tok_idx.is_some()
+                && !p[1].is_locked
+                && p[1].head == p[0].doc_tok_idx
+                && p[1].deprel == "case"
+        });
+    if next.is_some_and(|p| {
+        p[0].deprel == "nsubj"
+            || is_companion_person(&p[0]) && !matches!(p[1].surface.as_str(), "の" | "から")
+    }) {
+        return None;
+    }
+    // The motion verb itself can close Nと before the destination appears.
+    // This also retains an unlisted name or an animal without guessing its type.
+    (is_companion_person(noun)
+        || next.is_none()
+            && source[marker + 1..]
+                .iter()
+                .take_while(|a| !is_punct_atom(a))
+                .find(|a| a.upos == Some(Upos::Verb))
+                .is_some_and(|verb| {
+                    verb.doc_tok_idx == Some(owner) && travel_manner(verb).is_some()
+                }))
+    .then_some(owner)
+}
+
+fn travel_manner(verb: &Atom) -> Option<&'static str> {
+    match verb.lemma.as_deref().unwrap_or(&verb.surface) {
+        "歩く" => Some("走"),
+        "走る" | "駆ける" => Some("跑"),
+        "泳ぐ" => Some("游"),
+        "飛ぶ" => Some("飛"),
+        _ => None,
+    }
+}
+
+fn return_goal(group: &Bunsetsu, returning: usize) -> bool {
+    matches!(group.atoms.as_slice(), [.., noun, case]
+        if !noun.is_locked && !case.is_locked && noun.head == Some(returning)
+        && noun.doc_tok_idx.is_some() && case.head == noun.doc_tok_idx && case.deprel == "case"
+        && matches!(case.surface.as_str(), "へ" | "に" | "まで")
+        && !source_time_head(noun)
+        && (physical_goal_head(group) == Some(returning)
+            || case.surface == "へ" || is_spatial_made_bunsetsu(group)
+            || is_place_location_bunsetsu(&group.atoms)
+            || matches!(noun.surface.as_str(), "店" | "岸" | "島" | "庭")))
+}
+
+// Keep each return argument's source role before adjacent nouns are folded.
+// The original governor is still available when the two verbs need separate clauses.
+fn mark_return_arguments(groups: &mut [Bunsetsu], source: &[Atom], doc: &Document) {
+    for action in source.iter().filter(|a| {
+        !a.is_locked
+            && a.upos == Some(Upos::Verb)
+            && (matches!(a.lemma.as_deref().unwrap_or(&a.surface), "帰る" | "戻る")
+                || travel_manner(a).is_some()
+                    && a.deprel == "advcl"
+                    && a.head
+                        .and_then(|i| doc.tokens.get(i))
+                        .is_some_and(|verb| matches!(verb.lemma.as_deref(), Some("帰る" | "戻る"))))
+    }) {
+        let Some(owner) = action.doc_tok_idx else {
+            continue;
+        };
+        for group in &mut *groups {
+            let Some(tail) = group.atoms.last() else {
+                continue;
+            };
+            if let [adv] = group.atoms.as_slice()
+                && adv.is_locked
+                && adv.upos == Some(Upos::Adv)
+                && adv.doc_tok_idx.is_some()
+                && let Some(adj) = source.iter().find(|a| a.doc_tok_idx == adv.doc_tok_idx)
+                && !adj.is_locked
+                && adj.head == Some(owner)
+                && adj.deprel == "advcl"
+                && adj.upos == Some(Upos::Adj)
+                && adj.surface.ends_with('く')
+            {
+                group.role = BunsetsuRole::Adv;
+                if adj.lemma.as_deref() == Some("早い")
+                    && source.iter().any(|a| {
+                        a.head == adj.doc_tok_idx
+                            && a.deprel == "advmod"
+                            && (source_time_head(a) || is_nominal_adverb(a, doc))
+                    })
+                {
+                    group.atoms[0].surface = "早早地".to_owned();
+                }
+            } else if matches!(group.atoms.as_slice(), [noun, case] if noun.head == Some(owner)
+                && noun.surface == "一緒" && case.surface == "に" && linked_joint_case(noun, case))
+            {
+                group.role = BunsetsuRole::Adv;
+            } else if tail.surface == "と"
+                && tail.doc_tok_idx.is_some()
+                && let Some(i) = source
+                    .iter()
+                    .position(|a| a.doc_tok_idx == tail.doc_tok_idx)
+                && return_companion_owner(source, i) == Some(owner)
+            {
+                if i >= 2
+                    && let Some((noun, case)) = indefinite_argument(&source[i - 2..=i], owner)
+                {
+                    group.atoms = vec![noun];
+                    group.atoms.extend(case);
+                    group.sfp_tail = None;
+                }
+                group.role = BunsetsuRole::TravelCompanion;
+            }
+        }
+    }
+}
+
 // A linked manner and return describe one trip. A second subject, a
 // duration of walking or two destinations can instead distinguish two events.
 fn return_trip_at(atoms: &[Atom], link: usize, doc: &Document) -> Option<ReturnTrip> {
     let manner = atoms.get(link.checked_sub(1)?)?;
     let te = atoms.get(link)?;
-    let action = match manner.lemma.as_deref()? {
-        "歩く" => "走",
-        "走る" | "駆ける" => "跑",
-        "泳ぐ" => "游",
-        "飛ぶ" => "飛",
-        _ => return None,
-    };
+    let action = travel_manner(manner)?;
     let first = manner.doc_tok_idx?;
     let last = manner.head?;
     if manner.is_locked
@@ -2389,6 +2549,7 @@ fn return_trip_at(atoms: &[Atom], link: usize, doc: &Document) -> Option<ReturnT
     let mut goals = 0;
     let mut origins = 0;
     let mut time_owner = None;
+    let mut companion_owner = None;
     for (i, a) in clause.iter().take_while(|a| !is_punct_atom(a)).enumerate() {
         if a.lemma.as_deref() == Some(CLOCK_ATOM) && !a.surface.contains("[[PH") {
             if clause.get(i + 1).is_some_and(|p| p.surface == "まで") {
@@ -2418,17 +2579,19 @@ fn return_trip_at(atoms: &[Atom], link: usize, doc: &Document) -> Option<ReturnT
         {
             return None;
         }
+        if let Some(owner) =
+            return_companion_owner(clause, i).filter(|&owner| owner == first || owner == last)
+            && companion_owner
+                .replace(owner)
+                .is_some_and(|prev| prev != owner)
+        {
+            return None;
+        }
         let Some(head) = a.head else { continue };
         // Nominal adverbs such as 今朝 can appear bare, as a topic or
         // with a case. Their source role survives even without a time gloss.
         let time = render_temporal_made_atom(a).is_some();
-        let nominal_adverb = a
-            .doc_tok_idx
-            .and_then(|i| doc.tokens.get(i))
-            .is_some_and(|t| {
-                t.upos_candidates.contains(&Upos::Adv) && t.upos_candidates.contains(&Upos::Noun)
-            });
-        if (time || nominal_adverb)
+        if (time || is_nominal_adverb(a, doc))
             && matches!(a.deprel.as_str(), "advmod" | "obl" | "iobj" | "nsubj")
         {
             let mut owner = Some(head);
@@ -2437,12 +2600,12 @@ fn return_trip_at(atoms: &[Atom], link: usize, doc: &Document) -> Option<ReturnT
                 && doc
                     .tokens
                     .get(head)
-                    .is_some_and(|t| t.upos == Some(Upos::Adv))
+                    .is_some_and(|t| matches!(t.upos, Some(Upos::Adv | Upos::Adj)))
             {
                 owner = doc
                     .syntax
                     .iter()
-                    .find(|n| n.token == head && n.deprel == "advmod")
+                    .find(|n| n.token == head && matches!(n.deprel.as_str(), "advmod" | "advcl"))
                     .and_then(|n| n.head);
             }
             if let Some(owner) = owner.filter(|&owner| owner == first || owner == last)
@@ -2482,7 +2645,8 @@ fn return_trip_at(atoms: &[Atom], link: usize, doc: &Document) -> Option<ReturnT
                 if case.surface == "まで" {
                     return None;
                 }
-            } else {
+            } else if !(a.surface == "一緒" && case.surface == "に" && linked_joint_case(a, case))
+            {
                 goals += 1;
             }
         }
@@ -4040,6 +4204,7 @@ fn translate_clause_atoms(
         .enumerate()
         .filter(|(_, a)| matches!(a.surface.as_str(), "て" | "で"))
         .find_map(|(i, _)| return_trip_at(body, i, doc).map(|trip| (i, trip)));
+    let original_body = body;
     let trip_source = trip.map(|(link, trip)| {
         body.iter()
             .enumerate()
@@ -4065,6 +4230,7 @@ fn translate_clause_atoms(
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
+    mark_return_arguments(&mut grouped, original_body, doc);
     for group in &mut grouped {
         if deadline_governor(group, doc).is_some_and(|head| has_detached_voice_negation(body, head))
         {
@@ -7005,6 +7171,7 @@ fn translate_clause_bunsetsus(
     let mut joint_manner = None;
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
+    let mut travel_companions = Vec::new();
     let mut adverbs: Vec<String> = Vec::new();
     let mut iobjs: Vec<PlacedArg> = Vec::new();
     let mut objs: Vec<String> = Vec::new();
@@ -7197,6 +7364,24 @@ fn translate_clause_bunsetsus(
     // Resolve time and result roles while the other arguments of the predicate are available.
     let timed_result = timed_result_frame(&bunsetsus, source);
     let mut trip_destination = None;
+    let returning = ctx.return_trip.map(|trip| trip.returning).or_else(|| {
+        if !bunsetsus
+            .iter()
+            .any(|b| b.role == BunsetsuRole::TravelCompanion)
+        {
+            return None;
+        }
+        // A separate return keeps its own companion and a single destination.
+        let root = source
+            .iter()
+            .find(|a| {
+                !a.is_locked
+                    && a.deprel == "root"
+                    && matches!(a.lemma.as_deref().unwrap_or(&a.surface), "帰る" | "戻る")
+            })?
+            .doc_tok_idx?;
+        (bunsetsus.iter().filter(|b| return_goal(b, root)).count() == 1).then_some(root)
+    });
     let mut affected_object = None;
     let mut result_value = None;
     let mut setting_origin = None;
@@ -7212,22 +7397,7 @@ fn translate_clause_bunsetsus(
             temporal_others.push(label);
             continue;
         }
-        if let Some(trip) = ctx.return_trip
-            && let [.., noun, case] = b.atoms.as_slice()
-            && noun.head == Some(trip.returning)
-            && noun.doc_tok_idx.is_some()
-            && case.head == noun.doc_tok_idx
-            && case.deprel == "case"
-            && !case.is_locked
-            && !noun.is_locked
-            && matches!(case.surface.as_str(), "へ" | "に" | "まで")
-            && !source_time_head(noun)
-            && (physical_goal_head(&b) == Some(trip.returning)
-                || case.surface == "へ"
-                || is_spatial_made_bunsetsu(&b)
-                || is_place_location_bunsetsu(&b.atoms)
-                || matches!(noun.surface.as_str(), "店" | "岸" | "島" | "庭"))
-        {
+        if returning.is_some_and(|root| return_goal(&b, root)) {
             trip_destination = Some(render_bunsetsu_np(&b, target));
             continue;
         }
@@ -7318,6 +7488,9 @@ fn translate_clause_bunsetsus(
             }
             BunsetsuRole::JointCompanion => {
                 joint_companions.push(format!("和{}", render_bunsetsu_np(&b, target)));
+            }
+            BunsetsuRole::TravelCompanion => {
+                travel_companions.push(format!("跟{}", render_bunsetsu_np(&b, target)));
             }
             BunsetsuRole::MotionPurpose => purpose = b.atoms[0].lemma.clone(),
             BunsetsuRole::PurposeModifier if b.atoms[0].surface == "一緒" => {
@@ -7605,6 +7778,8 @@ fn translate_clause_bunsetsus(
         } else {
             format!("{}{verb_core}", trip.action)
         };
+    } else if let Some(place) = trip_destination {
+        verb_core = format!("回到{place}");
     }
     if let Some(frame) = timed_result {
         verb_core = frame.action.to_owned();
@@ -8508,6 +8683,7 @@ fn translate_clause_bunsetsus(
     if has_front_modal {
         parts.extend(temporal_others);
     }
+    parts.extend(travel_companions);
     // A place marked by まで is the endpoint of a motion event. Keep this
     // local to まで: the global goal flag also changes recipients and vehicles.
     let mut made_endpoints = Vec::new();
@@ -10843,6 +11019,7 @@ fn ends_in_coord_to(b: &Bunsetsu) -> bool {
     !matches!(
         b.role,
         BunsetsuRole::JointCompanion
+            | BunsetsuRole::TravelCompanion
             | BunsetsuRole::PurposeCompanion
             | BunsetsuRole::JointManner {
                 manner: JointManner::Companion,
@@ -13707,6 +13884,67 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn return_modifiers_describe_their_action_or_their_noun() {
+        for (source, expected) in [
+            (
+                "父は今朝早く走って家へ戻りました。",
+                "父親今朝早早地跑回家了。",
+            ),
+            (
+                "先生は楽しく歩いて公園へ戻りました。",
+                "老師快樂地走回公園了。",
+            ),
+            ("父は古い家へ走って戻りました。", "父親跑回舊的家了。"),
+            (
+                "今朝早く走って今夜家に戻りました。",
+                "今朝早早地跑，今夜回來到家了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn return_companions_keep_their_action_and_destination() {
+        for (source, expected) in [
+            ("私は妹と歩いて駅へ戻りました。", "我跟妹妹走回車站了。"),
+            (
+                "私は妹と歩いて父と駅へ戻りました。",
+                "我跟妹妹走，跟父親回到車站了。",
+            ),
+            (
+                "先生は弟と走って、母と公園に帰りました。",
+                "老師跟弟弟跑，跟母親回到公園了。",
+            ),
+            (
+                "私は母と妹と歩いて病院へ戻りました。",
+                "我跟母親和妹妹走回醫院了。",
+            ),
+            ("私と妹は歩いて駅へ戻りました。", "我和妹妹走回車站了。"),
+            (
+                "私は妹と父の家に歩いて戻りました。",
+                "我跟妹妹走回父親的家了。",
+            ),
+            (
+                "私は妹と一緒に歩いて駅へ戻りました。",
+                "我跟妹妹一起走回車站了。",
+            ),
+            ("誰かと歩いて駅へ戻りました。", "跟某個人走回車站了。"),
+            ("犬と走って家へ戻りました。", "跟狗跑回家了。"),
+            (
+                "私は妹と歩いて父と駅へ戻りましたか。",
+                "我跟妹妹走，跟父親回到車站了嗎？",
+            ),
+            (
+                "二人は歩いて駅と公園に戻りました。",
+                "二人走回車站和公園了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
     fn time_range_of_a_setting_stays_distinct_from_event_duration() {
         assert_eq!(
             translate("友達は昼過ぎまで公園で走りました。"),
@@ -15421,6 +15659,23 @@ fn localize_indefinite_arguments(groups: &mut Vec<Bunsetsu>, action: &Atom, sour
     *groups = previous;
 }
 
+fn is_companion_person(noun: &Atom) -> bool {
+    use faberline_nlp::lexicon::SemanticClass;
+    match noun.upos {
+        Some(Upos::Pron) => matches!(
+            noun.surface.as_str(),
+            "誰" | "だれ" | "私" | "僕" | "彼" | "彼女" | "君" | "あなた" | "みんな" | "皆"
+        ),
+        Some(Upos::Propn) => {
+            is_honorific_suffix(&noun.surface)
+                || faberline_nlp::lexicon::lookup_ja(&noun.surface)
+                    .is_some_and(|entry| entry.sem_class == Some(SemanticClass::Person))
+        }
+        Some(Upos::Noun) => is_demonstrative_person_noun(noun),
+        _ => false,
+    }
+}
+
 // In 先生と図書館に the person and the place have separate case particles.
 // Two places share their direction instead (東京と大阪に).
 fn place_companion(source: &[Atom], predicate: usize) -> Option<usize> {
@@ -15452,17 +15707,7 @@ fn place_companion(source: &[Atom], predicate: usize) -> Option<usize> {
             continue;
         }
         let class = faberline_nlp::lexicon::lookup_ja(&noun.surface).and_then(|hit| hit.sem_class);
-        let human = match noun.upos {
-            Some(Upos::Pron) => matches!(
-                noun.surface.as_str(),
-                "誰" | "だれ" | "私" | "僕" | "彼" | "彼女" | "君" | "あなた" | "みんな" | "皆"
-            ),
-            Some(Upos::Propn) => {
-                class == Some(SemanticClass::Person) || is_honorific_suffix(&noun.surface)
-            }
-            Some(Upos::Noun) => is_demonstrative_person_noun(noun),
-            _ => false,
-        };
+        let human = is_companion_person(noun);
         // 私と先生が and 先生と学生を can share the second noun's case.
         // A later location does not establish a separate companion there.
         // In 先生と二人で the count describes how the two people participate.

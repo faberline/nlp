@@ -887,15 +887,25 @@ pub(super) fn render(
     if !has_owner {
         return None;
     }
-    let shared = shared_owner_choices(phrase, topic, doc, sentence, target, chars);
-    if let Some(owners) = &shared
-        && ending.is_empty()
+    let alternatives =
+        shared_owner_choices(phrase, topic, doc, sentence, target, chars).unwrap_or(alternatives);
+    // A bare question mark can replace final か. Only inspect punctuation
+    // immediately after this clause, including when it is inside a quotation.
+    let next_char = chars
+        .get(atoms.last()?.span.end_char..)?
+        .iter()
+        .find(|c| !c.is_whitespace());
+    let question = ending == "嗎" || matches!(next_char, Some('？' | '?'));
+    if alternatives.len() > 1
+        && !question
         && let Some(past) = copula.strip_suffix("不是")
     {
-        return Some(format!("{subject}{past}既不是{}", owners.join("，也不是")));
+        return Some(format!(
+            "{subject}{past}既不是{}{ending}",
+            alternatives.join("，也不是")
+        ));
     }
-    let alternatives = shared.unwrap_or(alternatives);
-    let asks_choice = alternatives.len() > 1 && ending == "嗎" && matches!(copula, "是" | "當時是");
+    let asks_choice = alternatives.len() > 1 && question && matches!(copula, "是" | "當時是");
     let complement = alternatives.join(if asks_choice { "還是" } else { "或是" });
     let asks_which = nominals.iter().any(|a| {
         matches!(
@@ -903,7 +913,7 @@ pub(super) fn render(
             "誰" | "だれ" | "何" | "どれ" | "どの" | "どこ" | "どちら"
         )
     });
-    let ending = if asks_choice || ending == "嗎" && asks_which {
+    let ending = if ending == "嗎" && (asks_choice || asks_which) {
         ""
     } else {
         ending
@@ -973,6 +983,40 @@ mod tests {
             ),
             ("これは誰の本ですか。", "這是誰的書？"),
             ("あれは友達の本ですか。", "那是朋友的書嗎？"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn negative_nominal_choices_keep_polarity_over_each_alternative() {
+        for (source, expected) in [
+            (
+                "これは父の傘か母の傘ではありませんでした。",
+                "這當時既不是父親的傘，也不是母親的傘。",
+            ),
+            (
+                "これは父の車か母の鍵ではありませんでした。",
+                "這當時既不是父親的車，也不是母親的鑰匙。",
+            ),
+            (
+                "これは父の車か母の鍵ではありませんよ。",
+                "這既不是父親的車，也不是母親的鑰匙喔。",
+            ),
+            (
+                "これは父の本か母の鍵か妹の帽子ではありません。",
+                "這既不是父親的書，也不是母親的鑰匙，也不是妹妹的帽子。",
+            ),
+            (
+                "これは父の車か母の鍵ではありませんか。",
+                "這不是父親的車或是母親的鑰匙嗎？",
+            ),
+            (
+                "これは父の車か母の鍵ではありません？",
+                "這不是父親的車或是母親的鑰匙？",
+            ),
+            ("これは父の車か母の鍵です？", "這是父親的車還是母親的鑰匙？"),
+            ("これは父の傘ではありませんでした。", "這當時不是父親的傘。"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }

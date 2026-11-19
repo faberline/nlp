@@ -209,7 +209,11 @@ pub(crate) fn translate_ja_sentence(
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
-        calendar::bind_day_arguments(&mut atoms, doc);
+        calendar::bind_day_arguments(&mut atoms, doc, || {
+            direct_quote.is_some()
+                || written_form_continuation.is_some()
+                || calendar::protects_negative_goal_quote(chars, doc, sentence_idx)
+        });
         nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target, chars);
     }
 
@@ -17521,6 +17525,86 @@ mod clock_rule_tests {
         assert_eq!(translation.glossary_hits.len(), 1);
         assert_eq!(translation.target_text.matches("指定期間").count(), 1);
         assert!(!translation.target_text.contains("為期"));
+    }
+
+    #[test]
+    fn negative_day_duration_belongs_to_motion_not_its_destination() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        let before = translate("父は三日間家に帰りませんでした。");
+        let after = translate("父は家に三日間帰りませんでした。");
+        assert_eq!(before, after);
+        let days = before.find("三天").expect(&before);
+        let negative = before.find("沒有").expect(&before);
+        let home = before.find('家').expect(&before);
+        assert!(
+            days < negative && negative < home && !before.contains("三日間"),
+            "{before}"
+        );
+
+        let school = translate("父は三日間学校に行きませんでした。");
+        assert!(
+            school.contains("三天")
+                && school.contains("沒有")
+                && school.contains("學校")
+                && !school.contains("三日間"),
+            "{school}"
+        );
+        let plain = translate("父は三日間家に帰らなかった。");
+        assert!(
+            plain.contains("三天")
+                && plain.contains("沒有")
+                && plain.contains('家')
+                && !plain.contains("三日間"),
+            "{plain}"
+        );
+    }
+
+    #[test]
+    fn negative_day_motion_does_not_cross_other_time_or_quote_scopes() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        let recipient = translate("父は三日間先生に会いませんでした。");
+        assert!(
+            recipient.contains("老師") && !recipient.contains("到老師"),
+            "{recipient}"
+        );
+        let existence = translate("父は三日間家にいました。");
+        assert!(
+            existence.contains('在') && existence.contains('家') && !existence.contains('回'),
+            "{existence}"
+        );
+        let positive = translate("父は三日間家に帰りました。");
+        assert!(
+            positive.contains('回') && !positive.contains("沒有"),
+            "{positive}"
+        );
+        let quote = translate("先生は「父は三日間家に帰りませんでした」と言いました。");
+        assert!(
+            quote.contains("三日間") && quote.contains('「') && quote.contains('」'),
+            "{quote}"
+        );
+        let across = translate(
+            "先生は「休みました。父は三日間家に帰りませんでした。母は待ちました」と言いました。",
+        );
+        assert!(across.contains("父親沒有回到三日間家"), "{across}");
+        let closed =
+            translate("先生は「休みました」と言いました。父は三日間家に帰りませんでした。");
+        assert!(closed.contains("父親三天沒有回到家"), "{closed}");
+        let mut named = TranslationGlossary::new();
+        named.domain_terms.push(GlossaryEntry {
+            canonical: "北川".to_owned(),
+            surfaces: vec!["北川".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "指定人物".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let person = public_translate("北川は三日間家に帰りませんでした。", &named);
+        assert_eq!(
+            person.target_text.matches("指定人物").count(),
+            1,
+            "{}",
+            person.target_text
+        );
     }
 
     #[test]

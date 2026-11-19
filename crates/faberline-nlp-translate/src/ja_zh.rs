@@ -658,6 +658,7 @@ pub(crate) fn translate_ja_sentence(
                 };
                 let cond_opt = Some(conditioning);
                 let ctx = ClauseDiscourseCtx {
+                    return_trip: None,
                     inside_quote: ends_continued_quote(
                         segments.get(seg_idx + 1),
                         doc,
@@ -2333,6 +2334,112 @@ fn direct_ka_before_period(clause: &[Atom], end: &Atom) -> bool {
         })
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ReturnTrip {
+    manner: usize,
+    returning: usize,
+    action: &'static str,
+}
+
+// A linked manner and return describe one trip. A second subject, a
+// duration of walking or two destinations can instead distinguish two events.
+fn return_trip_at(atoms: &[Atom], link: usize) -> Option<ReturnTrip> {
+    let manner = atoms.get(link.checked_sub(1)?)?;
+    let te = atoms.get(link)?;
+    let action = match manner.lemma.as_deref()? {
+        "歩く" => "走",
+        "走る" | "駆ける" => "跑",
+        "泳ぐ" => "游",
+        "飛ぶ" => "飛",
+        _ => return None,
+    };
+    let first = manner.doc_tok_idx?;
+    let last = manner.head?;
+    if manner.is_locked
+        || te.is_locked
+        || manner.upos != Some(Upos::Verb)
+        || manner.deprel != "advcl"
+        || te.upos != Some(Upos::Sconj)
+        || !matches!(te.surface.as_str(), "て" | "で")
+        || te.deprel != "mark"
+        || te.head != Some(first)
+        || manner.span.end_char != te.span.start_char
+    {
+        return None;
+    }
+    let start = atoms[..link]
+        .iter()
+        .rposition(is_punct_atom)
+        .map_or(0, |i| i + 1);
+    let clause = &atoms[start..];
+    let verb = atoms[link + 1..]
+        .iter()
+        .take_while(|a| !is_punct_atom(a))
+        .find(|a| a.doc_tok_idx == Some(last))?;
+    if verb.is_locked
+        || verb.upos != Some(Upos::Verb)
+        || verb.deprel != "root"
+        || !matches!(
+            verb.lemma.as_deref().unwrap_or(&verb.surface),
+            "帰る" | "戻る"
+        )
+    {
+        return None;
+    }
+    let mut goals = 0;
+    for (i, a) in clause.iter().take_while(|a| !is_punct_atom(a)).enumerate() {
+        if a.lemma.as_deref() == Some(CLOCK_ATOM)
+            && clause.get(i + 1).is_some_and(|p| p.surface == "まで")
+        {
+            return None;
+        }
+        if (a.is_locked && (a.lemma.as_deref() != Some(CLOCK_ATOM) || a.surface.contains("[[PH")))
+            || (a.upos == Some(Upos::Verb)
+                && a.doc_tok_idx != Some(first)
+                && a.doc_tok_idx != Some(last))
+            || (a.head == Some(last)
+                && a.deprel == "nsubj"
+                && a.span.start_char > te.span.start_char)
+        {
+            return None;
+        }
+        if a.head != Some(first) && a.head != Some(last) {
+            continue;
+        }
+        if a.deprel == "obj" {
+            return None;
+        }
+        if a.doc_tok_idx.is_none() || !matches!(a.deprel.as_str(), "obl" | "iobj") {
+            continue;
+        }
+        let Some(case) = clause
+            .get(i + 1)
+            .filter(|case| case.head == a.doc_tok_idx && case.deprel == "case")
+        else {
+            continue;
+        };
+        // A separate activity site or means of transport need not belong to
+        // the return (公園で走って家に戻る, 車で走って家に帰る).
+        if case.surface == "で" {
+            return None;
+        }
+        if matches!(case.surface.as_str(), "に" | "へ" | "まで") {
+            if render_temporal_made_atom(a).is_some() || is_clock_atom(a) {
+                if case.surface == "まで" {
+                    return None;
+                }
+            } else {
+                goals += 1;
+            }
+        }
+    }
+    (goals <= 1).then_some(ReturnTrip {
+        manner: first,
+        returning: last,
+        action,
+    })
+}
+
 fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<Atom> = Vec::new();
@@ -2678,6 +2785,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
             && !is_punct_atom(next_atom)
             && next_atom.surface != "初めて"
             && !is_te_subsidiary_atom(next_atom)
+            && return_trip_at(atoms, i).is_none()
             && atoms[i + 1..].iter().any(|later| {
                 !later.is_locked
                     && (matches!(later.upos, Some(Upos::Verb | Upos::Adj))
@@ -3170,6 +3278,7 @@ pub(crate) fn direct_quote_end(
 
 #[derive(Clone, Default)]
 struct ClauseDiscourseCtx {
+    return_trip: Option<ReturnTrip>,
     inside_quote: bool,
     in_nagara_follow: bool,
     in_concessive_follow: bool,
@@ -3872,6 +3981,25 @@ fn translate_clause_atoms(
     };
 
     // Multi-token phrase & collocation replacement over atoms first, then normalize remaining atoms.
+    let trip = body
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| matches!(a.surface.as_str(), "て" | "で"))
+        .find_map(|(i, _)| return_trip_at(body, i).map(|trip| (i, trip)));
+    let trip_source = trip.map(|(link, trip)| {
+        body.iter()
+            .enumerate()
+            .filter(|(i, _)| *i != link - 1 && *i != link)
+            .map(|(_, a)| {
+                let mut a = a.clone();
+                if a.head == Some(trip.manner) {
+                    a.head = Some(trip.returning);
+                }
+                a
+            })
+            .collect::<Vec<_>>()
+    });
+    let body = trip_source.as_deref().unwrap_or(body);
     let counted = counted_object::bind(body);
     let merged_atoms = apply_phrase_matches(counted.as_deref().unwrap_or(body));
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
@@ -3913,13 +4041,17 @@ fn translate_clause_atoms(
         complement.sconj_tail = Some("ば".to_owned());
     }
 
+    let trip_ctx = trip.map(|(_, trip)| ClauseDiscourseCtx {
+        return_trip: Some(trip),
+        ..ctx.clone()
+    });
     let (mut text, subject_only) = translate_clause_bunsetsus(
         bunsetsus,
-        atoms,
+        trip_source.as_deref().unwrap_or(atoms),
         &raw_clause,
         conditioning,
         allow_pro_drop_inject,
-        ctx,
+        trip_ctx.as_ref().unwrap_or(ctx),
         target,
     );
     if let Some((predicate, question)) = proposal {
@@ -7010,28 +7142,57 @@ fn translate_clause_bunsetsus(
     };
     // Resolve time and result roles while the other arguments of the predicate are available.
     let timed_result = timed_result_frame(&bunsetsus, source);
+    let mut trip_destination = None;
     let mut affected_object = None;
     let mut result_value = None;
+    let mut setting_origin = None;
     let daypart_groups: Vec<_> = bunsetsus
         .iter()
         .enumerate()
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if let Some(trip) = ctx.return_trip
+            && let [.., noun, case] = b.atoms.as_slice()
+            && noun.head == Some(trip.returning)
+            && noun.doc_tok_idx.is_some()
+            && case.head == noun.doc_tok_idx
+            && case.deprel == "case"
+            && !case.is_locked
+            && !noun.is_locked
+            && matches!(case.surface.as_str(), "へ" | "に" | "まで")
+            && !source_time_head(noun)
+            && (physical_goal_head(&b) == Some(trip.returning)
+                || case.surface == "へ"
+                || is_spatial_made_bunsetsu(&b)
+                || is_place_location_bunsetsu(&b.atoms)
+                || matches!(noun.surface.as_str(), "店" | "岸" | "島" | "庭"))
+        {
+            trip_destination = Some(render_bunsetsu_np(&b, target));
+            continue;
+        }
         if timed_result.is_some_and(|f| f.object == idx) {
             affected_object = Some(render_bunsetsu_np(&b, target));
             continue;
         }
         if let Some(frame) = timed_result.filter(|f| f.value == idx) {
-            result_value = Some(
+            result_value = Some(if matches!(frame.time, SettingTime::From(_)) {
+                setting_time_label(&b, target)
+            } else {
                 frame
                     .site_name
-                    .map_or_else(|| render_bunsetsu_np(&b, target), str::to_owned),
-            );
+                    .map_or_else(|| render_bunsetsu_np(&b, target), str::to_owned)
+            });
             continue;
         }
-        if daypart_groups.contains(&idx) || timed_result.is_some_and(|f| f.when == idx) {
-            temporal_others.push(render_bunsetsu_np(&b, target));
+        if timed_result.is_some_and(|f| f.time == SettingTime::From(idx)) {
+            setting_origin = Some(format!("從{}", setting_time_label(&b, target)));
+            continue;
+        }
+        if daypart_groups.contains(&idx)
+            || timed_result.is_some_and(|f| f.time == SettingTime::At(idx))
+        {
+            temporal_others.push(render_daypart_np(&b, target));
             continue;
         }
         if b.case_particle.as_deref() == Some("へ") && !is_time_or_place_bunsetsu(&b.atoms) {
@@ -7378,6 +7539,13 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if let Some(trip) = ctx.return_trip {
+        verb_core = if let Some(place) = trip_destination {
+            format!("{}回{}", trip.action, place)
+        } else {
+            format!("{}{verb_core}", trip.action)
+        };
+    }
     if let Some(frame) = timed_result {
         verb_core = frame.action.to_owned();
     }
@@ -8409,6 +8577,7 @@ fn translate_clause_bunsetsus(
     if let Some(object) = affected_object {
         parts.push(format!("把{object}"));
     }
+    parts.extend(setting_origin);
     // 到 already expresses the destination relation of bare 去. Other motion
     // verbs retain their manner: 走到, 跑到.
     let keep_go = has_spatial_made && preserve_go && verb_core == "去";
@@ -11873,7 +12042,7 @@ fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
 
 fn is_daypart_surface(surface: &str) -> bool {
     matches!(
-        surface,
+        surface.strip_suffix("過ぎ").unwrap_or(surface),
         "早朝"
             | "明け方"
             | "朝"
@@ -11939,9 +12108,41 @@ fn has_verb_reading(surface: &str) -> bool {
         .is_some_and(|hit| hit.upos_candidates.contains(&Upos::Verb))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SettingTime {
+    At(usize),
+    From(usize),
+}
+
+fn render_daypart_np(group: &Bunsetsu, target: TargetVariant) -> String {
+    if let [t, _] = group.atoms.as_slice()
+        && let Some(label) = after_daypart(t)
+    {
+        return label;
+    }
+    render_bunsetsu_np(group, target)
+}
+
+fn after_daypart(time: &Atom) -> Option<String> {
+    if time.is_locked || !matches!(time.upos, Some(Upos::Noun | Upos::Adv)) {
+        return None;
+    }
+    let daypart = time.surface.strip_suffix("過ぎ")?;
+    is_daypart_surface(daypart)
+        .then(|| format!("{}過後", translate_single_ja_term(daypart, None, time.upos)))
+}
+
+fn setting_time_label(group: &Bunsetsu, target: TargetVariant) -> String {
+    // Within a pair of readings for one clock or schedule, 一時 is one o'clock.
+    if matches!(group.atoms.as_slice(), [t, _] if !t.is_locked && t.surface == "一時") {
+        return "一點".to_owned();
+    }
+    render_daypart_np(group, target)
+}
+
 #[derive(Clone, Copy)]
 struct TimedResult {
-    when: usize,
+    time: SettingTime,
     object: usize,
     value: usize,
     action: &'static str,
@@ -12023,32 +12224,79 @@ fn timed_result_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimedResul
     {
         return None;
     }
-    let mut args = groups.iter().enumerate().filter_map(|(i, b)| {
+    // A normalized clock can span several source tokens and no longer has
+    // one governor index. Only accept that clock in a single-predicate clause
+    // moving an identified time setting between two explicit readings.
+    let setting_range = lemma == "戻す"
+        && source_time_head(noun)
+        && source
+            .iter()
+            .any(|a| !a.is_locked && a.surface == "から" && a.deprel == "case")
+        && source
+            .iter()
+            .filter(|a| a.upos == Some(Upos::Verb))
+            .all(|a| a.doc_tok_idx == Some(id));
+    let args = groups.iter().enumerate().filter_map(|(i, b)| {
         let [.., t, ni] = b.atoms.as_slice() else {
             return None;
         };
-        (b.case_particle.as_deref() == Some("に")
-            && !t.is_locked
+        let attached = !t.is_locked
+            && matches!(t.deprel.as_str(), "obl" | "advmod")
+            && t.head == Some(id)
+            && t.doc_tok_idx.is_some()
+            && ni.head == t.doc_tok_idx
+            && ni.deprel == "case";
+        let clock = setting_range
+            && t.is_locked
+            && t.lemma.as_deref() == Some(CLOCK_ATOM)
+            && !t.surface.contains("[[PH")
+            && b.atoms.len() == 2;
+        (matches!(b.case_particle.as_deref(), Some("に" | "から"))
+            && (attached || clock)
             && !ni.is_locked
             && matches!(
                 t.upos,
                 Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Adv)
             )
-            && matches!(t.deprel.as_str(), "obl" | "advmod")
-            && t.head == Some(id)
-            && t.doc_tok_idx.is_some()
-            && ni.head == t.doc_tok_idx
-            && ni.surface == "に"
+            && b.case_particle.as_deref() == Some(ni.surface.as_str())
             && ni.upos == Some(Upos::Adp)
-            && ni.deprel == "case"
             && t.span.end_char == ni.span.start_char)
             .then_some((i, t, ni))
     });
-    let a = args.next()?;
-    let b = args.next()?;
-    if args.next().is_some() {
+    let mut values = args.clone().filter(|(_, _, p)| p.surface == "に");
+    let first_value = values.next()?;
+    let second_value = values.next();
+    if values.next().is_some() {
         return None;
     }
+    if second_value.is_none() && setting_range {
+        let mut origins = args.filter(|(_, _, p)| p.surface == "から");
+        let origin = origins.next()?;
+        let value = first_value;
+        let reading = |(i, t, _): (usize, &Atom, &Atom)| {
+            groups[i].atoms.len() == 2
+                && (t.lemma.as_deref() == Some(CLOCK_ATOM)
+                    || is_daypart_surface(&t.surface)
+                    || t.surface == "一時"
+                    || render_clock_surface(&t.surface).is_some())
+        };
+        if origins.next().is_some() || !reading(origin) || !reading(value) {
+            return None;
+        }
+        let action = if matches!(noun.surface.as_str(), "針" | "時針" | "分針" | "秒針") {
+            "撥回"
+        } else {
+            action
+        };
+        return Some(TimedResult {
+            time: SettingTime::From(origin.0),
+            object,
+            value: value.0,
+            action,
+            site_name: None,
+        });
+    }
+    let (a, b) = (first_value, second_value?);
     let a_time = groups[a.0].atoms.len() == 2 && is_daypart_surface(&a.1.surface);
     let b_time = groups[b.0].atoms.len() == 2 && is_daypart_surface(&b.1.surface);
     if a_time && b_time {
@@ -12059,7 +12307,7 @@ fn timed_result_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimedResul
             && wo.span.end_char <= b.1.span.start_char
             && b.2.span.end_char == verb.span.start_char)
             .then_some(TimedResult {
-                when: a.0,
+                time: SettingTime::At(a.0),
                 object,
                 value: b.0,
                 action,
@@ -12112,7 +12360,7 @@ fn timed_result_frame(groups: &[Bunsetsu], source: &[Atom]) -> Option<TimedResul
         "放回"
     };
     Some(TimedResult {
-        when,
+        time: SettingTime::At(when),
         object,
         value: site.0,
         action,
@@ -13283,6 +13531,71 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn manner_and_return_share_their_time_and_route() {
+        for (source, expected) in [
+            (
+                "姉は夕方に図書館から駅まで歩いて帰りました。",
+                "姊姊傍晚從圖書館走回車站了。",
+            ),
+            (
+                "妹は昼過ぎに走って学校へ戻りました。",
+                "妹妹中午過後跑回學校了。",
+            ),
+            (
+                "父は朝に走って公園へ戻りませんでした。",
+                "父親早上沒有跑回公園。",
+            ),
+            ("母は泳いで島へ戻りました。", "母親游回島了。"),
+            ("私は歩いて店に戻りました。", "我走回商店了。"),
+            ("「夕方に歩いて戻ります。」", "「傍晚走回來。」"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn return_does_not_absorb_a_distinct_activity_or_endpoint() {
+        for (source, first, second) in [
+            ("駅まで走って家に戻りました。", "跑到車站", "家"),
+            ("六時まで歩いて家に帰りました。", "走到六點", "家"),
+            ("彼は公園で走って家へ戻りました。", "在公園跑", "家"),
+            ("私は夕方に歩いて、妹が家に戻りました。", "走", "妹妹"),
+            ("私は歩いてから駅へ戻りました。", "走後", "車站"),
+            ("私は`昼`に歩いて家に戻りました。", "`昼`", "家"),
+        ] {
+            let text = translate(source);
+            let (a, b) = text
+                .split_once('，')
+                .unwrap_or_else(|| panic!("{source}: {text}"));
+            assert!(a.contains(first) && b.contains(second), "{source}: {text}");
+        }
+    }
+
+    #[test]
+    fn time_range_of_a_setting_stays_distinct_from_event_duration() {
+        assert_eq!(
+            translate("友達は昼過ぎまで公園で走りました。"),
+            "朋友在公園跑到中午過後。"
+        );
+        for (source, reading) in [
+            ("時計の針を一時から正午に戻しました。", "從一點撥回正午"),
+            ("時計の針を三時から正午に戻しました。", "從三點撥回正午"),
+            ("会議の時間を夕方から朝に戻しました。", "從傍晚改回早上"),
+        ] {
+            let text = translate(source);
+            assert!(
+                text.starts_with('把') && text.contains(reading),
+                "{source}: {text}"
+            );
+        }
+        let storage = translate("本を棚から机に戻しました。");
+        assert!(
+            storage.contains("放回") && !storage.contains("改回"),
+            "{storage}"
+        );
+    }
+
+    #[test]
     fn ordinary_returning_subjects_and_time_holders_are_distinct() {
         for (s, expected) in [
             ("家族が夕方に戻りました。", "家人傍晚回來了。"),
@@ -14447,36 +14760,35 @@ fn render_temporal_made_atom(time: &Atom) -> Option<String> {
         return Some(translate_single_ja_term(weekday, None, time.upos));
     }
     // These date and daypart heads are unambiguous as standalone time words.
-    let is_time = matches!(
-        time.surface.as_str(),
-        "今" | "昨日"
-            | "今日"
-            | "明日"
-            | "明後日"
-            | "翌日"
-            | "先週"
-            | "今週"
-            | "来週"
-            | "週末"
-            | "先月"
-            | "今月"
-            | "来月"
-            | "月末"
-            | "去年"
-            | "今年"
-            | "来年"
-            | "年末"
-            | "朝"
-            | "午前"
-            | "正午"
-            | "昼"
-            | "午後"
-            | "夕方"
-            | "夜"
-            | "深夜"
-    ) || faberline_nlp::lexicon::lookup_ja(&time.surface)
-        .is_some_and(|entry| entry.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Time));
-    is_time.then(|| translate_single_ja_term(&time.surface, time.lemma.as_deref(), time.upos))
+    let is_time = is_daypart_surface(&time.surface)
+        || matches!(
+            time.surface.as_str(),
+            "今" | "昨日"
+                | "今日"
+                | "明日"
+                | "明後日"
+                | "翌日"
+                | "先週"
+                | "今週"
+                | "来週"
+                | "週末"
+                | "先月"
+                | "今月"
+                | "来月"
+                | "月末"
+                | "去年"
+                | "今年"
+                | "来年"
+                | "年末"
+        )
+        || faberline_nlp::lexicon::lookup_ja(&time.surface).is_some_and(|entry| {
+            entry.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Time)
+        });
+    is_time.then(|| {
+        after_daypart(time).unwrap_or_else(|| {
+            translate_single_ja_term(&time.surface, time.lemma.as_deref(), time.upos)
+        })
+    })
 }
 
 fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {

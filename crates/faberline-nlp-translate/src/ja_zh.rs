@@ -8622,6 +8622,12 @@ fn translate_clause_bunsetsus(
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if let [reason] = b.atoms.as_slice()
+            && reason.lemma.as_deref() == Some(application_form::PURPOSE)
+        {
+            temporal_others.push(reason.surface.clone());
+            continue;
+        }
         if b.case_particle.as_deref() == Some("に")
             && let Some(time) = b
                 .atoms
@@ -14891,6 +14897,44 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn an_application_keeps_the_purpose_and_the_recipient_clause() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "私は部屋を借りるために入居申込書を管理会社に出しました。",
+                "我為了租房間向管理公司交了入住申請表。",
+            ),
+            (
+                "私は入居申込書を受付にいた職員に出しました。",
+                "我向當時在櫃檯的職員交了入住申請表。",
+            ),
+            (
+                "私は受付にいた職員に入居申込書を出しました。",
+                "我向當時在櫃檯的職員交了入住申請表。",
+            ),
+            (
+                "姉は管理会社にいる担当者に入居申込書を出しました。",
+                "姊姊向在管理公司的負責人交了入住申請表。",
+            ),
+            (
+                "私は料理教室の申込書を窓口に来た人に出しました。",
+                "我向來到窗口的人交了烹飪課程報名表。",
+            ),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+        let taken = public_translate(
+            "私は部屋を借りるために入居申込書をかばんから出しました。",
+            &glossary,
+        )
+        .target_text;
+        assert!(
+            taken.contains("為了租房間") && taken.contains("從包包") && taken.contains("拿出"),
+            "{taken}"
+        );
+    }
+
+    #[test]
     fn filing_time_and_person_keep_their_own_cases() {
         let glossary = TranslationGlossary::new();
         for (jp, zh) in [
@@ -19149,6 +19193,15 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
 }
 
 fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upos>) -> String {
+    if lemma == Some(application_form::PROTECTED_VERB) {
+        return surface.to_owned();
+    }
+    if lemma == Some(application_form::RENT) {
+        return "租".to_owned();
+    }
+    if lemma == Some(application_form::ATTEND) {
+        return "參加".to_owned();
+    }
     if lemma == Some(application_form::SUBMIT) {
         return "交".to_owned();
     }

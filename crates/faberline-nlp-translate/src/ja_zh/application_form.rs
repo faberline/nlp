@@ -7,6 +7,10 @@ pub(super) const CAN_SUBMIT: &str = "__ja_can_submit_application";
 pub(super) const OFFICE: &str = "__ja_application_recipient";
 pub(super) const TIME_QUESTION: &str = "__ja_application_time_question";
 const PRESENT_RECIPIENT: &str = "__ja_located_application_recipient";
+pub(super) const PURPOSE: &str = "__ja_application_purpose";
+pub(super) const RENT: &str = "__ja_rent_home";
+pub(super) const ATTEND: &str = "__ja_attend_course";
+pub(super) const PROTECTED_VERB: &str = "__ja_protected_purpose_verb";
 
 fn spelling(a: &Atom, chars: &[char]) -> String {
     chars[a.span.start_char..a.span.end_char].iter().collect()
@@ -191,21 +195,41 @@ fn is_person(noun: &Atom, chars: &[char]) -> bool {
     let mut original = noun.clone();
     original.upos = Some(Upos::Noun);
     let raw = spelling(noun, chars);
-    let name = raw
-        .rsplit_once("にいる")
-        .or_else(|| raw.rsplit_once('の'))
-        .map_or(raw.as_str(), |(_, head)| head);
+    // A whole glossary entry is one noun in the source document. Its
+    // final noun still distinguishes a recipient from that person's desk.
+    let name = [
+        "にいる",
+        "にいた",
+        "にいない",
+        "にいなかった",
+        "に来る",
+        "に来た",
+        "の",
+    ]
+    .iter()
+    .filter_map(|suffix| raw.rsplit_once(suffix))
+    .max_by_key(|(prefix, _)| prefix.len())
+    .map_or(raw.as_str(), |(_, head)| head);
     original.surface = name.to_owned();
-    super::is_companion_person(&original)
+    matches!(name, "担当者" | "係員") || super::is_companion_person(&original)
 }
 
-fn physical_argument(atoms: &[Atom], verb: usize, chars: &[char], doc: &Document) -> bool {
+fn physical_argument(
+    atoms: &[Atom],
+    verb: usize,
+    chars: &[char],
+    doc: &Document,
+    has_recipient: bool,
+) -> bool {
     atoms.windows(2).enumerate().any(|(i, pair)| {
         let [noun, case] = pair else { return false };
         if noun.head != Some(verb) || !dasu_case_link(noun, case) {
             return false;
         }
         let raw = spelling(noun, chars);
+        if has_recipient && case.surface == "に" && purpose_head(atoms, noun, doc).is_some() {
+            return false;
+        }
         let temporal = direct_quote_time(noun, doc).is_some()
             || is_clock_atom(noun)
             || noun.lemma.as_deref() == Some(TIME_QUESTION)
@@ -234,6 +258,149 @@ fn physical_argument(atoms: &[Atom], verb: usize, chars: &[char], doc: &Document
             _ => false,
         }
     })
+}
+
+fn purpose_head<'a>(atoms: &'a [Atom], reason: &Atom, doc: &Document) -> Option<&'a Atom> {
+    if reason.is_locked || reason.surface != "ため" {
+        return None;
+    }
+    atoms.iter().find(|v| {
+        v.deprel == "acl"
+            && v.head == reason.doc_tok_idx
+            && ((!v.is_locked && v.upos == Some(Upos::Verb))
+                || (v.is_locked
+                    && v.doc_tok_idx
+                        .and_then(|i| doc.tokens.get(i))
+                        .is_some_and(|t| t.upos == Some(Upos::Verb) && t.span == v.span)))
+    })
+}
+
+fn bind_filing_purpose(atoms: &mut Vec<Atom>, doc: &Document, chars: &[char]) {
+    for i in (1..atoms.len().saturating_sub(1)).rev() {
+        let Some(reason) = atoms.get(i) else { continue };
+        let Some(ni) = atoms
+            .get(i + 1)
+            .filter(|ni| ni.surface == "に" && dasu_case_link(reason, ni))
+        else {
+            continue;
+        };
+        let Some(verb) = purpose_head(atoms, reason, doc) else {
+            continue;
+        };
+        let Some(outer) = atoms.iter().find(|a| a.doc_tok_idx == reason.head) else {
+            continue;
+        };
+        let physical_form = filing_reading(outer, atoms).is_some()
+            && atoms.iter().enumerate().any(|(k, a)| {
+                a.deprel == "obj"
+                    && a.head == outer.doc_tok_idx
+                    && (covered_purpose(a, chars) || form_start(atoms, k, chars).is_some())
+            })
+            && atoms.windows(2).any(|p| {
+                p[0].head == outer.doc_tok_idx
+                    && p[1].surface == "から"
+                    && dasu_case_link(&p[0], &p[1])
+            });
+        if !physical_form && !matches!(outer.lemma.as_deref(), Some(SUBMIT | CAN_SUBMIT)) {
+            continue;
+        }
+        let inner = verb.doc_tok_idx;
+        let outer = outer.doc_tok_idx;
+        let Some(sentence) = verb
+            .doc_tok_idx
+            .and_then(|h| doc.syntax.iter().find(|n| n.token == h))
+            .map(|n| n.sentence)
+        else {
+            continue;
+        };
+        // A preceding は is the matrix topic. Include the objects of the
+        // purpose predicate in the embedded clause, leaving that topic outside.
+        let start = atoms[..i]
+            .iter()
+            .rposition(|a| a.surface == "は" || matches!(a.upos, Some(Upos::Punct)))
+            .map_or(0, |k| k + 1);
+        if !atoms[start..i].iter().any(|a| a.doc_tok_idx == inner)
+            || atoms[start..i]
+                .iter()
+                .any(|a| a.head == outer && a.deprel == "obj")
+        {
+            continue;
+        }
+        let ctx = super::ClauseDiscourseCtx {
+            source_chars: chars,
+            ..Default::default()
+        };
+        let mut clause = atoms[start..=i].to_vec();
+        if verb.is_locked
+            && let Some(v) = clause.iter_mut().find(|a| a.doc_tok_idx == inner)
+        {
+            v.upos = Some(Upos::Verb);
+            v.is_locked = false;
+            v.lemma = Some(PROTECTED_VERB.to_owned());
+        }
+        // In a housing application, 部屋を借りる is renting a room. An
+        // unrelated loan or a glossary-protected verb keeps its own reading.
+        if verb.lemma.as_deref().unwrap_or(&verb.surface) == "借りる"
+            && clause.iter().any(|a| {
+                a.deprel == "obj"
+                    && a.head == inner
+                    && matches!(
+                        spelling(a, chars).as_str(),
+                        "部屋" | "家" | "住宅" | "アパート"
+                    )
+            })
+            && atoms.iter().any(|a| {
+                a.deprel == "obj" && a.head == outer && {
+                    let raw = spelling(a, chars);
+                    ["申込書", "申込み書", "申し込み書"]
+                        .iter()
+                        .find_map(|suffix| raw.strip_suffix(suffix))
+                        .is_some_and(|qualifier| {
+                            matches!(qualifier.trim_end_matches('の'), "住宅" | "入居")
+                        })
+                }
+            })
+            && let Some(borrow) = clause.iter_mut().find(|a| a.doc_tok_idx == inner)
+        {
+            borrow.lemma = Some(RENT.to_owned());
+        }
+        if verb.lemma.as_deref().unwrap_or(&verb.surface) == "受ける"
+            && clause.iter().any(|a| {
+                a.deprel == "obj"
+                    && a.head == inner
+                    && matches!(
+                        spelling(a, chars).as_str(),
+                        "授業" | "講座" | "講習" | "研修"
+                    )
+            })
+            && let Some(take) = clause.iter_mut().find(|a| a.doc_tok_idx == inner)
+        {
+            take.lemma = Some(ATTEND.to_owned());
+        }
+        let Some((text, _)) = super::try_translate_purposive_tame(
+            &clause,
+            doc,
+            sentence,
+            &ctx,
+            super::TargetVariant::ZhHant,
+        ) else {
+            continue;
+        };
+        let mut phrase = reason.clone();
+        phrase.surface = text;
+        phrase.lemma = Some(PURPOSE.to_owned());
+        phrase.upos = Some(Upos::Adv);
+        phrase.deprel = "advmod".to_owned();
+        phrase.is_locked = true;
+        phrase.span.start_char = atoms[start].span.start_char;
+        phrase.span.end_char = ni.span.end_char;
+        for subject in &mut atoms[..start] {
+            if subject.deprel == "nsubj" && subject.head == inner {
+                subject.head = outer
+            }
+        }
+        atoms.splice(start..=i + 1, [phrase]);
+    }
 }
 
 fn mark_filing_time(atoms: &mut [Atom], verb: usize, chars: &[char]) {
@@ -286,22 +453,81 @@ fn office_name(a: &mut Atom) {
 
 // In 表を窓口にいる人に出す the parser may attach を to the intransitive
 // いる. The form belongs to 出す; the place belongs to the person.
+fn noun_start(atoms: &[Atom], end: usize) -> usize {
+    let mut start = end;
+    while start > 0
+        && atoms[start - 1].deprel == "compound"
+        && atoms[start - 1].head == atoms[end].doc_tok_idx
+        && atoms[start - 1].span.end_char == atoms[start].span.start_char
+    {
+        start -= 1;
+    }
+    start
+}
+
+fn noun_text(words: &[Atom], chars: &[char]) -> String {
+    let text = |a: &Atom| {
+        if a.is_locked {
+            a.surface.clone()
+        } else {
+            super::translate_single_ja_term(&a.surface, a.lemma.as_deref(), a.upos)
+        }
+    };
+    if words.iter().any(|a| a.is_locked) {
+        return words.iter().map(text).collect();
+    }
+    let raw: String = chars[words[0].span.start_char..words.last().unwrap().span.end_char]
+        .iter()
+        .collect();
+    match raw.as_str() {
+        "受付" => "櫃檯".to_owned(),
+        "窓口" => "窗口".to_owned(),
+        "管理会社" => "管理公司".to_owned(),
+        "担当者" => "負責人".to_owned(),
+        "担当" => "負責".to_owned(),
+        _ => super::translate_single_ja_term(&raw, None, Some(Upos::Noun)),
+    }
+}
+
 fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char]) {
-    for i in (0..atoms.len().saturating_sub(4)).rev() {
-        let Some([place, ni, be, person, to]) = atoms.get(i..i + 5) else {
+    for be_idx in (2..atoms.len()).rev() {
+        let Some(be) = atoms.get(be_idx) else {
             continue;
         };
-        if ni.surface != "に"
-            || !dasu_case_link(place, ni)
-            || place.head != be.doc_tok_idx
-            || be.is_locked
-            || !matches!(be.lemma.as_deref().unwrap_or(&be.surface), "いる" | "居る")
-            || be.deprel != "acl"
-            || be.head != person.doc_tok_idx
-            || !matches!(to.surface.as_str(), "に" | "へ")
-            || !dasu_case_link(person, to)
-            || !is_person(person, chars)
+        let action = be.lemma.as_deref().unwrap_or(&be.surface);
+        if be.is_locked || !matches!(action, "いる" | "居る" | "来る") || be.deprel != "acl" {
+            continue;
+        }
+        let place = &atoms[be_idx - 2];
+        let ni = &atoms[be_idx - 1];
+        if ni.surface != "に" || !dasu_case_link(place, ni) || place.head != be.doc_tok_idx {
+            continue;
+        }
+        let Some(modified) = atoms.iter().position(|a| a.doc_tok_idx == be.head) else {
+            continue;
+        };
+        let start_person = noun_start(atoms, modified);
+        if start_person <= be_idx {
+            continue;
+        }
+        let modifier = &atoms[modified];
+        let person_idx = if modifier.deprel == "nmod"
+            && atoms
+                .get(modified + 1)
+                .is_some_and(|no| no.surface == "の" && dasu_case_link(modifier, no))
+            && atoms
+                .get(modified + 2)
+                .is_some_and(|person| person.doc_tok_idx == modifier.head)
         {
+            modified + 2
+        } else {
+            modified
+        };
+        let person = &atoms[person_idx];
+        let Some(to) = atoms.get(person_idx + 1) else {
+            continue;
+        };
+        if !matches!(to.surface.as_str(), "に" | "へ") || !dasu_case_link(person, to) {
             continue;
         }
         let Some(outer) = person.head.filter(|id| {
@@ -311,9 +537,35 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char]) {
         }) else {
             continue;
         };
-        let Some(form) = (0..i).rev().find(|&k| {
+        if !recipient(atoms, person_idx + 1, outer, chars) {
+            continue;
+        }
+        let inflection = &atoms[be_idx + 1..start_person];
+        if !inflection
+            .iter()
+            .all(|a| !a.is_locked && a.head == be.doc_tok_idx && a.deprel == "aux")
+        {
+            continue;
+        }
+        let conjugation = inflection
+            .iter()
+            .map(|a| a.surface.as_str())
+            .collect::<String>();
+        let relation = match (action == "来る", conjugation.as_str()) {
+            (false, "") => "在",
+            (false, "た") => "當時在",
+            (false, "ない") => "不在",
+            (false, "なかった") => "當時不在",
+            (true, "" | "た") => "來到",
+            (true, "ない") => "不來",
+            (true, "なかった") => "沒來",
+            _ => continue,
+        };
+        let first = noun_start(atoms, be_idx - 2);
+        let Some(form) = (0..atoms.len()).find(|&k| {
             atoms[k].deprel == "obj"
-                && atoms[k].head == be.doc_tok_idx
+                && ((k < first && atoms[k].head == be.doc_tok_idx)
+                    || ((k < first || k > person_idx) && atoms[k].head == Some(outer)))
                 && atoms
                     .get(k + 1)
                     .is_some_and(|c| c.surface == "を" && dasu_case_link(&atoms[k], c))
@@ -322,27 +574,29 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char]) {
             continue;
         };
         let mut receiver = person.clone();
-        let mut location = place.clone();
-        office_name(&mut location);
-        let text = |a: &Atom| {
-            if a.is_locked {
-                a.surface.clone()
-            } else {
-                super::translate_single_ja_term(&a.surface, a.lemma.as_deref(), a.upos)
-            }
-        };
-        receiver.surface = format!("在{}的{}", text(&location), text(person));
+        let location = noun_text(&atoms[first..be_idx - 1], chars);
+        let mut role = noun_text(&atoms[start_person..=modified], chars);
+        if person_idx != modified {
+            role.push('的');
+            role.push_str(&noun_text(&atoms[person_idx..=person_idx], chars));
+        }
+        receiver.surface = format!("{relation}{location}的{role}");
         receiver.lemma = Some(PRESENT_RECIPIENT.to_owned());
         receiver.is_locked = true;
-        receiver.span.start_char = place.span.start_char;
+        receiver.span.start_char = atoms[first].span.start_char;
         let inner = be.doc_tok_idx;
-        for subject in &mut atoms[..form] {
-            if subject.deprel == "nsubj" && subject.head == inner {
-                subject.head = Some(outer);
+        for i in 0..first {
+            if atoms[i].deprel == "nsubj"
+                && atoms[i].head == inner
+                && atoms
+                    .get(i + 1)
+                    .is_some_and(|case| case.surface == "は" && dasu_case_link(&atoms[i], case))
+            {
+                atoms[i].head = Some(outer);
             }
         }
         atoms[form].head = Some(outer);
-        atoms.splice(i..i + 4, [receiver]);
+        atoms.splice(first..=person_idx, [receiver]);
     }
 }
 
@@ -371,7 +625,7 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
             });
             if atoms[v].surface == "提出"
                 || ((context.is_some() || office.is_some() || covered)
-                    && !physical_argument(atoms, verb, chars, doc))
+                    && !physical_argument(atoms, verb, chars, doc, office.is_some()))
             {
                 atoms[v].lemma = Some(reading.to_owned());
                 filing = true;
@@ -462,4 +716,5 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
         noun.is_locked = true;
         atoms.splice(first..=end, [noun]);
     }
+    bind_filing_purpose(atoms, doc, chars);
 }

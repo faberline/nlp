@@ -4,7 +4,7 @@ use super::{
     is_demonstrative_person_noun, merge_adnominal_bunsetsus, render_bunsetsu_np,
 };
 
-fn noun_phrase(
+pub(super) fn noun_phrase(
     atoms: &[Atom],
     doc: &Document,
     sentence: usize,

@@ -253,6 +253,7 @@ pub fn translate_document(
         Vec::with_capacity(doc.segmentation.opaque.len());
     let mut out_unknown: Vec<TranslateUnknown> = Vec::new();
     let mut consumed_direct_reports = HashMap::new();
+    let mut dates = ja_zh::DateContext::default();
 
     for (span, item) in items {
         if span.start_char > cursor {
@@ -361,6 +362,7 @@ pub fn translate_document(
                     &compiled_glossary,
                     seq2seq,
                     direct_quote_placements.get(&si),
+                    &mut dates,
                 );
 
                 let start = target_char_pos;
@@ -734,6 +736,7 @@ fn translate_single_sentence(
     compiled_glossary: &CompiledGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
     direct_quote: Option<&ja_zh::DirectQuotePlacement>,
+    dates: &mut ja_zh::DateContext,
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
@@ -867,6 +870,7 @@ fn translate_single_sentence(
             &conditioning,
             options.target,
             direct_quote,
+            dates,
         );
         let mut clause_spans: Vec<Span> = clause_alignments
             .iter()

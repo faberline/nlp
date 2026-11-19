@@ -8133,6 +8133,174 @@ fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
     }
 }
 
+// A bare elapsed quantity must touch its action and retain a dependency to it.
+fn elapsed_duration_surface(text: &str) -> Option<String> {
+    if text == "半時間" {
+        return Some("半個小時".to_owned());
+    }
+    if let Some((hours, tail)) = text.split_once("時間") {
+        let hour_value = elapsed_number(hours)?;
+        let hour = if hour_value == 2 {
+            "兩".to_owned()
+        } else {
+            normalize_decimal_digits(hours)
+        };
+        return match tail {
+            "" => Some(format!("{hour}個小時")),
+            "半" => Some(format!("{hour}個半小時")),
+            _ => Some(format!("{hour}個小時{}分鐘", elapsed_minutes(tail, 60)?)),
+        };
+    }
+    Some(format!("{}分鐘", elapsed_minutes(text, 10_000)?))
+}
+
+fn elapsed_minutes(text: &str, limit: u32) -> Option<String> {
+    let number = text.strip_suffix('分')?;
+    let normalized = normalize_decimal_digits(number);
+    (elapsed_number(number)? < limit).then_some(normalized)
+}
+
+// Elapsed quantities do not share the clock's 24-hour limit. Restrict the
+// accepted spelling before using the shared CJK number parser.
+fn elapsed_number(text: &str) -> Option<u32> {
+    let normalized = normalize_decimal_digits(text);
+    if normalized.is_empty() {
+        return None;
+    }
+    if !normalized.chars().all(|c| c.is_ascii_digit()) {
+        let mut previous_unit = 10_000;
+        let mut previous_digit = false;
+        let mut previous_zero = false;
+        for ch in normalized.chars() {
+            if matches!(
+                ch,
+                '零' | '〇' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九'
+            ) {
+                if previous_digit && !previous_zero {
+                    return None;
+                }
+                previous_digit = true;
+                previous_zero = matches!(ch, '零' | '〇');
+            } else {
+                let unit = match ch {
+                    '十' => 10,
+                    '百' => 100,
+                    '千' => 1000,
+                    _ => return None,
+                };
+                if unit >= previous_unit {
+                    return None;
+                }
+                previous_unit = unit;
+                previous_digit = false;
+                previous_zero = false;
+            }
+        }
+    }
+    super::opaque::parse_cjk_or_ascii_num(&normalized).filter(|n| (1..=9999).contains(n))
+}
+
+fn starts_inside_elapsed_number(source: &[Atom], start: usize) -> bool {
+    start > 0 && source[start - 1].span.end_char == source[start].span.start_char
+        && (source[start - 1].is_locked
+            || source[start - 1].surface.chars().last().is_some_and(|c|
+                matches!(c, '零' | '〇' | '一' | '二' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '百' | '千' | '万' | '萬' | '時' | '間' | '半' | '分' | '0'..='9' | '０'..='９')))
+}
+
+fn take_elapsed_duration(groups: &mut Vec<Bunsetsu>, source: &[Atom]) -> Option<String> {
+    for (action_index, action) in source.iter().enumerate() {
+        if action.is_locked || action.doc_tok_idx.is_none() || action.upos != Some(Upos::Verb) {
+            continue;
+        }
+        let action_id = action.doc_tok_idx?;
+        // A verbal noun and its adjacent する can be split by the parser.
+        let sahen = source.get(action_index + 1).filter(|next| {
+            !next.is_locked
+                && next.lemma.as_deref() == Some("する")
+                && next.upos == Some(Upos::Verb)
+                && action.head == next.doc_tok_idx
+                && action.span.end_char == next.span.start_char
+        });
+        let Some(predicate) = groups.iter().find(|g| {
+            g.role == BunsetsuRole::Predicate
+                && g.atoms.iter().any(|a| {
+                    a.span.start_char <= action.span.start_char
+                        && a.span.end_char >= action.span.end_char
+                        || sahen.is_some_and(|s| {
+                            a.span.start_char <= s.span.start_char
+                                && a.span.end_char >= s.span.end_char
+                        })
+                })
+        }) else {
+            continue;
+        };
+        // Negation can change the quantifier's scope.
+        if predicate.sconj_tail.is_some()
+            || predicate.atoms.iter().any(|a| {
+                matches!(a.lemma.as_deref(), Some("ない" | "ぬ"))
+                    || matches!(
+                        a.surface.as_str(),
+                        "て" | "で" | "ながら" | "ので" | "から" | "ませ"
+                    )
+            })
+        {
+            continue;
+        }
+        for start in 0..action_index {
+            let slice = &source[start..action_index];
+            if starts_inside_elapsed_number(source, start) {
+                continue;
+            }
+            if slice.is_empty()
+                || slice.iter().any(|a| a.is_locked || a.doc_tok_idx.is_none())
+                || slice
+                    .windows(2)
+                    .any(|w| w[0].span.end_char != w[1].span.start_char)
+                || slice.last()?.span.end_char != action.span.start_char
+                || !slice.iter().any(|a| a.head == Some(action_id))
+                || slice.iter().any(|a| {
+                    !slice.iter().any(|b| b.doc_tok_idx == a.head)
+                        && a.head != Some(action_id)
+                        && a.head != action.head
+                })
+            {
+                continue;
+            }
+            let surface: String = slice.iter().map(|a| a.surface.as_str()).collect();
+            let Some(rendered) = elapsed_duration_surface(&surface) else {
+                continue;
+            };
+            let first = slice.first()?.span.start_char;
+            let end = slice.last()?.span.end_char;
+            let overlapping: Vec<&Atom> = groups
+                .iter()
+                .flat_map(|g| &g.atoms)
+                .filter(|a| a.span.start_char < end && a.span.end_char > first)
+                .collect();
+            if overlapping.is_empty()
+                || overlapping.first()?.span.start_char != first
+                || overlapping.last()?.span.end_char != end
+                || overlapping
+                    .iter()
+                    .any(|a| a.is_locked || a.span.start_char < first || a.span.end_char > end)
+                || overlapping
+                    .windows(2)
+                    .any(|w| w[0].span.end_char != w[1].span.start_char)
+            {
+                continue;
+            }
+            for group in groups.iter_mut() {
+                group
+                    .atoms
+                    .retain(|a| !(a.span.start_char >= first && a.span.end_char <= end));
+            }
+            groups.retain(|g| !g.atoms.is_empty());
+            return Some(rendered);
+        }
+    }
+    None
+}
+
 fn translate_clause_bunsetsus(
     mut bunsetsus: Vec<Bunsetsu>,
     source: &[Atom],
@@ -8142,6 +8310,12 @@ fn translate_clause_bunsetsus(
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> (String, bool) {
+    let elapsed_duration = if target == TargetVariant::ZhHant {
+        take_elapsed_duration(&mut bunsetsus, source)
+    } else {
+        None
+    };
+
     #[derive(Clone, Copy)]
     enum DeadlineEndpoint {
         Calendar,
@@ -10005,6 +10179,7 @@ fn translate_clause_bunsetsus(
     } else {
         parts.extend(post_verb_mods);
     }
+    parts.extend(elapsed_duration);
     parts.extend(purpose_partners);
     if let Some(lemma) = purpose {
         // Bare transitive purposes use the ordinary Mandarin verb before the object.
@@ -14244,6 +14419,49 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn elapsed_surface_keeps_duration_and_near_forms_separate() {
+        assert_eq!(
+            super::elapsed_duration_surface("二時間半").as_deref(),
+            Some("兩個半小時")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("二時間").as_deref(),
+            Some("兩個小時")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("一時間十五分").as_deref(),
+            Some("一個小時十五分鐘")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("半時間").as_deref(),
+            Some("半個小時")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("九十分").as_deref(),
+            Some("九十分鐘")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("百二十分").as_deref(),
+            Some("百二十分鐘")
+        );
+        for prefix in ["百", "千", "万", "萬"] {
+            let source = [atom(prefix, 0, false), atom("二十分", 1, false)];
+            assert!(super::starts_inside_elapsed_number(&source, 1), "{prefix}");
+        }
+        assert_eq!(
+            super::elapsed_duration_surface("二十五時間半").as_deref(),
+            Some("二十五個半小時")
+        );
+        assert_eq!(
+            super::elapsed_duration_surface("４８時間").as_deref(),
+            Some("48個小時")
+        );
+        for near in ["二時半", "二時間前", "二時間の", "半分", "二時間六十分"] {
+            assert_eq!(super::elapsed_duration_surface(near), None, "{near}");
+        }
+    }
+
+    #[test]
     fn clock_numbers_and_half_are_bounded() {
         assert_eq!(clock_number("二十三"), Some(23));
         assert_eq!(clock_number("２４"), Some(24));
@@ -14445,6 +14663,26 @@ mod clock_rule_tests {
             Backend::Onnx,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn elapsed_duration_follows_its_action_and_preserves_clock_and_deadline() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("会議は二時間半続きます。"),
+            "會議持續兩個半小時。"
+        );
+        assert_eq!(translate("会議は二時間続きます。"), "會議持續兩個小時。");
+        let study = translate("今日は二時間勉強しました。");
+        assert!(study.contains("學習了兩個小時"), "{study}");
+        let clock = translate("会議は二時半まで続きました。");
+        assert!(
+            clock.contains("到兩點半") && !clock.contains("個小時"),
+            "{clock}"
+        );
+        let deadline = translate("二時間で仕事が終わりました。");
+        assert!(!deadline.contains("個小時"), "{deadline}");
     }
 
     #[test]

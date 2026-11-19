@@ -8861,11 +8861,15 @@ fn take_elapsed_duration(
                 == 1;
         let progressive_relative = progressive_acl_action(predicate)
             .is_some_and(|(verb, _)| verb.doc_tok_idx == Some(action_id));
+        let progressive_negative = progressive_relative && progressive_acl_is_negative(predicate);
+        let past_negative = elapsed_past_negative_action(predicate)
+            .is_some_and(|verb| verb.doc_tok_idx == Some(action_id));
         // Negation can change the quantifier's scope.
         if predicate.sconj_tail.is_some() && !temporal_after && !progressive_relative
             || predicate.atoms.iter().any(|a| {
-                matches!(a.lemma.as_deref(), Some("ない" | "ぬ"))
-                    || matches!(a.surface.as_str(), "ながら" | "ので" | "ませ")
+                (!progressive_negative && matches!(a.lemma.as_deref(), Some("ない" | "ぬ")))
+                    || matches!(a.surface.as_str(), "ながら" | "ので")
+                    || (!past_negative && a.surface == "ませ")
                     || !temporal_after
                         && !progressive_relative
                         && matches!(a.surface.as_str(), "て" | "で" | "から")
@@ -8924,7 +8928,7 @@ fn take_elapsed_duration(
                 };
                 let first = slice.first()?.span.start_char;
                 let end = slice.last()?.span.end_char;
-                if progressive_relative
+                if (progressive_relative || past_negative)
                     && groups
                         .iter()
                         .filter(|g| g.role == BunsetsuRole::Predicate)
@@ -8987,6 +8991,13 @@ fn translate_clause_bunsetsus(
     let elapsed_progressive_relative = elapsed.as_ref().is_some_and(|(_, _, id)| {
         bunsetsus.iter().any(|g| {
             progressive_acl_action(g).is_some_and(|(action, _)| action.doc_tok_idx == Some(*id))
+        })
+    });
+    let elapsed_progressive_negative = elapsed.as_ref().is_some_and(|(_, _, id)| {
+        bunsetsus.iter().any(|g| {
+            progressive_acl_is_negative(g)
+                && progressive_acl_action(g)
+                    .is_some_and(|(action, _)| action.doc_tok_idx == Some(*id))
         })
     });
     let elapsed_wh = elapsed.as_ref().is_some_and(|(_, wh, action_id)| {
@@ -9799,7 +9810,7 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
-    if elapsed_progressive_relative {
+    if elapsed_progressive_relative && !elapsed_progressive_negative {
         pre_verb_mods.retain(|m| m != "正在");
         pre_verb_mods.push("已經".to_owned());
         if !post_verb_mods.iter().any(|m| m == "了") {
@@ -13313,8 +13324,10 @@ fn elapsed_owned_by(source: &[Atom], owner: usize) -> bool {
 // A finite progressive relative has a lexical action linked through て to
 // いる, which modifies the following noun. Do not treat other て clauses as ACLs.
 fn progressive_acl_action(predicate: &Bunsetsu) -> Option<(&Atom, &Atom)> {
-    let [action, te, iru, past] = predicate.atoms.as_slice() else {
-        return None;
+    let (action, te, iru, negative, past) = match predicate.atoms.as_slice() {
+        [action, te, iru, past] => (action, te, iru, None, past),
+        [action, te, iru, negative, past] => (action, te, iru, Some(negative), past),
+        _ => return None,
     };
     if predicate
         .atoms
@@ -13334,6 +13347,13 @@ fn progressive_acl_action(predicate: &Bunsetsu) -> Option<(&Atom, &Atom)> {
         || past.upos != Some(Upos::Aux)
         || past.surface != "た"
         || past.head != iru.doc_tok_idx
+        || negative.is_some_and(|a| {
+            a.upos != Some(Upos::Aux)
+                || a.surface != "なかっ"
+                || a.lemma.as_deref() != Some("ない")
+                || a.head != iru.doc_tok_idx
+                || a.deprel != "aux"
+        })
         || predicate
             .atoms
             .windows(2)
@@ -13342,6 +13362,44 @@ fn progressive_acl_action(predicate: &Bunsetsu) -> Option<(&Atom, &Atom)> {
         return None;
     }
     Some((action, iru))
+}
+
+fn progressive_acl_is_negative(predicate: &Bunsetsu) -> bool {
+    progressive_acl_action(predicate).is_some()
+        && matches!(predicate.atoms.as_slice(), [_, _, _, negative, _] if negative.surface == "なかっ")
+}
+
+// Only bare, linked polite past negation is safe to combine with an elapsed
+// amount here. Focus, deadlines, and other negation stay on their own paths.
+fn elapsed_past_negative_action(predicate: &Bunsetsu) -> Option<&Atom> {
+    let [action, mase, n, deshi, past] = predicate.atoms.as_slice() else {
+        return None;
+    };
+    if predicate.sconj_tail.is_some()
+        || predicate.case_particle.is_some()
+        || predicate
+            .atoms
+            .iter()
+            .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "root"
+        || [mase, n, deshi, past]
+            .iter()
+            .any(|a| a.upos != Some(Upos::Aux) || a.deprel != "aux" || a.head != action.doc_tok_idx)
+        || [
+            mase.surface.as_str(),
+            n.surface.as_str(),
+            deshi.surface.as_str(),
+            past.surface.as_str(),
+        ] != ["ませ", "ん", "でし", "た"]
+        || predicate
+            .atoms
+            .windows(2)
+            .any(|w| w[0].span.end_char != w[1].span.start_char)
+    {
+        return None;
+    }
+    Some(action)
 }
 
 fn is_elapsed_progressive_relative(predicate: &Bunsetsu, noun: &Bunsetsu, source: &[Atom]) -> bool {
@@ -15956,6 +16014,59 @@ mod clock_rule_tests {
             "時間二等待，說了三十分鐘。"
         );
         assert_eq!(translate("会議は二時間までです。"), "會議是二時間到。");
+    }
+
+    #[test]
+    fn negative_elapsed_scope_stays_with_each_source_action() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("二時間待っていなかった客は三十分話しました。"),
+            "沒有等待兩個小時的客說了三十分鐘。"
+        );
+        assert_eq!(
+            translate("三十分話していなかった客は二時間待ちました。"),
+            "沒有說三十分鐘的客等待了兩個小時。"
+        );
+        assert_eq!(
+            translate("二時間泳いでいた学生は三十分休みませんでした。"),
+            "已經游泳了兩個小時的學生沒有休息三十分鐘。"
+        );
+        assert_eq!(
+            translate("三十分休んでいた学生は二時間泳ぎませんでした。"),
+            "已經休息了三十分鐘的學生沒有游泳兩個小時。"
+        );
+        assert_eq!(translate("二時間待ちませんでした。"), "沒有等待兩個小時。");
+        assert_eq!(
+            translate("二時間待っていた客は三十分話しました。"),
+            "已經等待了兩個小時的客說了三十分鐘。"
+        );
+    }
+
+    #[test]
+    fn negative_elapsed_does_not_reinterpret_focus_or_cutoffs() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        assert_eq!(
+            translate("私は二時間は待ちませんでした。"),
+            "我二時間沒有等待。"
+        );
+        assert_eq!(
+            translate("私は二時間も待ちませんでした。"),
+            "我二時間也沒有等待。"
+        );
+        assert_eq!(
+            translate("私は三時まで休みませんでした。"),
+            "我到三點為止沒有休息。"
+        );
+        assert_eq!(
+            translate("私は三時までに休みませんでした。"),
+            "我到三點為止沒有休息。"
+        );
+        assert_eq!(
+            translate("私は二時間以上待ちませんでした。"),
+            "我時間二以上面沒有等待。"
+        );
     }
 
     #[test]

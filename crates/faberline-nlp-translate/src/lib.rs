@@ -861,6 +861,32 @@ fn translate_single_sentence(
         && (sent.lang == Lang::Ja
             || (sent.lang == Lang::Mixed && ja_zh::has_kana_no_hangul(&raw_sent)));
     if is_ja_to_zh {
+        let prior_letter_distribution = sentence_idx.checked_sub(1).and_then(|idx| {
+            let prior = &doc.segmentation.sentences[idx];
+            if !raw_sent.contains("ずつ")
+                || !sent_tokens
+                    .iter()
+                    .any(|token| token.lemma.as_deref() == Some("書く"))
+                || prior.paragraph != sent.paragraph
+                || prior.lang != Lang::Ja
+                || prior.span.end_char > sent_span.start_char
+                || !chars[prior.span.end_char..sent_span.start_char]
+                    .iter()
+                    .all(|ch| ch.is_whitespace())
+                || doc.segmentation.opaque.iter().any(|opaque| {
+                    opaque.span.start_char < prior.span.end_char
+                        && prior.span.start_char < opaque.span.end_char
+                })
+            {
+                return None;
+            }
+            let raw_prior: String = chars[prior.span.start_char..prior.span.end_char]
+                .iter()
+                .collect();
+            let locks =
+                build_sentence_locks(idx, chars, doc, &[], &raw_prior, options, compiled_glossary);
+            ja_zh::prior_letter_distribution(idx, chars, doc, &locks)
+        });
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
@@ -871,6 +897,7 @@ fn translate_single_sentence(
             options.target,
             direct_quote,
             dates,
+            prior_letter_distribution,
         );
         let mut clause_spans: Vec<Span> = clause_alignments
             .iter()

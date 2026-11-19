@@ -2059,13 +2059,6 @@ fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpReques
     } else {
         None
     };
-    if manner.as_ref().is_some_and(|bound| bound.count.is_some())
-        && person
-            .as_ref()
-            .is_some_and(|person| person.role == TeHelpPersonRole::Performer)
-    {
-        return None;
-    }
     for (index, atom) in arguments.iter().enumerate() {
         if is_modifier(index)
             || person
@@ -4472,6 +4465,12 @@ fn render_te_help_request(
         .as_ref()
         .and_then(|manner| manner.count)
         .map(render_joint_people);
+    let performer_count = participants.as_deref().filter(|_| {
+        request
+            .person
+            .as_ref()
+            .is_some_and(|person| person.role == TeHelpPersonRole::Performer)
+    });
     let mut action: Vec<_> = request
         .action
         .iter()
@@ -4489,7 +4488,7 @@ fn render_te_help_request(
             if let Some(manner) = &request.manner
                 && (manner.start..manner.end).contains(&index)
             {
-                return (index == manner.start).then(|| Atom {
+                return (index == manner.start && performer_count.is_none()).then(|| Atom {
                     span: Span {
                         start_char: atom.span.start_char,
                         end_char: request.action[manner.end - 1].span.end_char,
@@ -4580,6 +4579,12 @@ fn render_te_help_request(
             "可以請"
         };
         if person.role == TeHelpPersonRole::Performer {
+            if let Some(count) = performer_count {
+                return Some(format!(
+                    "{polite}包括{name}在內的{count}一起幫我{}嗎",
+                    with_repeat(&body)
+                ));
+            }
             return Some(format!("{polite}{name}幫我{}嗎", with_repeat(&body)));
         }
         // Use the bare transfer verb so the linked recipient follows one 給.
@@ -16593,6 +16598,43 @@ mod existence_rule_tests {
             (
                 "二人で五時までに友達に手紙を送っていただけますか。",
                 "可以請兩人最晚在五點一起把信寄給朋友嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_request_keeps_the_named_performer_in_the_group() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "先生に二人で地図を描いていただけますか。",
+                "可以請包括老師在內的兩人一起幫我畫地圖嗎？",
+            ),
+            (
+                "二人で先生に地図を描いていただけますか。",
+                "可以請包括老師在內的兩人一起幫我畫地圖嗎？",
+            ),
+            (
+                "先生に三人で地図を描いていただけませんか。",
+                "可以麻煩包括老師在內的三人一起幫我畫地圖嗎？",
+            ),
+            (
+                "友達に二人で絵を描いてもらえますか。",
+                "可以請包括朋友在內的兩人一起幫我畫畫嗎？",
+            ),
+            (
+                "先生に地図を描いていただけますか。",
+                "可以請老師幫我畫地圖嗎？",
+            ),
+            (
+                "二人で地図を描いていただけますか。",
+                "可以請兩人一起畫畫地圖嗎？",
             ),
         ] {
             assert_eq!(

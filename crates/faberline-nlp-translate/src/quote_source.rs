@@ -426,17 +426,14 @@ fn acts_on_written_form(before: &[char], after: &[char]) -> bool {
 }
 
 fn copies_written_form(after: &[char]) -> bool {
-    let operand = if let Some(word) = strip_prefix(after, "という") {
-        let Some(operand) = after_word_name(word) else {
-            return false;
-        };
-        operand
-    } else if let Some(citation) = after.strip_prefix(&['と']) {
-        return starts_copying(citation);
+    let next = if let Some(word) = strip_prefix(after, "という") {
+        after_word_name(word).and_then(|operand| operand.strip_prefix(&['を']))
     } else {
         after
+            .strip_prefix(&['を'])
+            .or_else(|| after.strip_prefix(&['と']))
     };
-    let Some(destination) = operand.strip_prefix(&['を']).map(after_clause_comma) else {
+    let Some(destination) = next.map(after_clause_comma) else {
         return false;
     };
     starts_copying(destination)
@@ -1021,13 +1018,16 @@ mod tests {
     #[test]
     fn copies_the_quoted_text_into_a_translated_form() {
         let mut glossary = glossary();
-        glossary.objects.push(GlossaryEntry {
-            canonical: "申込書".to_owned(),
-            surfaces: vec!["申込書".to_owned()],
-            targets: [(TargetVariant::ZhHant, "申請表".to_owned())].into(),
-            pronoun_class: Default::default(),
-            speech_register: Default::default(),
-        });
+        for (source, target) in [("申込書", "申請表"), ("入居申込書", "入住申請表")]
+        {
+            glossary.objects.push(GlossaryEntry {
+                canonical: source.to_owned(),
+                surfaces: vec![source.to_owned()],
+                targets: [(TargetVariant::ZhHant, target.to_owned())].into(),
+                pronoun_class: Default::default(),
+                speech_register: Default::default(),
+            });
+        }
         for (source, expected) in [
             (
                 "「ドイツ」という単語を申込書に書き写しました。",
@@ -1037,6 +1037,15 @@ mod tests {
             (
                 "申込書に「申込書」と書き写しました。",
                 &["「申込書」", "申請表"],
+            ),
+            (
+                "『入居申込書』と紙に書き写しました。",
+                &["『入居申込書』", "紙"],
+            ),
+            ("入居申込書を受け取りました。", &["入住申請表"]),
+            (
+                "係員は「入居申込書は机の上です」と言いました。",
+                &["入住申請表", "說"],
             ),
             (
                 "4月2日に、申込書に『来て！』と書き写しました。",

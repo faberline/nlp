@@ -394,7 +394,7 @@ fn owner_atom(a: &Atom, doc: &Document) -> bool {
 
 const MODIFIED_NOUN: &str = "__ja_possession_modified_noun";
 
-fn original_pos(atom: &Atom, doc: &Document) -> Option<Upos> {
+pub(super) fn original_pos(atom: &Atom, doc: &Document) -> Option<Upos> {
     if !atom.is_locked {
         return atom.upos;
     }
@@ -416,7 +416,12 @@ fn noun_classifier(word: &str, noun: &Atom) -> &'static str {
 
 // Fold adjective phrases only into the noun identified by their source arcs.
 // The following の remains the possessor marker, outside this noun phrase.
-fn modified_noun(words: &[Atom], doc: &Document, chars: &[char]) -> Option<Vec<Atom>> {
+pub(super) fn modified_noun(
+    words: &[Atom],
+    doc: &Document,
+    chars: &[char],
+    time: Option<&str>,
+) -> Option<Vec<Atom>> {
     let (head, prefix) = words.split_last()?;
     if !owner_atom(head, doc) || head.doc_tok_idx.is_none() {
         return None;
@@ -492,11 +497,11 @@ fn modified_noun(words: &[Atom], doc: &Document, chars: &[char]) -> Option<Vec<A
             })
             .count();
         let morph: String = rest[..n].iter().map(|a| a.surface.as_str()).collect();
-        let tense = match morph.as_str() {
-            "" | "な" | "て" => "",
-            "ない" => "不",
-            "た" => "原本",
-            "なかった" => "原本不",
+        let (past, negative) = match morph.as_str() {
+            "" | "な" | "て" => (false, false),
+            "ない" => (false, true),
+            "た" => (true, false),
+            "なかった" => (true, true),
             _ => return None,
         };
         let adjective = if adj.is_locked {
@@ -519,18 +524,30 @@ fn modified_noun(words: &[Atom], doc: &Document, chars: &[char]) -> Option<Vec<A
             )
         };
         let word = adjective.trim_end_matches('的');
-        let hue = matches!(word, "紅" | "黑" | "白" | "藍" | "黃" | "綠" | "紫" | "灰");
+        let hue = matches!(
+            word,
+            "紅" | "黑" | "白" | "藍" | "黃" | "綠" | "紫" | "灰" | "棕"
+        );
+        let when = time.unwrap_or(if past { "原本" } else { "" });
         let description = if hue && degree.is_empty() && descriptions.is_empty() && n == rest.len()
         {
-            let tense = match tense {
-                "不" => "不是",
-                "原本不" => "原本不是",
-                "原本" => "原本是",
-                _ => "",
+            let copula = if negative {
+                "不是"
+            } else if past || !when.is_empty() {
+                "是"
+            } else {
+                ""
             };
-            format!("{tense}{word}色")
+            format!("{when}{copula}{word}色")
         } else {
-            format!("{tense}{degree}{word}")
+            let scale = match (degree.as_str(), negative) {
+                ("不太", true) => "不太".to_owned(),
+                ("那麼", true) => "沒那麼".to_owned(),
+                ("", false) if time.is_some() && past => "很".to_owned(),
+                (degree, true) => format!("不{degree}"),
+                (degree, false) => degree.to_owned(),
+            };
+            format!("{when}{scale}{word}")
         };
         descriptions.push(description);
         modifiers = &rest[n..];
@@ -674,8 +691,8 @@ fn render_ellipsis(
         }
         (&[][..], prefix)
     };
-    let modified_topic = modified_noun(topic, doc, chars);
-    let modified_owner = modified_noun(owner_phrase, doc, chars);
+    let modified_topic = modified_noun(topic, doc, chars, None);
+    let modified_owner = modified_noun(owner_phrase, doc, chars, None);
     let topic = modified_topic.as_deref().unwrap_or(topic);
     let owner_phrase = modified_owner.as_deref().unwrap_or(owner_phrase);
     if !topic.iter().chain(owner_phrase).all(|a| {

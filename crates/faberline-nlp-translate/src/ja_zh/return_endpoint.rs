@@ -23,6 +23,18 @@ fn attached_case(noun: &Atom, marker: &Atom) -> bool {
         && noun.span.end_char == marker.span.start_char
 }
 
+fn has_hand_prefix(noun: &Atom, source: &[Atom], prefixes: &[&str]) -> bool {
+    noun.surface == "針"
+        && noun.doc_tok_idx.is_some()
+        && source.iter().any(|prefix| {
+            !prefix.is_locked
+                && prefix.head == noun.doc_tok_idx
+                && prefix.deprel == "compound"
+                && prefix.span.end_char == noun.span.start_char
+                && prefixes.contains(&prefix.surface.as_str())
+        })
+}
+
 fn clock_hand(noun: &Atom, source: &[Atom]) -> bool {
     let Some(id) = noun.doc_tok_idx else {
         return false;
@@ -36,24 +48,19 @@ fn clock_hand(noun: &Atom, source: &[Atom]) -> bool {
     ) {
         return true;
     }
-    noun.surface == "針"
-        && (source.iter().any(|prefix| {
-            !prefix.is_locked
-                && prefix.head == Some(id)
-                && prefix.deprel == "compound"
-                && prefix.span.end_char == noun.span.start_char
-                && matches!(prefix.surface.as_str(), "長" | "短" | "時" | "分" | "秒")
-        }) || source.windows(2).any(|pair| {
-            pair[0].head == Some(id)
-                && pair[0].deprel == "nmod"
-                && matches!(
-                    pair[0].surface.as_str(),
-                    "時計" | "腕時計" | "掛け時計" | "置き時計"
-                )
-                && !pair[0].is_locked
-                && pair[1].surface == "の"
-                && attached_case(&pair[0], &pair[1])
-        }))
+    has_hand_prefix(noun, source, &["長", "短", "時", "分", "秒"])
+        || noun.surface == "針"
+            && source.windows(2).any(|pair| {
+                pair[0].head == Some(id)
+                    && pair[0].deprel == "nmod"
+                    && matches!(
+                        pair[0].surface.as_str(),
+                        "時計" | "腕時計" | "掛け時計" | "置き時計"
+                    )
+                    && !pair[0].is_locked
+                    && pair[1].surface == "の"
+                    && attached_case(&pair[0], &pair[1])
+            })
 }
 
 fn whole_dial_number(source: &[Atom], last: usize, final_part: &str) -> Option<(usize, u32)> {
@@ -95,11 +102,43 @@ fn dial_hour(label: &str) -> Option<u32> {
     (1..=12).contains(&hour).then_some(hour)
 }
 
+fn dial_second(source: &[Atom], unit: usize) -> Option<(usize, u32)> {
+    use crate::opaque::parse_cjk_or_ascii_num;
+
+    let mark = &source[unit];
+    let suffix = mark.surface.strip_suffix('秒')?;
+    let head = mark.doc_tok_idx?;
+    let mut first = unit;
+    while let Some(index) = first.checked_sub(1) {
+        let number = &source[index];
+        let next = &source[first];
+        if number.is_locked
+            || number.span.end_char != next.span.start_char
+            || !matches!(number.deprel.as_str(), "nmod" | "nummod" | "compound")
+            || !number
+                .head
+                .is_some_and(|token| token == head || Some(token) == next.doc_tok_idx)
+            || parse_cjk_or_ascii_num(&number.surface).is_none()
+        {
+            break;
+        }
+        first = index;
+    }
+    let number: String = source[first..unit]
+        .iter()
+        .map(|atom| atom.surface.as_str())
+        .chain(std::iter::once(suffix))
+        .collect();
+    let second = parse_cjk_or_ascii_num(&number)?;
+    (second < 60).then_some((first, second))
+}
+
 fn stated_dial_position(
     source: &[Atom],
     doc: &Document,
     head: usize,
     at: usize,
+    second_hand: bool,
 ) -> Option<(Span, String)> {
     let [prefix @ .., modifier, no, position] = &source[..=at] else {
         return None;
@@ -154,6 +193,9 @@ fn stated_dial_position(
         (at - 2, format!("{hour}點鐘的位置"))
     } else if modifier.surface == "元" {
         (at - 2, "原位".to_owned())
+    } else if second_hand && modifier.surface.ends_with('秒') {
+        let (begin, second) = dial_second(source, at - 2)?;
+        (begin, format!("{second}秒的位置"))
     } else if modifier.surface == "時" {
         let last = prefix.len().checked_sub(1)?;
         let value = &source[last];
@@ -256,24 +298,31 @@ pub(super) fn clock_hand_return(
         }
         _ => return None,
     };
-    let mut hands = groups.iter().enumerate().filter(|(_, group)| {
-        group.role == role
-            && source.iter().any(|noun| {
-                noun.head == Some(head)
-                    && noun.deprel == relation
-                    && clock_hand(noun, source)
-                    && group
-                        .atoms
-                        .iter()
-                        .any(|part| contains_span(part.span, noun.span))
-            })
-    });
-    let (hand, _) = hands.next()?;
+    let mut hands = groups
+        .iter()
+        .enumerate()
+        .filter(|(_, group)| group.role == role)
+        .filter_map(|(index, group)| {
+            source
+                .iter()
+                .find(|noun| {
+                    noun.head == Some(head)
+                        && noun.deprel == relation
+                        && clock_hand(noun, source)
+                        && group
+                            .atoms
+                            .iter()
+                            .any(|part| contains_span(part.span, noun.span))
+                })
+                .map(|noun| (index, noun))
+        });
+    let (hand, hand_noun) = hands.next()?;
     if hands.next().is_some() {
         return None;
     }
+    let second_hand = hand_noun.surface == "秒針" || has_hand_prefix(hand_noun, source, &["秒"]);
     let mut positions = source.iter().enumerate().filter_map(|(idx, _)| {
-        let (span, label) = stated_dial_position(source, doc, head, idx)?;
+        let (span, label) = stated_dial_position(source, doc, head, idx, second_hand)?;
         let mut parts = groups
             .iter()
             .filter(|group| {
@@ -337,6 +386,42 @@ pub(super) fn clock_hand_return(
         if points.next().is_some() {
             return None;
         }
+        let span = Span {
+            start_char: value.atoms.first()?.span.start_char,
+            end_char: value.atoms.last()?.span.end_char,
+        };
+        // A date or frequency can qualify the clock time of the return.
+        // Preserve that reading when there is no stated dial position.
+        if source.iter().any(|time| {
+            !time.is_locked
+                && matches!(time.deprel.as_str(), "advmod" | "obl")
+                && matches!(
+                    time.surface.as_str(),
+                    "一昨日"
+                        | "昨日"
+                        | "今日"
+                        | "明日"
+                        | "明後日"
+                        | "当日"
+                        | "毎朝"
+                        | "毎晩"
+                        | "毎日"
+                        | "毎週"
+                        | "毎月"
+                        | "毎年"
+                        | "いつも"
+                        | "普段"
+                )
+                && time.head.is_some_and(|token| {
+                    token == head
+                        || doc
+                            .tokens
+                            .get(token)
+                            .is_some_and(|token| contains_span(span, token.span))
+                })
+        }) {
+            return None;
+        }
         let label = setting_time_label(value, target);
         let label = if label == "正午" {
             "正午的位置".to_owned()
@@ -344,14 +429,7 @@ pub(super) fn clock_hand_return(
             dial_hour(&label)?;
             format!("{label}鐘的位置")
         };
-        (
-            Span {
-                start_char: value.atoms.first()?.span.start_char,
-                end_char: value.atoms.last()?.span.end_char,
-            },
-            label,
-            None,
-        )
+        (span, label, None)
     };
     Some(ClockHandReturn {
         dial,

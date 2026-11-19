@@ -498,10 +498,10 @@ fn copies_written_form(
                         destination_start + index,
                     )
             })
-        || copy_with_linked_modifiers(chars, destination_start, scope_end, syntax)
+        || copy_with_local_dependencies(chars, destination_start, scope_end, syntax)
 }
 
-fn copy_with_linked_modifiers(
+fn copy_with_local_dependencies(
     chars: &[char],
     start: usize,
     end: usize,
@@ -537,34 +537,34 @@ fn copy_with_linked_modifiers(
         return false;
     }
 
-    let modifiers = first..predicate;
-    !modifiers.is_empty()
-        && modifiers.clone().all(|index| {
+    let before_predicate = first..predicate;
+    !before_predicate.is_empty()
+        && before_predicate.clone().all(|index| {
             let token = &syntax.tokens[index];
             let surface = &chars[token.span.start_char..token.span.end_char];
             if token.upos == Some(Upos::Punct) {
                 return surface == ['、'];
             }
-            !matches!(surface, ['を'] | ['は'] | ['が'])
+            surface != ['を']
                 && token.sentence == verb.sentence
-                && attaches_as_copy_modifier(
+                && attaches_to_copy_predicate(
                     index,
-                    modifiers.clone(),
+                    before_predicate.clone(),
                     predicate,
                     syntax.dependencies,
                 )
         })
 }
 
-fn attaches_as_copy_modifier(
+fn attaches_to_copy_predicate(
     mut token: usize,
-    modifiers: std::ops::Range<usize>,
+    before_predicate: std::ops::Range<usize>,
     predicate: usize,
     dependencies: &[SyntaxToken],
 ) -> bool {
     // Follow only local attachments. A case particle can attach through its noun,
     // and several manner modifiers can modify one another before reaching the verb.
-    for _ in modifiers.clone() {
+    for _ in before_predicate.clone() {
         let Ok(index) = dependencies.binary_search_by_key(&token, |edge| edge.token) else {
             return false;
         };
@@ -572,13 +572,13 @@ fn attaches_as_copy_modifier(
         let Some(head) = edge.head else {
             return false;
         };
-        if matches!(edge.deprel.as_str(), "nsubj" | "csubj" | "obj" | "iobj") {
+        if matches!(edge.deprel.as_str(), "csubj" | "obj" | "iobj") {
             return false;
         }
         if head == predicate {
-            return matches!(edge.deprel.as_str(), "advmod" | "advcl" | "obl");
+            return matches!(edge.deprel.as_str(), "advmod" | "advcl" | "obl" | "nsubj");
         }
-        if !modifiers.contains(&head) {
+        if !before_predicate.contains(&head) {
             return false;
         }
         token = head;
@@ -1223,6 +1223,14 @@ mod tests {
             (
                 "『来て』を紙に、小さく書き写しました。",
                 &["『来て』", "紙"],
+            ),
+            (
+                "『入居申込書』を紙に、係員が書き写しました。",
+                &["『入居申込書』", "紙", "係員"],
+            ),
+            (
+                "『入居申込書』を紙に係員が書き写しました。",
+                &["『入居申込書』", "紙", "係員"],
             ),
             (
                 "「帰る」を紙に、ゆっくり正確に書き写しました。",

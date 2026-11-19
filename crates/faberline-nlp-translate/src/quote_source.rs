@@ -381,7 +381,7 @@ fn writes_with_character_count(before: &[char], after: &[char]) -> bool {
         return false;
     };
     let writing_particles = ["では", "でも", "で"];
-    if after_character_count(object)
+    if after_character_count(after_clause_comma(object))
         .and_then(|tail| {
             writing_particles
                 .iter()
@@ -405,11 +405,22 @@ fn writes_with_character_count(before: &[char], after: &[char]) -> bool {
 }
 
 fn starts_writing(chars: &[char]) -> bool {
-    let chars = skip_space(chars);
-    let chars = chars.strip_prefix(&['、']).map_or(chars, skip_space);
+    let chars = after_clause_comma(chars);
     ["書く", "書き", "書い", "書か", "書け", "書こ"]
         .iter()
         .any(|verb| strip_prefix(chars, verb).is_some())
+}
+
+fn after_clause_comma(chars: &[char]) -> &[char] {
+    let chars = skip_space(chars);
+    chars.strip_prefix(&['、']).map_or(chars, skip_space)
+}
+
+fn after_total_modifier(chars: &[char]) -> &[char] {
+    ["合計で", "全部で"]
+        .iter()
+        .find_map(|phrase| strip_prefix(chars, phrase))
+        .map_or(chars, skip_space)
 }
 
 fn asks_character_count(after: &[char]) -> bool {
@@ -431,8 +442,7 @@ fn asks_character_count(after: &[char]) -> bool {
     else {
         return false;
     };
-    let topic = skip_space(topic);
-    let topic = topic.strip_prefix(&['、']).map_or(topic, skip_space);
+    let topic = after_total_modifier(after_clause_comma(topic));
     let question = FORM_SCRIPTS
         .iter()
         .find_map(|script| strip_prefix(topic, script))
@@ -442,11 +452,7 @@ fn asks_character_count(after: &[char]) -> bool {
                 .or_else(|| tail.strip_prefix(&['で']))
                 .map_or(tail, skip_space)
         });
-    let question = question.strip_prefix(&['、']).map_or(question, skip_space);
-    let question = ["合計で", "全部で"]
-        .iter()
-        .find_map(|phrase| strip_prefix(question, phrase))
-        .map_or(question, skip_space);
+    let question = after_total_modifier(after_clause_comma(question));
     let Some(count) = question.strip_prefix(&['何']) else {
         return false;
     };
@@ -594,6 +600,7 @@ mod tests {
             "彼は「ドイツ」を三文字で書きました。",
             "彼は「ドイツ」をカタカナ３文字で書いた。",
             "彼は「ドイツ」を三文字では書きませんでした。",
+            "彼は「ドイツ」を、三文字では書きませんでした。",
         ] {
             let translated = analyze_and_translate(
                 source,
@@ -838,6 +845,10 @@ mod tests {
             ),
             (
                 "「ドイツ！」と「来て？」は合計で何文字ですか。",
+                &["「ドイツ！」", "「来て？」"],
+            ),
+            (
+                "「ドイツ！」と「来て？」は、合計でカタカナ何文字ですか。",
                 &["「ドイツ！」", "「来て？」"],
             ),
             (

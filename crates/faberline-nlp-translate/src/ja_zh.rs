@@ -8556,7 +8556,12 @@ fn translate_clause_bunsetsus(
     let filing_verb = candidates
         .iter()
         .flat_map(|b| &b.atoms)
-        .find(|a| a.lemma.as_deref() == Some(application_form::SUBMIT))
+        .find(|a| {
+            matches!(
+                a.lemma.as_deref(),
+                Some(application_form::SUBMIT | application_form::CAN_SUBMIT)
+            )
+        })
         .and_then(|a| a.doc_tok_idx);
     let mut filing_office = None;
     let mut affected_object = None;
@@ -9027,7 +9032,11 @@ fn translate_clause_bunsetsus(
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
     if let Some(office) = filing_office {
-        verb_core = format!("向{office}{verb_core}");
+        verb_core = if let Some(action) = verb_core.strip_prefix('能') {
+            format!("能向{office}{action}")
+        } else {
+            format!("向{office}{verb_core}")
+        };
     }
     if target == TargetVariant::ZhHant
         && let Some(state) = finite_adjective::render(
@@ -14697,6 +14706,88 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn form_purpose_and_departure_place_select_the_filing_action() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "明日までに講座の申込書を出します。",
+                "最晚在明天交課程報名表。",
+            ),
+            (
+                "学生は日本語講座の申込書を窓口に出しました。",
+                "學生向窗口交了日語課程報名表。",
+            ),
+            ("私は窓口に申込書を出したいです。", "我想向窗口交申請表。"),
+            ("私は窓口に申込書を出せます。", "我能向窗口交申請表。"),
+            (
+                "講座の申込書をかばんから出しました。",
+                "從包包拿出了課程報名表。",
+            ),
+            (
+                "入居申込書を管理会社に出しました。",
+                "向管理公司交了入住申請表。",
+            ),
+            (
+                "かばんから入居申込書を出しました。",
+                "從包包拿出了入住申請表。",
+            ),
+            ("入居申込書に名前を書きました。", "在入住申請表上寫了名字。"),
+            (
+                "私は英会話講座の申込書を提出しました。",
+                "我交了英語會話課程報名表。",
+            ),
+            ("かばんから本を出しました。", "從包包拿出了書。"),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+        for jp in [
+            "講座の申込書をテーブルに出しました。",
+            "母に見せるために講座の申込書を出しました。",
+        ] {
+            let text = public_translate(jp, &glossary).target_text;
+            assert!(
+                text.contains("拿出") && text.contains("課程報名表"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn protected_application_names_still_have_a_source_and_destination() {
+        for (jp, key, expected) in [
+            ("講座の申込書を出す。", "講座の申込書", "交指定值。"),
+            (
+                "窓口に日本語講座の申込書を出す。",
+                "日本語講座",
+                "向窗口交指定值報名表。",
+            ),
+            (
+                "入居申込書を管理会社に出しました。",
+                "管理会社",
+                "向指定值交了入住申請表。",
+            ),
+            (
+                "かばんから住宅の申込書を出す。",
+                "住宅の申込書",
+                "從包包拿出指定值。",
+            ),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: key.to_owned(),
+                surfaces: vec![key.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "指定值".to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            assert_eq!(
+                public_translate(jp, &glossary).target_text,
+                expected,
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
     fn deadline_keeps_the_time_separate_from_recipients_and_destinations() {
         let glossary = TranslationGlossary::new();
         let translate = |s| public_translate(s, &glossary).target_text;
@@ -18297,6 +18388,9 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
 fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upos>) -> String {
     if lemma == Some(application_form::SUBMIT) {
         return "交".to_owned();
+    }
+    if lemma == Some(application_form::CAN_SUBMIT) {
+        return "能交".to_owned();
     }
     if lemma == Some(BUILDING_FLOOR)
         && let Some(label) = surface.strip_suffix('階')

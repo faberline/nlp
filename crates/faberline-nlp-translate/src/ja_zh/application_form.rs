@@ -3,6 +3,7 @@
 use super::{Atom, Document, Upos, dasu_case_link, direct_quote_time, is_clock_atom};
 
 pub(super) const SUBMIT: &str = "__ja_submit_application";
+pub(super) const CAN_SUBMIT: &str = "__ja_can_submit_application";
 pub(super) const OFFICE: &str = "__ja_application_recipient";
 
 fn spelling(a: &Atom, chars: &[char]) -> String {
@@ -25,12 +26,13 @@ fn form_start(atoms: &[Atom], end: usize, chars: &[char]) -> Option<usize> {
         return None;
     }
     let prefix = &atoms[end - 1];
-    (!form.is_locked
-        && !prefix.is_locked
-        && prefix.head == form.doc_tok_idx
+    (prefix.head == form.doc_tok_idx
         && prefix.deprel == "compound"
         && prefix.span.end_char == form.span.start_char
-        && matches!(prefix.surface.as_str(), "申込" | "申込み" | "申し込み"))
+        && matches!(
+            spelling(prefix, chars).as_str(),
+            "申込" | "申込み" | "申し込み"
+        ))
     .then_some(end - 1)
 }
 
@@ -56,23 +58,95 @@ fn purpose(
         return None;
     };
     let owner = &atoms[i];
-    let text = match spelling(owner, chars).as_str() {
-        "講座" | "コース" | "講習" => "課程報名表",
-        "教室"
-            if atoms[..i]
-                .iter()
-                .any(|a| a.head == owner.doc_tok_idx && a.deprel == "compound") =>
+    let label = spelling(owner, chars);
+    let subject = atoms[..i].iter().any(|a| {
+        a.head == owner.doc_tok_idx && a.deprel == "compound" && taught_subject(&spelling(a, chars))
+    });
+    Some((i, named_purpose(&label, subject)?))
+}
+
+fn taught_subject(name: &str) -> bool {
+    matches!(
+        name,
+        "日本語" | "英語" | "会話" | "料理" | "音楽" | "水泳" | "書道" | "絵画" | "ダンス"
+    )
+}
+
+fn named_purpose(label: &str, subject: bool) -> Option<&'static str> {
+    if ["講座", "コース", "講習", "授業", "研修"]
+        .iter()
+        .any(|name| label.ends_with(name))
+        || label
+            .strip_suffix("教室")
+            .is_some_and(|name| subject || taught_subject(name))
+    {
+        return Some("課程報名表");
+    }
+    [
+        ("大会", "大會報名表"),
+        ("イベント", "活動報名表"),
+        ("セミナー", "研討會報名表"),
+        ("入居", "入住申請表"),
+        ("住宅", "住宅申請表"),
+    ]
+    .into_iter()
+    .find_map(|(end, text)| label.ends_with(end).then_some(text))
+}
+
+// The glossary can make a protected qualified noun one source token.
+// Its visible case and source spelling identify the filing argument.
+fn covered_purpose(form: &Atom, chars: &[char]) -> bool {
+    if !form.is_locked {
+        return false;
+    }
+    let raw = spelling(form, chars);
+    ["申込書", "申込み書", "申し込み書"]
+        .iter()
+        .find_map(|ending| raw.strip_suffix(ending))
+        .and_then(|name| named_purpose(name.strip_suffix('の').unwrap_or(name), false))
+        .is_some()
+}
+
+fn writable_surface(atoms: &[Atom], end: usize) -> bool {
+    let form = &atoms[end];
+    atoms
+        .get(end + 1)
+        .is_some_and(|c| c.surface == "に" && dasu_case_link(form, c))
+        && atoms.iter().any(|a| {
+            a.doc_tok_idx == form.head
+                && !a.is_locked
+                && matches!(
+                    a.lemma.as_deref().unwrap_or(&a.surface),
+                    "書く" | "記入" | "記載"
+                )
+        })
+        && atoms
+            .iter()
+            .any(|a| a.head == form.head && a.deprel == "obj")
+}
+
+fn filing_reading(a: &Atom, atoms: &[Atom]) -> Option<&'static str> {
+    if a.is_locked || a.upos != Some(Upos::Verb) {
+        return None;
+    }
+    match a.lemma.as_deref().unwrap_or(&a.surface) {
+        "出す" | "提出" => Some(SUBMIT),
+        "出せる" => Some(CAN_SUBMIT),
+        "出せ"
+            if atoms.iter().any(|aux| {
+                aux.head == a.doc_tok_idx
+                    && aux.deprel == "aux"
+                    && !aux.is_locked
+                    && matches!(
+                        aux.surface.as_str(),
+                        "ます" | "まし" | "ませ" | "ました" | "ません"
+                    )
+            }) =>
         {
-            "課程報名表"
+            Some(CAN_SUBMIT)
         }
-        "大会" => "大會報名表",
-        "イベント" => "活動報名表",
-        "セミナー" => "研討會報名表",
-        "入居" => "入住申請表",
-        "住宅" => "住宅申請表",
-        _ => return None,
-    };
-    Some((i, text))
+        _ => None,
+    }
 }
 
 // Return a receiving office only when its case belongs to this action.
@@ -102,22 +176,36 @@ fn receiving_office(atoms: &[Atom], case: usize, verb: usize, chars: &[char]) ->
 }
 
 fn physical_argument(atoms: &[Atom], verb: usize, chars: &[char], doc: &Document) -> bool {
-    atoms.windows(2).any(|pair| {
+    atoms.windows(2).enumerate().any(|(i, pair)| {
         let [noun, case] = pair else { return false };
         if noun.head != Some(verb) || !dasu_case_link(noun, case) {
             return false;
         }
         let raw = spelling(noun, chars);
-        match case.surface.as_str() {
-            "から" => {
-                direct_quote_time(noun, doc).is_none()
-                    && !is_clock_atom(noun)
-                    && !raw.ends_with(['時', '日', '月', '年'])
-            }
-            "に" | "へ" => matches!(
+        let temporal = direct_quote_time(noun, doc).is_some()
+            || is_clock_atom(noun)
+            || matches!(
                 raw.as_str(),
-                "かばん" | "鞄" | "引き出し" | "封筒" | "袋" | "机" | "箱" | "上" | "中" | "外"
-            ),
+                "日" | "月" | "年" | "時" | "分" | "翌日" | "平日"
+            )
+            || [
+                "月曜日",
+                "火曜日",
+                "水曜日",
+                "木曜日",
+                "金曜日",
+                "土曜日",
+                "日曜日",
+            ]
+            .contains(&raw.as_str())
+            || ["日", "時", "月", "年"].iter().any(|s| {
+                raw.strip_suffix(s)
+                    .and_then(crate::opaque::parse_cjk_or_ascii_num)
+                    .is_some()
+            });
+        match case.surface.as_str() {
+            "から" => !temporal,
+            "に" | "へ" => !temporal && !receiving_office(atoms, i + 1, verb, chars),
             _ => false,
         }
     })
@@ -126,7 +214,8 @@ fn physical_argument(atoms: &[Atom], verb: usize, chars: &[char], doc: &Document
 pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
     for end in (0..atoms.len()).rev() {
         let Some(form) = atoms.get(end) else { continue };
-        let Some(start) = form_start(atoms, end, chars) else {
+        let covered = covered_purpose(form, chars);
+        let Some(start) = form_start(atoms, end, chars).or_else(|| covered.then_some(end)) else {
             continue;
         };
         let context = purpose(atoms, start, form, chars);
@@ -135,22 +224,18 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
             && atoms
                 .get(end + 1)
                 .is_some_and(|wo| wo.surface == "を" && dasu_case_link(form, wo))
-            && let Some(v) = atoms.iter().position(|a| {
-                a.doc_tok_idx == form.head
-                    && !a.is_locked
-                    && a.upos == Some(Upos::Verb)
-                    && a.lemma.as_deref() == Some("出す")
-            })
+            && let Some(v) = atoms.iter().position(|a| a.doc_tok_idx == form.head)
+            && let Some(reading) = filing_reading(&atoms[v], atoms)
             && let Some(verb) = atoms[v].doc_tok_idx
-            && !physical_argument(atoms, verb, chars, doc)
+            && (atoms[v].surface == "提出" || !physical_argument(atoms, verb, chars, doc))
         {
             let office = atoms.iter().enumerate().find_map(|(i, a)| {
                 (matches!(a.surface.as_str(), "に" | "へ")
                     && receiving_office(atoms, i, verb, chars))
                 .then(|| i - 1)
             });
-            if context.is_some() || office.is_some() {
-                atoms[v].lemma = Some(SUBMIT.to_owned());
+            if context.is_some() || office.is_some() || covered || atoms[v].surface == "提出" {
+                atoms[v].lemma = Some(reading.to_owned());
                 filing = true;
                 if let Some(i) = office {
                     let a = &mut atoms[i];
@@ -168,20 +253,19 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
                 }
             }
         }
+        let writing = writable_surface(atoms, end);
+        if writing {
+            atoms[end + 1].surface = "で".to_owned();
+        }
         let form = &atoms[end];
-        if form.is_locked {
+        if form.is_locked && start == end && context.is_none() {
+            if writing {
+                atoms[end].surface.push('上');
+            }
             continue;
         }
         let (first, target) = match context {
-            Some((first, text)) if !atoms[first].is_locked => (first, text),
-            Some((_, text)) => (
-                start,
-                if text.ends_with("報名表") {
-                    "報名表"
-                } else {
-                    "申請表"
-                },
-            ),
+            Some(pair) => pair,
             None if filing => (start, "申請表"),
             None => continue,
         };
@@ -221,7 +305,25 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
                 }
             }
         }
-        noun.surface = prefix + target;
+        let qualifier = target.trim_end_matches("報名表").trim_end_matches("申請表");
+        let kind = target.strip_prefix(qualifier).unwrap_or(target);
+        let domain = context
+            .map(|(i, _)| &atoms[i])
+            .filter(|a| a.is_locked)
+            .map_or(qualifier, |a| a.surface.as_str());
+        let form_name = if noun.is_locked && start == end {
+            noun.surface.clone()
+        } else if noun.is_locked {
+            format!("{}{}", kind.trim_end_matches('表'), noun.surface)
+        } else if start < end && atoms[start].is_locked {
+            format!("{}表", atoms[start].surface)
+        } else {
+            kind.to_owned()
+        };
+        noun.surface = prefix + domain + &form_name;
+        if writing {
+            noun.surface.push('上');
+        }
         noun.span.start_char = atoms[first].span.start_char;
         noun.is_locked = true;
         atoms.splice(first..=end, [noun]);

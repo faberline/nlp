@@ -190,7 +190,11 @@ fn choice_particle(a: &Atom) -> bool {
     !a.is_locked && a.surface == "か" && a.upos == Some(Upos::Part) && a.deprel == "discourse"
 }
 
+// か attaches to the last noun even when the intervening の stands for the item.
 fn links_choice(noun: &Atom, particle: &Atom) -> bool {
+    if !noun.is_locked && noun.surface == "の" && noun.deprel == "case" {
+        return choice_particle(particle) && noun.head.is_some() && particle.head == noun.head;
+    }
     choice_particle(particle)
         && noun.doc_tok_idx.is_some()
         && particle.head == noun.doc_tok_idx
@@ -842,9 +846,24 @@ pub(super) fn render(
     {
         return None;
     }
+    // A final genitive can share a token with the following copula (母／ので／は).
+    // Keep that source edge separate from the word that carries tense and negation.
+    let final_genitive = nominals.iter().any(choice_particle)
+        && !tail[0].is_locked
+        && head.doc_tok_idx.is_some()
+        && tail[0].head == head.doc_tok_idx
+        && matches!(
+            (tail[0].surface.as_str(), tail[0].deprel.as_str()),
+            ("の", "case") | ("ので", "mark")
+        );
     let suffix: String = tail.iter().map(|a| a.surface.as_str()).collect();
-    let copula = match suffix.as_str() {
-        "です" | "だ" if tail[0].upos == Some(Upos::Aux) => "是",
+    let suffix = if final_genitive {
+        suffix.strip_prefix('の')?
+    } else {
+        suffix.as_str()
+    };
+    let copula = match suffix {
+        "です" | "だ" if tail[usize::from(final_genitive)].upos == Some(Upos::Aux) => "是",
         "だった" | "でした" => "當時是",
         "じゃない"
         | "ではない"
@@ -920,15 +939,43 @@ pub(super) fn render(
     };
     // An interior か belongs to the preceding noun. The final か, if present,
     // was removed with the other sentence particles above.
-    if phrase.windows(2).any(|pair| {
-        choice_particle(&pair[1])
-            && (pair[0].doc_tok_idx.is_none() || pair[1].head != pair[0].doc_tok_idx)
-    }) {
+    if phrase
+        .windows(2)
+        .any(|pair| choice_particle(&pair[1]) && !links_choice(&pair[0], &pair[1]))
+    {
         return None;
     }
+    let omitted_item = final_genitive
+        || phrase
+            .windows(2)
+            .any(|pair| pair[0].surface == "の" && links_choice(&pair[0], &pair[1]));
     let mut alternatives = Vec::new();
     let mut has_owner = false;
     for part in phrase.split(choice_particle) {
+        // Parse each alternative on its own side of か. A bare owner ends in
+        // の, while a full possession must link that owner to its explicit head.
+        let bare_owner = match part {
+            [owner @ .., no] if has_choices && !no.is_locked && no.surface == "の" => {
+                let last = owner.last()?;
+                if no.deprel != "case" || no.head != last.doc_tok_idx {
+                    return None;
+                }
+                Some(owner)
+            }
+            _ if final_genitive && part.last()?.doc_tok_idx == head.doc_tok_idx => Some(part),
+            _ => None,
+        };
+        if let Some(owner) = bare_owner {
+            if !owner.iter().all(nominal_part) || !owner_atom(owner.last()?, doc) {
+                return None;
+            }
+            alternatives.push(format!(
+                "{}的",
+                elliptical_owner(owner, doc, sentence, target)?
+            ));
+            has_owner = true;
+            continue;
+        }
         let noun = part.last()?;
         let noun_id = noun.doc_tok_idx?;
         if !part.iter().all(nominal_part) || matches!(noun.surface.as_str(), "こと" | "事") {
@@ -947,7 +994,16 @@ pub(super) fn render(
         has_owner |= owned;
         // In a nominal identification もの can stand for an already mentioned item.
         let name = match part {
-            [owner @ .., no, thing] if thing.surface == "もの" && no.surface == "の" => {
+            [owner @ .., no, item]
+                if no.surface == "の"
+                    && (item.surface == "もの"
+                        || omitted_item
+                            && !item.is_locked
+                            && topic
+                                .last()
+                                .and_then(|a| source_noun(a, doc, chars))
+                                .is_some_and(|a| a.surface == item.surface)) =>
+            {
                 format!("{}的", phrase_text(owner)?)
             }
             _ => phrase_text(part)?,
@@ -957,8 +1013,11 @@ pub(super) fn render(
     if !has_owner {
         return None;
     }
-    let alternatives =
-        shared_owner_choices(phrase, topic, doc, sentence, target, chars).unwrap_or(alternatives);
+    let alternatives = if omitted_item {
+        alternatives
+    } else {
+        shared_owner_choices(phrase, topic, doc, sentence, target, chars).unwrap_or(alternatives)
+    };
     // A bare question mark can replace final か. Only inspect punctuation
     // immediately after this clause, including when it is inside a quotation.
     let next_char = chars
@@ -1007,6 +1066,27 @@ mod tests {
         )
         .unwrap()
         .target_text
+    }
+
+    #[test]
+    fn possessive_choices_allow_an_omitted_item_on_either_side() {
+        for (source, expected) in [
+            ("これは父の車か、母のですか。", "這是父親的車還是母親的？"),
+            ("これは父のか、母の車ですか。", "這是父親的還是母親的車？"),
+            ("この本は兄の本か姉のですか。", "這本書是哥哥的還是姊姊的？"),
+            ("これは母のか父の車でした。", "這當時是母親的或是父親的車。"),
+            (
+                "これは父の車か母のではありません。",
+                "這既不是父親的車，也不是母親的。",
+            ),
+            ("これは妹の本か、姉のです。", "這是妹妹的書或是姊姊的。"),
+            (
+                "これは妹のか、姉の本ではありませんか。",
+                "這不是妹妹的或是姊姊的書嗎？",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
     }
 
     #[test]

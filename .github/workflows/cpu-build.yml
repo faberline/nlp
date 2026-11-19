@@ -54,27 +54,25 @@ jobs:
           py=python3
           if [[ '${{ matrix.target }}' == *windows* ]]; then exe=nlp.exe; py=python; fi
           "$py" scripts/release/package.py "target/${{ matrix.target }}/release/$exe" '${{ matrix.target }}' dist cpu-metadata.json runtime-dependencies.txt '${{ matrix.rustflags }}'
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: cpu-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
-      - name: Create separate download directory
-        shell: bash
-        run: mkdir verify-download
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Download this job's uploaded CPU artifact
+        uses: ./.github/actions/download-cpu-artifact
         with:
-          name: cpu-${{ matrix.target }}
-          path: verify-download
+          artifact-id: ${{ steps.upload.outputs.artifact-id }}
       - name: Verify downloaded archive and execute all commands
         shell: bash
+        env:
+          UPLOAD_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
         run: |
           py=python3
-          if [[ '${{ matrix.target }}' == *windows* ]]; then py=python; fi
-          for checksum in verify-download/*.sha256; do
-            archive="${checksum%.sha256}"
-            "$py" scripts/release/verify.py "$archive" "$checksum" '${{ matrix.target }}' "$(git rev-parse HEAD)" 'target/${{ matrix.target }}/release'
-          done
+          if [[ "$RUNNER_OS" == Windows ]]; then py=python; fi
+          "$py" -m unittest discover -s scripts/release -p test_verify_artifact.py
+          "$py" scripts/release/verify_artifact.py raw-download "$UPLOAD_DIGEST" dist '${{ matrix.target }}' "$(git rev-parse HEAD)" 'target/${{ matrix.target }}/release'
   cpu-package-gate:
     name: cpu-package-gate
     if: always()

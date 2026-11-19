@@ -14161,6 +14161,30 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn residence_has_a_place_and_keeps_its_own_tense_and_polarity() {
+        for (source, expected) in [
+            ("私は東京に住んでいます。", "我住在東京。"),
+            ("私は大阪に住んでいました。", "我曾住在大阪。"),
+            ("私は京都に住んでいません。", "我不住在京都。"),
+            ("私は東京に住んでいませんでした。", "我當時沒有住在東京。"),
+            ("先生はアパートに住んでいます。", "老師住在公寓。"),
+            ("友達は町に住んでいる。", "朋友住在城鎮。"),
+            ("京都には三年住んでいました。", "在京都住了三年。"),
+            ("友達と東京に住んでいます。", "和朋友住在東京。"),
+            ("どこに住んでいますか。", "住在哪裡？"),
+            ("私は東京から来ました。", "我從東京來了。"),
+            ("私は京都に行きませんでした。", "我沒有去京都。"),
+            ("東京の友達に電話します。", "給東京的朋友打電話。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        let handoff = translate("私は大阪の先生に本を渡しました。");
+        assert!(
+            handoff.contains("大阪的老師") && handoff.contains("書") && !handoff.contains("住在")
+        );
+    }
+
+    #[test]
     fn origin_and_recipient_cases_keep_their_relations() {
         let origin = translate("駅から歩いた。");
         assert!(origin.contains("從車站"), "{origin}");

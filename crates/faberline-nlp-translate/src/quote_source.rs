@@ -34,6 +34,10 @@ const CHARACTER_COUNT_PREDICATES: &[&str] = &[
     "あった",
     "あるのです",
     "あるでしょう",
+    "になります",
+    "になる",
+    "になりました",
+    "になった",
     "なんです",
     "なの",
 ];
@@ -177,7 +181,11 @@ fn protect_sibling_forms(
         let before = &chars[scope.start_char..opening];
         let after = skip_space(&chars[quote.end_char + 1..scope.end_char]);
         let measures_form = measures_written_form(after);
-        if measures_form || describes_written_form(after) || acts_on_written_form(before, after) {
+        if measures_form
+            || describes_written_form(after)
+            || acts_on_written_form(before, after)
+            || copies_written_form(after)
+        {
             protected.push(protection_span(*quote, nested));
         }
         let join = index.checked_sub(1).and_then(|prev| {
@@ -417,6 +425,55 @@ fn acts_on_written_form(before: &[char], after: &[char]) -> bool {
         .is_some_and(|&ch| is_count_character(ch))
 }
 
+fn copies_written_form(after: &[char]) -> bool {
+    let operand = if let Some(word) = strip_prefix(after, "という") {
+        let Some(operand) = after_word_name(word) else {
+            return false;
+        };
+        operand
+    } else if let Some(citation) = after.strip_prefix(&['と']) {
+        return starts_copying(citation);
+    } else {
+        after
+    };
+    let Some(destination) = operand.strip_prefix(&['を']).map(after_clause_comma) else {
+        return false;
+    };
+    starts_copying(destination)
+        || destination
+            .iter()
+            .take_while(|&&ch| {
+                !matches!(
+                    ch,
+                    'を' | 'が'
+                        | 'は'
+                        | 'と'
+                        | '、'
+                        | '。'
+                        | '！'
+                        | '？'
+                        | '!'
+                        | '?'
+                        | '「'
+                        | '」'
+                        | '『'
+                        | '』'
+                        | '\n'
+                )
+            })
+            .enumerate()
+            .any(|(index, &ch)| {
+                ch == 'に' && index > 0 && starts_copying(&destination[index + 1..])
+            })
+}
+
+fn starts_copying(chars: &[char]) -> bool {
+    let chars = skip_space(chars);
+    ["書き写", "書写", "転記"]
+        .iter()
+        .any(|verb| strip_prefix(chars, verb).is_some())
+}
+
 fn starts_writing(chars: &[char]) -> bool {
     let chars = after_clause_comma(chars);
     ["書く", "書き", "書い", "書か", "書け", "書こ"]
@@ -452,7 +509,23 @@ fn after_count_modifiers(mut chars: &[char]) -> &[char] {
 }
 
 fn after_included_written_mark(chars: &[char]) -> Option<&[char]> {
-    let mark = [
+    let tail = after_written_mark(chars)?;
+    if let Some(after) = ["込みで", "抜きで", "なしで"]
+        .iter()
+        .find_map(|marker| strip_prefix(tail, marker))
+    {
+        return Some(after);
+    }
+    let relation = written_mark_argument(tail)?;
+    ["含めて", "含めると", "入れて", "入れると"]
+        .iter()
+        .find_map(|predicate| strip_prefix(relation, predicate))
+        .or_else(|| after_mark_removal(relation))
+}
+
+fn after_written_mark(chars: &[char]) -> Option<&[char]> {
+    let chars = skip_space(chars);
+    [
         "感嘆符",
         "疑問符",
         "句読点",
@@ -464,28 +537,45 @@ fn after_included_written_mark(chars: &[char]) -> Option<&[char]> {
         "括弧",
     ]
     .iter()
-    .find_map(|name| strip_prefix(chars, name))?;
-    let (&particle, relation) = skip_space(mark).split_first()?;
-    if !matches!(particle, 'を' | 'も') {
-        return None;
-    }
-    ["含めて", "入れて", "除いて", "抜いて"]
+    .find_map(|name| strip_prefix(chars, name))
+    .map(skip_space)
+}
+
+fn written_mark_argument(after: &[char]) -> Option<&[char]> {
+    let (&particle, relation) = after.split_first()?;
+    matches!(particle, 'を' | 'も').then(|| skip_space(relation))
+}
+
+fn after_mark_removal(relation: &[char]) -> Option<&[char]> {
+    [
+        "引くと",
+        "引いて",
+        "除くと",
+        "除いて",
+        "抜くと",
+        "抜いて",
+        "数えずに",
+    ]
+    .iter()
+    .find_map(|predicate| strip_prefix(relation, predicate))
+}
+
+fn after_word_name(nominal: &[char]) -> Option<&[char]> {
+    let nominal = skip_space(nominal);
+    WORD_NAMES
         .iter()
-        .find_map(|predicate| strip_prefix(skip_space(relation), predicate))
+        .find_map(|word| strip_prefix(nominal, word))
+        .map(skip_space)
 }
 
 fn measures_written_form(after: &[char]) -> bool {
     // When the quote names a word, the case marker belongs to that word.
     // A country or another referent introduced by という is a different use.
     let after = if let Some(nominal) = strip_prefix(after, "という") {
-        let nominal = skip_space(nominal);
-        let Some(after) = WORD_NAMES
-            .iter()
-            .find_map(|word| strip_prefix(nominal, word))
-        else {
+        let Some(after) = after_word_name(nominal) else {
             return false;
         };
-        skip_space(after)
+        after
     } else {
         after
     };
@@ -502,6 +592,12 @@ fn measures_written_form(after: &[char]) -> bool {
         .strip_prefix(&['は'])
         .or_else(|| after.strip_prefix(&['が']))
         .or_else(|| strip_prefix(after, "には"))
+        .or_else(|| {
+            strip_prefix(after, "から")
+                .and_then(after_written_mark)
+                .and_then(written_mark_argument)
+                .and_then(after_mark_removal)
+        })
     else {
         return false;
     };
@@ -893,6 +989,19 @@ mod tests {
             ),
             ("「ドイツ」を一字ずつ読みました。", &["「ドイツ」"]),
             ("「ドイツ」を一字一字読みました。", &["「ドイツ」"]),
+            (
+                "「来て！」は記号を含めると何文字になりますか。",
+                &["「来て！」"],
+            ),
+            ("「来て！」は感嘆符込みで何文字ですか。", &["「来て！」"]),
+            (
+                "「来て！」から感嘆符を引くと何文字になりますか。",
+                &["「来て！」"],
+            ),
+            (
+                "「来て！」は感嘆符を数えずに何文字ですか。",
+                &["「来て！」"],
+            ),
         ] {
             let result = analyze_and_translate(
                 source,
@@ -906,6 +1015,54 @@ mod tests {
                 assert_eq!(result.target_text.matches(original).count(), 1, "{source}");
             }
             assert!(result.glossary_hits.is_empty(), "{source}");
+        }
+    }
+
+    #[test]
+    fn copies_the_quoted_text_into_a_translated_form() {
+        let mut glossary = glossary();
+        glossary.objects.push(GlossaryEntry {
+            canonical: "申込書".to_owned(),
+            surfaces: vec!["申込書".to_owned()],
+            targets: [(TargetVariant::ZhHant, "申請表".to_owned())].into(),
+            pronoun_class: Default::default(),
+            speech_register: Default::default(),
+        });
+        for (source, expected) in [
+            (
+                "「ドイツ」という単語を申込書に書き写しました。",
+                &["「ドイツ」", "申請表"][..],
+            ),
+            ("「申込書」と書き写しました。", &["「申込書」"]),
+            (
+                "申込書に「申込書」と書き写しました。",
+                &["「申込書」", "申請表"],
+            ),
+            (
+                "4月2日に、申込書に『来て！』と書き写しました。",
+                &["4月2日", "『来て！』", "申請表"],
+            ),
+            (
+                "「ドイツ」という国に行くため、申込書に住所を書き写しました。",
+                &["德國", "申請表", "住所"],
+            ),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            for &term in expected {
+                assert_eq!(
+                    result.target_text.matches(term).count(),
+                    1,
+                    "{source}: {}",
+                    result.target_text
+                );
+            }
         }
     }
 

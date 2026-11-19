@@ -196,7 +196,7 @@ pub(crate) fn translate_ja_sentence(
         .collect();
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
-    let segments = split_atoms_into_segments(&atoms, chars, sent_span);
+    let segments = split_atoms_into_segments(&atoms, doc, sent_span);
 
     let mut out = String::new();
     let mut seg_target_spans: Vec<(Span, Span)> = Vec::with_capacity(segments.len());
@@ -294,7 +294,7 @@ pub(crate) fn translate_ja_sentence(
                 let open_zh = localize_open_quote(*open_q, target);
                 let close_zh = localize_close_quote(*close_q, target);
                 out.push(open_zh);
-                let inner_segs = split_atoms_into_segments(inner_atoms, chars, *span);
+                let inner_segs = split_atoms_into_segments(inner_atoms, doc, *span);
                 for iseg in &inner_segs {
                     if let Segment::Clause {
                         atoms: catoms,
@@ -349,7 +349,7 @@ pub(crate) fn translate_ja_sentence(
                     out.push_str(&prefix.text);
                 }
                 out.push(localize_open_quote(*open_q, target));
-                let inner_segs = split_atoms_into_segments(inner_atoms, chars, *span);
+                let inner_segs = split_atoms_into_segments(inner_atoms, doc, *span);
                 for iseg in &inner_segs {
                     if let Segment::Clause {
                         atoms: catoms,
@@ -1782,9 +1782,16 @@ fn is_te_form_link(base: &Atom, te: &Atom, auxiliary: &Atom) -> bool {
 struct TeHelpRequest<'a> {
     action: &'a [Atom],
     person: Option<TeHelpPerson<'a>>,
+    manner: Option<TeHelpManner<'a>>,
     child_suffix: Option<usize>,
     humble: bool,
     negative_form: bool,
+}
+
+struct TeHelpManner<'a> {
+    start: usize,
+    end: usize,
+    count: Option<&'a str>,
 }
 
 struct TeHelpPerson<'a> {
@@ -1912,7 +1919,14 @@ fn te_help_child_suffix(arguments: &[Atom], action_idx: usize) -> Option<usize> 
     })
 }
 
-fn te_help_request(atoms: &[Atom]) -> Option<TeHelpRequest<'_>> {
+fn te_help_has_following_focus(arguments: &[Atom], end: usize) -> bool {
+    arguments.get(end).is_some_and(|atom| {
+        matches!(atom.surface.as_str(), "も" | "は")
+            && arguments[end - 1].span.end_char == atom.span.start_char
+    })
+}
+
+fn te_help_request<'a>(atoms: &'a [Atom], doc: &Document) -> Option<TeHelpRequest<'a>> {
     let (body, helper, polite, question, negative_form) = match atoms {
         [body @ .., helper, mase, n, question] if mase.surface == "ませ" && n.surface == "ん" => {
             (
@@ -1967,11 +1981,76 @@ fn te_help_request(atoms: &[Atom]) -> Option<TeHelpRequest<'_>> {
         return None;
     }
 
-    let child_suffix = te_help_child_suffix(arguments, action_idx);
-    let mut datives = arguments
-        .iter()
+    let mut manners = (0..arguments.len()).filter_map(|start| {
+        let (size, count) = match &arguments[start..] {
+            [word, ni, ..]
+                if word.surface == "一緒"
+                    && ni.surface == "に"
+                    && word.head == Some(action_idx)
+                    && linked_joint_case(word, ni) =>
+            {
+                (2, None)
+            }
+            [number, people, de, ..]
+                if people.head == Some(action_idx) && linked_joint_people(number, people, de) =>
+            {
+                (3, Some(number.surface.as_str()))
+            }
+            _ => return None,
+        };
+        let end = start + size;
+        if start.checked_sub(1).is_some_and(|index| {
+            let before = &arguments[index];
+            before.span.end_char == arguments[start].span.start_char
+                && (before.surface == "と" && before.deprel == "case"
+                    || count.is_some() && is_japanese_numeral(&before.surface))
+        }) || matches!(&arguments[end..], [companion, to, ..]
+            if to.surface == "と"
+                && companion.head == Some(action_idx)
+                && linked_joint_case(companion, to))
+            || te_help_has_following_focus(arguments, end)
+        {
+            return None;
+        }
+        Some(TeHelpManner { start, end, count })
+    });
+    let manner = manners.next();
+    if manners.next().is_some() {
+        return None;
+    }
+
+    // A normalized clock can be stored as a locked atom. Verify its original
+    // endpoint and both particles before exempting the span from the dative check.
+    let mut deadlines = arguments
+        .windows(3)
         .enumerate()
-        .filter(|(_, atom)| atom.upos == Some(Upos::Adp) && atom.surface == "に");
+        .filter_map(|(start, group)| {
+            let time = &group[0];
+            let end = start + group.len();
+            ((!time.is_locked || time.lemma.as_deref() == Some(CLOCK_ATOM))
+                && deadline_time_question(time).is_none()
+                && !te_help_has_following_focus(arguments, end)
+                && has_temporal_deadline(&arguments[..end], doc)
+                && deadline_case_governor(&group[2], doc) == Some(action_idx))
+            .then_some(start..end)
+        });
+    let deadline = deadlines.next();
+    if deadlines.next().is_some() {
+        return None;
+    }
+    let is_modifier = |index| {
+        manner
+            .as_ref()
+            .is_some_and(|bound| (bound.start..bound.end).contains(&index))
+            || deadline
+                .as_ref()
+                .is_some_and(|bound| bound.contains(&index))
+    };
+
+    let child_suffix = te_help_child_suffix(arguments, action_idx);
+    let mut datives = arguments.iter().enumerate().filter(|&(index, atom)| {
+        atom.upos == Some(Upos::Adp) && atom.surface == "に" && !is_modifier(index)
+    });
     let person = if let Some((index, _)) = datives.next() {
         if datives.next().is_some() {
             return None;
@@ -1981,9 +2060,10 @@ fn te_help_request(atoms: &[Atom]) -> Option<TeHelpRequest<'_>> {
         None
     };
     for (index, atom) in arguments.iter().enumerate() {
-        if person
-            .as_ref()
-            .is_some_and(|bound| (bound.start..bound.end).contains(&index))
+        if is_modifier(index)
+            || person
+                .as_ref()
+                .is_some_and(|bound| (bound.start..bound.end).contains(&index))
         {
             continue;
         }
@@ -2012,17 +2092,18 @@ fn te_help_request(atoms: &[Atom]) -> Option<TeHelpRequest<'_>> {
         if !matches!(rest[0].surface.as_str(), "、" | "，" | ",")
             || lead.is_empty()
             || rest[1..].iter().any(is_punct_atom)
-            || !lead.iter().all(|adverb| {
-                !adverb.is_locked
-                    && adverb.upos == Some(Upos::Adv)
-                    && adverb.deprel == "advmod"
-                    && (adverb.head == Some(action_idx)
-                        || rest[1..].iter().any(|next| {
-                            next.doc_tok_idx.is_some()
-                                && adverb.head == next.doc_tok_idx
-                                && next.deprel == "advmod"
-                                && next.head == Some(action_idx)
-                        }))
+            || !lead.iter().enumerate().all(|(index, adverb)| {
+                is_modifier(index)
+                    || (!adverb.is_locked
+                        && adverb.upos == Some(Upos::Adv)
+                        && adverb.deprel == "advmod"
+                        && (adverb.head == Some(action_idx)
+                            || rest[1..].iter().any(|next| {
+                                next.doc_tok_idx.is_some()
+                                    && adverb.head == next.doc_tok_idx
+                                    && next.deprel == "advmod"
+                                    && next.head == Some(action_idx)
+                            })))
             })
         {
             return None;
@@ -2032,6 +2113,7 @@ fn te_help_request(atoms: &[Atom]) -> Option<TeHelpRequest<'_>> {
     Some(TeHelpRequest {
         action: &body[..body.len() - 1],
         person,
+        manner,
         child_suffix,
         humble,
         negative_form,
@@ -2251,7 +2333,7 @@ fn direct_ka_before_period(clause: &[Atom], end: &Atom) -> bool {
         })
 }
 
-fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span) -> Vec<Segment> {
+fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<Atom> = Vec::new();
     let mut i = 0usize;
@@ -2282,7 +2364,7 @@ fn split_atoms_into_segments(atoms: &[Atom], _chars: &[char], parent_span: Span)
     let ending = &atoms[request_atoms.len()..];
     if (ending.is_empty()
         || matches!(ending, [punct] if !punct.is_locked && matches!(punct.surface.as_str(), "。" | "？" | "?")))
-        && te_help_request(request_atoms).is_some()
+        && te_help_request(request_atoms, doc).is_some()
     {
         let punctuation = (!ending.is_empty()).then(|| "？".to_owned());
         flush_clause(&mut request_atoms.to_vec(), punctuation, &mut segments);
@@ -2993,7 +3075,7 @@ pub(crate) fn direct_quote_opening(
 ) -> Option<DirectQuoteOpening> {
     let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, tokens, locks);
     let segments =
-        split_atoms_into_segments(&atoms, chars, doc.segmentation.sentences[sentence_idx].span);
+        split_atoms_into_segments(&atoms, doc, doc.segmentation.sentences[sentence_idx].span);
     let (quote, before) = segments.split_last()?;
     let (inner_atoms, span, close) = match quote {
         Segment::OpenQuote {
@@ -3048,7 +3130,7 @@ pub(crate) fn direct_quote_end(
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let Some(close_quote) = opening.close else {
         if let Some(Segment::Clause { atoms, span, .. }) =
-            split_atoms_into_segments(&atoms, chars, sent_span).first()
+            split_atoms_into_segments(&atoms, doc, sent_span).first()
             && let Some(prefix) = complete_cross_sentence_direct_quote(opening, atoms, doc, locks)
         {
             return DirectQuoteEnd::Reports(*span, prefix);
@@ -3061,7 +3143,7 @@ pub(crate) fn direct_quote_end(
     if !delimiter.surface.starts_with(close_quote) {
         return DirectQuoteEnd::Other;
     }
-    let segments = split_atoms_into_segments(&atoms, chars, sent_span);
+    let segments = split_atoms_into_segments(&atoms, doc, sent_span);
     for segments in segments.windows(2) {
         if let [
             Segment::CloseQuote(_, close_span),
@@ -3670,7 +3752,7 @@ fn translate_clause_atoms(
         return (String::new(), false);
     }
 
-    if let Some(request) = te_help_request(core_non_punct(atoms))
+    if let Some(request) = te_help_request(core_non_punct(atoms), doc)
         && let Some(rendered) = render_te_help_request(request, doc, sentence_idx, ctx, target)
     {
         return (rendered, false);
@@ -4377,6 +4459,18 @@ fn render_te_help_request(
     target: TargetVariant,
 ) -> Option<String> {
     let mut repeat = false;
+    let action_head = request.action.last().and_then(|atom| atom.doc_tok_idx);
+    let participants = request
+        .manner
+        .as_ref()
+        .and_then(|manner| manner.count)
+        .map(render_joint_people);
+    let performer_count = participants.as_deref().filter(|_| {
+        request
+            .person
+            .as_ref()
+            .is_some_and(|person| person.role == TeHelpPersonRole::Performer)
+    });
     let mut action: Vec<_> = request
         .action
         .iter()
@@ -4391,6 +4485,23 @@ fn render_te_help_request(
             {
                 return None;
             }
+            if let Some(manner) = &request.manner
+                && (manner.start..manner.end).contains(&index)
+            {
+                return (index == manner.start && performer_count.is_none()).then(|| Atom {
+                    span: Span {
+                        start_char: atom.span.start_char,
+                        end_char: request.action[manner.end - 1].span.end_char,
+                    },
+                    surface: "一起".to_owned(),
+                    lemma: None,
+                    upos: Some(Upos::Adv),
+                    doc_tok_idx: None,
+                    head: action_head,
+                    deprel: "advmod".to_owned(),
+                    is_locked: false,
+                });
+            }
             if !atom.is_locked && atom.surface == "もう一度" && atom.deprel == "advmod" {
                 repeat = true;
                 return None;
@@ -4404,7 +4515,6 @@ fn render_te_help_request(
             Some(localized)
         })
         .collect();
-    let action_head = request.action.last().and_then(|atom| atom.doc_tok_idx);
     if let Some(index) = action.iter().position(|atom| {
         !atom.is_locked
             && atom.upos == Some(Upos::Noun)
@@ -4469,6 +4579,12 @@ fn render_te_help_request(
             "可以請"
         };
         if person.role == TeHelpPersonRole::Performer {
+            if let Some(count) = performer_count {
+                return Some(format!(
+                    "{polite}包括{name}在內的{count}一起幫我{}嗎",
+                    with_repeat(&body)
+                ));
+            }
             return Some(format!("{polite}{name}幫我{}嗎", with_repeat(&body)));
         }
         // Use the bare transfer verb so the linked recipient follows one 給.
@@ -4479,21 +4595,31 @@ fn render_te_help_request(
         let (modifiers, object) = body
             .split_once(&transfer)
             .filter(|(_, object)| !object.is_empty())?;
-        let listener = if request.humble || request.negative_form {
-            "您"
-        } else {
-            "你"
-        };
+        let listener =
+            participants
+                .as_deref()
+                .unwrap_or(if request.humble || request.negative_form {
+                    "您"
+                } else {
+                    "你"
+                });
         let action_body = format!("{modifiers}把{object}{verb}給{name}");
         return Some(format!("{polite}{listener}{}嗎", with_repeat(&action_body)));
     }
-    let opening = match (request.humble, request.negative_form) {
-        (true, false) => "可以請您幫我",
-        (true, true) => "可以麻煩您幫我",
-        (false, false) => "可以幫我",
-        (false, true) => "可以麻煩你幫我",
+    let opening = match (
+        participants.is_some(),
+        request.humble,
+        request.negative_form,
+    ) {
+        (true, _, false) => "可以請",
+        (true, _, true) => "可以麻煩",
+        (false, true, false) => "可以請您幫我",
+        (false, true, true) => "可以麻煩您幫我",
+        (false, false, false) => "可以幫我",
+        (false, false, true) => "可以麻煩你幫我",
     };
-    Some(format!("{opening}{}嗎", with_repeat(&body)))
+    let participants = participants.as_deref().unwrap_or_default();
+    Some(format!("{opening}{participants}{}嗎", with_repeat(&body)))
 }
 
 fn try_translate_tsumori_clause(
@@ -6964,15 +7090,7 @@ fn translate_clause_bunsetsus(
                     }
                     JointManner::Together => None,
                     JointManner::Everyone => Some("大家".to_owned()),
-                    JointManner::Counted => {
-                        let count = normalize_decimal_digits(&b.atoms[0].surface);
-                        let count = if matches!(count.as_str(), "二" | "2") {
-                            "兩"
-                        } else {
-                            &count
-                        };
-                        Some(format!("{count}人"))
-                    }
+                    JointManner::Counted => Some(render_joint_people(&b.atoms[0].surface)),
                 };
                 joint_manner = Some((manner, invitation, wh_question));
             }
@@ -9757,6 +9875,48 @@ fn compose_relative_daypart(groups: Vec<Bunsetsu>) -> Vec<Bunsetsu> {
     result
 }
 
+fn linked_joint_case(noun: &Atom, tail: &Atom) -> bool {
+    !noun.is_locked
+        && !tail.is_locked
+        && matches!(noun.deprel.as_str(), "obl" | "advmod")
+        && noun.doc_tok_idx.is_some()
+        && tail.head == noun.doc_tok_idx
+        && tail.upos == Some(Upos::Adp)
+        && tail.deprel == "case"
+        && noun.span.end_char == tail.span.start_char
+}
+
+fn linked_joint_people(number: &Atom, people: &Atom, de: &Atom) -> bool {
+    !number.is_locked
+        && ((number.upos == Some(Upos::Num) && number.deprel == "nummod")
+            || (number.upos == Some(Upos::Noun)
+                && number.deprel == "compound"
+                && number.surface.chars().all(|ch| matches!(ch, '０'..='９'))))
+        && number.head == people.doc_tok_idx
+        && number.span.end_char == people.span.start_char
+        && linked_joint_case(people, de)
+        && people.surface == "人"
+        && de.surface == "で"
+        && (normalize_decimal_digits(&number.surface)
+            .parse::<u32>()
+            .is_ok_and(|n| n > 1)
+            || number
+                .surface
+                .chars()
+                .all(|c| "一二三四五六七八九十百千萬万".contains(c))
+                && number.surface.chars().any(|c| c != '一'))
+}
+
+fn render_joint_people(number: &str) -> String {
+    let number = normalize_decimal_digits(number);
+    let number = if matches!(number.as_str(), "二" | "2") {
+        "兩"
+    } else {
+        &number
+    };
+    format!("{number}人")
+}
+
 // An overt joint participant or a joint manner can invite the listener.
 // With an overt third party, the same finite form asks a negative question.
 fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[Atom]) {
@@ -9866,17 +10026,7 @@ fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[
                 | "いただける"
         );
     let can_offer = listeners_only && intentional_action && !wh_question;
-    let attached_case = |noun: &Atom, tail: &Atom| {
-        !noun.is_locked
-            && !tail.is_locked
-            && governs(noun)
-            && matches!(noun.deprel.as_str(), "obl" | "advmod")
-            && noun.doc_tok_idx.is_some()
-            && tail.head == noun.doc_tok_idx
-            && tail.upos == Some(Upos::Adp)
-            && tail.deprel == "case"
-            && noun.span.end_char == tail.span.start_char
-    };
+    let attached_case = |noun: &Atom, tail: &Atom| governs(noun) && linked_joint_case(noun, tail);
     let mut markers = groups.iter().enumerate().filter_map(|(i, group)| {
         let text = match group.atoms.as_slice() {
             [joint, case] if attached_case(joint, case) => {
@@ -9895,26 +10045,7 @@ fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[
             {
                 JointManner::Together
             }
-            [number, people, de]
-                if !number.is_locked
-                    && ((number.upos == Some(Upos::Num) && number.deprel == "nummod")
-                        || (number.upos == Some(Upos::Noun)
-                            && number.deprel == "compound"
-                            && number.surface.chars().all(|ch| matches!(ch, '０'..='９'))))
-                    && number.head == people.doc_tok_idx
-                    && number.span.end_char == people.span.start_char
-                    && attached_case(people, de)
-                    && people.surface == "人"
-                    && de.surface == "で"
-                    && (normalize_decimal_digits(&number.surface)
-                        .parse::<u32>()
-                        .is_ok_and(|n| n > 1)
-                        || number
-                            .surface
-                            .chars()
-                            .all(|c| "一二三四五六七八九十百千萬万".contains(c))
-                            && number.surface.chars().any(|c| c != '一')) =>
-            {
+            [number, people, de] if governs(people) && linked_joint_people(number, people, de) => {
                 JointManner::Counted
             }
             _ => return None,
@@ -11173,8 +11304,12 @@ fn deadline_governor(group: &Bunsetsu, doc: &Document) -> Option<usize> {
     if group.case_particle.as_deref() != Some("までに") {
         return None;
     }
+    deadline_case_governor(group.atoms.last()?, doc)
+}
+
+fn deadline_case_governor(case: &Atom, doc: &Document) -> Option<usize> {
     // Even on a normalized clock, the case marker retains the original time token.
-    let time = group.atoms.last()?.head?;
+    let time = case.head?;
     doc.syntax.iter().find(|node| node.token == time)?.head
 }
 
@@ -16536,6 +16671,114 @@ mod existence_rule_tests {
                 && !implicit.contains("寄給"),
             "{source}: {implicit}"
         );
+    }
+
+    #[test]
+    fn te_help_request_keeps_joint_manner_and_deadlines_on_the_action() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "一緒にこの荷物を持っていただけませんか。",
+                "可以麻煩您幫我一起拿著這件行李嗎？",
+            ),
+            (
+                "この荷物を一緒に持っていただけませんか。",
+                "可以麻煩您幫我一起拿著這件行李嗎？",
+            ),
+            (
+                "二人で友達に手紙を送っていただけますか。",
+                "可以請兩人一起把信寄給朋友嗎？",
+            ),
+            (
+                "五時までに友達に手紙を送っていただけますか。",
+                "可以請您最晚在五點把信寄給朋友嗎？",
+            ),
+            (
+                "友達に手紙を五時までに送っていただけますか。",
+                "可以請您最晚在五點把信寄給朋友嗎？",
+            ),
+            (
+                "二人で五時までに友達に手紙を送っていただけますか。",
+                "可以請兩人最晚在五點一起把信寄給朋友嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_request_keeps_the_named_performer_in_the_group() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "先生に二人で地図を描いていただけますか。",
+                "可以請包括老師在內的兩人一起幫我畫地圖嗎？",
+            ),
+            (
+                "二人で先生に地図を描いていただけますか。",
+                "可以請包括老師在內的兩人一起幫我畫地圖嗎？",
+            ),
+            (
+                "先生に三人で地図を描いていただけませんか。",
+                "可以麻煩包括老師在內的三人一起幫我畫地圖嗎？",
+            ),
+            (
+                "友達に二人で絵を描いてもらえますか。",
+                "可以請包括朋友在內的兩人一起幫我畫畫嗎？",
+            ),
+            (
+                "先生に地図を描いていただけますか。",
+                "可以請老師幫我畫地圖嗎？",
+            ),
+            (
+                "二人で地図を描いていただけますか。",
+                "可以請兩人一起畫畫地圖嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn te_help_request_preserves_other_cases_and_the_invitation() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("一緒にこの荷物を持ちませんか。", "要不要一起拿著這荷物？"),
+            (
+                "公園で写真を撮ってもらえますか。",
+                "可以幫我在公園拍攝照片嗎？",
+            ),
+            (
+                "`一緒`にこの荷物を持っていただけませんか。",
+                "給`一緒`拿著這荷物，不能得到嗎？",
+            ),
+            (
+                "五時に友達に手紙を送っていただけますか。",
+                "在五點給朋友寄送信，能得到嗎？",
+            ),
+            (
+                "私たちと一緒に本を読んでいただけますか。",
+                "給我們和一起讀書，能得到嗎？",
+            ),
+            (
+                "一緒に友達とこの荷物を持っていただけませんか。",
+                "跟朋友給一起拿著這荷物，不能得到嗎？",
+            ),
+        ] {
+            assert_eq!(
+                translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
     }
 
     #[test]

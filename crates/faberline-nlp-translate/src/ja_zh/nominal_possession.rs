@@ -393,7 +393,9 @@ pub(super) fn contains_copular_node(atoms: &[Atom], at: usize, doc: &Document) -
 
 fn owner_atom(a: &Atom, doc: &Document) -> bool {
     matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
-        && (!a.is_locked || a.lemma.as_deref() == Some(MODIFIED_NOUN) || whole_nominal_lock(a, doc))
+        && (!a.is_locked
+            || matches!(a.lemma.as_deref(), Some(MODIFIED_NOUN | PROTECTED_COMPOUND))
+            || whole_nominal_lock(a, doc))
 }
 
 const MODIFIED_NOUN: &str = "__ja_possession_modified_noun";
@@ -583,7 +585,34 @@ fn describe_noun(
         .get(head.span.start_char..head.span.end_char)?
         .iter()
         .collect();
-    let word = super::translate_single_ja_term(&raw, None, original_pos(head, doc));
+    let mut word = super::translate_single_ja_term(&raw, None, original_pos(head, doc));
+    if compact_choice && !head.is_locked {
+        let first = doc
+            .tokens
+            .partition_point(|t| t.span.start_char < head.span.start_char);
+        let parts = doc.tokens.get(first..=head.doc_tok_idx?)?;
+        if raw == "腕時計" {
+            word = "手錶".to_owned();
+        } else if parts.len() > 1
+            && super::lookup_curated_ja_word(&raw).is_none()
+            && super::lookup_ja_lexicon_gloss(&raw, None, head.upos).is_none()
+        {
+            // A compound lacking its own dictionary entry still has the
+            // ordinary translations of its source tokens (旅行 + かばん).
+            word.clear();
+            for token in parts {
+                let part: String = chars
+                    .get(token.span.start_char..token.span.end_char)?
+                    .iter()
+                    .collect();
+                word.push_str(&super::translate_single_ja_term(
+                    &part,
+                    token.lemma.as_deref(),
+                    token.upos,
+                ));
+            }
+        }
+    }
     let mut noun = head.clone();
     let classifier = if demonstrative.is_empty() {
         ""
@@ -786,6 +815,94 @@ fn render_ellipsis(
 }
 
 pub(super) fn render(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    target: TargetVariant,
+    chars: &[char],
+) -> Option<String> {
+    render_choice(atoms, doc, sentence, target, chars)
+        .or_else(|| render_glossary_choice(atoms, target, chars))
+}
+
+// A glossary can merge 旅行 + かばん into one token tagged VERB, changing the
+// surrounding dependency links. Verify the clause against its ordinary source
+// parse and put each original placeholder back on the same source phrase.
+fn render_glossary_choice(atoms: &[Atom], target: TargetVariant, chars: &[char]) -> Option<String> {
+    if !atoms.iter().any(choice_particle)
+        || !atoms.iter().any(|a| a.surface == "の")
+        || !atoms
+            .iter()
+            .any(|a| a.is_locked && a.surface.starts_with("[[PH"))
+    {
+        return None;
+    }
+    let start = atoms.first()?.span.start_char;
+    let end = atoms.last()?.span.end_char;
+    let extra = usize::from(
+        chars
+            .get(end)
+            .is_some_and(|c| matches!(c, '。' | '？' | '?' | '！' | '!')),
+    );
+    let source = chars.get(start..end + extra)?;
+    let text: String = source.iter().collect();
+    let doc = faberline_nlp::doc::analyze_document(
+        &text,
+        &faberline_nlp::doc::Options {
+            normalize_traditional: true,
+            enrich_morphology: true,
+            cpu_syntax: true,
+            ..Default::default()
+        },
+    );
+    if doc.segmentation.sentences.len() != 1 {
+        return None;
+    }
+    let tokens: Vec<_> = doc.tokens.iter().collect();
+    let mut raw =
+        super::build_sentence_atoms(0, source, &doc, &tokens, &super::SpanLockTable::default());
+    raw.retain(|a| {
+        a.span.end_char <= end - start
+            && (!matches!(a.surface.as_str(), "、" | "，")
+                || atoms.iter().any(|old| {
+                    old.span.start_char == start + a.span.start_char && old.surface == a.surface
+                }))
+    });
+    for lock in atoms.iter().rev().filter(|a| a.is_locked) {
+        if !lock.surface.starts_with("[[PH") || !lock.surface.ends_with("]]") {
+            return None;
+        }
+        let begin = raw
+            .iter()
+            .position(|a| a.span.start_char + start == lock.span.start_char)?;
+        let last = raw
+            .iter()
+            .position(|a| a.span.end_char + start >= lock.span.end_char)?;
+        let parts = raw.get(begin..=last)?;
+        let mut head = parts.last()?.clone();
+        let entire = head.span.end_char + start == lock.span.end_char;
+        // In 大き + な and 小さ + な the final な marks the attributive form.
+        let size_stem = parts.len() == 1
+            && head.deprel == "det"
+            && matches!(head.surface.as_str(), "大きな" | "小さな")
+            && head.span.end_char + start == lock.span.end_char + 1;
+        if !(entire || size_stem)
+            || parts.len() > 1
+                && !parts
+                    .iter()
+                    .all(|a| matches!(a.upos, Some(Upos::Noun | Upos::Propn)))
+        {
+            return None;
+        }
+        head.span.start_char = parts.first()?.span.start_char;
+        head.surface.clone_from(&lock.surface);
+        head.is_locked = true;
+        raw.splice(begin..=last, [head]);
+    }
+    render_choice(&raw, &doc, 0, target, source)
+}
+
+fn render_choice(
     atoms: &[Atom],
     doc: &Document,
     sentence: usize,
@@ -1187,6 +1304,60 @@ mod tests {
         )
         .unwrap();
         assert_eq!(product.target_text, "這是妹妹的大型的箱子還是父親的？");
+    }
+
+    #[test]
+    fn compound_choices_preserve_the_source_parse_and_glossary_spans() {
+        for source in [
+            "これは父の大きな旅行かばんか、母のですか。",
+            "これは母のか、父の大きな旅行かばんですか。",
+        ] {
+            let plain = translate(source);
+            assert!(
+                plain.contains("大旅行包包") && plain.contains("還是"),
+                "{plain}"
+            );
+            for terms in [
+                vec![("旅行かばん", "旅用提袋")],
+                vec![("大きな", "特大款"), ("旅行かばん", "旅用提袋")],
+                vec![("大き", "加大款")],
+            ] {
+                let mut glossary = TranslationGlossary::new();
+                for &(term, value) in &terms {
+                    glossary.objects.push(crate::GlossaryEntry {
+                        canonical: term.into(),
+                        surfaces: vec![term.into()],
+                        targets: [(TargetVariant::ZhHant, value.into())]
+                            .into_iter()
+                            .collect(),
+                        ..Default::default()
+                    });
+                }
+                let result = analyze_and_translate(
+                    source,
+                    &TranslateOptions::new(TargetVariant::ZhHant),
+                    &glossary,
+                    None,
+                    Backend::Onnx,
+                )
+                .unwrap();
+                assert!(
+                    result.target_text.contains("還是") && !result.target_text.contains('嗎'),
+                    "{}",
+                    result.target_text
+                );
+                for (term, value) in terms {
+                    assert_eq!(result.target_text.matches(value).count(), 1);
+                    assert!(result.glossary_hits.iter().any(|hit| {
+                        source
+                            .chars()
+                            .skip(hit.source_span.start_char)
+                            .take(hit.source_span.end_char - hit.source_span.start_char)
+                            .eq(term.chars())
+                    }));
+                }
+            }
+        }
     }
 
     #[test]

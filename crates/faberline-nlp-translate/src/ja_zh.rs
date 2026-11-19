@@ -232,6 +232,7 @@ pub(crate) fn translate_ja_sentence(
 
     if target == TargetVariant::ZhHant {
         calendar::bind_relative_contrast(&mut atoms, chars);
+        homework_relative::mark_argument_commas(&mut atoms, doc);
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
@@ -3319,6 +3320,12 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
             continue;
         }
 
+        if homework_relative::is_argument_comma(a) {
+            current.push(a.clone());
+            i += 1;
+            continue;
+        }
+
         // Clause-ending comma `、` / `，` or sentence-ending punctuation `。` / `！` / `？`
         if !a.is_locked
             && matches!(
@@ -5277,6 +5284,7 @@ fn try_translate_homework_transfer(
     let mut subject = None;
     let mut recipient = None;
     let mut homework = None;
+    let mut recipient_before_subject = false;
     let mut adjuncts = Vec::new();
     for bunsetsu in bunsetsus {
         if bunsetsu.sconj_tail.is_some()
@@ -5389,6 +5397,13 @@ fn try_translate_homework_transfer(
                 }
                 has_time_modifier = true;
             }
+            ("nsubj", "は")
+                if modifiers.is_empty()
+                    && let Some(time) = render_temporal_made_atom(noun) =>
+            {
+                adjuncts.push(time);
+                has_time_modifier = true;
+            }
             ("nsubj", "は" | "が") if subject.is_none() => {
                 subject = Some(homework_relative::person(bunsetsu, source)?);
             }
@@ -5402,6 +5417,7 @@ fn try_translate_homework_transfer(
             }
             ("obl" | "iobj", "に") if recipient.is_none() => {
                 recipient = Some(homework_relative::person(bunsetsu, source)?);
+                recipient_before_subject = subject.is_none();
             }
             ("obl", "で")
                 if noun.surface == "教室"
@@ -5500,6 +5516,7 @@ fn try_translate_homework_transfer(
         if desire.is_none()
             && deadline.is_none()
             && !has_time_modifier
+            && (relative.is_some() || !recipient_before_subject)
             && !homework_relative::has_modified_person(bunsetsus, source)
         {
             return None;
@@ -12431,6 +12448,16 @@ fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> 
     let mut cur: Vec<Atom> = Vec::new();
 
     for (idx, atom) in atoms.iter().enumerate() {
+        if homework_relative::is_argument_comma(atom) {
+            if !cur.is_empty() {
+                bunsetsus.push(classify_bunsetsu(
+                    std::mem::take(&mut cur),
+                    doc,
+                    sentence_idx,
+                ));
+            }
+            continue;
+        }
         cur.push(atom.clone());
         let is_func = is_bunsetsu_tail_atom(atom);
         let next = atoms.get(idx + 1);

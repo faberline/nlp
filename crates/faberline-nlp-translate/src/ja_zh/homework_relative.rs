@@ -4,6 +4,107 @@ use super::{
     dasu_case_link, deadline_governor, prepend_locked_atom, try_translate_homework_transfer,
 };
 
+const ARGUMENT_COMMA: &str = "__ja_homework_argument_comma";
+
+pub(super) fn is_argument_comma(atom: &Atom) -> bool {
+    atom.lemma.as_deref() == Some(ARGUMENT_COMMA)
+}
+
+/// A reading comma can separate a fronted argument from the rest of one
+/// homework transfer. Keep real clause boundaries for the normal splitter.
+pub(super) fn mark_argument_commas(source: &mut [Atom], doc: &Document) {
+    let is_comma = |a: &Atom| !a.is_locked && matches!(a.surface.as_str(), "、" | "，");
+    if !source.iter().any(is_comma) {
+        return;
+    }
+    let mut objects = source
+        .iter()
+        .filter(|a| !a.is_locked && a.surface == "宿題" && a.deprel == "obj");
+    let Some(id) = objects.next().and_then(|object| object.head) else {
+        return;
+    };
+    if objects.next().is_some() || source.iter().any(|a| a.surface.contains("[[PH")) {
+        return;
+    }
+    let Some(verb) = source
+        .iter()
+        .find(|a| a.doc_tok_idx == Some(id) && !a.is_locked && a.lemma.as_deref() == Some("出す"))
+    else {
+        return;
+    };
+    if verb.deprel != "root"
+        && !source.iter().any(|a| {
+            a.span.start_char == verb.span.end_char
+                && matches!(a.surface.as_str(), "たい" | "たく" | "たかっ" | "たかった")
+        })
+    {
+        return;
+    }
+    let mut subject = None;
+    let mut recipient = None;
+    for (i, pair) in source.windows(2).enumerate() {
+        let [noun, marker] = pair else { continue };
+        if noun.head != Some(id) || !dasu_case_link(noun, marker) {
+            continue;
+        }
+        if marker.surface == "から" {
+            return;
+        }
+        let role = classroom_role(&[], noun)
+            .or_else(|| classroom_role(&source[i.saturating_sub(1)..i], noun));
+        match (noun.deprel.as_str(), marker.surface.as_str(), role) {
+            ("nsubj", "は" | "が", Some((role, _))) => subject = Some(role),
+            ("obl" | "iobj", "に", Some((role, _))) => recipient = Some(role),
+            _ => {}
+        }
+    }
+    if subject.is_none() || recipient.is_none() || subject == recipient {
+        return;
+    }
+    let mut start = 0;
+    let mut separators = Vec::new();
+    for (i, atom) in source
+        .iter()
+        .enumerate()
+        .take_while(|(_, atom)| atom.span.start_char < verb.span.start_char)
+    {
+        if !is_comma(atom) {
+            continue;
+        }
+        // Use original tokens here: a normalized clock may contain several
+        // tokens and no single dependency head of its own.
+        if let Some(first) = source.get(start).filter(|_| start < i) {
+            let from = doc
+                .tokens
+                .partition_point(|t| t.span.end_char <= first.span.start_char);
+            let to = doc
+                .tokens
+                .partition_point(|t| t.span.start_char < atom.span.start_char);
+            if from < to
+                && doc.syntax.get(from..to).is_some_and(|nodes| {
+                    nodes.iter().all(|node| {
+                        node.deprel != "punct"
+                            && node.head.is_some_and(|governor| {
+                                (from..to).contains(&governor)
+                                    || (governor == id
+                                        && matches!(
+                                            node.deprel.as_str(),
+                                            "nsubj" | "obl" | "iobj" | "obj" | "advmod"
+                                        ))
+                            })
+                    })
+                })
+            {
+                separators.push(i);
+            }
+        }
+        start = i + 1;
+    }
+    for i in separators {
+        source[i].lemma = Some(ARGUMENT_COMMA.to_owned());
+    }
+}
+
 fn modifier_of<'a>(person: &Atom, source: &'a [Atom]) -> Option<&'a Atom> {
     source.iter().find(|a| {
         !a.is_locked
@@ -288,6 +389,42 @@ mod tests {
     fn transfers_follow_the_participant_modified_by_the_relative_clause() {
         let options = TranslateOptions::new(TargetVariant::ZhHant);
         for (source, expected) in [
+            (
+                "七時に来た先生に、生徒は九時までに宿題を出します。",
+                "學生最晚在九點把作業交給在七點來的老師。",
+            ),
+            (
+                "七時に来た生徒に、先生は九時までに宿題を出します。",
+                "老師最晚在九點出作業給在七點來的學生。",
+            ),
+            (
+                "四時に来た生徒に、先生は宿題を出しませんでした。",
+                "老師沒有出作業給在四點來的學生。",
+            ),
+            (
+                "七時に来た先生に、生徒は明日は宿題を出しません。",
+                "學生明天不把作業交給在七點來的老師。",
+            ),
+            (
+                "先生に、生徒は宿題を出しましたか。",
+                "學生把作業交給老師了嗎？",
+            ),
+            (
+                "昨日来た生徒は今日、先生に宿題を出しました。",
+                "昨天來的學生今天把作業交給老師了。",
+            ),
+            (
+                "昨日来た先生は今日、生徒に宿題を出しました。",
+                "昨天來的老師今天出作業給學生了。",
+            ),
+            (
+                "先生に、学生は机から宿題を出しました。",
+                "給老師，學生從書桌拿出了作業。",
+            ),
+            (
+                "先生は七時に教室に入り、生徒は九時にかばんから宿題を出しました。",
+                "老師在七點進入教室，生徒在九點從包包拿出了作業。",
+            ),
             (
                 "六時に来た先生は生徒に宿題を出しました。",
                 "在六點來的老師出作業給學生了。",

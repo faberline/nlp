@@ -162,7 +162,14 @@ fn reported_content(word: &Atom, previous: Option<&Segment>, after: &[Segment]) 
             };
             let lemma = report.lemma.as_deref().unwrap_or(&report.surface);
             if marker.surface == "を" {
-                return lemma == "聞く";
+                // Hearing a sound does not by itself identify quoted speech.
+                // A linked emotional response supplies evidence that the
+                // listener reacted to the content of the answer.
+                return lemma == "聞く"
+                    && matches!(after.get(1), Some(Segment::Clause { atoms, .. })
+                    if atoms.iter().any(|v| !v.is_locked && v.doc_tok_idx == report.head
+                        && matches!(v.lemma.as_deref().unwrap_or(&v.surface),
+                            "安心する" | "安堵する" | "喜ぶ" | "驚く")));
             }
             let attached_answer = |noun: &Atom| {
                 answer_noun(noun)
@@ -732,6 +739,11 @@ mod tests {
             ("彼は「支払える。」と答えました。", "「能付款。」"),
             ("彼は紙に「支払える」と書いて返事をしました。", "「能付款」"),
             ("「支払える」を聞いて安心しました。", "「能付款」"),
+            (
+                "録音の「支払える」を聞いてアクセントを確認しました。",
+                "「支払える」",
+            ),
+            ("授業で「支払える」を初めて聞きました。", "「支払える」"),
         ] {
             let actual = translate(jp);
             assert!(actual.contains(quotes), "{jp} -> {actual}");

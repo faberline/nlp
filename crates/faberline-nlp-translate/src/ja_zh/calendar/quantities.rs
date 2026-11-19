@@ -281,6 +281,85 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, end: usize, contrast: bool) {
 
 pub(super) const HABIT: &str = "__ja_habitual_topic";
 
+// Attach an alternative rate to the measured event inside the relative
+// clause before punctuation can separate the two halves of its contrast.
+pub(in crate::ja_zh) fn bind_relative_contrast(atoms: &mut Vec<Atom>) {
+    for start in 0..atoms.len() {
+        let Some(end) = [3, 4].into_iter().map(|len| start + len).find(|&end| {
+            atoms
+                .get(start..end)
+                .is_some_and(super::contrasts_recurrence)
+        }) else {
+            continue;
+        };
+        let neg = &atoms[end - 1];
+        let number = end
+            + usize::from(
+                atoms
+                    .get(end)
+                    .is_some_and(|a| !a.is_locked && a.surface == "、"),
+            );
+        let Some(day_idx) = (number..atoms.len()).find(|&i| !is_numeral(&atoms[i])) else {
+            continue;
+        };
+        let day = &atoms[day_idx];
+        if day.is_locked
+            || day.surface != "日"
+            || number == day_idx
+            || !atoms
+                .get(day_idx + 1)
+                .is_some_and(|c| linked_case(c, day, day, "に"))
+            || !(neg.head == day.doc_tok_idx || neg.head == day.head)
+            || !atoms.iter().any(|a| {
+                a.doc_tok_idx == day.head
+                    && a.upos == Some(Upos::Verb)
+                    && a.deprel == "acl"
+                    && atoms.iter().any(|n| {
+                        n.doc_tok_idx == a.head && matches!(n.upos, Some(Upos::Noun | Upos::Propn))
+                    })
+            })
+        {
+            continue;
+        }
+        let mut scoped = atoms.clone();
+        bind(&mut scoped, day_idx, true);
+        let Some(interval) = scoped
+            .iter_mut()
+            .find(|a| a.doc_tok_idx == day.doc_tok_idx && super::is_interval(a))
+        else {
+            continue;
+        };
+        let rate = &atoms[start];
+        let text = translate_single_ja_term(&rate.surface, rate.lemma.as_deref(), rate.upos);
+        interval.surface = format!("不是{text}，而是{}", interval.surface);
+        // A topic before the relative contrast can be attached to なく.
+        // Restore the matrix governor when the relative has its own subject.
+        let mut first = start;
+        let before = start - usize::from(start > 0 && atoms[start - 1].surface == "、");
+        if let [.., topic] = &atoms[..before]
+            && !topic.is_locked
+            && topic.surface == "は"
+            && topic.deprel == "case"
+            && let Some(subject) = atoms[..before]
+                .iter()
+                .position(|a| a.doc_tok_idx == topic.head && a.deprel == "nsubj")
+            && let Some(matrix) = atoms
+                .iter()
+                .find(|a| a.upos == Some(Upos::Verb) && a.deprel == "root")
+            && (atoms[subject].head == neg.doc_tok_idx || atoms[subject].head == matrix.doc_tok_idx)
+            && atoms[day_idx + 1..]
+                .iter()
+                .any(|a| a.deprel == "nsubj" && a.head == day.head)
+        {
+            scoped[subject].head = matrix.doc_tok_idx;
+            first = before;
+        }
+        scoped.drain(first..number);
+        *atoms = scoped;
+        return;
+    }
+}
+
 // 普段は and its kana spelling are time modifiers of the following event.
 // The analyzer can split ふだん into ふ + だ + ん.
 pub(super) fn normalize_habit(atoms: &mut Vec<Atom>) {

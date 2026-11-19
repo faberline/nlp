@@ -226,6 +226,10 @@ pub(crate) fn translate_ja_sentence(
         .then(|| calendar::report::take(&mut atoms, doc, lock_table, chars))
         .flatten();
 
+    if target == TargetVariant::ZhHant {
+        calendar::bind_relative_contrast(&mut atoms);
+    }
+
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
     let segments = split_atoms_into_segments(&atoms, doc, sent_span);
 
@@ -8458,23 +8462,24 @@ fn translate_clause_bunsetsus(
         }
     }
 
-    let asks_event_time = source.last().is_some_and(|ka| {
+    let asks_event_question = source.last().is_some_and(|ka| {
         !ka.is_locked
             && ka.surface == "か"
             && ka.upos == Some(Upos::Part)
             && ka.deprel == "discourse"
             && ka.head.is_some()
-            && bunsetsus.iter().any(|group| {
-                group.atoms.iter().any(|time| {
-                    time.head == ka.head
-                        && (calendar::asks_interval(time)
-                            || match group.case_particle.as_deref() {
-                                Some("までに") => deadline_time_question(time).is_some(),
-                                Some("に") => calendar::question(time).is_some(),
-                                _ => false,
-                            })
-                })
-            })
+            && (calendar::asks_event_argument(&bunsetsus, source, ka)
+                || bunsetsus.iter().any(|group| {
+                    group.atoms.iter().any(|time| {
+                        time.head == ka.head
+                            && (calendar::asks_interval(time)
+                                || match group.case_particle.as_deref() {
+                                    Some("までに") => deadline_time_question(time).is_some(),
+                                    Some("に") => calendar::question(time).is_some(),
+                                    _ => false,
+                                })
+                    })
+                }))
     });
     let explicit_deadline = bunsetsus.iter().find_map(|b| match b.role {
         BunsetsuRole::ExplicitDeadline { modal, additive } => Some((modal, additive)),
@@ -8628,7 +8633,7 @@ fn translate_clause_bunsetsus(
         }
         if let Some(sfp) = b.sfp_tail.as_deref() {
             sfp_suffix = match sfp {
-                "か" if asks_event_time => None,
+                "か" if asks_event_question => None,
                 "か" | "かな" => Some("嗎"),
                 "よ" => Some("喔"),
                 "ね" | "よね" => Some("呢"),
@@ -13067,6 +13072,9 @@ fn deadline_governor(group: &Bunsetsu, doc: &Document) -> Option<usize> {
     if group.case_particle.as_deref() != Some("までに") {
         return None;
     }
+    if let Some(date) = group.atoms.iter().find(|a| calendar::is_date(a)) {
+        return date.head;
+    }
     deadline_case_governor(group.atoms.last()?, doc)
 }
 
@@ -14709,6 +14717,59 @@ mod clock_rule_tests {
             (
                 "何曜日までに駅に着くことを決めましたか。",
                 "決定了最晚星期幾抵達到車站嗎？",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn detached_calendar_cases_preserve_their_event_and_its_scope() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "九月九日までに、友だちに写真を送ります。",
+                "最晚在九月九日給朋友寄送照片。",
+            ),
+            (
+                "九月九日に、友だちに写真を送ります。",
+                "在九月九日給朋友寄送照片。",
+            ),
+            (
+                "九月九日までに、誰に写真を送りますか。",
+                "最晚在九月九日給誰寄送照片？",
+            ),
+            (
+                "九月九日までに、友だちに写真を送った先生が来ました。",
+                "最晚在九月九日給朋友寄送了照片的老師來了。",
+            ),
+            (
+                "九月九日までに、友だちに送る写真を選びました。",
+                "選擇了最晚在九月九日給朋友寄送的照片。",
+            ),
+            (
+                "先生は六月四日に母へ、六月二日と三日に学生が来たとは答えませんでした。",
+                "老師在六月四日沒有向母親回答說學生在六月二日和三日來了。",
+            ),
+            (
+                "先生は六月四日に母へ、六月二日と三日に学生が来なかったとは答えませんでした。",
+                "老師在六月四日沒有向母親回答說學生在六月二日和三日沒有來。",
+            ),
+            (
+                "六月七日と九日に一人ずつ学生が来たと先生は答えなかったのですか。",
+                "老師是否沒有回答說在六月七日和九日各來了一位學生？",
+            ),
+            (
+                "先生は、毎日ではなく三日に一人ずつ患者が来る病院を選びましたか。",
+                "老師選擇了不是每天，而是每三天來一位患者的醫院嗎？",
+            ),
+            (
+                "父は、毎週ではなく四日に二人ずつ学生が来る学校を選びました。",
+                "父親選擇了不是每週，而是每四天來兩位學生的學校。",
             ),
         ] {
             assert_eq!(

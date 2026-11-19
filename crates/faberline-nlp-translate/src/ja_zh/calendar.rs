@@ -5,6 +5,7 @@ pub(super) mod report;
 use super::{Atom, Upos, normalize_decimal_digits, selects_time_value};
 use crate::opaque::parse_cjk_or_ascii_num;
 pub(crate) use dates::DateContext;
+pub(super) use quantities::bind_relative_contrast;
 
 const DATE: &str = "__ja_calendar_day";
 const DATE_LIST: &str = "__ja_calendar_dates";
@@ -101,6 +102,33 @@ pub(super) fn is_date(atom: &Atom) -> bool {
 pub(super) fn question(atom: &Atom) -> Option<&str> {
     (is_date(atom) && (atom.surface.ends_with("幾號") || atom.surface == "星期幾"))
         .then_some(atom.surface.as_str())
+}
+
+pub(super) fn asks_event_argument(groups: &[super::Bunsetsu], source: &[Atom], ka: &Atom) -> bool {
+    groups
+        .iter()
+        .flat_map(|group| &group.atoms)
+        .any(|date| is_date(date) && date.head == ka.head)
+        && source.windows(2).any(|pair| {
+            let [wh, case] = pair else { return false };
+            !wh.is_locked
+                && wh.head == ka.head
+                && matches!(
+                    wh.surface.as_str(),
+                    "誰" | "だれ" | "どなた" | "何" | "なに" | "どこ"
+                )
+                && matches!(wh.deprel.as_str(), "nsubj" | "obj" | "iobj" | "obl")
+                && matches!(
+                    case.surface.as_str(),
+                    "が" | "に" | "へ" | "を" | "で" | "から"
+                )
+                && linked_case(case, wh, wh, &case.surface)
+                && !source.iter().any(|p| {
+                    p.doc_tok_idx != case.doc_tok_idx
+                        && p.head == wh.doc_tok_idx
+                        && matches!(p.surface.as_str(), "も" | "か" | "でも")
+                })
+        })
 }
 
 fn is_numeral(atom: &Atom) -> bool {

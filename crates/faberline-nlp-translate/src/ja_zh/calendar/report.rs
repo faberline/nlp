@@ -246,8 +246,10 @@ impl Frame {
                 });
                 self.also = case.surface == "も";
             }
-            ("に", "obl" | "iobj") => {
-                if let Some(time) = reporting_time(words, doc, chars) {
+            ("に" | "へ", "obl" | "iobj") => {
+                if case.surface == "に"
+                    && let Some(time) = reporting_time(words, doc, chars)
+                {
                     if self.time.is_some() {
                         return None;
                     }
@@ -314,6 +316,19 @@ pub(in crate::ja_zh) fn take(
     if particle {
         tail = &tail[..tail.len() - 1];
     }
+    // Explanatory のです modifies the outer assertion, including in a
+    // negative question. It does not negate the reported proposition.
+    if let [inflection @ .., no, cop] = tail
+        && !no.is_locked
+        && no.surface == "の"
+        && no.deprel == "mark"
+        && !cop.is_locked
+        && matches!(cop.surface.as_str(), "だ" | "です")
+        && no.head == verb.doc_tok_idx
+        && cop.head == verb.doc_tok_idx
+    {
+        tail = inflection;
+    }
     if !tail
         .iter()
         .all(|a| !a.is_locked && a.upos == Some(Upos::Aux) && a.head == verb.doc_tok_idx)
@@ -333,18 +348,31 @@ pub(in crate::ja_zh) fn take(
         ["ない"] | ["ませ", "ん"] | ["ません"] => "不",
         _ => return None,
     };
-    let (marker, pred) = core[..report].iter().enumerate().rev().find_map(|(i, m)| {
-        if m.is_locked || m.surface != "と" || m.deprel != "case" {
-            return None;
-        }
-        let pred = core[..i].iter().rposition(|a| {
-            !a.is_locked
-                && a.doc_tok_idx == m.head
-                && a.upos == Some(Upos::Verb)
-                && matches!(a.deprel.as_str(), "obl" | "ccomp")
+    let (marker, pred, after_start) =
+        core[..report].iter().enumerate().rev().find_map(|(i, m)| {
+            if m.is_locked || m.surface != "と" || m.deprel != "case" {
+                return None;
+            }
+            let contrast = core.get(i + 1).is_some_and(|wa| {
+                !wa.is_locked
+                    && wa.surface == "は"
+                    && wa.deprel == "case"
+                    && wa.span.start_char == m.span.end_char
+                    && (wa.head == m.head || wa.head == m.doc_tok_idx)
+            });
+            let pred = core[..i].iter().rposition(|a| {
+                !a.is_locked
+                    && a.doc_tok_idx == m.head
+                    && a.upos == Some(Upos::Verb)
+                    && (matches!(a.deprel.as_str(), "obl" | "ccomp")
+                        || contrast && a.deprel == "nsubj")
+            })?;
+            nominal_path(core[pred].head, verb.doc_tok_idx, &core[i + 1..report]).then_some((
+                i,
+                pred,
+                i + 1 + usize::from(contrast),
+            ))
         })?;
-        nominal_path(core[pred].head, verb.doc_tok_idx, &core[i + 1..report]).then_some((i, pred))
-    })?;
     let to = &core[marker];
     let event = &core[pred];
     if !core[pred + 1..marker]
@@ -370,7 +398,7 @@ pub(in crate::ja_zh) fn take(
         return None;
     }
     let mut frame = Frame::default();
-    let mut after = &core[marker + 1..report];
+    let mut after = &core[after_start..report];
     while !after.is_empty() {
         if is_punct_atom(&after[0]) {
             after = &after[1..];
@@ -378,7 +406,7 @@ pub(in crate::ja_zh) fn take(
         }
         if let Some((end, governor)) = after.iter().enumerate().find_map(|(end, a)| {
             if !a.is_locked
-                && matches!(a.surface.as_str(), "は" | "が" | "に" | "も" | "で")
+                && matches!(a.surface.as_str(), "は" | "が" | "に" | "へ" | "も" | "で")
                 && matches!(a.deprel.as_str(), "case" | "discourse")
                 && let Some(owner) = after[..end]
                     .iter()
@@ -433,7 +461,7 @@ pub(in crate::ja_zh) fn take(
         .position(|a| {
             !a.is_locked
                 && a.deprel == "case"
-                && matches!(a.surface.as_str(), "は" | "が" | "に" | "も" | "で")
+                && matches!(a.surface.as_str(), "は" | "が" | "に" | "へ" | "も" | "で")
         })
         .map(|n| start + n)
     {
@@ -460,7 +488,7 @@ pub(in crate::ja_zh) fn take(
         let front_listener = start > 0
             && frame.person.is_some()
             && frame.recipient.is_none()
-            && core[case].surface == "に"
+            && matches!(core[case].surface.as_str(), "に" | "へ")
             && owner.head == event.doc_tok_idx
             && opening_end.is_some_and(|end| case < end)
             && is_listener(&core[start..case], doc, locks);

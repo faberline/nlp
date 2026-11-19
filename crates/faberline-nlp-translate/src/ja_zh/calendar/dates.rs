@@ -138,6 +138,104 @@ fn bind(atoms: &mut Vec<Atom>, start: usize, end: usize, text: String, tag: &str
     atoms.splice(start..=end, [day]);
 }
 
+// The analyzer can split 友だち into 友 + a copula + ち even before the
+// recipient particle. Recover the nominal head and its dependent time.
+fn bind_friend_recipient(atoms: &mut Vec<Atom>) {
+    let mut i = 0;
+    while let Some([friend, cop, suffix, case]) = atoms.get(i..i + 4) {
+        if ![friend, cop, suffix].iter().any(|a| a.is_locked)
+            && friend.surface == "友"
+            && cop.surface == "だ"
+            && suffix.surface == "ち"
+            && friend.head == suffix.doc_tok_idx
+            && cop.head == friend.doc_tok_idx
+            && cop.deprel == "cop"
+            && friend.span.end_char == cop.span.start_char
+            && cop.span.end_char == suffix.span.start_char
+            && matches!(case.surface.as_str(), "に" | "へ")
+            && linked_case(case, suffix, suffix, &case.surface)
+        {
+            let mut noun = suffix.clone();
+            noun.surface = "友達".to_owned();
+            noun.lemma = Some(noun.surface.clone());
+            noun.upos = Some(Upos::Noun);
+            noun.span.start_char = friend.span.start_char;
+            let misparsed = friend.doc_tok_idx;
+            for a in &mut atoms[..i] {
+                if a.head == misparsed
+                    && matches!(a.deprel.as_str(), "advmod" | "obl" | "iobj")
+                    && (a.surface == "日"
+                        || month_text(&a.surface).is_some()
+                        || dated_atom(a)
+                        || a.is_locked)
+                {
+                    a.head = noun.head;
+                }
+            }
+            atoms.splice(i..i + 3, [noun]);
+        }
+        i += 1;
+    }
+}
+
+// A comma after the case of a concrete date can separate a temporal
+// argument from the event it still modifies. Keep them in the same clause.
+fn bind_detached_dates(atoms: &mut Vec<Atom>, chars: &[char]) {
+    let mut i = 0;
+    while i < atoms.len() {
+        let start = i;
+        i += 1;
+        let (start, end, text) =
+            if let Some(day) = day_at(atoms, start).filter(|d| d.month.is_some()) {
+                let Some((start, text)) = super::dated_month(atoms, start, render(&day)) else {
+                    continue;
+                };
+                (start, day.end, text)
+            } else if super::is_date(&atoms[start])
+                || atoms[start].is_locked
+                    && chars
+                        .get(atoms[start].span.start_char..atoms[start].span.end_char)
+                        .is_some_and(|source| {
+                            source.contains(&'月')
+                                && spelled_report_day(&source.iter().collect::<String>()).is_some()
+                        })
+            {
+                (start, start, atoms[start].surface.clone())
+            } else {
+                continue;
+            };
+        let day = &atoms[end];
+        let Some(case) = atoms.get(end + 1).filter(|c| {
+            matches!(c.surface.as_str(), "まで" | "に") && linked_case(c, day, day, &c.surface)
+        }) else {
+            continue;
+        };
+        let comma = if case.surface == "まで" {
+            if !atoms
+                .get(end + 2)
+                .is_some_and(|ni| linked_case(ni, day, case, "に"))
+            {
+                continue;
+            }
+            end + 3
+        } else {
+            end + 2
+        };
+        if !atoms
+            .get(comma)
+            .is_some_and(|a| !a.is_locked && matches!(a.surface.as_str(), "、" | "，" | ","))
+            || !atoms[comma + 1..]
+                .iter()
+                .any(|a| a.doc_tok_idx == day.head && a.upos == Some(Upos::Verb))
+        {
+            continue;
+        }
+        let list = day.lemma.as_deref() == Some(DATE_LIST);
+        atoms.remove(comma);
+        bind(atoms, start, end, text, if list { DATE_LIST } else { DATE });
+    }
+}
+
 fn bind_month_dates(atoms: &mut Vec<Atom>) {
     let mut i = 0;
     while i < atoms.len() {
@@ -270,7 +368,9 @@ impl DateContext {
         {
             bind(atoms, 0, day.end, text, DATE);
         }
+        bind_friend_recipient(atoms);
         bind_month_dates(atoms);
+        bind_detached_dates(atoms, chars);
         for start in 0..atoms.len() {
             let Some(day) = day_at(atoms, start).filter(|d| d.month.is_some()) else {
                 continue;

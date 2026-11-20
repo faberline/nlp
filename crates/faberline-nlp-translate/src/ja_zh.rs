@@ -10939,12 +10939,19 @@ fn elapsed_interposed_argument(atoms: &[Atom], action: usize) -> bool {
     })
 }
 
+struct ElapsedDuration {
+    text: String,
+    is_wh_question: bool,
+    owner: usize,
+    is_bare_day_period: bool,
+}
+
 fn take_elapsed_duration(
     groups: &mut Vec<Bunsetsu>,
     source: &[Atom],
     parallel_te: Option<usize>,
     doc: &Document,
-) -> Option<(String, bool, usize)> {
+) -> Option<ElapsedDuration> {
     for (action_index, action) in source.iter().enumerate() {
         if action.is_locked || action.doc_tok_idx.is_none() || action.upos != Some(Upos::Verb) {
             continue;
@@ -11018,7 +11025,12 @@ fn take_elapsed_duration(
             || groups.iter().filter(|g| g.role == BunsetsuRole::Predicate).count() == 1)
         {
             let day = groups.remove(index).atoms.remove(0);
-            return Some((day.surface, false, action_id));
+            return Some(ElapsedDuration {
+                text: day.surface,
+                is_wh_question: false,
+                owner: action_id,
+                is_bare_day_period: true,
+            });
         }
         for (end, argument_id) in elapsed_argument_ends(source, action_index, action_id) {
             for start in 0..end {
@@ -11125,7 +11137,12 @@ fn take_elapsed_duration(
                     }
                 }
                 groups.retain(|g| !g.atoms.is_empty());
-                return Some((rendered, surface == "何時間", action_id));
+                return Some(ElapsedDuration {
+                    text: rendered,
+                    is_wh_question: surface == "何時間",
+                    owner: action_id,
+                    is_bare_day_period: surface.ends_with("日間"),
+                });
             }
         }
     }
@@ -11151,25 +11168,31 @@ fn translate_clause_bunsetsus(
     let focus = focused_days.as_ref().map(|(_, _, shika)| *shika);
     let elapsed = if target == TargetVariant::ZhHant {
         focused_days
-            .map(|(amount, owner, _)| (amount, false, owner))
+            .map(|(text, owner, _)| ElapsedDuration {
+                text,
+                is_wh_question: false,
+                owner,
+                is_bare_day_period: false,
+            })
             .or_else(|| take_elapsed_duration(&mut bunsetsus, source, ctx.parallel_elapsed_te, doc))
     } else {
         None
     };
-    let elapsed_progressive_relative = elapsed.as_ref().is_some_and(|(_, _, id)| {
+    let elapsed_progressive_relative = elapsed.as_ref().is_some_and(|duration| {
         bunsetsus.iter().any(|g| {
-            progressive_acl_action(g).is_some_and(|(action, _)| action.doc_tok_idx == Some(*id))
+            progressive_acl_action(g)
+                .is_some_and(|(action, _)| action.doc_tok_idx == Some(duration.owner))
         })
     });
-    let elapsed_progressive_negative = elapsed.as_ref().is_some_and(|(_, _, id)| {
+    let elapsed_progressive_negative = elapsed.as_ref().is_some_and(|duration| {
         bunsetsus.iter().any(|g| {
             progressive_acl_is_negative(g)
                 && progressive_acl_action(g)
-                    .is_some_and(|(action, _)| action.doc_tok_idx == Some(*id))
+                    .is_some_and(|(action, _)| action.doc_tok_idx == Some(duration.owner))
         })
     });
-    let elapsed_wh = elapsed.as_ref().is_some_and(|(_, wh, action_id)| {
-        if !*wh {
+    let elapsed_wh = elapsed.as_ref().is_some_and(|duration| {
+        if !duration.is_wh_question {
             return false;
         }
         let Some(question) = core_non_punct(source).last() else {
@@ -11183,10 +11206,13 @@ fn translate_clause_bunsetsus(
         {
             return false;
         }
-        if question.head == Some(*action_id) {
+        if question.head == Some(duration.owner) {
             return true;
         }
-        let Some(action) = source.iter().find(|a| a.doc_tok_idx == Some(*action_id)) else {
+        let Some(action) = source
+            .iter()
+            .find(|a| a.doc_tok_idx == Some(duration.owner))
+        else {
             return false;
         };
         let Some(modal) = source.iter().find(|a| {
@@ -11199,10 +11225,14 @@ fn translate_clause_bunsetsus(
         };
         question.head == modal.doc_tok_idx || question.head == modal.head
     });
-    let held_for_days = elapsed.as_ref().is_some_and(|(amount, _, owner)| {
-        amount.ends_with('天') && calendar::is_held_event(source, *owner)
+    let held_for_days = elapsed.as_ref().is_some_and(|duration| {
+        duration.text.ends_with('天') && calendar::is_held_event(source, duration.owner)
     });
-    let mut elapsed_duration = elapsed.map(|(text, _, _)| text);
+    let activity_period_owner = elapsed
+        .as_ref()
+        .filter(|duration| duration.is_bare_day_period)
+        .map(|duration| duration.owner);
+    let mut elapsed_duration = elapsed.map(|duration| duration.text);
 
     #[derive(Clone, Copy)]
     enum DeadlineEndpoint {
@@ -13561,6 +13591,7 @@ fn translate_clause_bunsetsus(
     if has_spatial_made && verb_core == "去" && !preserve_go {
         verb_core.clear();
     }
+    let mut activity_period_tail = None;
     // The event held is the object of 開催. Its duration belongs with that object.
     if let [event] = objs.as_mut_slice()
         && purpose.is_none()
@@ -13570,7 +13601,46 @@ fn translate_clause_bunsetsus(
             let only = if focus.is_some() { "僅" } else { "" };
             *event = format!("為期{only}{days}的{event}");
         } else if post_verb_mods.iter().any(|m| m == "了") {
-            parts.push(format!("花了{days}"));
+            // With a specified object, 花了 can sound like the time it
+            // took to finish the task. Give the verified action its own
+            // period while leaving the compact form for ordinary activity.
+            if let Some(owner) = activity_period_owner
+                && post_verb_mods.as_slice() == ["了"]
+                && !verb_core.is_empty()
+                && !passive_agent_needed
+                && !has_front_modal
+                && goal_tails.is_empty()
+                && made_endpoints.is_empty()
+                && result_value.is_none()
+                && sfp_suffix.is_none()
+                && matches!(predicates.as_slice(), [predicate] if predicate.atoms.iter().any(
+                    |atom| !atom.is_locked && atom.doc_tok_idx == Some(owner)
+                ))
+                && source.iter().any(|object| {
+                    object.deprel == "obj"
+                        && object.head == Some(owner)
+                        && object.doc_tok_idx.is_some()
+                        && source.windows(2).any(|pair| {
+                            matches!(pair, [modifier, marker]
+                                if modifier.deprel == "nmod"
+                                    && modifier.head == object.doc_tok_idx
+                                    && modifier.doc_tok_idx.is_some()
+                                    && marker.surface == "の"
+                                    && marker.deprel == "case"
+                                    && marker.head == modifier.doc_tok_idx
+                                    && marker.span.start_char == modifier.span.end_char)
+                        })
+                })
+            {
+                let period = if has_temporal_te_kara_tail(ctx.preceding_activity) {
+                    "這一階段"
+                } else {
+                    "這個過程"
+                };
+                activity_period_tail = Some(format!("，{period}歷時{days}"));
+            } else {
+                parts.push(format!("花了{days}"));
+            }
             post_verb_mods.retain(|m| m != "了");
         } else {
             parts.push(format!("花{days}"));
@@ -13657,6 +13727,7 @@ fn translate_clause_bunsetsus(
     parts.extend(counted_arrival);
     parts.extend(objs);
     parts.extend(elapsed_duration);
+    parts.extend(activity_period_tail);
     parts.extend(purpose_recipients);
     parts.extend(route_endpoints);
     parts.extend(temporal_made_tails);

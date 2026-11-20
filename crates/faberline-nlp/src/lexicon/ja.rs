@@ -201,29 +201,49 @@ fn has_human_topic(surface: &str) -> bool {
         "児童",
         "教師",
         "先生",
+        "男",
+        "女",
+        "男性",
+        "女性",
+        "医師",
+        "医者",
+        "社員",
+        "記者",
+        "選手",
     ];
+    let role_head = surface.strip_suffix('長');
+    let is_leadership_role = matches!(
+        role_head,
+        Some("店" | "社" | "部" | "課" | "校" | "学" | "院" | "局" | "会" | "隊" | "班" | "船")
+    );
     lookup_ja(surface).is_some_and(|hit| {
         hit.sem_class == Some(SemanticClass::Person)
             || (hit.upos_candidates.contains(&Upos::Pron) && PERSONAL_PRONOUNS.contains(&surface))
-            || (hit.decided_upos == Some(Upos::Noun) && HUMAN_NOUNS.contains(&surface))
+            || (hit.decided_upos == Some(Upos::Noun)
+                && (HUMAN_NOUNS.contains(&surface) || is_leadership_role))
     })
 }
 
-const HAGAKI_COPULAS: &[&str] = &[
-    "ではなかった",
-    "じゃなかった",
-    "ではない",
-    "じゃない",
-    "だった",
-    "でした",
-    "です",
-    "だ",
-];
-
 fn strip_hagaki_copula(text: &str) -> Option<&str> {
-    HAGAKI_COPULAS
-        .iter()
-        .find_map(|form| text.strip_prefix(*form))
+    if let Some(negative) = text
+        .strip_prefix("では")
+        .or_else(|| text.strip_prefix("じゃ"))
+    {
+        // The contracted and uncontracted forms take the same finite endings.
+        return [
+            "ありませんでした",
+            "なかったです",
+            "ありません",
+            "ないです",
+            "なかった",
+            "ない",
+        ]
+        .into_iter()
+        .find_map(|ending| negative.strip_prefix(ending));
+    }
+    ["だった", "でした", "です", "だ"]
+        .into_iter()
+        .find_map(|form| text.strip_prefix(form))
 }
 
 fn follows_with_age_or_copula(suffix: &str) -> bool {
@@ -297,13 +317,45 @@ fn contrasts_with_current_person(left: &str, suffix: &str, following_text: &str)
         .any(has_human_topic)
 }
 
-fn has_honorific_topic(
+fn has_linked_human_topic(
     left: &str,
     before: &[(usize, usize, BackEdge)],
     text: &str,
     byte_offs: &[usize],
     boundary: usize,
 ) -> bool {
+    let preceding = before
+        .last()
+        .filter(|(_, end, _)| *end == boundary)
+        .map(|(start, end, _)| &text[byte_offs[*start]..byte_offs[*end]]);
+    if left == "人" {
+        // 人 also counts people. Require a modifier that identifies a person.
+        return matches!(
+            preceding,
+            Some(
+                "の" | "この"
+                    | "その"
+                    | "あの"
+                    | "どの"
+                    | "隣"
+                    | "近所"
+                    | "知"
+                    | "友"
+                    | "通行"
+                    | "旅"
+            )
+        );
+    }
+    if let Some(stem) = left.strip_suffix('郎') {
+        let stem = if stem.is_empty() {
+            preceding.unwrap_or("")
+        } else {
+            stem
+        };
+        // A traditional given-name ending can be separated by the lattice.
+        return (1..=2).contains(&stem.chars().count())
+            && stem.chars().all(|c| matches!(c, '\u{4e00}'..='\u{9fff}'));
+    }
     const HONORIFICS: &[&str] = &["さん", "さま", "様", "君", "くん", "ちゃん", "氏"];
     HONORIFICS.iter().any(|honorific| {
         let Some(stem) = left.strip_suffix(*honorific) else {
@@ -312,11 +364,7 @@ fn has_honorific_topic(
         if !stem.is_empty() {
             return has_human_topic(stem);
         }
-        before.last().is_some_and(|(start, end, edge)| {
-            *end == boundary
-                && matches!(edge.kind, EdgeKind::Lexicon)
-                && has_human_topic(&text[byte_offs[*start]..byte_offs[*end]])
-        })
+        preceding.is_some_and(has_human_topic)
     })
 }
 
@@ -344,7 +392,7 @@ fn resolve_hagaki_topic(
         let left = &text[byte_offs[*subject_start]..byte_offs[start]];
         let suffix = &text[byte_offs[end]..];
         let explicit_person = has_human_topic(left)
-            || has_honorific_topic(left, &path[..index - 1], text, byte_offs, *subject_start);
+            || has_linked_human_topic(left, &path[..index - 1], text, byte_offs, *subject_start);
         let compound = path
             .get(index + 1)
             .filter(|(next_start, _, next)| {
@@ -1566,6 +1614,13 @@ mod hagaki_topic_segmentation_tests {
             (&["彼女", "はがき"][..], "だったと話した。"),
             (&["昔", "はがき"][..], "だったが、今は父親だ。"),
             (&["その", "生徒", "はがき"][..], "のころ、自転車に乗った。"),
+            (&["その", "男", "はがき"][..], "ではありません。"),
+            (&["太", "郎", "はがき"][..], "のころ、川で泳いだ。"),
+            (&["一", "郎", "はがき"][..], "の頃に本を読み始めた。"),
+            (&["店長", "はがき"][..], "のころから野球が好きでした。"),
+            (&["隣", "人", "はがき"][..], "じゃありません。"),
+            (&["彼", "はがき"][..], "ではありませんでした。"),
+            (&["彼女", "はがき"][..], "じゃないです。"),
         ] {
             let end = prefix.iter().map(|part| part.chars().count()).sum();
             assert_eq!(
@@ -1597,6 +1652,9 @@ mod hagaki_topic_segmentation_tests {
             ("新しい", "の束を買いました。"),
             ("これ", "ですか。"),
             ("これ", "ではないよ。"),
+            ("これ", "ではありません。"),
+            ("返答", "じゃありませんでした。"),
+            ("身長", "のころに記録を書きました。"),
             ("昔", "だった。"),
             ("昔", "だったが、今は封書だ。"),
             ("それ", "だったと説明しました。"),
@@ -1614,5 +1672,9 @@ mod hagaki_topic_segmentation_tests {
                 "{term:?}"
             );
         }
+        assert_eq!(
+            select_hagaki_topic(&["二", "人", "はがき"], "でした。", &[]),
+            None
+        );
     }
 }

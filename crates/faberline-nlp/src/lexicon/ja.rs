@@ -205,6 +205,7 @@ fn has_human_topic(surface: &str) -> bool {
         "女",
         "男性",
         "女性",
+        "大人",
         "医師",
         "医者",
         "社員",
@@ -286,17 +287,23 @@ fn contrasts_with_current_person(left: &str, suffix: &str, following_text: &str)
     let Some(tail) = strip_hagaki_copula(suffix) else {
         return false;
     };
-    let Some(contrast) = ["が", "けれども", "けれど", "けど"]
-        .into_iter()
-        .find_map(|link| tail.strip_prefix(link))
-    else {
-        return false;
-    };
-    // Read across a comma or horizontal space, keeping sentence ends intact.
-    let context = if contrast.is_empty() {
-        following_text
+    let context = if tail.is_empty() {
+        let Some(next) = following_text.strip_prefix('。') else {
+            return false;
+        };
+        next
     } else {
-        contrast
+        let Some(contrast) = ["が", "けれども", "けれど", "けど"]
+            .into_iter()
+            .find_map(|link| tail.strip_prefix(link))
+        else {
+            return false;
+        };
+        if contrast.is_empty() {
+            following_text
+        } else {
+            contrast
+        }
     };
     let inline_space = [' ', '\t', '\u{3000}'];
     let clause = context.trim_start_matches(inline_space);
@@ -328,6 +335,16 @@ fn has_linked_human_topic(
         .last()
         .filter(|(_, end, _)| *end == boundary)
         .map(|(start, end, _)| &text[byte_offs[*start]..byte_offs[*end]]);
+    if left == "員" {
+        // Only a lexical occupation stem identifies a person; 員 also counts members.
+        return matches!(
+            preceding,
+            Some("配達" | "郵便" | "駅" | "店" | "乗務" | "職" | "教" | "乗員")
+        );
+    }
+    if left == "僚" {
+        return preceding == Some("同");
+    }
     if left == "人" {
         // 人 also counts people. Require a modifier that identifies a person.
         return matches!(
@@ -356,6 +373,18 @@ fn has_linked_human_topic(
         return (1..=2).contains(&stem.chars().count())
             && stem.chars().all(|c| matches!(c, '\u{4e00}'..='\u{9fff}'));
     }
+    if let Some(stem) = left.strip_suffix('子') {
+        let stem = if stem.is_empty() {
+            preceding.unwrap_or("")
+        } else {
+            stem
+        };
+        let full = format!("{stem}子");
+        // Known common nouns keep their existing reading.
+        return (1..=2).contains(&stem.chars().count())
+            && stem.chars().all(|c| matches!(c, '\u{4e00}'..='\u{9fff}'))
+            && lookup_ja(&full).is_none();
+    }
     const HONORIFICS: &[&str] = &["さん", "さま", "様", "君", "くん", "ちゃん", "氏"];
     HONORIFICS.iter().any(|honorific| {
         let Some(stem) = left.strip_suffix(*honorific) else {
@@ -377,14 +406,13 @@ fn resolve_hagaki_topic(
 ) {
     let mut index = 1;
     while index < path.len() {
-        let (subject_start, subject_end, subject) = &path[index - 1];
+        let (subject_start, subject_end, _) = &path[index - 1];
         let (start, end, edge) = &path[index];
         let (start, end) = (*start, *end);
         if end - start != 3
             || !matches!(edge.kind, EdgeKind::Lexicon)
             || &text[byte_offs[start]..byte_offs[end]] != "はがき"
             || *subject_end != start
-            || !matches!(subject.kind, EdgeKind::Lexicon)
         {
             index += 1;
             continue;
@@ -1584,6 +1612,21 @@ mod hagaki_topic_segmentation_tests {
     fn reads_a_human_topic_across_honorifics_reports_and_contrast() {
         assert!(contrasts_with_current_person(
             "昔",
+            "だった",
+            "。今は大人です。"
+        ));
+        assert!(!contrasts_with_current_person(
+            "昔",
+            "だった",
+            "。今は封書です。"
+        ));
+        assert!(!contrasts_with_current_person(
+            "昔",
+            "だった",
+            "。\n今は大人です。"
+        ));
+        assert!(contrasts_with_current_person(
+            "昔",
             "だったが",
             " 今は父親だ。"
         ));
@@ -1621,6 +1664,9 @@ mod hagaki_topic_segmentation_tests {
             (&["隣", "人", "はがき"][..], "じゃありません。"),
             (&["彼", "はがき"][..], "ではありませんでした。"),
             (&["彼女", "はがき"][..], "じゃないです。"),
+            (&["配達", "員", "はがき"][..], "の頃からここに住んだ。"),
+            (&["優", "子", "はがき"][..], "のころ泳いだ。"),
+            (&["同", "僚", "はがき"][..], "のころ自転車に乗った。"),
         ] {
             let end = prefix.iter().map(|part| part.chars().count()).sum();
             assert_eq!(

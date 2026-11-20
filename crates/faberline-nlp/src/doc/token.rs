@@ -957,6 +957,7 @@ pub(super) fn tokenize_with_matcher(
             ja_context,
             matcher,
             false,
+            "",
             &mut out,
         );
         if let Some(kind) = kind {
@@ -968,6 +969,23 @@ pub(super) fn tokenize_with_matcher(
         }
         cursor = span.end_char;
     }
+    // Pass only the next sentence in the same paragraph. Opaque or suppressed
+    // spans interrupt this optional context and remain outside segmentation.
+    let next_end = (sentence.end_char..c.len())
+        .find(|&i| matches!(c[i], '。' | '！' | '？' | '!' | '?' | '\n' | '\r'))
+        .unwrap_or(c.len());
+    let next_is_visible = !inline
+        .iter()
+        .any(|(span, _)| span.start_char < next_end && sentence.end_char < span.end_char)
+        && !silent
+            .iter()
+            .any(|span| span.start_char < next_end && sentence.end_char < span.end_char);
+    let next_sentence: String =
+        if sentence.end_char > 0 && c[sentence.end_char - 1] == '。' && next_is_visible {
+            c[sentence.end_char..next_end].iter().collect()
+        } else {
+            String::new()
+        };
     text_pieces(
         c,
         cursor,
@@ -975,6 +993,7 @@ pub(super) fn tokenize_with_matcher(
         ja_context,
         matcher,
         true,
+        &next_sentence,
         &mut out,
     );
     out
@@ -987,6 +1006,7 @@ fn text_pieces(
     ja_context: bool,
     matcher: &TokenMatcher,
     is_last_piece: bool,
+    next_sentence: &str,
     out: &mut Vec<Piece>,
 ) {
     if start >= end {
@@ -1011,7 +1031,15 @@ fn text_pieces(
                     && s[b..].chars().all(|ch| {
                         ch.is_whitespace() || matches!(ch, '。' | '！' | '？' | '!' | '?')
                     });
-                ja_tokens(&s, a, b, matcher, sentence_tail, &mut ja_ranges)
+                ja_tokens(
+                    &s,
+                    a,
+                    b,
+                    matcher,
+                    sentence_tail,
+                    next_sentence,
+                    &mut ja_ranges,
+                )
             }
             RunKind::Zh => {
                 simple_ranges.clear();
@@ -1078,9 +1106,11 @@ fn ja_tokens(
     b: usize,
     matcher: &TokenMatcher,
     sentence_tail: bool,
+    next_sentence: &str,
     out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
 ) {
     let run = &s[a..b];
+    let following_text = format!("{}{next_sentence}", &s[b..]);
     if let Some(ac) = &matcher.ja_ko_extra {
         let mut at = 0;
         for m in ac.find_iter(run) {
@@ -1100,11 +1130,18 @@ fn ja_tokens(
             a + at,
             &matcher.ja_lexicon,
             sentence_tail,
-            &s[b..],
+            &following_text,
             out,
         );
     } else {
-        ja_words(run, a, &matcher.ja_lexicon, sentence_tail, &s[b..], out);
+        ja_words(
+            run,
+            a,
+            &matcher.ja_lexicon,
+            sentence_tail,
+            &following_text,
+            out,
+        );
     }
 }
 

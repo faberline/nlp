@@ -269,6 +269,9 @@ pub(crate) fn translate_ja_sentence(
     if target == TargetVariant::ZhHant {
         calendar::bind_relative_contrast(&mut atoms, chars);
         homework_relative::mark_argument_commas(&mut atoms, doc);
+        recover_prohibitive_verb_forms(&mut atoms);
+        normalize_spoken_prohibitive_report(&mut atoms);
+        bind_prohibitive_written_form(&mut atoms, lock_table);
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
@@ -9191,16 +9194,41 @@ fn try_translate_indirect_directive(
         return None;
     }
 
-    let you_idx = (1..core.len().saturating_sub(2)).rfind(|&i| {
-        !core[i].is_locked
-            && core[i].surface == "よう"
-            && !core[i + 1].is_locked
-            && core[i + 1].surface == "に"
-            && !core[i - 1].is_locked
-            && matches!(core[i - 1].upos, Some(Upos::Verb | Upos::Aux | Upos::Adj))
-    })?;
-
-    let pred_atoms = &core[you_idx + 2..];
+    let prohibition_marker = (target == TargetVariant::ZhHant)
+        .then(|| {
+            (2..core.len() - 1).rfind(|&idx| {
+                let marker = &core[idx];
+                !marker.is_locked
+                    && marker.surface == "と"
+                    && marker.upos == Some(Upos::Adp)
+                    && marker.span.start_char == core[idx - 1].span.end_char
+                    && prohibitive_report_verb(&core[..idx]).is_some()
+            })
+        })
+        .flatten();
+    let (content_end, report_start) = if let Some(idx) = prohibition_marker {
+        let after_marker = idx + 1;
+        let focused = core.get(after_marker).is_some_and(|atom| {
+            !atom.is_locked
+                && atom.surface == "は"
+                && matches!(atom.upos, Some(Upos::Adp | Upos::Part))
+        });
+        (idx, after_marker + usize::from(focused))
+    } else {
+        let idx = (1..core.len().saturating_sub(2)).rfind(|&i| {
+            !core[i].is_locked
+                && core[i].surface == "よう"
+                && !core[i + 1].is_locked
+                && core[i + 1].surface == "に"
+                && !core[i - 1].is_locked
+                && matches!(core[i - 1].upos, Some(Upos::Verb | Upos::Aux | Upos::Adj))
+        })?;
+        (idx, idx + 2)
+    };
+    let prohibited_action =
+        prohibition_marker.and_then(|idx| prohibitive_report_verb(&core[..idx]));
+    let prohibition = prohibited_action.is_some();
+    let pred_atoms = &core[report_start..];
     if pred_atoms.iter().any(|a| {
         !a.is_locked
             && matches!(
@@ -9225,16 +9253,23 @@ fn try_translate_indirect_directive(
     let is_directive_verb = matches!(
         v_lemma,
         "言う" | "伝える" | "頼む" | "求める" | "命じる" | "指示する"
-    ) || head_verb.surface.starts_with("言")
-        || head_verb.surface.starts_with("伝え")
-        || head_verb.surface.starts_with("頼")
-        || head_verb.surface.starts_with("求め")
-        || head_verb.surface.starts_with("命じ");
-    if !is_directive_verb {
+    ) || (!prohibition
+        && ["言", "伝え", "頼", "求め", "命じ"]
+            .iter()
+            .any(|prefix| head_verb.surface.starts_with(prefix)));
+    if !is_directive_verb
+        || (prohibition
+            && (!std::ptr::eq(head_verb, &pred_atoms[0])
+                || pred_atoms[1..].iter().any(|a| {
+                    a.is_locked
+                        || !(matches!(a.upos, Some(Upos::Aux | Upos::Part))
+                            || matches!(a.surface.as_str(), "けど" | "けれど" | "けれども" | "が"))
+                })))
+    {
         return None;
     }
 
-    let prefix_bunsetsus = group_into_bunsetsus(&core[..you_idx], doc, sentence_idx);
+    let prefix_bunsetsus = group_into_bunsetsus(&core[..content_end], doc, sentence_idx);
     let mut matrix_subjs: Vec<String> = Vec::new();
     let mut matrix_recips: Vec<String> = Vec::new();
     let mut consumed_atoms = 0usize;
@@ -9244,7 +9279,33 @@ fn try_translate_indirect_directive(
             && b.case_particle
                 .as_deref()
                 .is_some_and(|cp| matches!(cp, "は" | "が"));
-        let is_recip_ni = b.role == BunsetsuRole::IObj && b.case_particle.as_deref() == Some("に");
+        let is_recip_ni = b.role == BunsetsuRole::IObj
+            && b.case_particle.as_deref() == Some("に")
+            && prohibited_action.is_none_or(|verb| {
+                // Keep a local goal or participant with the prohibited action.
+                // The parser can attach a listener to an action such as 走る,
+                // which does not take a personal に argument.
+                is_person_like_bunsetsu(b)
+                    && (b.atoms.iter().any(|a| {
+                        a.upos != Some(Upos::Adp)
+                            && head_verb.doc_tok_idx.is_some()
+                            && a.head == head_verb.doc_tok_idx
+                    }) || matches!(
+                        verb.lemma.as_deref().unwrap_or(&verb.surface),
+                        "走る"
+                            | "待つ"
+                            | "止まる"
+                            | "騒ぐ"
+                            | "休む"
+                            | "黙る"
+                            | "笑う"
+                            | "泣く"
+                            | "座る"
+                            | "眠る"
+                            | "寝る"
+                            | "泳ぐ"
+                    ))
+            });
         if (is_topic_subj && matrix_subjs.is_empty() && matrix_recips.is_empty())
             || (is_recip_ni && matrix_recips.is_empty())
         {
@@ -9262,7 +9323,7 @@ fn try_translate_indirect_directive(
         }
     }
 
-    let sub_atoms = &core[consumed_atoms..you_idx];
+    let sub_atoms = &core[consumed_atoms..content_end];
     if sub_atoms.is_empty() {
         return None;
     }
@@ -9279,13 +9340,22 @@ fn try_translate_indirect_directive(
         return None;
     }
 
-    let pred_is_neg = pred_atoms.iter().any(|a| {
-        !a.is_locked
-            && matches!(
-                a.surface.as_str(),
-                "ない" | "なかった" | "ません" | "ませんでした" | "ず" | "ぬ"
-            )
-    });
+    let split_polite_neg = prohibition
+        && pred_atoms.windows(2).any(|pair| {
+            !pair[0].is_locked
+                && !pair[1].is_locked
+                && pair[0].surface == "ませ"
+                && pair[1].surface == "ん"
+                && pair[0].span.end_char == pair[1].span.start_char
+        });
+    let pred_is_neg = split_polite_neg
+        || pred_atoms.iter().any(|a| {
+            !a.is_locked
+                && matches!(
+                    a.surface.as_str(),
+                    "ない" | "なかった" | "ません" | "ませんでした" | "ず" | "ぬ"
+                )
+        });
     let pred_is_past = pred_atoms.iter().any(|a| {
         !a.is_locked
             && matches!(
@@ -9318,8 +9388,8 @@ fn try_translate_indirect_directive(
     let recip = matrix_recips.join("");
     let verb_zh = if v_lemma == "言う" || head_verb.surface.starts_with("言") {
         if recip.is_empty() {
-            "說要"
-        } else if pred_is_neg {
+            if prohibition { "說" } else { "說要" }
+        } else if pred_is_neg || prohibition {
             "叫"
         } else {
             "要"
@@ -9338,11 +9408,18 @@ fn try_translate_indirect_directive(
     out.push_str(verb_zh);
     if !recip.is_empty() {
         out.push_str(&recip);
-        if verb_zh == "轉告" {
+        if verb_zh == "轉告" && !prohibition {
             out.push('要');
         }
     }
     out.push_str(&sub_zh);
+    if prohibition
+        && pred_atoms
+            .last()
+            .is_some_and(|a| matches!(a.surface.as_str(), "けど" | "けれど" | "けれども" | "が"))
+    {
+        out.push_str("，但是");
+    }
 
     Some((out, false))
 }
@@ -12021,6 +12098,12 @@ fn translate_clause_bunsetsus(
     if open_past_object && !open_past_endpoint {
         pre_verb_mods.retain(|m| m != "一直");
         pre_verb_mods.push("都在".to_owned());
+    }
+    if target == TargetVariant::ZhHant
+        && !verb_core.is_empty()
+        && has_prohibitive_ending(core_non_punct(source))
+    {
+        pre_verb_mods.insert(0, "不要".to_owned());
     }
     if let Some(shika) = focus {
         if shika {
@@ -20800,6 +20883,164 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn direct_prohibition_preserves_the_action_and_reporting_scope() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("走るな。", "不要跑。"),
+            ("ここで待つな。", "不要在這裡等待。"),
+            ("この窓を開けるな！", "不要打開這窗戶！"),
+            (
+                "母は『窓を開けるな』と言いました。",
+                "母親說『不要打開窗戶』。",
+            ),
+            ("「駅」と書くな。", "不要寫「駅」。"),
+            (
+                "先生は「写真」と書くなと言いました。",
+                "老師說不要寫「写真」。",
+            ),
+            ("先生は学生に走るなと言いました。", "老師叫學生不要跑。"),
+            ("先生が学生に走るなと言いました。", "老師叫學生不要跑。"),
+            ("先生は「走るな」と言いました。", "老師說「不要跑」。"),
+            (
+                "先生は『「写真」と書くな』と言いました。",
+                "老師說『不要寫「写真」』。",
+            ),
+            ("先生は走るなと言いませんでした。", "老師沒說不要跑。"),
+            ("触るなって言った。", "說不要觸摸。"),
+            ("出るな、戻れ。", "不要出去，回來。"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn direct_prohibition_leaves_near_non_prohibitions_unchanged() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("「駅」と書け。", "「駅」寫。"),
+            ("「駅」と書かないでください。", "「駅」請不要寫。"),
+            ("走らない。", "不跑。"),
+            ("静かだな。", "安靜。"),
+            ("よく走るな。", "經常跑。"),
+            ("よく走るなあ。", "經常跑。"),
+            ("本を読めるな。", "讀る書。"),
+            ("私にもできるな。", "給我能夠。"),
+            (
+                "先生は「私にもできるな」と言いました。",
+                "老師說「給我能夠」。",
+            ),
+            ("明日は雨が降るな。", "明天下雨。"),
+            (
+                "先生は「明日は雨が降るな」と言いました。",
+                "老師說「明天下雨」。",
+            ),
+            (
+                "母は私に彼が先に眠るなと言いました。",
+                "當母親他先に給我睡覺說了時。",
+            ),
+            ("元気な子が走りました。", "有精神的子跑了。"),
+            ("先生は走ると言いました。", "當老師跑說了時。"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn written_prohibition_keeps_the_source_while_speech_is_translated() {
+        let glossary = TranslationGlossary::new();
+        for (source, literal) in [
+            ("紙に「開けるな」と書きました。", "「開けるな」"),
+            ("紙に「窓を開けるな」と書きました。", "「窓を開けるな」"),
+            ("紙に「窓を開けるな！」と書きました。", "「窓を開けるな！」"),
+            ("紙に「窓を開けるな。」と書きました。", "「窓を開けるな。」"),
+            ("紙に「窓を開けるな」と書いてください。", "「窓を開けるな」"),
+            ("案内板には「窓を開けるな」とあります。", "「窓を開けるな」"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual.matches(literal).count(), 1, "{source}: {actual}");
+        }
+        assert_eq!(
+            public_translate("先生は「窓を開けるな」と言いました。", &glossary).target_text,
+            "老師說「不要打開窗戶」。"
+        );
+        for source in [
+            "紙に「窓を開けるな」と英語で書きました。",
+            "母への手紙に「窓を開けるな」と書きました。",
+            "英語だけの案内板には「窓を開けるな」とあります。",
+            "紙に「よく走るな」と書きました。",
+            "紙に「よく　走るな」と書きました。",
+            "紙に「本を読めるな」と書きました。",
+            "紙に「私にもできるな」と書きました。",
+            "ノートには「明日は雨が降るな」とあります。",
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            let quote = source
+                .split('「')
+                .nth(1)
+                .unwrap()
+                .split('」')
+                .next()
+                .unwrap();
+            assert!(!actual.contains(quote), "{source}: {actual}");
+        }
+        let message = public_translate("紙に「写真を買った」と書きました。", &glossary).target_text;
+        assert!(message.contains("照片"), "{message}");
+        let addressee = public_translate("お前が走るな。", &glossary).target_text;
+        assert!(addressee.contains("不要"), "{addressee}");
+        let future_ban = public_translate("明日は学校に行くな。", &glossary).target_text;
+        assert!(future_ban.contains("不要"), "{future_ban}");
+    }
+
+    #[test]
+    fn prohibition_requires_an_action_the_addressee_can_control() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("雨は降るな。", "下雨。"),
+            ("雪は降るな。", "下雪。"),
+            ("風は吹くな。", "風吹風。"),
+            ("天気は晴れるな。", "天氣放晴。"),
+            ("この窓は風で閉まるな。", "這窗戶在風關閉。"),
+            ("このドアは風で閉まるな。", "這門在風關閉。"),
+            ("この機械は動けるな。", "這機械動ける。"),
+            ("この機械はうごけるな。", "這機械うごける。"),
+            ("この機械は壊れるな。", "這機械故障。"),
+            ("動けるな。", "動ける。"),
+            ("うごけるな。", "うごける。"),
+            ("帰れるな。", "回去る。"),
+            (
+                "先生が学生に「雨は明日降るな」と言いました。",
+                "老師給學生說「明天下雨」。",
+            ),
+            ("看板には「雨は降るな」とあります。", "給看板，「下雨」有。"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual, expected, "{source}");
+        }
+        for source in [
+            "君は窓を閉めるな。",
+            "この窓は閉めるな。",
+            "この窓は開けるな。",
+            "子供は走るな。",
+            "子供に食事をあたえるな。",
+            "人を貶めるな。",
+            "首をすくめるな。",
+            "明日は学校に行くな。",
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert!(actual.contains("不要"), "{source}: {actual}");
+        }
+        for (source, literal) in [
+            ("紙に「人を貶めるな」と書きました。", "「人を貶めるな」"),
+            ("紙に「首をすくめるな」と書きました。", "「首をすくめるな」"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual.matches(literal).count(), 1, "{source}: {actual}");
+        }
+    }
+
+    #[test]
     fn a_single_day_restricts_only_the_matching_day_in_the_next_sentence() {
         let glossary = TranslationGlossary::new();
         let jp = "試験は六月二日だけです。二日に学生が一人ずつ来ます。";
@@ -24433,6 +24674,277 @@ fn localize_honorific(name: &str, suffix: &str) -> String {
         "くん" => format!("{name}君"),
         "様" | "さま" => format!("{name}大人"),
         _ => format!("{name}{suffix}"),
+    }
+}
+
+// A dictionary verb may be split into a stem and an auxiliary before な.
+// Join it only when the complete surface has its own verb entry.
+fn recover_prohibitive_verb_forms(atoms: &mut Vec<Atom>) {
+    let mut index = 0;
+    while index + 2 < atoms.len() {
+        let [verb, ending, marker] = &atoms[index..index + 3] else {
+            break;
+        };
+        let surface = format!("{}{}", verb.surface, ending.surface);
+        if !verb.is_locked
+            && verb.upos == Some(Upos::Verb)
+            && verb.doc_tok_idx.is_some()
+            && !ending.is_locked
+            && ending.upos == Some(Upos::Aux)
+            && ending.surface == "る"
+            && !marker.is_locked
+            && marker.upos == Some(Upos::Part)
+            && marker.surface == "な"
+            && marker.head == verb.doc_tok_idx
+            && verb.span.end_char == ending.span.start_char
+            && ending.span.end_char == marker.span.start_char
+            && faberline_nlp::lexicon::lookup_ja(&surface).is_some_and(|entry| {
+                entry.upos_candidates.contains(&Upos::Verb)
+                    && entry.infl == Some("ichidan")
+                    && entry.counterpart.as_deref().is_some_and(|meaning| {
+                        !meaning.starts_with('能') && !meaning.starts_with("可以")
+                    })
+            })
+        {
+            let mut whole = verb.clone();
+            whole.surface = surface.clone();
+            whole.lemma = Some(surface);
+            whole.span.end_char = ending.span.end_char;
+            atoms.splice(index..index + 2, [whole]);
+        }
+        index += 1;
+    }
+}
+
+fn is_prohibitive_verb_base(verb: &Atom) -> bool {
+    !verb.is_locked
+        && verb.doc_tok_idx.is_some()
+        && matches!(verb.upos, Some(Upos::Verb | Upos::Aux))
+        && verb
+            .surface
+            .ends_with(['う', 'く', 'ぐ', 'す', 'つ', 'ぬ', 'ぶ', 'む', 'る'])
+        && !is_ambiguous_potential(&verb.surface)
+}
+
+// A whole-token potential may have no embedded gloss. Keep the known motion
+// potential ambiguous; do not infer ability from spelling alone, because a
+// separate ichidan verb can have the same shape as a godan potential.
+pub(crate) fn is_ambiguous_potential(surface: &str) -> bool {
+    matches!(surface, "動ける" | "うごける")
+        || faberline_nlp::lexicon::lookup_ja(surface).is_some_and(|entry| {
+            entry
+                .counterpart
+                .as_deref()
+                .is_some_and(|meaning| meaning.starts_with('能') || meaning.starts_with("可以"))
+        })
+}
+
+// A precipitation or self-closing event with its own physical subject does
+// not establish an action controlled by the addressee.
+pub(crate) fn has_nonvolitional_subject(verb: &str, subject: &str) -> bool {
+    (verb == "降る" && matches!(subject, "雨" | "雪" | "雹" | "霰" | "霙" | "みぞれ"))
+        || (verb == "吹く" && subject == "風")
+        || (matches!(verb, "晴れる" | "曇る") && matches!(subject, "天気" | "空"))
+        || (verb == "閉まる" && !is_explicit_second_person(subject))
+        || (verb == "壊れる"
+            && matches!(
+                subject,
+                "機械" | "機器" | "装置" | "車" | "時計" | "窓" | "ドア" | "扉"
+            ))
+}
+
+fn prohibitive_pair(verb: &Atom, marker: &Atom) -> bool {
+    is_prohibitive_verb_base(verb)
+        && !marker.is_locked
+        && marker.upos == Some(Upos::Part)
+        && marker.surface == "な"
+        && marker.span.start_char == verb.span.end_char
+        && marker.head == verb.doc_tok_idx
+}
+
+fn has_prohibitive_ending(atoms: &[Atom]) -> bool {
+    prohibitive_verb(atoms).is_some()
+}
+
+pub(crate) fn is_explicit_second_person(surface: &str) -> bool {
+    matches!(
+        surface,
+        "あなた" | "貴方" | "あんた" | "お前" | "おまえ" | "君" | "きみ" | "貴様"
+    )
+}
+
+fn prohibitive_verb(atoms: &[Atom]) -> Option<&Atom> {
+    prohibitive_verb_with_reporter(atoms, false)
+}
+
+fn prohibitive_report_verb(atoms: &[Atom]) -> Option<&Atom> {
+    prohibitive_verb_with_reporter(atoms, true)
+}
+
+fn prohibitive_verb_with_reporter(atoms: &[Atom], has_reporter: bool) -> Option<&Atom> {
+    let (body, emphatic) = match atoms {
+        [body @ .., tail] if !tail.is_locked && tail.surface == "よ" => (body, true),
+        _ => (atoms, false),
+    };
+    let [prefix @ .., verb, marker] = body else {
+        return None;
+    };
+    let reporter = has_reporter
+        .then(|| {
+            prefix.windows(2).position(|pair| {
+                let [subject, case] = pair else {
+                    return false;
+                };
+                !subject.is_locked
+                    && subject.deprel == "nsubj"
+                    && subject.head == verb.doc_tok_idx
+                    && is_person_like_atom(subject)
+                    && !case.is_locked
+                    && matches!(case.surface.as_str(), "は" | "が")
+                    && case.head == subject.doc_tok_idx
+            })
+        })
+        .flatten();
+    let other_subject = prefix.windows(2).enumerate().any(|(index, pair)| {
+        let [subject, case] = pair else { return false };
+        !subject.is_locked
+            && subject.deprel == "nsubj"
+            && subject.head == verb.doc_tok_idx
+            && !case.is_locked
+            && case.surface == "が"
+            && case.head == subject.doc_tok_idx
+            && !is_explicit_second_person(&subject.surface)
+            && Some(index) != reporter
+    });
+    let nonvolitional_subject = prefix.windows(2).any(|pair| {
+        let [subject, case] = pair else { return false };
+        !subject.is_locked
+            && subject.deprel == "nsubj"
+            && subject.head == verb.doc_tok_idx
+            && !case.is_locked
+            && matches!(case.surface.as_str(), "は" | "が")
+            && case.head == subject.doc_tok_idx
+            && has_nonvolitional_subject(
+                verb.lemma.as_deref().unwrap_or(&verb.surface),
+                &subject.surface,
+            )
+    });
+    (prohibitive_pair(verb, marker)
+        && !other_subject
+        && !nonvolitional_subject
+        && (emphatic
+            || !prefix
+                .last()
+                .is_some_and(|a| !a.is_locked && a.surface == "よく")))
+    .then_some(verb)
+}
+
+// After a bare verb and before a speech verb, recover な + って when the
+// tokenizer reads なって as the inflection of なる.
+fn normalize_spoken_prohibitive_report(atoms: &mut [Atom]) {
+    for index in 0..atoms.len().saturating_sub(3) {
+        let [verb, merged, te, report] = &atoms[index..index + 4] else {
+            continue;
+        };
+        if !is_prohibitive_verb_base(verb)
+            || merged.is_locked
+            || te.is_locked
+            || report.is_locked
+            || merged.surface != "なっ"
+            || merged.lemma.as_deref() != Some("なる")
+            || te.surface != "て"
+            || !matches!(report.lemma.as_deref(), Some("言う" | "伝える"))
+            || verb.span.end_char != merged.span.start_char
+            || merged.span.end_char != te.span.start_char
+            || te.span.end_char != report.span.start_char
+        {
+            continue;
+        }
+        let head = verb.doc_tok_idx;
+        let boundary = merged.span.start_char + 1;
+        let marker = &mut atoms[index + 1];
+        marker.surface = "な".to_owned();
+        marker.lemma = None;
+        marker.upos = Some(Upos::Part);
+        marker.span.end_char = boundary;
+        marker.head = head;
+        let quote = &mut atoms[index + 2];
+        quote.surface = "と".to_owned();
+        quote.lemma = None;
+        quote.upos = Some(Upos::Adp);
+        quote.span.start_char = boundary;
+    }
+}
+
+fn protected_written_quote(atoms: &[Atom], locks: &SpanLockTable) -> Option<(usize, Atom)> {
+    let lock_for = |atom: &Atom| {
+        locks.locks.iter().find(|lock| {
+            atom.is_locked
+                && lock.origin == LockOrigin::QuotedSource
+                && lock.source_span == atom.span
+                && lock.placeholder == atom.surface
+        })
+    };
+    if let [open, original, close, ..] = atoms
+        && !open.is_locked
+        && !close.is_locked
+        && matches!(
+            (open.surface.as_str(), close.surface.as_str()),
+            ("「", "」") | ("『", "』")
+        )
+        && lock_for(original).is_some()
+    {
+        let mut literal = original.clone();
+        literal.surface = format!("{}{}{}", open.surface, original.surface, close.surface);
+        literal.span = Span {
+            start_char: open.span.start_char,
+            end_char: close.span.end_char,
+        };
+        return Some((3, literal));
+    }
+    // A nested quotation is already locked with its brackets.
+    let first = atoms.first()?;
+    let source = &lock_for(first)?.replacement;
+    matches!(
+        (source.chars().next(), source.chars().next_back()),
+        (Some('「'), Some('」')) | (Some('『'), Some('』'))
+    )
+    .then(|| (1, first.clone()))
+}
+
+// Keep a protected written form with its command, outside the speech splitter.
+fn bind_prohibitive_written_form(atoms: &mut Vec<Atom>, locks: &SpanLockTable) {
+    let mut index = 0;
+    while index < atoms.len() {
+        let Some((quote_len, literal)) = protected_written_quote(&atoms[index..], locks) else {
+            index += 1;
+            continue;
+        };
+        let quote_end = index + quote_len;
+        let Some((quotative, rest)) = atoms[quote_end..].split_first() else {
+            break;
+        };
+        let writer = rest
+            .iter()
+            .take_while(|atom| !atom.is_locked && !is_punct_atom(atom))
+            .position(|atom| atom.upos == Some(Upos::Verb));
+        if !quotative.is_locked
+            && quotative.surface == "と"
+            && quotative.upos == Some(Upos::Adp)
+            && let Some(writer) = writer
+            && let [write, marker, tail @ ..] = &rest[writer..]
+            && write.lemma.as_deref().unwrap_or(&write.surface) == "書く"
+            && prohibitive_pair(write, marker)
+            && tail.first().is_none_or(|atom| {
+                !atom.is_locked
+                    && (is_punct_atom(atom) || matches!(atom.surface.as_str(), "よ" | "と"))
+            })
+        {
+            let mut object_case = quotative.clone();
+            object_case.surface = "を".to_owned();
+            atoms.splice(index..=quote_end, [literal, object_case]);
+        }
+        index += 1;
     }
 }
 

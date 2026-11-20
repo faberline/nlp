@@ -851,9 +851,11 @@ fn quotes_exact_writing(
         return false;
     }
     let label = particle == 'と' && is_written_phrase(chars, first_in_quote..end_of_quote, syntax);
+    let prohibition =
+        particle == 'と' && is_written_prohibition(chars, first_in_quote..end_of_quote, syntax);
     if states_inscription {
         // 「…」とある states an inscription when it has an explicit surface.
-        return label
+        return (label || prohibition)
             && writing_surface
             && matches_written_form(
                 phrase,
@@ -869,13 +871,158 @@ fn quotes_exact_writing(
             );
     }
 
-    unchanged
-        || (label
-            && (is_writing_instruction(chars, scope, syntax, predicate)
-                || describes_writing(phrase, |tail| {
-                    (writing_surface && ends_inscription_statement(tail))
-                        || modified_writing_surface(chars, scope, syntax, predicate, tail).is_some()
-                })))
+    if unchanged {
+        return true;
+    }
+    let instruction = is_writing_instruction(chars, scope, syntax, predicate);
+    if label && instruction {
+        return true;
+    }
+    particle == 'と'
+        && (label || prohibition)
+        && ((writing_surface && instruction)
+            || describes_writing(phrase, |tail| {
+                (writing_surface && ends_inscription_statement(tail))
+                    || modified_writing_surface(chars, scope, syntax, predicate, tail).is_some()
+            }))
+}
+
+// A command written on a named surface is an inscription even when it has
+// an object. Keep this separate from ordinary quoted propositions and speech.
+fn is_written_prohibition(
+    chars: &[char],
+    tokens: std::ops::Range<usize>,
+    syntax: QuoteSyntax<'_>,
+) -> bool {
+    let Some(marker) = tokens.clone().rev().find(|&i| {
+        let word = &syntax.tokens[i];
+        !chars[word.span.start_char..word.span.end_char]
+            .iter()
+            .all(|c| matches!(c, '！' | '!' | '？' | '?' | '。' | '．' | '.'))
+    }) else {
+        return false;
+    };
+    let word = &syntax.tokens[marker];
+    if word.upos != Some(Upos::Part) || chars[word.span.start_char..word.span.end_char] != ['な'] {
+        return false;
+    }
+    let Some(verb) = syntax.head(marker).filter(|head| tokens.contains(head)) else {
+        return false;
+    };
+    let verb_surface: String = chars[syntax.tokens[verb].span.start_char..word.span.start_char]
+        .iter()
+        .collect();
+    if crate::ja_zh::is_ambiguous_potential(&verb_surface) {
+        return false;
+    }
+    let other_subject = tokens.clone().any(|i| {
+        let Some(case) = syntax
+            .tokens
+            .get(i + 1)
+            .filter(|_| tokens.contains(&(i + 1)))
+        else {
+            return false;
+        };
+        let subject = &syntax.tokens[i];
+        let is_subject = syntax
+            .dependencies
+            .binary_search_by_key(&i, |edge| edge.token)
+            .ok()
+            .is_some_and(|edge| syntax.dependencies[edge].deprel == "nsubj");
+        is_subject
+            && syntax.head(i) == Some(verb)
+            && syntax.head(i + 1) == Some(i)
+            && chars[case.span.start_char..case.span.end_char] == ['が']
+            && !crate::ja_zh::is_explicit_second_person(
+                &chars[subject.span.start_char..subject.span.end_char]
+                    .iter()
+                    .collect::<String>(),
+            )
+    });
+    let nonvolitional_subject = tokens.clone().any(|i| {
+        let Some(case) = syntax
+            .tokens
+            .get(i + 1)
+            .filter(|_| tokens.contains(&(i + 1)))
+        else {
+            return false;
+        };
+        let subject = &syntax.tokens[i];
+        let is_subject = syntax
+            .dependencies
+            .binary_search_by_key(&i, |edge| edge.token)
+            .ok()
+            .is_some_and(|edge| syntax.dependencies[edge].deprel == "nsubj");
+        let case_surface = &chars[case.span.start_char..case.span.end_char];
+        let subject_surface: String = chars[subject.span.start_char..subject.span.end_char]
+            .iter()
+            .collect();
+        is_subject
+            && syntax.head(i) == Some(verb)
+            && syntax.head(i + 1) == Some(i)
+            && (case_surface == ['は'] || case_surface == ['が'])
+            && crate::ja_zh::has_nonvolitional_subject(
+                syntax.tokens[verb]
+                    .lemma
+                    .as_deref()
+                    .unwrap_or(&verb_surface),
+                &subject_surface,
+            )
+    });
+    syntax.tokens[verb].upos == Some(Upos::Verb)
+        && !other_subject
+        && !nonvolitional_subject
+        && !verb.checked_sub(1).is_some_and(|i| {
+            i >= tokens.start
+                && syntax.tokens[i].span.end_char <= syntax.tokens[verb].span.start_char
+                && chars[syntax.tokens[i].span.end_char..syntax.tokens[verb].span.start_char]
+                    .iter()
+                    .all(|c| c.is_whitespace())
+                && chars[syntax.tokens[i].span.start_char..syntax.tokens[i].span.end_char]
+                    == ['よ', 'く']
+        })
+        && tokens
+            .clone()
+            .filter(|&i| syntax.tokens[i].upos == Some(Upos::Verb))
+            .count()
+            == 1
+        && marker.checked_sub(1).is_some_and(|i| {
+            i >= tokens.start
+                && syntax.tokens[i].span.end_char == word.span.start_char
+                && if i == verb {
+                    let surface = &chars[syntax.tokens[verb].span.start_char..word.span.start_char];
+                    surface.last().is_some_and(|c| {
+                        matches!(
+                            c,
+                            'う' | 'く' | 'ぐ' | 'す' | 'つ' | 'ぬ' | 'ぶ' | 'む' | 'る'
+                        )
+                    }) && !faberline_nlp::lexicon::lookup_ja(&surface.iter().collect::<String>())
+                        .is_some_and(|entry| {
+                            entry.counterpart.as_deref().is_some_and(|meaning| {
+                                meaning.starts_with('能') || meaning.starts_with("可以")
+                            })
+                        })
+                } else {
+                    let ending = &syntax.tokens[i];
+                    let stem = &syntax.tokens[verb];
+                    ending.upos == Some(Upos::Aux)
+                        && syntax.head(i) == Some(verb)
+                        && stem.span.end_char == ending.span.start_char
+                        && chars[ending.span.start_char..ending.span.end_char] == ['る']
+                        && faberline_nlp::lexicon::lookup_ja(
+                            &chars[stem.span.start_char..ending.span.end_char]
+                                .iter()
+                                .collect::<String>(),
+                        )
+                        .is_some_and(|entry| {
+                            entry.upos_candidates.contains(&Upos::Verb)
+                                && entry.infl == Some("ichidan")
+                                && entry.counterpart.as_deref().is_some_and(|meaning| {
+                                    !meaning.starts_with('能') && !meaning.starts_with("可以")
+                                })
+                        })
+                }
+        })
 }
 
 /// An inflected word or a noun phrase can be the inscription. A quoted

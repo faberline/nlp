@@ -21067,6 +21067,7 @@ mod clock_rule_tests {
             "次の駅で電車から降りるな。",
             "空が暗い。君は窓を閉めるな。",
             "空が暗い。「窓を閉めるな」と先生が言いました。",
+            "空が暗いから、今日は山から降りろ。明日は降るな。",
             "別のドアを自動で開いたら、このドアは開くな。",
             "このドアが自動で開いたら、窓を開くな。",
             "紙に「このドアが自動で開いたら、窓を開くな」と書きました。",
@@ -24887,6 +24888,16 @@ fn follows_dark_sky_weather(source: &[Atom], doc: &Document, ctx: &ClauseDiscour
             return false;
         };
         ctx.source_chars[subject.span.start_char..subject.span.end_char] == ['空']
+            && edge.head.is_some_and(|head| {
+                doc.syntax.iter().any(|predicate_edge| {
+                    predicate_edge.token == head
+                        && predicate_edge.sentence == previous_idx
+                        && predicate_edge.deprel == "root"
+                })
+            })
+            && !doc.tokens.iter().any(|token| {
+                token.sentence == previous_idx && matches!(token.upos, Some(Upos::Verb | Upos::Aux))
+            })
             && (predicate.lemma.as_deref() == Some("暗い")
                 || ctx.source_chars[predicate.span.start_char..predicate.span.end_char]
                     == ['暗', 'い'])

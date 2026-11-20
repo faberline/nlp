@@ -10494,6 +10494,7 @@ fn translate_clause_bunsetsus(
     let mut additional_residences = Vec::new();
     let mut past_until = false;
     let mut open_past_endpoint = false;
+    let mut open_past_object = false;
     let mut bounded_state = None;
     let mut residence_duration = String::new();
     let mut residence_manners = Vec::new();
@@ -11194,6 +11195,20 @@ fn translate_clause_bunsetsus(
                         if until.is_some() {
                             past_until = true;
                             let owner = time_case_governor(case, doc);
+                            open_past_object = source.windows(2).any(|w| {
+                                let word = &w[0];
+                                let particle = &w[1];
+                                !word.is_locked
+                                    && !particle.is_locked
+                                    && word.upos == Some(Upos::Pron)
+                                    && matches!(word.surface.as_str(), "何" | "誰" | "どれ")
+                                    && word.deprel == "obj"
+                                    && word.head == owner
+                                    && particle.surface == "を"
+                                    && particle.deprel == "case"
+                                    && particle.head == word.doc_tok_idx
+                                    && word.span.end_char == particle.span.start_char
+                            });
                             bounded_state = source
                                 .iter()
                                 .find(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == owner)
@@ -11320,7 +11335,7 @@ fn translate_clause_bunsetsus(
         }
     }
 
-    if (elapsed_wh || open_past_endpoint) && sfp_suffix == Some("嗎") {
+    if (elapsed_wh || open_past_endpoint || open_past_object) && sfp_suffix == Some("嗎") {
         sfp_suffix = None;
     }
     if saw_to_sconj && (raw_clause.ends_with("とすぐ") || raw_clause.ends_with("とすぐに")) {
@@ -11421,6 +11436,10 @@ fn translate_clause_bunsetsus(
     }
     if past_until && adverbs.iter().any(|adv| adv == "一直") {
         pre_verb_mods.retain(|modifier| modifier != "一直");
+    }
+    if open_past_object && !open_past_endpoint {
+        pre_verb_mods.retain(|m| m != "一直");
+        pre_verb_mods.push("都在".to_owned());
     }
     if let Some(shika) = focus {
         if shika {
@@ -12508,8 +12527,8 @@ fn translate_clause_bunsetsus(
     for o in obliques {
         let _ = o.is_instrument_de;
         if let Some(time) = o.temporal_made_time {
-            if predicate_is_negative {
-                // Put an "until" frame before the negated event and retain its negation.
+            if predicate_is_negative || open_past_object && !open_past_endpoint {
+                // The time bounds the whole negation or open question.
                 parts.push(format!("到{time}為止"));
             } else {
                 // The endpoint follows the full activity, including a direct object.
@@ -22204,6 +22223,16 @@ mod motion_endpoint_tests {
     #[test]
     fn past_progressive_activity_continues_until_its_own_endpoint() {
         for (source, expected) in [
+            ("何時まで働いていましたか。", "一直工作到幾點？"),
+            ("六時まで何をしていましたか。", "到六點為止都在做什麼？"),
+            (
+                "父は昼まで眼鏡をかけていました。",
+                "父親一直戴著眼鏡到中午。",
+            ),
+            (
+                "先生は朝まで椅子に座っていました。",
+                "老師一直坐在椅子上，直到早上。",
+            ),
             ("私は六時まで働いていた。", "我一直工作到六點。"),
             ("私は夕方まで本を読んでいました。", "我一直讀書到傍晚。"),
             ("私は昼までずっと働いていました。", "我一直工作到中午。"),

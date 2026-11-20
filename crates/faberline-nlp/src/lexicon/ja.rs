@@ -280,25 +280,14 @@ fn follows_with_age_or_copula(suffix: &str) -> bool {
     })
 }
 
-fn contrasts_with_current_person(left: &str, suffix: &str, following_text: &str) -> bool {
-    if !matches!(left, "昔" | "以前" | "かつて" | "当時") {
-        return false;
-    }
-    let Some(tail) = strip_hagaki_copula(suffix) else {
-        return false;
-    };
+fn next_hagaki_clause<'a>(suffix: &'a str, following_text: &'a str) -> Option<&'a str> {
+    let tail = strip_hagaki_copula(suffix)?;
     let context = if tail.is_empty() {
-        let Some(next) = following_text.strip_prefix('。') else {
-            return false;
-        };
-        next
+        following_text.strip_prefix('。')?
     } else {
-        let Some(contrast) = ["が", "けれども", "けれど", "けど"]
+        let contrast = ["が", "けれども", "けれど", "けど"]
             .into_iter()
-            .find_map(|link| tail.strip_prefix(link))
-        else {
-            return false;
-        };
+            .find_map(|link| tail.strip_prefix(link))?;
         if contrast.is_empty() {
             following_text
         } else {
@@ -308,20 +297,120 @@ fn contrasts_with_current_person(left: &str, suffix: &str, following_text: &str)
     let inline_space = [' ', '\t', '\u{3000}'];
     let clause = context.trim_start_matches(inline_space);
     let clause = clause.strip_prefix(['、', '，', ',']).unwrap_or(clause);
-    let Some(current) = ["今は", "いまは", "現在は"]
+    clause
+        .trim_start_matches(inline_space)
+        .split(['。', '、', '！', '？', '!', '?', ',', '」', '』'])
+        .next()
+}
+
+fn occupation_stem(stem: &str) -> bool {
+    matches!(
+        stem,
+        "配達" | "郵便" | "駅" | "店" | "乗務" | "職" | "教" | "乗員"
+    )
+}
+
+fn actor_before_hagaki_time(leading: &str) -> Option<&str> {
+    let actor = leading.strip_suffix(['も', 'は', 'が'])?;
+    let noun = ["この", "その", "あの"]
         .into_iter()
-        .find_map(|topic| clause.trim_start_matches(inline_space).strip_prefix(topic))
+        .find_map(|modifier| actor.strip_prefix(modifier))
+        .unwrap_or(actor);
+    (has_human_topic(noun)
+        || noun.strip_suffix('員').is_some_and(occupation_stem)
+        || noun == "同僚")
+        .then_some(actor)
+}
+
+fn same_actor_hagaki_predicate<'a>(clause: &'a str, actor: &str) -> &'a str {
+    clause
+        .strip_prefix(actor)
+        .and_then(|tail| tail.strip_prefix(['も', 'は', 'が']))
+        .unwrap_or(clause)
+}
+
+fn hagaki_age_predicate(clause: &str, age_nouns: &[&str], copulas: &[&str]) -> bool {
+    let Some(predicate) = copulas
+        .iter()
+        .copied()
+        .find_map(|form| clause.strip_suffix(form))
     else {
         return false;
     };
-    let predicate = current
-        .split(['。', '、', '！', '？', '!', '?', ',', '」', '』'])
-        .next()
-        .unwrap_or(current);
-    ["だ", "です"]
+    let adjective = |word| lookup_ja(word).is_some_and(|hit| hit.decided_upos == Some(Upos::Adj));
+    age_nouns
+        .iter()
+        .copied()
+        .filter_map(|noun| predicate.strip_suffix(noun))
+        .any(|modifier| {
+            if modifier.is_empty() || adjective(modifier) {
+                return true;
+            }
+            if let Some(stem) = modifier.strip_suffix('な') {
+                return adjective(stem);
+            }
+            // A short bound Kanji stem can form an adjective compound, e.g. 礼儀正しい.
+            let mut chars = modifier.char_indices().peekable();
+            for _ in 0..2 {
+                if !chars
+                    .next()
+                    .is_some_and(|(_, ch)| matches!(ch, '\u{4e00}'..='\u{9fff}'))
+                {
+                    break;
+                }
+                if chars
+                    .peek()
+                    .is_some_and(|(at, _)| adjective(&modifier[*at..]))
+                {
+                    return true;
+                }
+            }
+            false
+        })
+}
+
+fn contrasts_with_current_person(
+    leading: &str,
+    time: &str,
+    suffix: &str,
+    following_text: &str,
+) -> bool {
+    if !matches!(time, "昔" | "以前" | "かつて" | "当時") {
+        return false;
+    }
+    let actor = actor_before_hagaki_time(leading);
+    if !leading.is_empty() && actor.is_none() {
+        return false;
+    }
+    let Some(clause) = next_hagaki_clause(suffix, following_text) else {
+        return false;
+    };
+    if let Some(current) = ["今は", "いまは", "現在は"]
         .into_iter()
-        .filter_map(|copula| predicate.strip_suffix(copula))
-        .any(has_human_topic)
+        .find_map(|topic| clause.strip_prefix(topic))
+    {
+        let current = current.trim_start_matches([' ', '\t', '\u{3000}']);
+        return match actor {
+            Some(actor) => hagaki_age_predicate(
+                same_actor_hagaki_predicate(current, actor),
+                &["大人", "成人"],
+                &["だ", "です"],
+            ),
+            None => ["だ", "です"]
+                .into_iter()
+                .filter_map(|form| current.strip_suffix(form))
+                .any(has_human_topic),
+        };
+    }
+    (suffix.starts_with("では") || suffix.starts_with("じゃ"))
+        && actor.is_some_and(|actor| {
+            let child = clause.strip_prefix("昔は").unwrap_or(clause);
+            hagaki_age_predicate(
+                same_actor_hagaki_predicate(child, actor),
+                &["子", "子供", "子ども"],
+                &["だった", "でした"],
+            )
+        })
 }
 
 fn has_linked_human_topic(
@@ -337,10 +426,7 @@ fn has_linked_human_topic(
         .map(|(start, end, _)| &text[byte_offs[*start]..byte_offs[*end]]);
     if left == "員" {
         // Only a lexical occupation stem identifies a person; 員 also counts members.
-        return matches!(
-            preceding,
-            Some("配達" | "郵便" | "駅" | "店" | "乗務" | "職" | "教" | "乗員")
-        );
+        return preceding.is_some_and(occupation_stem);
     }
     if left == "僚" {
         return preceding == Some("同");
@@ -435,7 +521,12 @@ fn resolve_hagaki_topic(
         let (noun_end, lemma) = if let Some(compound) = compound {
             compound
         } else if (explicit_person && follows_with_age_or_copula(suffix))
-            || contrasts_with_current_person(left, suffix, following_text)
+            || contrasts_with_current_person(
+                &text[..byte_offs[*subject_start]],
+                left,
+                suffix,
+                following_text,
+            )
         {
             (end, "ガキ".to_owned())
         } else {
@@ -1547,6 +1638,15 @@ mod hagaki_topic_segmentation_tests {
         suffix: &str,
         custom_terms: &[(&str, usize)],
     ) -> Option<(String, usize)> {
+        select_hagaki_topic_with_context(parts, suffix, custom_terms, "")
+    }
+
+    fn select_hagaki_topic_with_context(
+        parts: &[&str],
+        suffix: &str,
+        custom_terms: &[(&str, usize)],
+        following_text: &str,
+    ) -> Option<(String, usize)> {
         let text = parts.concat() + suffix;
         let byte_offs: Vec<_> = text
             .char_indices()
@@ -1567,7 +1667,7 @@ mod hagaki_topic_segmentation_tests {
             ));
             start += len_chars;
         }
-        resolve_hagaki_topic(&mut path, &text, &byte_offs, custom_terms, "");
+        resolve_hagaki_topic(&mut path, &text, &byte_offs, custom_terms, following_text);
         path.into_iter().find_map(|(_, end, edge)| {
             if let EdgeKind::HagakiTopic(lemma) = edge.kind {
                 Some((lemma, end))
@@ -1611,41 +1711,49 @@ mod hagaki_topic_segmentation_tests {
     #[test]
     fn reads_a_human_topic_across_honorifics_reports_and_contrast() {
         assert!(contrasts_with_current_person(
+            "",
             "昔",
             "だった",
             "。今は大人です。"
         ));
         assert!(!contrasts_with_current_person(
+            "",
             "昔",
             "だった",
             "。今は封書です。"
         ));
         assert!(!contrasts_with_current_person(
+            "",
             "昔",
             "だった",
             "。\n今は大人です。"
         ));
         assert!(contrasts_with_current_person(
+            "",
             "昔",
             "だったが",
             " 今は父親だ。"
         ));
         assert!(!contrasts_with_current_person(
+            "",
             "昔",
             "だったが",
             "\n今は父親だ。"
         ));
         assert!(contrasts_with_current_person(
+            "",
             "昔",
             "だったが",
             "、今は父親だ。"
         ));
         assert!(!contrasts_with_current_person(
+            "",
             "昔",
             "だったが",
             "。今は父親だ。"
         ));
         assert!(!contrasts_with_current_person(
+            "",
             "昔",
             "だったが",
             "、今は封書だ。"
@@ -1684,6 +1792,87 @@ mod hagaki_topic_segmentation_tests {
                 &["弟", "はがき", "大将"],
                 "だったそうです。",
                 &[("がき大将", 4)]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn later_age_predicate_resolves_only_compatible_childhood_topic() {
+        for (parts, suffix, next, expected) in [
+            (
+                &["叔母", "も", "昔", "はがき"][..],
+                "だった",
+                "。今は叔母も大人です",
+                true,
+            ),
+            (
+                &["兄", "は", "かつて", "はがき"][..],
+                "でした",
+                "。現在は兄が立派な大人です",
+                true,
+            ),
+            (
+                &["あの", "店員", "も", "昔", "はがき"][..],
+                "ではありませんでした",
+                "。礼儀正しい子でした",
+                true,
+            ),
+            (
+                &["駅員", "も", "昔", "はがき"][..],
+                "じゃなかった",
+                "。駅員はおとなしい子でした",
+                true,
+            ),
+            (
+                &["父", "も", "昔", "はがき"][..],
+                "だった",
+                "。今は母も立派な大人です",
+                false,
+            ),
+            (
+                &["私", "も", "昔", "はがき"][..],
+                "でした",
+                "。今は先生です",
+                false,
+            ),
+            (
+                &["母", "も", "昔", "はがき"][..],
+                "を買っていた",
+                "。今は母も大人です",
+                false,
+            ),
+            (
+                &["母", "も", "昔", "はがき"][..],
+                "ではなかった",
+                "。妹もおとなしい子でした",
+                false,
+            ),
+            (
+                &["母", "も", "昔", "はがき"][..],
+                "だった",
+                "。\n今は母も大人です",
+                false,
+            ),
+            (
+                &["それ", "は", "昔", "はがき"][..],
+                "だった",
+                "。今は大人です",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                select_hagaki_topic_with_context(parts, suffix, &[], next).is_some(),
+                expected,
+                "{parts:?} {suffix} {next}",
+            );
+        }
+        assert_eq!(
+            select_hagaki_topic_with_context(
+                &["叔母", "も", "昔", "はがき"],
+                "だった",
+                &[("はがき", 3)],
+                "。今は叔母も大人です",
             ),
             None
         );

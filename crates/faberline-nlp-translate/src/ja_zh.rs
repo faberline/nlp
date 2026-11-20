@@ -13,6 +13,7 @@ pub(crate) use calendar::DateContext;
 mod copular_time;
 mod counted_object;
 mod daytime;
+mod finished_go;
 mod finite_adjective;
 mod handover;
 mod homework_desire;
@@ -273,6 +274,7 @@ pub(crate) fn translate_ja_sentence(
     if target == TargetVariant::ZhHant {
         calendar::bind_relative_contrast(&mut atoms, chars);
         homework_relative::mark_argument_commas(&mut atoms, doc);
+        finished_go::mark_reading_pause(&mut atoms, doc, chars);
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
@@ -4497,7 +4499,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
             continue;
         }
 
-        if homework_relative::is_argument_comma(a) {
+        if homework_relative::is_argument_comma(a) || finished_go::is_reading_pause(a) {
             current.push(a.clone());
             i += 1;
             continue;
@@ -11055,6 +11057,7 @@ fn translate_clause_bunsetsus(
         is_event_time_ni: bool,
         transfer_dative: bool,
         physical_goal_head: Option<usize>,
+        completed_go_place: Option<String>,
     }
 
     struct PlacedSubj {
@@ -11383,6 +11386,11 @@ fn translate_clause_bunsetsus(
         .filter(|a| daytime::is_modifier(a))
         .find_map(|day| daytime::meeting_verb(source, day));
     let handover = handover::resolve(&bunsetsus, ctx.source_chars, doc, target);
+    let completed_go = if target == TargetVariant::ZhHant && !ctx.inside_quote {
+        finished_go::resolve(&bunsetsus, source, doc, ctx.source_chars)
+    } else {
+        None
+    };
     for (idx, b) in bunsetsus.drain(..).enumerate() {
         if handover
             .as_ref()
@@ -11623,6 +11631,10 @@ fn translate_clause_bunsetsus(
             };
         }
 
+        let completed_go_place = completed_go
+            .as_ref()
+            .filter(|action| action.goal_group == idx)
+            .map(|_| render_bunsetsu_np(&b, target));
         match b.role {
             BunsetsuRole::ResidencePlace {
                 form,
@@ -11853,6 +11865,7 @@ fn translate_clause_bunsetsus(
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
+                        completed_go_place,
                     });
                 }
             }
@@ -11900,6 +11913,7 @@ fn translate_clause_bunsetsus(
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
+                        completed_go_place,
                     });
                 }
             }
@@ -12467,6 +12481,7 @@ fn translate_clause_bunsetsus(
                     is_event_time_ni: false,
                     transfer_dative: false,
                     physical_goal_head: None,
+                    completed_go_place: None,
                 });
             }
         }
@@ -12655,8 +12670,6 @@ fn translate_clause_bunsetsus(
     let is_cause_verb = predicates_is_cause_verb(&predicates);
     let has_causative = pre_verb_mods.iter().any(|m| m == "讓");
 
-    // Only a single directly linked physical goal of a directly negated 行く
-    // can use Chinese 去 + place order. Leave competing に / まで untouched.
     let mut lexical_verbs = predicates
         .iter()
         .flat_map(|b| &b.atoms)
@@ -12664,6 +12677,34 @@ fn translate_clause_bunsetsus(
     let direct_go = lexical_verbs
         .next()
         .filter(|a| a.lemma.as_deref().unwrap_or(&a.surface) == "行く");
+    // Keep the original argument unless the ordinary renderer still has
+    // the same affirmative past action and its proved destination.
+    let completed_destination = if verb_core == "去"
+        && pre_verb_mods.is_empty()
+        && post_verb_mods.as_slice() == ["了"]
+        && !passive_agent_needed
+        && objs.is_empty()
+        && route.is_none()
+        && purpose.is_none()
+        && elapsed_duration.is_none()
+        && completed_go.as_ref().is_some_and(|action| {
+            direct_go.and_then(|verb| verb.doc_tok_idx) == Some(action.predicate)
+        }) {
+        let is_completed_goal = |arg: &mut PlacedArg| {
+            arg.completed_go_place
+                .as_ref()
+                .is_some_and(|place| !place.is_empty())
+        };
+        obliques
+            .extract_if(.., is_completed_goal)
+            .next()
+            .or_else(|| iobjs.extract_if(.., is_completed_goal).next())
+            .and_then(|arg| arg.completed_go_place)
+    } else {
+        None
+    };
+    // Only a single directly linked physical goal of a directly negated 行く
+    // can use Chinese 去 + place order. Leave competing に / まで untouched.
     let is_negative_go = verb_core == "去"
         && pre_verb_mods
             .iter()
@@ -13356,6 +13397,7 @@ fn translate_clause_bunsetsus(
     } else {
         parts.extend(post_verb_mods);
     }
+    parts.extend(completed_destination);
     // A duration follows an explicit object: 動詞了 + 物件 + 時長.
     // A separate purpose has its own verb and must not take this duration.
     if objs.is_empty() || purpose.is_some() {
@@ -15543,7 +15585,7 @@ fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> 
     let mut cur: Vec<Atom> = Vec::new();
 
     for (idx, atom) in atoms.iter().enumerate() {
-        if homework_relative::is_argument_comma(atom) {
+        if homework_relative::is_argument_comma(atom) || finished_go::is_reading_pause(atom) {
             if !cur.is_empty() {
                 bunsetsus.push(classify_bunsetsu(
                     std::mem::take(&mut cur),
@@ -22897,7 +22939,7 @@ mod motion_endpoint_tests {
             assert!(output.contains("沒有去機場"), "{source}: {output}");
         }
         let positive = translate("図書館へ行きました。");
-        assert!(positive.contains("往圖書館"), "{positive}");
+        assert_eq!(positive, "去了圖書館。");
         let question = translate("図書館に行きませんか。");
         assert!(question.contains('嗎'), "{question}");
         let endpoint = translate("図書館まで行かなかった。");
@@ -22924,10 +22966,7 @@ mod motion_endpoint_tests {
             );
         }
         let positive = translate("午前九時に学校へ行きました。");
-        assert!(
-            positive.contains("上午九點") && positive.contains("往學校"),
-            "{positive}"
-        );
+        assert_eq!(positive, "在上午九點去了學校。");
         let endpoint = translate("午前九時に学校まで行きませんでした。");
         assert!(
             endpoint.contains("上午九點") && endpoint.contains("學校") && endpoint.contains("沒有"),

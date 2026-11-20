@@ -12,6 +12,18 @@ pub(super) struct FinishedGo {
     pub(super) goal_group: usize,
 }
 
+const READING_PAUSE: &str = "__ja_finished_go_reading_pause";
+
+pub(super) fn mark_reading_pause(atoms: &mut [Atom], doc: &Document, source: &[char]) {
+    if let Some(index) = reading_pause(atoms, doc, source) {
+        atoms[index].lemma = Some(READING_PAUSE.to_owned());
+    }
+}
+
+pub(super) fn is_reading_pause(atom: &Atom) -> bool {
+    atom.lemma.as_deref() == Some(READING_PAUSE)
+}
+
 struct DirectGo {
     predicate: usize,
     place: usize,
@@ -279,7 +291,7 @@ pub(super) fn resolve(
 
 /// A reading comma after a source-linked time can keep all arguments of the
 /// same trip in one segment. Keep ambiguous or event-separating commas intact.
-pub(super) fn reading_pause(atoms: &[Atom], doc: &Document, source: &[char]) -> Option<usize> {
+fn reading_pause(atoms: &[Atom], doc: &Document, source: &[char]) -> Option<usize> {
     if doc.text_chars != source.len() {
         return None;
     }
@@ -360,13 +372,25 @@ fn topic_has_same_governor(atoms: &[Atom], predicate: usize, doc: &Document) -> 
 #[cfg(test)]
 mod tests {
     use faberline_nlp::doc::analyze_document;
+    use faberline_nlp::doc::model::Backend;
 
     use super::super::{
         GlossaryKind, LockOrigin, SpanLockTable, core_non_punct, group_into_bunsetsus,
         merge_adnominal_bunsetsus, normalize_ja_atoms, normalized_sentence_atoms,
     };
     use super::*;
-    use crate::{GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary};
+    use crate::{
+        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+    };
+
+    fn glossary_entry(canonical: &str, target: &str) -> GlossaryEntry {
+        GlossaryEntry {
+            canonical: canonical.to_owned(),
+            surfaces: vec![canonical.to_owned()],
+            targets: [(TargetVariant::ZhHant, target.to_owned())].into(),
+            ..GlossaryEntry::default()
+        }
+    }
 
     fn source_result(text: &str, place: Option<&str>) -> (Option<usize>, Option<String>) {
         let mut glossary = TranslationGlossary::new();
@@ -387,12 +411,7 @@ mod tests {
                 },
                 true,
             ));
-            GlossaryEntry {
-                canonical: canonical.to_owned(),
-                surfaces: vec![canonical.to_owned()],
-                targets: [(TargetVariant::ZhHant, target.to_owned())].into(),
-                ..GlossaryEntry::default()
-            }
+            glossary_entry(canonical, target)
         };
         if let Some(place) = place {
             glossary
@@ -476,6 +495,90 @@ mod tests {
             ),
         ] {
             assert_eq!(source_result(source, glossary), (None, None), "{source}");
+        }
+    }
+
+    #[test]
+    fn completed_trips_use_their_own_subject_clock_and_goal() {
+        let glossary = TranslationGlossary::new();
+        for hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = hint;
+            for (source, expected) in [
+                ("田中さんは昨日、学校へ行きました。", "田中昨天去了學校。"),
+                ("午前九時に学校へ行った。", "在上午九點去了學校。"),
+                ("午前九時に学校に行きました。", "在上午九點去了學校。"),
+                ("午後二時に学校に行きました。", "在下午兩點去了學校。"),
+                (
+                    "田中さんは午前九時に、学校へ行きました。",
+                    "田中在上午九點去了學校。",
+                ),
+                (
+                    "田中さんは午前九時、学校へ行きました。",
+                    "田中上午九點，往學校去了。",
+                ),
+                (
+                    "午前九時に駅で待ち、学校へ行きました。",
+                    "在上午九點在車站等待，往學校去了。",
+                ),
+                ("私は学校の方へ行きました。", "我往學校的位去了。"),
+                ("昨日学校へ本を返しに行きました。", "昨天往學校去還書了。"),
+                (
+                    "午前九時までに学校へ行きました。",
+                    "最晚在上午九點往學校去了。",
+                ),
+                (
+                    "先生は生徒に資料を渡し、教室へ行きました。",
+                    "老師把資料交給學生，往教室去了。",
+                ),
+                (
+                    "紙に「図書館へ行きました」と一字ずつ書きました。",
+                    "給紙，「図書館へ行きました」一字ずつ寫了。",
+                ),
+            ] {
+                let result =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                assert_eq!(result.target_text, expected, "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn completed_trips_keep_original_actor_and_place_glossary_spans() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.actors.push(glossary_entry("田中さん", "田中代表"));
+        glossary.places.push(glossary_entry("学校", "甲學校"));
+        let source = "田中さんは午前九時に、学校へ行きました。";
+        for hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = hint;
+            let result =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(result.target_text, "田中代表在上午九點去了甲學校。");
+            let slice = |text: &str, span: Span| {
+                text.chars()
+                    .skip(span.start_char)
+                    .take(span.end_char - span.start_char)
+                    .collect::<String>()
+            };
+            let hits: Vec<_> = result
+                .glossary_hits
+                .iter()
+                .map(|hit| {
+                    (
+                        slice(source, hit.source_span),
+                        slice(&result.target_text, hit.target_span),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                hits,
+                [
+                    ("田中さん".to_owned(), "田中代表".to_owned()),
+                    ("学校".to_owned(), "甲學校".to_owned()),
+                ]
+            );
         }
     }
 }

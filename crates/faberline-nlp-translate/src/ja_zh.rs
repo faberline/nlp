@@ -12102,6 +12102,7 @@ fn translate_clause_bunsetsus(
     if target == TargetVariant::ZhHant
         && !verb_core.is_empty()
         && has_prohibitive_ending(core_non_punct(source))
+        && !has_weather_forecast(source, doc, ctx)
         && !has_ambiguous_sky_context(source, doc, ctx)
     {
         pre_verb_mods.insert(0, "不要".to_owned());
@@ -21118,12 +21119,21 @@ mod clock_rule_tests {
             "この布は日に当たると縮むな。",
             "海は今朝荒れるな。",
             "雨は明日も降るな。",
+            "天気予報では明日も降るな。",
+            "昨日は電車に乗った。天気予報では明日も降るな。",
+            "明日は雨が降るな。",
+            "先生は学生に「明日は雨が降るな」と言いました。",
             "係員は客に「このドアは自動で開くな」と言いました。",
             "空が暗い。明日は降るな。",
             "今日は朝だ。空が暗い。明日は降るな。",
+            "コードは`x`です。\n\n空が暗い。明日は降るな。",
+            "コードは`x`です。空が暗い。明日は降るな。",
+            "John’s book。空が暗い。明日は降るな。",
             "男は「電車に乗る」と言った。空が暗い。明日は降るな。",
             "男は電車に乗ると言った。空が暗い。明日は降るな。",
             "男は電車に乗ると書いた。空が暗い。明日は降るな。",
+            "空が暗い。そうだよ、明日は降るな。",
+            "空が暗い。これは冬だよ、明日は降るな。",
             "今日は山に登る。空が暗い。明日は降るな。",
             "今日は電車に乗る。空が暗い。明日は降るな。",
             "男は「敵は降伏を迫った」と言った。空が暗い。明日は降るな。",
@@ -21141,8 +21151,14 @@ mod clock_rule_tests {
             "棚を手で倒すな。",
             "次の駅で電車から降りるな。",
             "明日は飛行機を降りるな。",
+            "まだ飛行機から降りるな。",
             "山を下るな。",
+            "今は山を下るな。",
+            "君は明日ここで飛行機を降りるな。",
+            "天気予報を聞いて、飛行機から降りるな。",
             "雨よ、明日は降るな。",
+            "雨よ、天気予報では明日も降るな。",
+            "天気予報では君は明日は降るな。",
             "空が暗い。雨よ、明日は降るな。",
             "「空が暗い。雨よ、明日は降るな。」",
             "敵に降るな。",
@@ -21176,12 +21192,28 @@ mod clock_rule_tests {
             ),
             ("「空が暗い。明日は降るな。」", "「天空很昏暗。明天下。」"),
             (
+                "空が暗い。「そうだ」、明日は降るな。",
+                "天空很昏暗。「是那樣」，明天下。",
+            ),
+            (
+                "「空が暗い。『そうだ』、明日は降るな。」",
+                "「天空很昏暗。『是那樣』，明天下。」",
+            ),
+            (
                 "紙に「空が暗い。明日は降るな」と書きました。",
                 "給紙「天空很昏暗。明天下」寫了。",
             ),
             (
                 "看板には「空が暗い。明日は降るな」とあります。",
                 "給看板「天空很昏暗。明天下」有。",
+            ),
+            (
+                "紙に「空が暗い。『そうだ』、明日は降るな」と書きました。",
+                "給紙「天空很昏暗。『是那樣』，明天下」寫了。",
+            ),
+            (
+                "紙に「天気予報では明日も降るな」と書きました。",
+                "給紙，「明天在天氣予報也下」寫了。",
             ),
         ] {
             assert_eq!(
@@ -24979,6 +25011,196 @@ pub(crate) fn is_explicit_second_person(surface: &str) -> bool {
     )
 }
 
+// The top opener's position identifies its entire enclosing quote stack.
+pub(crate) fn quote_scope_relation_from(
+    chars: &[char],
+    start: usize,
+    left: usize,
+    right: usize,
+) -> Option<bool> {
+    quote_scope_relation_inner(chars, start, left, right, |_| false)
+}
+
+pub(crate) fn quote_scope_relations_from(
+    chars: &[char],
+    start: usize,
+    positions: &[usize],
+    right: usize,
+) -> Option<Vec<bool>> {
+    quote_scope_relations_inner(chars, start, positions, right, |_| false)
+}
+
+fn document_quote_scope(doc: &Document, chars: &[char], left: usize, right: usize) -> bool {
+    let Some(paragraph) =
+        doc.segmentation.paragraphs.iter().find(|paragraph| {
+            paragraph.span.start_char <= left && right <= paragraph.span.end_char
+        })
+    else {
+        return false;
+    };
+    quote_scope_relation_inner(chars, paragraph.span.start_char, left, right, |index| {
+        doc.segmentation
+            .opaque
+            .iter()
+            .any(|opaque| opaque.span.start_char <= index && index < opaque.span.end_char)
+    }) == Some(true)
+}
+
+fn quote_scope_relation_inner(
+    chars: &[char],
+    start: usize,
+    left: usize,
+    right: usize,
+    is_opaque: impl Fn(usize) -> bool,
+) -> Option<bool> {
+    quote_scope_relations_inner(chars, start, &[left], right, is_opaque)?
+        .first()
+        .copied()
+}
+
+fn quote_scope_relations_inner(
+    chars: &[char],
+    start: usize,
+    positions: &[usize],
+    right: usize,
+    is_opaque: impl Fn(usize) -> bool,
+) -> Option<Vec<bool>> {
+    if start > right
+        || right > chars.len()
+        || positions
+            .iter()
+            .any(|&pos| pos < start || pos > right || is_opaque(pos))
+        || positions.windows(2).any(|pair| pair[0] > pair[1])
+        || is_opaque(right)
+    {
+        return None;
+    }
+    let mut stack: Vec<(char, usize)> = Vec::new();
+    let mut scopes = Vec::with_capacity(positions.len());
+    let mut next = 0;
+    for (index, &ch) in chars.iter().enumerate().take(right).skip(start) {
+        while positions.get(next) == Some(&index) {
+            scopes.push(stack.last().map(|(_, open)| *open));
+            next += 1;
+        }
+        if is_opaque(index) {
+            continue;
+        }
+        match ch {
+            '「' | '『' | '“' | '‘' => stack.push((ch, index)),
+            '’' if stack.last().is_none_or(|(open, _)| *open != '‘') => {}
+            '」' | '』' | '”' | '’' => {
+                let expected = match ch {
+                    '」' => '「',
+                    '』' => '『',
+                    '”' => '“',
+                    _ => '‘',
+                };
+                if stack.pop().is_none_or(|(open, _)| open != expected) {
+                    return None;
+                }
+            }
+            '"' => {
+                if stack.last().is_some_and(|(open, _)| *open == '"') {
+                    stack.pop();
+                } else {
+                    stack.push(('"', index));
+                }
+            }
+            // Opaque or escaped content needs its own source-range handling.
+            '`' | '\\' => return None,
+            _ => {}
+        }
+    }
+    while positions.get(next) == Some(&right) {
+        scopes.push(stack.last().map(|(_, open)| *open));
+        next += 1;
+    }
+    if next != positions.len() {
+        return None;
+    }
+    let current_scope = stack.last().map(|(_, open)| *open);
+    Some(
+        scopes
+            .into_iter()
+            .map(|scope| scope == current_scope)
+            .collect(),
+    )
+}
+
+fn has_prior_vocative(doc: &Document, ctx: &ClauseDiscourseCtx<'_>, verb: &Atom) -> bool {
+    let Some(sentence_idx) = verb
+        .doc_tok_idx
+        .and_then(|index| doc.tokens.get(index))
+        .map(|token| token.sentence)
+    else {
+        return false;
+    };
+    doc.syntax.iter().any(|edge| {
+        edge.sentence == sentence_idx
+            && edge.deprel == "discourse"
+            && doc.tokens.get(edge.token).is_some_and(|token| {
+                token.span.end_char <= verb.span.start_char
+                    && ctx
+                        .source_chars
+                        .get(token.span.start_char..token.span.end_char)
+                        == Some(&['よ'][..])
+                    && document_quote_scope(
+                        doc,
+                        ctx.source_chars,
+                        token.span.start_char,
+                        verb.span.start_char,
+                    )
+                    && edge.head.is_some_and(|head| {
+                        doc.tokens.get(head).is_some_and(|word| {
+                            matches!(word.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+                        }) && doc
+                            .syntax
+                            .iter()
+                            .any(|head_edge| head_edge.token == head && head_edge.deprel == "nmod")
+                    })
+            })
+    })
+}
+
+fn has_weather_forecast(source: &[Atom], doc: &Document, ctx: &ClauseDiscourseCtx<'_>) -> bool {
+    if ctx.source_chars.is_empty() {
+        return false;
+    }
+    let [prefix @ .., verb, marker] = core_non_punct(source) else {
+        return false;
+    };
+    if verb.surface != "降る"
+        || marker.surface != "な"
+        || !document_quote_scope(
+            doc,
+            ctx.source_chars,
+            verb.span.start_char,
+            verb.span.start_char,
+        )
+        || has_prior_vocative(doc, ctx, verb)
+        || prefix
+            .iter()
+            .any(|atom| !atom.is_locked && is_explicit_second_person(&atom.surface))
+    {
+        return false;
+    }
+    prefix.windows(4).any(|words| {
+        let [weather, forecast, case, topic] = words else {
+            return false;
+        };
+        words.iter().all(|word| !word.is_locked)
+            && weather.surface == "天気"
+            && forecast.surface == "予報"
+            && case.surface == "で"
+            && topic.surface == "は"
+            && weather.head == forecast.doc_tok_idx
+            && forecast.head == verb.doc_tok_idx
+            && case.head == forecast.doc_tok_idx
+            && topic.head == forecast.doc_tok_idx
+    })
+}
+
 // Keep the existing output when an adjacent sky statement leaves the omitted
 // subject ambiguous. This does not resolve an unstated speaker or event.
 fn has_ambiguous_sky_context(
@@ -25023,17 +25245,7 @@ fn has_ambiguous_sky_context(
     }
     // The caller can split a vocative into an earlier clause in this same
     // sentence. Do not lose that explicit addressee at the clause boundary.
-    if doc.syntax.iter().any(|edge| {
-        edge.sentence == sentence_idx
-            && edge.deprel == "discourse"
-            && doc.tokens.get(edge.token).is_some_and(|token| {
-                token.span.end_char <= verb.span.start_char
-                    && ctx
-                        .source_chars
-                        .get(token.span.start_char..token.span.end_char)
-                        == Some(&['よ'][..])
-            })
-    }) {
+    if has_prior_vocative(doc, ctx, verb) {
         return false;
     }
     doc.syntax.iter().any(|edge| {
@@ -25058,16 +25270,13 @@ fn has_ambiguous_sky_context(
         else {
             return false;
         };
-        let Some(between) = ctx
-            .source_chars
-            .get(predicate.span.end_char..verb.span.start_char)
-        else {
-            return false;
-        };
         subject_chars == ['空']
-            && !between
-                .iter()
-                .any(|ch| matches!(ch, '「' | '」' | '『' | '』' | '“' | '”' | '"'))
+            && document_quote_scope(
+                doc,
+                ctx.source_chars,
+                predicate.span.end_char,
+                verb.span.start_char,
+            )
             && edge.head.is_some_and(|head| {
                 doc.syntax.iter().any(|predicate_edge| {
                     predicate_edge.token == head

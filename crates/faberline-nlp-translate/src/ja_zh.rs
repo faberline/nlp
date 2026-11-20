@@ -11182,8 +11182,10 @@ fn translate_clause_bunsetsus(
     let mut go_together = Vec::new();
     let mut to_complements: Vec<(String, bool)> = Vec::new();
     let mut predicates: Vec<Bunsetsu> = Vec::new();
-    let until_addressee = prohibitive_until_addressee(&bunsetsus, source);
+    let until_addressee = prohibitive_until_addressee(&bunsetsus, source, ctx.source_chars);
+    let until_recipient = prohibitive_until_speech_recipient(&bunsetsus, source);
     let mut deferred_until_addressee: Option<(usize, String)> = None;
+    let mut deferred_until_recipient: Option<String> = None;
     let mut others: Vec<String> = Vec::new();
     let mut sconj_prefix: Option<&'static str> = None;
     let mut sconj_suffix: Option<&'static str> = None;
@@ -11827,6 +11829,15 @@ fn translate_clause_bunsetsus(
             BunsetsuRole::Obl
             | BunsetsuRole::ExplicitDeadline { .. }
             | BunsetsuRole::DeadlineWithDetachedNegation => {
+                if until_recipient
+                    .is_some_and(|id| b.atoms.iter().any(|atom| atom.doc_tok_idx == Some(id)))
+                {
+                    let recipient = render_bunsetsu_np(&b, target);
+                    if !recipient.is_empty() {
+                        deferred_until_recipient = Some(format!("對{recipient}"));
+                        continue;
+                    }
+                }
                 let is_inst = b.case_particle.as_deref() == Some("で")
                     && ((!is_place_location_bunsetsu(&b.atoms)
                         && is_instrument_bunsetsu(&b.atoms))
@@ -11947,6 +11958,12 @@ fn translate_clause_bunsetsus(
             BunsetsuRole::IObj => {
                 let s = render_bunsetsu_iobj(&b, target);
                 if !s.is_empty() {
+                    if until_recipient
+                        .is_some_and(|id| b.atoms.iter().any(|atom| atom.doc_tok_idx == Some(id)))
+                    {
+                        deferred_until_recipient = Some(s);
+                        continue;
+                    }
                     iobjs.push(PlacedArg {
                         text: s,
                         case_particle: b.case_particle.clone(),
@@ -12126,6 +12143,39 @@ fn translate_clause_bunsetsus(
         verb_core.insert_str(position + "之前".len(), &addressee);
         subj_entries.remove(index);
     }
+    if let Some(recipient) = deferred_until_recipient {
+        if local_prohibition.is_some()
+            && let Some(position) = verb_core.find("不要")
+        {
+            verb_core.insert_str(position + "不要".len(), &recipient);
+        } else {
+            iobjs.push(PlacedArg {
+                text: recipient,
+                case_particle: Some("に".to_owned()),
+                is_instrument_de: false,
+                is_spatial_made: false,
+                temporal_made_time: None,
+                is_event_time: false,
+                is_building_floor: false,
+                deadline_endpoint: DeadlineEndpoint::Calendar,
+                deadline_has_detached_negation: false,
+                is_event_time_ni: false,
+                transfer_dative: false,
+                physical_goal_head: None,
+            });
+        }
+    }
+    let until_prefix = if local_prohibition.is_some() {
+        verb_core.find("之前").and_then(|position| {
+            let end = position + "之前".len();
+            verb_core[end..].contains("不要").then(|| {
+                let action = verb_core.split_off(end);
+                std::mem::replace(&mut verb_core, action)
+            })
+        })
+    } else {
+        None
+    };
     if let Some(state) = bounded_state {
         verb_core = state.to_owned();
         post_verb_mods.retain(|m| m != "著");
@@ -13050,6 +13100,9 @@ fn translate_clause_bunsetsus(
         }
         parts.extend(connectors);
         parts.extend(subjects);
+    }
+    if let Some(until) = until_prefix {
+        parts.push(until);
     }
 
     if (ctx.in_kuseni_follow || ctx.in_noni_follow) && sconj_prefix.is_none() {
@@ -16011,7 +16064,11 @@ fn mark_prohibitive_until(groups: &mut [Bunsetsu], source: &[Atom]) {
 
 // Keep an explicit second-person addressee with the prohibited action, even
 // when the parser attaches the topic to the earlier until-event.
-fn prohibitive_until_addressee(groups: &[Bunsetsu], source: &[Atom]) -> Option<usize> {
+fn prohibitive_until_addressee(
+    groups: &[Bunsetsu],
+    source: &[Atom],
+    chars: &[char],
+) -> Option<usize> {
     let action = prohibitive_verb(core_non_punct(source))?.doc_tok_idx?;
     let mut deadlines = groups
         .iter()
@@ -16025,10 +16082,20 @@ fn prohibitive_until_addressee(groups: &[Bunsetsu], source: &[Atom]) -> Option<u
     }
     let mut people = source.windows(2).filter_map(|pair| {
         let [person, case] = pair else { return None };
-        if person.is_locked
-            || case.is_locked
+        let person_surface = if person.is_locked {
+            if person.lemma.as_deref() != Some(LOCKED_RESIDENT_ATOM) {
+                return None;
+            }
+            chars
+                .get(person.span.start_char..person.span.end_char)?
+                .iter()
+                .collect::<String>()
+        } else {
+            person.surface.clone()
+        };
+        if case.is_locked
             || person.deprel != "nsubj"
-            || !is_explicit_second_person(&person.surface)
+            || !is_explicit_second_person(&person_surface)
             || !matches!(case.surface.as_str(), "は" | "が")
             || case.head != person.doc_tok_idx
         {
@@ -16038,7 +16105,8 @@ fn prohibitive_until_addressee(groups: &[Bunsetsu], source: &[Atom]) -> Option<u
             let [other, particle] = pair else {
                 return false;
             };
-            !other.is_locked
+            (!other.is_locked || other.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM))
+                && other.doc_tok_idx.is_some()
                 && !particle.is_locked
                 && other.doc_tok_idx != person.doc_tok_idx
                 && other.deprel == "nsubj"
@@ -16063,7 +16131,8 @@ fn prohibitive_until_addressee(groups: &[Bunsetsu], source: &[Atom]) -> Option<u
     let addressee = people.next()?;
     if people.next().is_some()
         || source.iter().any(|other| {
-            !other.is_locked
+            (!other.is_locked || other.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM))
+                && other.doc_tok_idx.is_some()
                 && other.deprel == "nsubj"
                 && other.head == Some(action)
                 && other.doc_tok_idx != Some(addressee)
@@ -16072,6 +16141,45 @@ fn prohibitive_until_addressee(groups: &[Bunsetsu], source: &[Atom]) -> Option<u
         return None;
     }
     Some(addressee)
+}
+
+// A person marked に is the addressee of 話す, not the actor of the
+// preceding until-event. Keep it next to that speech action.
+fn prohibitive_until_speech_recipient(groups: &[Bunsetsu], source: &[Atom]) -> Option<usize> {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+    if !groups
+        .iter()
+        .any(|group| group.role == BunsetsuRole::ProhibitiveUntil)
+    {
+        return None;
+    }
+    let action = prohibitive_verb(core_non_punct(source))?;
+    if action.lemma.as_deref().unwrap_or(&action.surface) != "話す" {
+        return None;
+    }
+    let mut recipients = source.windows(2).filter_map(|pair| {
+        let [person, case] = pair else { return None };
+        ((!person.is_locked || person.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM))
+            && !case.is_locked
+            && person.doc_tok_idx.is_some()
+            && is_person_like_atom(person)
+            && !is_time_or_place_bunsetsu(pair)
+            && !source_time_head(person)
+            && !lookup_ja(&person.surface).is_some_and(|hit| {
+                matches!(
+                    hit.sem_class,
+                    Some(SemanticClass::Time | SemanticClass::Location)
+                )
+            })
+            && matches!(person.deprel.as_str(), "obl" | "iobj")
+            && person.head == action.doc_tok_idx
+            && case.surface == "に"
+            && case.head == person.doc_tok_idx)
+            .then_some(person.doc_tok_idx)
+            .flatten()
+    });
+    let recipient = recipients.next()?;
+    recipients.next().is_none().then_some(recipient)
 }
 
 fn is_prenominal_pred(b: &Bunsetsu) -> bool {
@@ -21511,6 +21619,91 @@ mod clock_rule_tests {
                 "{source}: {actual}"
             );
         }
+        let negative_until =
+            public_translate("雨が降らないまま朝になるまで外へ出るな。", &glossary).target_text;
+        assert!(
+            negative_until.find("不下") < negative_until.find("之前")
+                && negative_until.find("之前") < negative_until.find("不要出去"),
+            "{negative_until}"
+        );
+    }
+
+    #[test]
+    fn until_speech_time_is_not_a_recipient() {
+        let glossary = TranslationGlossary::new();
+        for (source, time) in [
+            ("先生が来るまで夜中に話すな。", "夜中"),
+            ("先生が来るまで午後に話すな。", "下午"),
+            ("先生が来るまで明後日に話すな。", "後天"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert!(!actual.contains(&format!("對{time}")), "{source}: {actual}");
+            assert!(
+                actual.find("之前") < actual.find(time),
+                "{source}: {actual}"
+            );
+            assert!(actual.find(time) < actual.find("說"), "{source}: {actual}");
+        }
+    }
+
+    #[test]
+    fn until_roles_preserve_actor_and_signal_glossary_spans() {
+        let mut glossary = TranslationGlossary::new();
+        for (source, target) in [("君", "指定你"), ("学生", "指定學生")] {
+            glossary.actors.push(GlossaryEntry {
+                canonical: source.to_owned(),
+                surfaces: vec![source.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, target.to_owned())]),
+                ..GlossaryEntry::default()
+            });
+        }
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "合図".to_owned(),
+            surfaces: vec!["合図".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "信號".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        for (source, order, expected_hits) in [
+            (
+                "君は先生が来るまで学生に話すな。",
+                vec!["老師", "來", "之前", "指定你", "不要", "指定學生", "說"],
+                vec![("君", "指定你"), ("学生", "指定學生")],
+            ),
+            (
+                "飛行機が着陸した。客室乗務員は乗客に「合図があるまで降りるな」と言いました。",
+                vec!["乘務員", "乘客", "信號", "之前", "不要", "下來"],
+                vec![("合図", "信號")],
+            ),
+        ] {
+            let result = public_translate(source, &glossary);
+            let positions: Vec<usize> = order
+                .into_iter()
+                .map(|part| result.target_text.find(part).expect(source))
+                .collect();
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "{source}: {}",
+                result.target_text
+            );
+            assert_eq!(result.glossary_hits.len(), expected_hits.len(), "{source}");
+            for (hit, (original, target)) in result.glossary_hits.iter().zip(expected_hits) {
+                let source_text: String = source
+                    .chars()
+                    .skip(hit.source_span.start_char)
+                    .take(hit.source_span.end_char - hit.source_span.start_char)
+                    .collect();
+                let target_text: String = result
+                    .target_text
+                    .chars()
+                    .skip(hit.target_span.start_char)
+                    .take(hit.target_span.end_char - hit.target_span.start_char)
+                    .collect();
+                assert_eq!(
+                    (source_text.as_str(), target_text.as_str()),
+                    (original, target)
+                );
+            }
+        }
     }
 
     #[test]
@@ -21561,7 +21754,9 @@ mod clock_rule_tests {
     fn negated_or_questioned_clouds_are_not_positive_weather_evidence() {
         for source in [
             "雨雲が広がらなかった。そろそろ降るな。",
+            "雨雲が広がりませんでした。そろそろ降るな。",
             "雨雲が広がったか。そろそろ降るな。",
+            "雨雲が広がったのだろうか。そろそろ降るな。",
             "雨雲が広がった。絶対降るな。",
             "雨雲が広がった。降るな。",
         ] {

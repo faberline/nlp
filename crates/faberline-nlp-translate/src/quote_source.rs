@@ -714,6 +714,13 @@ fn quotes_exact_writing(
     };
     let start = scope.end_char - tail.len();
     let first = syntax.tokens.partition_point(|t| t.span.start_char < start);
+    let Some(marker) = first.checked_sub(1).and_then(|i| syntax.tokens.get(i)) else {
+        return false;
+    };
+    // The first character of という does not introduce the written phrase.
+    if marker.span.start_char + 1 != start || marker.span.end_char != start {
+        return false;
+    }
     let Some((predicate, verb)) = syntax.first_predicate(first, scope.end_char) else {
         return false;
     };
@@ -763,6 +770,8 @@ fn quotes_exact_writing(
 
     let mut unchanged = false;
     let mut writing_surface = false;
+    let mut surface_has_foreign_text = false;
+    let mut writes_in_japanese = false;
     for (i, token) in syntax.tokens[..predicate]
         .iter()
         .enumerate()
@@ -788,11 +797,17 @@ fn quotes_exact_writing(
         let surface = case.starts_with(&['に'])
             && is_writing_surface(chars, scope.start_char, token.span.end_char, syntax, copies);
         writing_surface |= surface;
-        let other_language = word.ends_with(&['語']) && word != ['日', '本', '語'];
+        if surface && !copies {
+            surface_has_foreign_text |=
+                has_foreign_surface_inscription(chars, scope, quote, syntax, i);
+        }
+        let language_case = inscription_language_case(case);
+        let states_language = matches!(language_case, Some('で' | 'に'));
+        writes_in_japanese |= states_language && word == ['日', '本', '語'] && attached(i);
         let camera = ["カメラ", "スマホ", "スマートフォン", "携帯", "携帯電話"]
             .iter()
             .any(|name| word.iter().copied().eq(name.chars()));
-        if (other_language && matches!(case.first(), Some('で' | 'に')))
+        if (is_foreign_inscription_language(word) && states_language)
             || (copies && camera && case.starts_with(&['で']))
         {
             // A target language requests translation. An instrument with 写す
@@ -821,6 +836,16 @@ fn quotes_exact_writing(
     }
 
     let phrase = &chars[verb.span.start_char..scope.end_char];
+    if surface_has_foreign_text
+        && !writes_in_japanese
+        && !unchanged
+        && (states_inscription
+            || ["書いてあ", "書いてな", "書かれ"]
+                .iter()
+                .any(|prefix| strip_prefix(phrase, prefix).is_some()))
+    {
+        return false;
+    }
     let label = particle == 'と' && is_written_phrase(chars, first_in_quote..end_of_quote, syntax);
     if states_inscription {
         // 「…」とある states an inscription when it has an explicit surface.
@@ -971,9 +996,71 @@ fn ends_inscription_statement(tail: &[char]) -> bool {
     matches!(
         sentence_end.first(),
         None | Some('。' | '？' | '！' | '?' | '!' | '、' | 'と' | 'が')
-    ) || ["後", "あと", "前", "から", "ので", "けれど"]
+    ) || ["かどうか", "後", "あと", "前", "から", "ので", "けれど"]
         .iter()
         .any(|link| strip_prefix(tail, link).is_some())
+}
+
+fn inscription_language_case(tail: &[char]) -> Option<char> {
+    let tail = skip_space(tail);
+    let tail = strip_prefix(tail, "だけ")
+        .or_else(|| strip_prefix(tail, "のみ"))
+        .unwrap_or(tail);
+    skip_space(tail).first().copied()
+}
+
+fn is_foreign_inscription_language(word: &[char]) -> bool {
+    word.len() > 1
+        && word.ends_with(&['語'])
+        && !["日本語", "単語", "用語", "言語", "専門用語"]
+            .iter()
+            .any(|name| word.iter().copied().eq(name.chars()))
+}
+
+fn has_foreign_surface_inscription(
+    chars: &[char],
+    scope: Span,
+    quote: Span,
+    syntax: QuoteSyntax<'_>,
+    surface: usize,
+) -> bool {
+    let noun = &syntax.tokens[surface];
+    let outside_quote = |token: &Token| {
+        token.span.end_char <= quote.start_char || token.span.start_char >= quote.end_char
+    };
+    syntax.tokens[..surface]
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(_, token)| {
+            token.sentence == noun.sentence && token.span.start_char >= scope.start_char
+        })
+        .any(|(index, word)| {
+            if !outside_quote(word)
+                || !is_foreign_inscription_language(
+                    &chars[word.span.start_char..word.span.end_char],
+                )
+            {
+                return false;
+            }
+            let Some(edge) = syntax.edge(index) else {
+                return false;
+            };
+            let case = inscription_language_case(&chars[word.span.end_char..noun.span.start_char]);
+            if edge.head == Some(surface) {
+                return edge.deprel == "nmod" && case == Some('の');
+            }
+            let Some(writer) = edge.head.filter(|&head| index < head && head < surface) else {
+                return false;
+            };
+            let verb = &syntax.tokens[writer];
+            outside_quote(verb)
+                && verb.lemma.as_deref() == Some("書く")
+                && matches!(case, Some('で' | 'に'))
+                && syntax.edge(writer).is_some_and(|modifier| {
+                    modifier.head == Some(surface) && modifier.deprel == "acl"
+                })
+        })
 }
 
 fn modifies_written_surface(
@@ -2279,6 +2366,7 @@ mod tests {
             ("名札に「写真」と書いてありました。", "「写真」"),
             ("この札には「写真」と書いてありますか。", "「写真」"),
             ("看板には「写真」と書かれていましたか。", "「写真」"),
+            ("札に「写真」と書いてあるかどうか確かめました。", "「写真」"),
             ("看板には「写真」とは書いてありませんでした。", "「写真」"),
             ("札に「写真」と書かれていました。", "「写真」"),
             ("案内板には「写真」とあります。", "「写真」"),
@@ -2290,6 +2378,24 @@ mod tests {
             ("「写真」と言ってから、看板を見ました。", "「照片」"),
             ("「写真」と書いてから、札を渡しました。", "「照片」"),
             ("看板に「写真」と英語で書いてあります。", "「照片」"),
+            (
+                "英語だけで書かれた札には「写真」と書いてあります。",
+                "「照片」",
+            ),
+            ("英語だけの案内板には「写真」とあります。", "「照片」"),
+            (
+                "英語で書かれた札には、日本語で「写真」と書いてあります。",
+                "「写真」",
+            ),
+            (
+                "英語で書かれた札を閉じ、看板には「写真」と書いてあります。",
+                "「写真」",
+            ),
+            (
+                "「写真」という意味の英語だけで書かれた札を見ました。",
+                "「照片」",
+            ),
+            ("紙に「写真」という言葉を書きました。", "「写真」"),
             ("看板に「写真を買いました」と書いてありました。", "照片"),
             ("看板の前で「写真」と言いました。", "「照片」"),
         ] {

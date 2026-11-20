@@ -11184,8 +11184,10 @@ fn translate_clause_bunsetsus(
     let mut predicates: Vec<Bunsetsu> = Vec::new();
     let until_addressee = prohibitive_until_addressee(&bunsetsus, source, ctx.source_chars);
     let until_recipient = prohibitive_until_speech_recipient(&bunsetsus, source);
+    let until_time = prohibitive_until_speech_time(&bunsetsus, source, doc);
     let mut deferred_until_addressee: Option<(usize, String)> = None;
     let mut deferred_until_recipient: Option<String> = None;
+    let mut deferred_until_time: Option<String> = None;
     let mut others: Vec<String> = Vec::new();
     let mut sconj_prefix: Option<&'static str> = None;
     let mut sconj_suffix: Option<&'static str> = None;
@@ -11448,6 +11450,19 @@ fn translate_clause_bunsetsus(
         .filter(|a| daytime::is_modifier(a))
         .find_map(|day| daytime::meeting_verb(source, day));
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if let [time, case] = b.atoms.as_slice()
+            && until_time == time.doc_tok_idx
+            && until_time.is_some()
+            && !case.is_locked
+            && case.surface == "に"
+            && case.head == until_time
+        {
+            let time = render_bunsetsu_np(&b, target);
+            if !time.is_empty() {
+                deferred_until_time = Some(time);
+                continue;
+            }
+        }
         let protected_manner = b.atoms.iter().find(|a| {
             a.lemma.as_deref() == Some(application_form::LOCKED_ADJUNCT)
                 && a.head == form_manner_verb
@@ -13104,6 +13119,7 @@ fn translate_clause_bunsetsus(
     if let Some(until) = until_prefix {
         parts.push(until);
     }
+    parts.extend(deferred_until_time);
 
     if (ctx.in_kuseni_follow || ctx.in_noni_follow) && sconj_prefix.is_none() {
         parts.push("卻".to_owned());
@@ -16180,6 +16196,51 @@ fn prohibitive_until_speech_recipient(groups: &[Bunsetsu], source: &[Atom]) -> O
     });
     let recipient = recipients.next()?;
     recipients.next().is_none().then_some(recipient)
+}
+
+// Keep a source-linked event time with the prohibited speech, not with the
+// motion verb inside the preceding until-event.
+fn prohibitive_until_speech_time(
+    groups: &[Bunsetsu],
+    source: &[Atom],
+    doc: &Document,
+) -> Option<usize> {
+    use faberline_nlp::doc::EntityKind;
+
+    if !groups
+        .iter()
+        .any(|group| group.role == BunsetsuRole::ProhibitiveUntil)
+    {
+        return None;
+    }
+    let action = prohibitive_verb(core_non_punct(source))?;
+    if action.lemma.as_deref().unwrap_or(&action.surface) != "話す" {
+        return None;
+    }
+    let mut times = source.windows(2).filter_map(|pair| {
+        let [time, case] = pair else { return None };
+        let id = time.doc_tok_idx?;
+        let token = doc.tokens.get(id)?;
+        let date = doc.entities.iter().any(|entity| {
+            matches!(
+                entity.kind,
+                EntityKind::Date | EntityKind::RelativeDate | EntityKind::Time
+            ) && entity.sentence == token.sentence
+                && entity.span == token.span
+        });
+        (!time.is_locked
+            && token.span == time.span
+            && time.head == action.doc_tok_idx
+            && matches!(time.deprel.as_str(), "obl" | "iobj")
+            && !case.is_locked
+            && case.surface == "に"
+            && case.head == Some(id)
+            && time.span.end_char == case.span.start_char
+            && (date || source_time_head(time)))
+        .then_some(id)
+    });
+    let time = times.next()?;
+    times.next().is_none().then_some(time)
 }
 
 fn is_prenominal_pred(b: &Bunsetsu) -> bool {

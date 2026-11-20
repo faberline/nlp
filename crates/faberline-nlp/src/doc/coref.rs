@@ -635,7 +635,8 @@ fn has_male_hint(s: &str) -> bool {
 }
 
 fn has_japanese_honorific(canon_span: &str) -> bool {
-    let name = ["たち", "達", "ら"]
+    // The mention is already canonicalized, including 達 as 达.
+    let name = ["たち", "达", "ら"]
         .into_iter()
         .find_map(|plural| canon_span.strip_suffix(plural))
         .unwrap_or(canon_span)
@@ -1844,11 +1845,44 @@ mod tests {
             "母さん",
             "田中 さん たち",
             "田中さんら",
+            "みなさん 達",
         ] {
-            assert!(has_japanese_honorific(name), "{name}");
+            assert!(has_japanese_honorific(&canonicalize_str(name)), "{name}");
         }
-        for other in ["さん", "さんま", "さんご", "たくさん", "田中さん の 本"] {
-            assert!(!has_japanese_honorific(other), "{other}");
+        for other in [
+            "さん",
+            "さんま",
+            "さんご",
+            "たくさん",
+            "たくさん 達",
+            "田中さん の 本",
+        ] {
+            assert!(!has_japanese_honorific(&canonicalize_str(other)), "{other}");
+        }
+    }
+
+    #[test]
+    fn japanese_zero_subject_keeps_the_full_group_antecedent() {
+        let options = Options {
+            cpu_syntax: true,
+            enrich_morphology: true,
+            ..Options::default()
+        };
+        for group in ["みなさん達", "皆さん達", "みなさんたち", "田中さん達"] {
+            let text = format!("{group}は本を買いました。水を飲みました。");
+            let doc = analyze_document(&text, &options);
+            let mut subjects = doc
+                .zero_mentions
+                .iter()
+                .filter(|z| z.sentence == 1 && z.role == ZeroRole::Nsubj);
+            let subject = subjects.next().expect("group antecedent");
+            assert_eq!(subject.antecedent.span.start_char, 0, "{group}");
+            assert_eq!(
+                subject.antecedent.span.end_char,
+                group.chars().count(),
+                "{group}"
+            );
+            assert!(subjects.next().is_none(), "{group}");
         }
     }
 

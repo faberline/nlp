@@ -21068,6 +21068,7 @@ mod clock_rule_tests {
             "空が暗い。君は窓を閉めるな。",
             "空が暗い。「窓を閉めるな」と先生が言いました。",
             "空が暗いから、今日は山から降りろ。明日は降るな。",
+            "今日は山に登る。空が暗い。明日は降るな。",
             "別のドアを自動で開いたら、このドアは開くな。",
             "このドアが自動で開いたら、窓を開くな。",
             "紙に「このドアが自動で開いたら、窓を開くな」と書きました。",
@@ -24871,6 +24872,9 @@ fn follows_dark_sky_weather(source: &[Atom], doc: &Document, ctx: &ClauseDiscour
     let previous = &doc.segmentation.sentences[previous_idx];
     let current = &doc.segmentation.sentences[sentence_idx];
     if previous.paragraph != current.paragraph
+        || previous_idx.checked_sub(1).is_some_and(|earlier| {
+            doc.segmentation.sentences[earlier].paragraph == previous.paragraph
+        })
         || ctx.source_chars[previous.span.start_char..current.span.end_char]
             .iter()
             .any(|ch| matches!(ch, '「' | '」' | '『' | '』' | '“' | '”' | '"'))

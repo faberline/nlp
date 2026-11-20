@@ -3,7 +3,10 @@ mod dated_clock;
 mod dates;
 mod quantities;
 pub(super) mod report;
-use super::{Atom, Upos, normalize_decimal_digits, selects_time_value};
+use super::{
+    Atom, Bunsetsu, BunsetsuRole, Document, ElapsedDuration, Upos, normalize_decimal_digits,
+    selects_time_value,
+};
 use crate::opaque::parse_cjk_or_ascii_num;
 pub(super) use dated_clock::QUESTION as CLOCK_QUESTION;
 pub(crate) use dates::DateContext;
@@ -217,6 +220,217 @@ pub(super) fn is_day_duration(atom: &Atom) -> bool {
     atom.lemma.as_deref() == Some(DAY_DURATION)
 }
 
+pub(super) fn day_window(atoms: &[Atom]) -> Option<&str> {
+    let [day, marker] = atoms else {
+        return None;
+    };
+    (is_day_duration(day)
+        && !marker.is_locked
+        && marker.surface == "で"
+        && marker.deprel == "case"
+        && marker.head == day.doc_tok_idx)
+        .then_some(day.surface.as_str())
+}
+
+pub(super) fn is_day_result(day: &Atom, marker: &Atom) -> bool {
+    is_day_duration(day)
+        && !marker.is_locked
+        && marker.surface == "に"
+        && marker.deprel == "case"
+        && marker.head == day.doc_tok_idx
+        && marker.span.start_char == day.span.end_char
+}
+
+pub(super) enum DayRole {
+    Activity,
+    Ongoing,
+    HeldEvent,
+    Change(&'static str),
+    ResultState(&'static str),
+    NewLength(&'static str),
+}
+
+pub(super) fn day_change_adjective(atom: &Atom) -> Option<&'static str> {
+    if atom.upos != Some(Upos::Adj) || atom.deprel != "advcl" || atom.is_locked {
+        return None;
+    }
+    match (atom.surface.as_str(), atom.lemma.as_deref()) {
+        ("短く", Some("短い")) => Some("縮短"),
+        ("長く", Some("長い")) => Some("延長"),
+        _ => None,
+    }
+}
+
+fn is_information_activity(word: &str) -> bool {
+    let stem = word.strip_suffix("する").unwrap_or(word);
+    matches!(
+        stem,
+        "確認" | "点検" | "検査" | "観察" | "記録" | "計測" | "測定" | "監視" | "見張る"
+    )
+}
+
+pub(super) fn is_day_activity_progressive(action: &Atom, source: &[Atom]) -> bool {
+    action.doc_tok_idx.is_some_and(|owner| {
+        is_information_activity(action.lemma.as_deref().unwrap_or(&action.surface))
+            && (super::past_progressive_action(source, owner)
+                || day_light_verb(action, source)
+                    .is_some_and(|light| super::past_progressive_action(source, light)))
+    })
+}
+
+// A verbal noun can be linked to a separate する while still selecting
+// the object of the same activity.
+fn day_light_verb(word: &Atom, source: &[Atom]) -> Option<usize> {
+    source
+        .iter()
+        .find(|atom| {
+            !atom.is_locked
+                && atom.doc_tok_idx == word.head
+                && word.span.end_char == atom.span.start_char
+                && atom.lemma.as_deref().unwrap_or(&atom.surface) == "する"
+                && matches!(word.deprel.as_str(), "advcl" | "compound")
+        })
+        .and_then(|atom| atom.doc_tok_idx)
+}
+
+pub(super) fn day_role(
+    duration: &ElapsedDuration,
+    groups: &[Bunsetsu],
+    source: &[Atom],
+    doc: &Document,
+    focused: bool,
+) -> Option<DayRole> {
+    let result_marker = |atom: &Atom| {
+        !atom.is_locked
+            && atom.surface == "に"
+            && atom.deprel == "case"
+            && atom.span.start_char == duration.span.end_char
+    };
+    let new_length = source
+        .iter()
+        .any(|atom| atom.head == duration.unit && result_marker(atom));
+    if !new_length && is_held_event(source, duration.owner) {
+        return Some(DayRole::HeldEvent);
+    }
+    let unit = duration.unit?;
+    let original_unit = doc.tokens.get(unit)?;
+    if original_unit.span.end_char != duration.span.end_char
+        || original_unit.span.start_char < duration.span.start_char
+        || source.iter().any(|atom| {
+            atom.head == Some(unit)
+                && matches!(atom.deprel.as_str(), "case" | "discourse")
+                && !result_marker(atom)
+                && !(focused && matches!(atom.surface.as_str(), "だけ" | "しか"))
+        })
+    {
+        return None;
+    }
+    let owner = duration.owner;
+    let verb = source
+        .iter()
+        .find(|atom| atom.doc_tok_idx == Some(owner) && !atom.is_locked)?;
+    // A verbal noun may own the object itself or pass it to its linked する.
+    let light_verb = day_light_verb(verb, source);
+    let owns = |head| head == Some(owner) || light_verb.is_some_and(|light| head == Some(light));
+    let mut objects = groups
+        .iter()
+        .filter(|group| group.role == BunsetsuRole::Obj);
+    let object = objects.next()?;
+    if objects.next().is_some() {
+        return None;
+    }
+    let marker = object.atoms.last()?;
+    let noun = object.atoms.iter().find(|atom| {
+        atom.doc_tok_idx.is_some()
+            && doc.syntax.iter().any(|original| {
+                Some(original.token) == atom.doc_tok_idx
+                    && original.deprel == "obj"
+                    && owns(original.head)
+            })
+    })?;
+    if !linked_case(marker, noun, noun, "を") {
+        return None;
+    }
+    let word = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    let stem = word.strip_suffix("する").unwrap_or(word);
+    // Capturing or inspecting information can occupy an interval. The interval
+    // does not specify whether the information was checked once or many times.
+    let ongoing = is_day_activity_progressive(verb, source);
+    let independent_activity = ongoing
+        || matches!(verb.deprel.as_str(), "root" | "conj")
+        || light_verb.is_some_and(|head| {
+            source.iter().any(|atom| {
+                atom.doc_tok_idx == Some(head) && matches!(atom.deprel.as_str(), "root" | "conj")
+            })
+        });
+    if !new_length && independent_activity && is_information_activity(word) {
+        if source.iter().any(|atom| {
+            atom.head == Some(unit)
+                && matches!(
+                    atom.surface.as_str(),
+                    "約" | "およそ" | "ほぼ" | "くらい" | "ぐらい"
+                )
+        }) {
+            // Keep the approximation with the original day expression until
+            // both can be moved together.
+            return None;
+        }
+        return Some(if ongoing {
+            DayRole::Ongoing
+        } else {
+            DayRole::Activity
+        });
+    }
+    if focused
+        || noun.is_locked
+        || source
+            .iter()
+            .any(|atom| owns(atom.head) && atom.deprel == "advmod" && regular_rate(&atom.surface))
+    {
+        return None;
+    }
+    // Match the affected scale as well as the verb. The linked に marks
+    // a new length, while a bare measure can express the change in length.
+    let noun = noun.lemma.as_deref().unwrap_or(&noun.surface);
+    if matches!(noun, "期間" | "日数" | "年数" | "任期" | "時間") {
+        let action = match stem {
+            "延ばす" | "伸ばす" | "延長" => "延長",
+            "縮める" | "減らす" | "短縮" => "縮短",
+            _ if light_verb.is_some() => day_change_adjective(verb)?,
+            _ => return None,
+        };
+        return Some(if new_length {
+            DayRole::NewLength(action)
+        } else {
+            DayRole::Change(action)
+        });
+    }
+    if new_length {
+        return None;
+    }
+    // A reversible closure leaves the affected place closed for the
+    // measured period. A case-marked window is handled separately.
+    if matches!(
+        noun,
+        "入口" | "出口" | "道路" | "通路" | "窓口" | "施設" | "店舗"
+    ) && stem == "閉鎖"
+    {
+        return Some(DayRole::ResultState("封閉"));
+    }
+    let action = match (noun, stem) {
+        (
+            "日程" | "日時" | "日付" | "締切" | "出発" | "開会" | "会議" | "結婚" | "帰国",
+            "延期" | "延ばす" | "遅らせる" | "繰り下げる" | "繰り延べる" | "先送り",
+        ) => "延後",
+        (
+            "日程" | "日時" | "日付" | "締切" | "出発" | "開会" | "会議" | "結婚" | "帰国",
+            "早める" | "繰り上げる" | "前倒し",
+        ) => "提前",
+        _ => return None,
+    };
+    Some(DayRole::Change(action))
+}
+
 fn counted_days(source: &[Atom]) -> Option<String> {
     let spelling = source
         .iter()
@@ -225,12 +439,179 @@ fn counted_days(source: &[Atom]) -> Option<String> {
     super::elapsed_duration_surface(&spelling)
 }
 
+fn as_day_amount(atoms: &[Atom]) -> Option<String> {
+    let mut spelling: String = atoms.iter().map(|atom| atom.surface.as_str()).collect();
+    if spelling.ends_with('日') {
+        spelling.push('間');
+    }
+    super::elapsed_duration_surface(&spelling)
+}
+
+pub(super) fn normalize_time_taken(atoms: &mut Vec<Atom>) {
+    let Some(elapsed) = atoms.iter().position(|atom| {
+        !atom.is_locked
+            && atom.deprel == "root"
+            && atom.upos == Some(Upos::Verb)
+            && matches!(
+                atom.lemma.as_deref().unwrap_or(&atom.surface),
+                "かかる" | "掛かる"
+            )
+    }) else {
+        return;
+    };
+    let Some(marker) = atoms[..elapsed]
+        .iter()
+        .position(|atom| atom.surface == "のに")
+    else {
+        return;
+    };
+    let Some(action_index) = marker.checked_sub(1) else {
+        return;
+    };
+    let action = &atoms[action_index];
+    let time_verb = &atoms[elapsed];
+    let marker_atom = &atoms[marker];
+    let start = marker + 1;
+    let end = atoms.len() - usize::from(atoms.last().is_some_and(super::is_punct_atom));
+    let Some(amount) = as_day_amount(&atoms[start..elapsed]) else {
+        return;
+    };
+    let Some(owner) = action.doc_tok_idx else {
+        return;
+    };
+    let Some(time_owner) = time_verb.doc_tok_idx else {
+        return;
+    };
+    if action.is_locked
+        || marker_atom.is_locked
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "advcl"
+        || action.head != Some(time_owner)
+        || marker_atom.deprel != "mark"
+        || marker_atom.head != Some(owner)
+        || atoms[..action_index].iter().any(|atom| {
+            atom.upos == Some(Upos::Sconj)
+                || matches!(atom.surface.as_str(), "「" | "」" | "『" | "』")
+        })
+        || atoms[action_index..end]
+            .windows(2)
+            .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
+        || atoms[start..elapsed].iter().any(|atom| {
+            atom.is_locked
+                || atom.head != Some(time_owner)
+                    && !atoms[start..elapsed]
+                        .iter()
+                        .any(|time| time.doc_tok_idx == atom.head)
+        })
+        || atoms[elapsed + 1..end]
+            .iter()
+            .any(|atom| atom.is_locked || atom.deprel != "aux" || atom.head != Some(time_owner))
+    {
+        return;
+    }
+    let tense = match &atoms[elapsed + 1..end] {
+        [past] if past.surface == "た" => "花了",
+        [polite, past] if polite.surface == "まし" && past.surface == "た" => "花了",
+        [polite] if polite.surface == "ます" => "要花",
+        [] => "要花",
+        _ => return,
+    };
+    let mut rendered = marker_atom.clone();
+    rendered.span.end_char = atoms[end - 1].span.end_char;
+    rendered.surface = format!("{tense}{amount}");
+    rendered.upos = Some(Upos::Adv);
+    rendered.is_locked = true;
+    rendered.lemma = None;
+    rendered.deprel = "advmod".to_owned();
+    atoms[action_index].deprel = "root".to_owned();
+    atoms[action_index].head = None;
+    atoms.splice(marker..end, [rendered]);
+}
+
+// Keep a count of days with the explicit upper-bound marker. Here に
+// belongs to 以内, not to a calendar date or to a new selected value.
+fn normalize_day_limits(atoms: &mut Vec<Atom>) {
+    for marker in (1..atoms.len()).rev() {
+        let Some(ni) = atoms.get(marker) else {
+            continue;
+        };
+        let bound = &atoms[marker - 1];
+        let day = match bound.surface.as_str() {
+            "以内" => marker.checked_sub(2),
+            "内" if marker >= 3
+                && atoms[marker - 2].surface == "以"
+                && atoms[marker - 2].head == bound.doc_tok_idx
+                && atoms[marker - 2].deprel == "compound" =>
+            {
+                marker.checked_sub(3)
+            }
+            _ => None,
+        };
+        let Some(day) = day else {
+            continue;
+        };
+        let unit = &atoms[day];
+        let Some(owner) = bound.head else {
+            continue;
+        };
+        let Some(verb) = atoms.iter().find(|atom| {
+            !atom.is_locked && atom.doc_tok_idx == Some(owner) && atom.upos == Some(Upos::Verb)
+        }) else {
+            continue;
+        };
+        let word = verb.lemma.as_deref().unwrap_or(&verb.surface);
+        if !linked_case(ni, bound, bound, "に")
+            || unit.surface != "日"
+            || unit.head != Some(owner)
+            || word == "する"
+            || selects_time_value(word)
+        {
+            continue;
+        }
+        let mut start = day;
+        while start > 0
+            && is_numeral(&atoms[start - 1])
+            && atoms[start - 1].span.end_char == atoms[start].span.start_char
+        {
+            start -= 1;
+        }
+        if start == day
+            || atoms[..start].last().is_some_and(|previous| {
+                previous.span.end_char == atoms[start].span.start_char
+                    && previous.surface.ends_with('月')
+                    && previous.head == unit.doc_tok_idx
+            })
+            || atoms[start..=marker].iter().any(|atom| atom.is_locked)
+            || atoms[start..=marker]
+                .windows(2)
+                .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
+            || atoms[start..day]
+                .iter()
+                .any(|atom| atom.head != Some(owner) && atom.head != unit.doc_tok_idx)
+        {
+            continue;
+        }
+        let Some(amount) = as_day_amount(&atoms[start..=day]) else {
+            continue;
+        };
+        let mut rendered = bound.clone();
+        rendered.span.start_char = atoms[start].span.start_char;
+        rendered.span.end_char = ni.span.end_char;
+        rendered.surface = format!("在{amount}以內");
+        rendered.upos = Some(Upos::Adv);
+        rendered.is_locked = true;
+        rendered.lemma = None;
+        rendered.deprel = "advmod".to_owned();
+        atoms.splice(start..=marker, [rendered]);
+    }
+}
+
 // A focus marker immediately after a duration limits that amount. しか
 // contributes "only" together with the negative ending of its own verb.
 pub(super) fn take_focused_days(
     groups: &mut Vec<super::Bunsetsu>,
     source: &[Atom],
-) -> Option<(String, usize, bool)> {
+) -> Option<(ElapsedDuration, bool)> {
     for args in source.windows(2) {
         let [unit, marker] = args else {
             continue;
@@ -249,7 +630,23 @@ pub(super) fn take_focused_days(
             ("しか", "case") => true,
             _ => continue,
         };
-        let owner = unit.head?;
+        let governor = unit.head?;
+        let indirect_owner = source.iter().find_map(|noun| {
+            if noun.is_locked || noun.doc_tok_idx != Some(governor) || noun.deprel != "obj" {
+                return None;
+            }
+            let owner = noun.head?;
+            source
+                .iter()
+                .any(|atom| {
+                    !atom.is_locked
+                        && atom.doc_tok_idx == Some(owner)
+                        && atom.upos == Some(Upos::Verb)
+                        && is_information_activity(atom.lemma.as_deref().unwrap_or(&atom.surface))
+                })
+                .then_some(owner)
+        });
+        let owner = indirect_owner.unwrap_or(governor);
         let predicate = groups.iter().find(|g| {
             g.role == super::BunsetsuRole::Predicate
                 && g.atoms.iter().any(|a| {
@@ -290,7 +687,16 @@ pub(super) fn take_focused_days(
             g.atoms.retain(|a| a.span != span && a.span != marker.span);
         }
         groups.retain(|g| !g.atoms.is_empty());
-        return Some((amount, owner, shika));
+        return Some((
+            ElapsedDuration {
+                amount,
+                question: false,
+                owner,
+                span,
+                unit: unit.doc_tok_idx,
+            },
+            shika,
+        ));
     }
     None
 }
@@ -1055,6 +1461,7 @@ fn expression(atoms: &[Atom], end: usize, contrasts_recurrence: bool) -> Option<
 }
 
 pub(super) fn normalize(atoms: &mut Vec<Atom>, contrasts_recurrence: bool) {
+    normalize_day_limits(atoms);
     // Work from the right: binding a count can collapse both the counted
     // phrase and its day interval. Start the date pass with the resulting spans.
     quantities::normalize_habit(atoms);

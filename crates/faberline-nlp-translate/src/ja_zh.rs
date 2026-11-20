@@ -18415,7 +18415,7 @@ mod clock_rule_tests {
         );
         assert_eq!(
             translate("二時間鈴木さんと話しました。"),
-            "跟鈴木小姐說了兩個小時。"
+            "跟鈴木說了兩個小時。"
         );
         assert_eq!(
             translate("一時間友達と本を読みました。"),

@@ -625,7 +625,7 @@ fn quotes_exact_writing(
                 .is_some_and(|head| (first_in_quote..end_of_quote).contains(&head));
         let surface = (attached(i) || via_quote)
             && case.starts_with(&['に'])
-            && is_writing_surface(chars, scope.start_char, token.span.end_char, syntax);
+            && is_writing_surface(chars, scope.start_char, token.span.end_char, syntax, copies);
         writing_surface |= surface;
         if !attached(i) {
             continue;
@@ -653,6 +653,7 @@ fn quotes_exact_writing(
                 scope.start_char,
                 scope.start_char + source.len(),
                 syntax,
+                true,
             )
         });
         return unchanged && (written_source || writing_surface);
@@ -775,18 +776,37 @@ fn is_writing_instruction(
             && matches!(head.lemma.as_deref(), Some("頼む" | "言う" | "命じる")))
 }
 
-fn is_writing_surface(chars: &[char], start: usize, end: usize, syntax: QuoteSyntax<'_>) -> bool {
+fn is_writing_surface(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    syntax: QuoteSyntax<'_>,
+    copying: bool,
+) -> bool {
     let source = &chars[start..end];
-    ends_in_reading_material(chars, start, end, syntax)
-        || ["紙", "用紙", "ノート", "黒板", "手帳", "申込書"]
-            .iter()
-            .filter_map(|noun| strip_suffix(source, noun))
-            .any(|prefix| {
-                syntax
-                    .tokens
-                    .binary_search_by_key(&(start + prefix.len()), |t| t.span.start_char)
-                    .is_ok()
-            })
+    // A letter or book can report a message in its own right. A sheet, board
+    // or label instead supplies a surface for an inscription.
+    (copying && ends_in_reading_material(chars, start, end, syntax))
+        || [
+            "紙",
+            "用紙",
+            "ノート",
+            "黒板",
+            "手帳",
+            "申込書",
+            "名札",
+            "ラベル",
+            "看板",
+            "ホワイトボード",
+        ]
+        .iter()
+        .filter_map(|noun| strip_suffix(source, noun))
+        .any(|prefix| {
+            syntax
+                .tokens
+                .binary_search_by_key(&(start + prefix.len()), |t| t.span.start_char)
+                .is_ok()
+        })
 }
 
 fn copy_with_local_dependencies(
@@ -1822,6 +1842,12 @@ mod tests {
             ("黒板に「走る」と書いた。", &["「走る」"]),
             ("「赤い」とノートに書きます。", &["「赤い」"]),
             ("紙に「食べない」と書きました。", &["「食べない」"]),
+            ("母への手紙に「帰った」と書きました。", &["回去"]),
+            ("母への手紙に「帰る」と書きました。", &["回去"]),
+            (
+                "母への手紙に「帰った」とそのまま書きました。",
+                &["「帰った」"],
+            ),
             ("紙に「青い車」と書きました。", &["「青い車」"]),
             ("紙に「三日間」と書きました。", &["「三日間」"]),
             ("紙に「写真を買った」と書きました。", &["照片"]),

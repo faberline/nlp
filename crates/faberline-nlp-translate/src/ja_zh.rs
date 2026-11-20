@@ -836,10 +836,7 @@ pub(crate) fn translate_ja_sentence(
                         && !inside_quote
                         && matches!(trailing_punct.as_deref(), None | Some("、" | "，"))
                     {
-                        match segments.get(seg_idx + 1) {
-                            Some(Segment::Clause { atoms: next, .. }) => parallel_elapsed_te(trimmed_atoms, next),
-                            _ => None,
-                        }
+                        elapsed_te_before_following(trimmed_atoms, &segments[seg_idx + 1..], doc)
                     } else { None },
                     elapsed_modal_applied: None,
                     inside_quote,
@@ -1706,6 +1703,13 @@ fn build_sentence_atoms(
                             },
                             true,
                         ) => Some(LOCKED_RESIDENT_ATOM.to_owned()),
+                        (
+                            LockOrigin::Glossary {
+                                kind: GlossaryKind::Object,
+                                ..
+                            },
+                            true,
+                        ) => Some(LOCKED_OBJECT_ATOM.to_owned()),
                         _ => None,
                     },
                     upos: Some(Upos::Propn),
@@ -5260,14 +5264,82 @@ struct ClauseDiscourseCtx<'a> {
     prior_letter_distribution: Option<PriorLetterDistribution>,
 }
 
+// A quoted object can divide the next clause into segments. Only the
+// material outside that object supplies syntactic evidence for its verb.
+fn elapsed_te_before_following(
+    first: &[Atom],
+    following: &[Segment],
+    doc: &Document,
+) -> Option<usize> {
+    let tail_after_object = |tail: &[Atom]| {
+        tail.first()
+            .is_some_and(|case| !case.is_locked && matches!(case.surface.as_str(), "を" | "と"))
+    };
+    match following {
+        [
+            Segment::Clause {
+                atoms: prefix,
+                trailing_punct: None,
+                ..
+            },
+            Segment::Quote { span, .. },
+            Segment::Clause {
+                atoms: tail,
+                trailing_punct,
+                ..
+            },
+            ..,
+        ] if tail_after_object(tail) && !prefix.iter().any(|a| a.upos == Some(Upos::Verb)) => {
+            let outside: Vec<_> = prefix.iter().chain(tail).cloned().collect();
+            parallel_elapsed_te(
+                first,
+                &outside,
+                trailing_punct.as_deref(),
+                Some((*span, &tail[0], doc)),
+            )
+        }
+        [
+            Segment::Quote { span, .. },
+            Segment::Clause {
+                atoms: tail,
+                trailing_punct,
+                ..
+            },
+            ..,
+        ] if tail_after_object(tail) => parallel_elapsed_te(
+            first,
+            tail,
+            trailing_punct.as_deref(),
+            Some((*span, &tail[0], doc)),
+        ),
+        [
+            Segment::Clause {
+                atoms,
+                trailing_punct,
+                ..
+            },
+            ..,
+        ] => parallel_elapsed_te(first, atoms, trailing_punct.as_deref(), None),
+        _ => None,
+    }
+}
+
 // The segmenter has already separated the two clauses. Prove the terminal て
 // belongs to the first action and that action reaches the second lexical event.
-fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
-    if first
-        .iter()
-        .chain(next)
-        .any(|a| a.is_locked || a.doc_tok_idx.is_none())
-        || next.first().is_some_and(|a| a.surface == "から")
+fn parallel_elapsed_te(
+    first: &[Atom],
+    next: &[Atom],
+    trailing_punct: Option<&str>,
+    quoted_argument: Option<(Span, &Atom, &Document)>,
+) -> Option<usize> {
+    if first.iter().chain(next).any(|a| {
+        a.doc_tok_idx.is_none()
+            || a.is_locked
+                && !matches!(
+                    a.lemma.as_deref(),
+                    Some(LOCKED_RESIDENT_ATOM | LOCKED_OBJECT_ATOM)
+                )
+    }) || next.first().is_some_and(|a| a.surface == "から")
     {
         return None;
     }
@@ -5317,7 +5389,42 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
     }
     let root = next
         .iter()
-        .find(|a| a.upos == Some(Upos::Verb) && a.deprel == "root")?;
+        .find(|a| a.upos == Some(Upos::Verb) && a.deprel == "root")
+        .or_else(|| match next {
+            // A continuative verb can end its own clause at a comma,
+            // before the next action supplies the sentence's finite root.
+            [.., verb]
+                if verb.upos == Some(Upos::Verb)
+                    && verb.deprel == "advcl"
+                    && verb.head.is_some()
+                    && matches!(trailing_punct, Some("、" | "，" | ",")) =>
+            {
+                Some(verb)
+            }
+            [.., verb, mark, kara]
+                if has_temporal_te_kara_tail(next)
+                    && matches!(verb.deprel.as_str(), "obl" | "advcl")
+                    && verb.head.is_some()
+                    && mark.deprel == "mark"
+                    && kara.deprel == "case"
+                    && mark.head == verb.doc_tok_idx
+                    && kara.head == verb.doc_tok_idx
+                    && verb.span.end_char == mark.span.start_char
+                    && mark.span.end_char == kara.span.start_char =>
+            {
+                Some(verb)
+            }
+            [.., verb, mark]
+                if verb.upos == Some(Upos::Verb)
+                    && verb.deprel == "advcl"
+                    && matches!(mark.surface.as_str(), "て" | "で")
+                    && mark.deprel == "mark"
+                    && mark.head == verb.doc_tok_idx =>
+            {
+                Some(verb)
+            }
+            _ => None,
+        })?;
     let root_id = root.doc_tok_idx?;
     let other_verbs: Vec<_> = next
         .iter()
@@ -5340,9 +5447,33 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
             if head == Some(root_id) {
                 return true;
             }
-            let Some(part) = next.iter().find(|a| a.doc_tok_idx == head) else {
+            // The parser can link the first action to a word inside the
+            // quoted argument. Its outer particle connects it to this verb.
+            if quoted_argument.is_some_and(|(span, particle, doc)| {
+                particle.upos == Some(Upos::Adp)
+                    && particle.head == Some(root_id)
+                    && head.and_then(|i| doc.tokens.get(i)).is_some_and(|word| {
+                        span.start_char < word.span.start_char && word.span.end_char < span.end_char
+                    })
+            }) {
+                return true;
+            }
+            let Some(index) = next.iter().position(|a| a.doc_tok_idx == head) else {
                 return false;
             };
+            let part = &next[index];
+            // A て-clause can attach to the adjective of the next event's
+            // case-marked noun. Only follow a complete argument of that verb.
+            if !part.is_locked
+                && part.upos == Some(Upos::Adj)
+                && part.deprel == "amod"
+                && next[index + 1..].windows(2).any(|argument| {
+                    part.head == argument[0].doc_tok_idx
+                        && elapsed_interposed_argument(argument, root_id)
+                })
+            {
+                return true;
+            }
             if part.deprel != "advcl"
                 || !(part.upos == Some(Upos::Adj) || part.doc_tok_idx == sahen)
             {
@@ -5377,11 +5508,15 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
     let reaches_first = |head: Option<usize>| {
         head == Some(action_id)
             || head == terminal.doc_tok_idx
-            || first.iter().any(|part| {
+            || first.iter().enumerate().any(|(index, part)| {
                 part.doc_tok_idx == head
-                    && part.upos == Some(Upos::Adj)
-                    && part.deprel == "advcl"
-                    && part.head == Some(action_id)
+                    && ((part.upos == Some(Upos::Adj)
+                        && part.deprel == "advcl"
+                        && part.head == Some(action_id))
+                        || first.get(index + 1..index + 3).is_some_and(|argument| {
+                            argument[0].head == Some(action_id)
+                                && minute_before_argument(part, argument, first)
+                        }))
             })
             || reaches_root(head)
     };
@@ -6275,6 +6410,7 @@ fn translate_clause_atoms(
     let mut merged_atoms = apply_phrase_matches(&attributed);
     if target == TargetVariant::ZhHant {
         bind_tidied_tabletops(&mut merged_atoms);
+        localize_sufficiency(&mut merged_atoms);
     }
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {
@@ -9590,6 +9726,7 @@ fn normalize_building_floors(mut atoms: Vec<Atom>, doc: &Document) -> Vec<Atom> 
 const LOCKED_PLACE_ATOM: &str = "__ja_locked_glossary_place";
 
 const LOCKED_RESIDENT_ATOM: &str = "__ja_locked_glossary_resident";
+const LOCKED_OBJECT_ATOM: &str = "__ja_locked_glossary_object";
 
 /// A focus particle can precede or follow the case particle. Both must belong
 /// to the same noun. The focus of 妹だけが differs from that of 京都だけに.
@@ -9907,6 +10044,55 @@ fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
 }
 
 // A bare elapsed quantity must touch its action and retain a dependency to it.
+// 十分な describes a sufficient quantity. 十分に describes the degree of
+// an action. Neither construction supplies the number of elapsed minutes.
+fn localize_sufficiency(atoms: &mut Vec<Atom>) {
+    for i in (1..atoms.len()).rev() {
+        let (word, marker) = (&atoms[i - 1], &atoms[i]);
+        if word.is_locked
+            || marker.is_locked
+            || word.surface != "十分"
+            || word.upos != Some(Upos::Adj)
+            || word.doc_tok_idx.is_none()
+            || marker.head != word.doc_tok_idx
+            || word.span.end_char != marker.span.start_char
+            || starts_inside_elapsed_number(atoms, i - 1)
+        {
+            continue;
+        }
+        if marker.surface == "な" && word.deprel == "amod" {
+            atoms[i - 1].surface = "足夠".to_owned();
+            atoms[i - 1].lemma = None;
+        } else if marker.surface == "に"
+            && marker.deprel == "case"
+            && matches!(word.deprel.as_str(), "advcl" | "amod" | "advmod")
+        {
+            let Some(verb) = atoms.iter().find(|atom| {
+                !atom.is_locked && atom.upos == Some(Upos::Verb) && atom.deprel == "root"
+            }) else {
+                continue;
+            };
+            if word.head != verb.doc_tok_idx
+                && !atoms.iter().any(|arg| {
+                    arg.doc_tok_idx == word.head
+                        && arg.deprel == "obj"
+                        && arg.head == verb.doc_tok_idx
+                })
+            {
+                continue;
+            }
+            let mut adverb = word.clone();
+            adverb.surface = "充分".to_owned();
+            adverb.lemma = None;
+            adverb.upos = Some(Upos::Adv);
+            adverb.deprel = "advmod".to_owned();
+            adverb.head = verb.doc_tok_idx;
+            adverb.span.end_char = marker.span.end_char;
+            atoms.splice(i - 1..=i, [adverb]);
+        }
+    }
+}
+
 fn elapsed_duration_surface(text: &str) -> Option<String> {
     if let Some(days) = text.strip_suffix("日間") {
         let count = if elapsed_number(days)? == 2 {
@@ -9939,7 +10125,9 @@ fn elapsed_duration_surface(text: &str) -> Option<String> {
 }
 
 fn elapsed_minutes(text: &str, limit: u32) -> Option<String> {
-    let number = text.strip_suffix('分')?;
+    let number = text
+        .strip_suffix("分間")
+        .or_else(|| text.strip_suffix('分'))?;
     let normalized = normalize_decimal_digits(number);
     (elapsed_number(number)? < limit).then_some(normalized)
 }
@@ -10135,7 +10323,7 @@ fn localize_elapsed_modal(
             event.sfp_tail = Some("か".to_owned());
         }
         prepend_locked_atom(event, prefix.to_owned());
-        if take_elapsed_duration(&mut candidate.clone(), source, None).is_some() {
+        if take_elapsed_duration(&mut candidate.clone(), source, None, doc).is_some() {
             *groups = candidate;
             return true;
         }
@@ -10143,27 +10331,205 @@ fn localize_elapsed_modal(
     false
 }
 
-// Accept only a complete object subtree, including its own modifiers, between
+// A person marked with と can participate in an action independently of its
+// duration. Keep the two arguments separate in either source order.
+fn elapsed_partner(noun: &Atom, marker: &Atom, context: &[Atom]) -> bool {
+    let named = is_honorific_suffix(&noun.surface)
+        && context.iter().any(|name| {
+            !name.is_locked
+                && name.upos == Some(Upos::Propn)
+                && name.head == noun.doc_tok_idx
+                && name.span.end_char == noun.span.start_char
+        });
+    (!noun.is_locked || noun.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM))
+        && !marker.is_locked
+        && matches!(noun.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+        && !is_time_or_place_bunsetsu(std::slice::from_ref(noun))
+        && !matches!(
+            noun.surface.as_str(),
+            "時間" | "時" | "分" | "秒" | "日" | "日間" | "週" | "週間" | "月" | "年"
+        )
+        && (named
+            || !faberline_nlp::lexicon::lookup_ja(&noun.surface).is_some_and(|entry| {
+                matches!(
+                    entry.sem_class,
+                    Some(SemanticClass::Time | SemanticClass::Quantity)
+                )
+            }))
+        && noun.deprel == "obl"
+        && noun.doc_tok_idx.is_some()
+        && marker.upos == Some(Upos::Adp)
+        && marker.surface == "と"
+        && marker.deprel == "case"
+        && marker.head == noun.doc_tok_idx
+        && noun.span.end_char == marker.span.start_char
+}
+
+// The parser can attach 十分 to a companion or an object as an adjective.
+// Confirm the complete quantity and case argument against the same event.
+fn minute_before_argument(unit: &Atom, argument: &[Atom], source: &[Atom]) -> bool {
+    let (argument, end, explicit_duration) = match argument {
+        [suffix, rest @ ..]
+            if suffix.surface == "間"
+                && !suffix.is_locked
+                && suffix.head == unit.head
+                && suffix.span.start_char == unit.span.end_char
+                && unit.surface.ends_with('分') =>
+        {
+            (rest, suffix.span.end_char, true)
+        }
+        _ => (argument, unit.span.end_char, false),
+    };
+    let [noun, _case] = argument else {
+        return false;
+    };
+    !unit.is_locked
+        && unit.upos == Some(Upos::Adj)
+        && unit.deprel == "amod"
+        && unit.head == noun.doc_tok_idx
+        && end == noun.span.start_char
+        && (explicit_duration
+            || source.iter().any(|a| {
+                !a.is_locked && a.upos == Some(Upos::Num) && a.span.end_char == unit.span.start_char
+            }))
+        && noun.head.is_some_and(|id| {
+            elapsed_interposed_argument(argument, id)
+                && elapsed_attached_before(source, id, Some(noun.span.start_char))
+        })
+}
+
+fn partner_before_elapsed(partner: &Bunsetsu, next: &Bunsetsu, source: &[Atom]) -> bool {
+    let [.., noun, marker] = partner.atoms.as_slice() else {
+        return false;
+    };
+    if !elapsed_partner(noun, marker, source)
+        || next
+            .atoms
+            .first()
+            .is_none_or(|a| a.span.start_char != marker.span.end_char)
+    {
+        return false;
+    }
+    let Some(start) = source
+        .iter()
+        .position(|a| a.span.start_char == marker.span.end_char)
+    else {
+        return false;
+    };
+    // With 三十分 the parser can attach the participant to 十分, and 十分
+    // to the action. Follow those rightward links from the actual case noun.
+    let mut governor = noun.head;
+    let mut cursor = start;
+    while let Some(id) = governor {
+        let Some(offset) = source[cursor..]
+            .iter()
+            .position(|a| a.doc_tok_idx == Some(id))
+        else {
+            break;
+        };
+        let action = cursor + offset;
+        if !source[action].is_locked
+            && source[action].upos == Some(Upos::Verb)
+            && elapsed_argument_ends(source, action, id)
+                .iter()
+                .any(|&(end, _)| {
+                    if end <= start {
+                        return false;
+                    }
+                    let amount = &source[start..end];
+                    amount
+                        .iter()
+                        .all(|a| !a.is_locked && a.doc_tok_idx.is_some())
+                        && amount.iter().any(|a| a.head == Some(id))
+                        && source[start..=end]
+                            .windows(2)
+                            .all(|w| w[0].span.end_char == w[1].span.start_char)
+                        && elapsed_duration_surface(
+                            &amount
+                                .iter()
+                                .map(|a| a.surface.as_str())
+                                .collect::<String>(),
+                        )
+                        .is_some()
+                })
+        {
+            return true;
+        }
+        cursor = action + 1;
+        governor = source[action].head;
+    }
+    false
+}
+
+fn elapsed_argument_ends(
+    source: &[Atom],
+    action: usize,
+    owner: usize,
+) -> Vec<(usize, Option<usize>)> {
+    let mut ends = vec![(action, None)];
+    // A participant and an object may both intervene before the same verb.
+    // Only continue across a complete dependency subtree at each case boundary.
+    let mut index = 0;
+    while index < ends.len() {
+        let boundary = ends[index].0;
+        index += 1;
+        let Some(case) = source[..boundary].last() else {
+            continue;
+        };
+        if case.is_locked
+            || case.upos != Some(Upos::Adp)
+            || case.deprel != "case"
+            || !matches!(case.surface.as_str(), "を" | "と")
+            || case.span.end_char != source[boundary].span.start_char
+        {
+            continue;
+        }
+        let argument = case.head;
+        for start in (0..boundary).rev() {
+            if elapsed_interposed_argument(&source[start..boundary], owner)
+                && !ends.contains(&(start, argument))
+            {
+                ends.push((start, argument));
+            }
+        }
+    }
+    ends
+}
+
+// Accept only a complete object or companion, including its own modifiers, between
 // the duration and the action. Opaque material cannot establish attachment.
-fn elapsed_interposed_object(atoms: &[Atom], action: usize) -> bool {
+fn elapsed_interposed_argument(atoms: &[Atom], action: usize) -> bool {
     let Some(case) = atoms.last() else {
         return false;
     };
-    if case.surface != "を" || case.deprel != "case" || case.upos != Some(Upos::Adp) {
+    if !matches!(case.surface.as_str(), "を" | "と")
+        || case.deprel != "case"
+        || case.upos != Some(Upos::Adp)
+    {
         return false;
     }
-    if atoms
-        .iter()
-        .any(|a| a.is_locked || a.doc_tok_idx.is_none() || is_punct_atom(a))
-        || atoms
-            .windows(2)
-            .any(|w| w[0].span.end_char != w[1].span.start_char)
+    // A complete, typed glossary noun keeps its source case and its own
+    // translated text. Other opaque spans cannot supply attachment evidence.
+    let permitted_lock = if case.surface == "と" {
+        LOCKED_RESIDENT_ATOM
+    } else {
+        LOCKED_OBJECT_ATOM
+    };
+    if atoms.iter().any(|a| {
+        a.doc_tok_idx.is_none()
+            || is_punct_atom(a)
+            || a.is_locked
+                && (a.doc_tok_idx != case.head || a.lemma.as_deref() != Some(permitted_lock))
+    }) || atoms
+        .windows(2)
+        .any(|w| w[0].span.end_char != w[1].span.start_char)
     {
         return false;
     }
     let Some(noun) = atoms.iter().find(|a| {
         a.doc_tok_idx == case.head
-            && a.deprel == "obj"
+            && (case.surface == "を" && a.deprel == "obj"
+                || case.surface == "と" && elapsed_partner(a, case, atoms))
             && a.head == Some(action)
             && matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
     }) else {
@@ -10194,6 +10560,7 @@ fn take_elapsed_duration(
     groups: &mut Vec<Bunsetsu>,
     source: &[Atom],
     parallel_te: Option<usize>,
+    doc: &Document,
 ) -> Option<(String, bool, usize)> {
     for (action_index, action) in source.iter().enumerate() {
         if action.is_locked || action.doc_tok_idx.is_none() || action.upos != Some(Upos::Verb) {
@@ -10224,12 +10591,7 @@ fn take_elapsed_duration(
         // A separately assembled てから clause has its own predicate and
         // places 後 after that predicate. Other connective scopes stay intact.
         let temporal_after = predicate.sconj_tail.as_deref() == Some("てから")
-            && has_temporal_te_kara_tail(&predicate.atoms)
-            && groups
-                .iter()
-                .filter(|g| g.role == BunsetsuRole::Predicate)
-                .count()
-                == 1;
+            && has_temporal_te_kara_tail(&predicate.atoms);
         let progressive_relative = progressive_acl_action(predicate)
             .is_some_and(|(verb, _)| verb.doc_tok_idx == Some(action_id));
         let progressive_negative = progressive_relative && progressive_acl_is_negative(predicate);
@@ -10269,28 +10631,13 @@ fn take_elapsed_duration(
             matches!(g.atoms.as_slice(), [a] if calendar::is_day_duration(a)
                 && a.head == Some(action_id) && a.deprel == "obl"
                 && !source.iter().any(|m| m.head == a.doc_tok_idx && matches!(m.deprel.as_str(), "case" | "discourse")))
-        }) {
+        }) && (!temporal_after
+            || groups.iter().filter(|g| g.role == BunsetsuRole::Predicate).count() == 1)
+        {
             let day = groups.remove(index).atoms.remove(0);
             return Some((day.surface, false, action_id));
         }
-        let mut ends = vec![action_index];
-        if source
-            .get(action_index.wrapping_sub(1))
-            .is_some_and(|case| {
-                !case.is_locked
-                    && case.surface == "を"
-                    && case.upos == Some(Upos::Adp)
-                    && case.deprel == "case"
-                    && case.span.end_char == action.span.start_char
-            })
-        {
-            ends.extend(
-                (0..action_index).rev().filter(|&end| {
-                    elapsed_interposed_object(&source[end..action_index], action_id)
-                }),
-            );
-        }
-        for end in ends {
+        for (end, argument_id) in elapsed_argument_ends(source, action_index, action_id) {
             for start in 0..end {
                 if starts_inside_elapsed_number(source, start) {
                     continue;
@@ -10309,11 +10656,14 @@ fn take_elapsed_duration(
                     || between
                         .last()
                         .is_some_and(|a| a.span.end_char != action.span.start_char)
-                    || !slice.iter().any(|a| a.head == Some(action_id))
+                    || !slice.iter().any(|a| {
+                        a.head == Some(action_id) || argument_id.is_some() && a.head == argument_id
+                    })
                     || slice.iter().any(|a| {
                         !slice.iter().any(|b| b.doc_tok_idx == a.head)
                             && a.head != Some(action_id)
                             && a.head != action.head
+                            && !(argument_id.is_some() && a.head == argument_id)
                     })
                 {
                     continue;
@@ -10324,7 +10674,9 @@ fn take_elapsed_duration(
                 };
                 let first = slice.first()?.span.start_char;
                 let end = slice.last()?.span.end_char;
-                if (progressive_relative || past_negative || separate_te)
+                // 十分 can form an adjective predicate inside a measured
+                // duration. An unrelated predicate still has its own scope.
+                if (temporal_after || progressive_relative || past_negative || separate_te)
                     && groups
                         .iter()
                         .filter(|g| g.role == BunsetsuRole::Predicate)
@@ -10375,6 +10727,19 @@ fn take_elapsed_duration(
                     group
                         .atoms
                         .retain(|a| !(a.span.start_char >= first && a.span.end_char <= end));
+                    // A minute token such as 十分 can be classified as a verb.
+                    // Once it is removed, と marks the remaining noun's case.
+                    if let [.., noun, marker] = group.atoms.as_slice()
+                        && let Some(id) = argument_id
+                        && noun.doc_tok_idx == Some(id)
+                        && elapsed_partner(noun, marker, source)
+                    {
+                        *group = classify_bunsetsu(
+                            std::mem::take(&mut group.atoms),
+                            doc,
+                            doc.tokens[id].sentence,
+                        );
+                    }
                 }
                 groups.retain(|g| !g.atoms.is_empty());
                 return Some((rendered, surface == "何時間", action_id));
@@ -10404,7 +10769,7 @@ fn translate_clause_bunsetsus(
     let elapsed = if target == TargetVariant::ZhHant {
         focused_days
             .map(|(amount, owner, _)| (amount, false, owner))
-            .or_else(|| take_elapsed_duration(&mut bunsetsus, source, ctx.parallel_elapsed_te))
+            .or_else(|| take_elapsed_duration(&mut bunsetsus, source, ctx.parallel_elapsed_te, doc))
     } else {
         None
     };
@@ -14978,6 +15343,9 @@ fn is_person_like_bunsetsu(b: &Bunsetsu) -> bool {
 }
 
 fn is_person_like_atom(a: &Atom) -> bool {
+    if a.is_locked && a.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM) {
+        return false;
+    }
     matches!(a.upos, Some(Upos::Pron | Upos::Propn))
         || a.is_locked
             && matches!(
@@ -15034,54 +15402,56 @@ fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
 }
 
 fn elapsed_owned_by(source: &[Atom], owner: usize) -> bool {
+    elapsed_attached_before(source, owner, None)
+}
+
+fn elapsed_attached_before(source: &[Atom], owner: usize, before: Option<usize>) -> bool {
     let Some(action_index) = source
         .iter()
         .position(|a| a.doc_tok_idx == Some(owner) && !a.is_locked && a.upos == Some(Upos::Verb))
     else {
         return false;
     };
-    let mut ends = vec![action_index];
-    if source[..action_index].last().is_some_and(|a| {
-        !a.is_locked && a.surface == "を" && a.upos == Some(Upos::Adp) && a.deprel == "case"
-    }) {
-        ends.extend(
-            (0..action_index)
-                .rev()
-                .filter(|&end| elapsed_interposed_object(&source[end..action_index], owner)),
-        );
-    }
-    ends.into_iter().any(|end| {
-        (0..end).any(|start| {
-            if starts_inside_elapsed_number(source, start) {
+    elapsed_argument_ends(source, action_index, owner)
+        .into_iter()
+        .any(|(end, argument_id)| {
+            if before.is_some_and(|at| at != source[end].span.start_char) {
                 return false;
             }
-            let amount = &source[start..end];
-            let next = &source[end];
-            if amount
-                .iter()
-                .any(|a| a.is_locked || a.doc_tok_idx.is_none())
-                || amount
-                    .windows(2)
-                    .any(|w| w[0].span.end_char != w[1].span.start_char)
-                || amount
-                    .last()
-                    .is_none_or(|a| a.span.end_char != next.span.start_char)
-                || !amount.iter().any(|a| a.head == Some(owner))
-                || amount.iter().any(|a| {
-                    a.head != Some(owner) && !amount.iter().any(|other| other.doc_tok_idx == a.head)
-                })
-            {
-                return false;
-            }
-            elapsed_duration_surface(
-                &amount
+            (0..end).any(|start| {
+                if starts_inside_elapsed_number(source, start) {
+                    return false;
+                }
+                let amount = &source[start..end];
+                let next = &source[end];
+                let attached = |a: &Atom| {
+                    a.head == Some(owner) || (argument_id.is_some() && a.head == argument_id)
+                };
+                if amount
                     .iter()
-                    .map(|a| a.surface.as_str())
-                    .collect::<String>(),
-            )
-            .is_some()
+                    .any(|a| a.is_locked || a.doc_tok_idx.is_none())
+                    || amount
+                        .windows(2)
+                        .any(|w| w[0].span.end_char != w[1].span.start_char)
+                    || amount
+                        .last()
+                        .is_none_or(|a| a.span.end_char != next.span.start_char)
+                    || !amount.iter().any(attached)
+                    || amount.iter().any(|a| {
+                        !attached(a) && !amount.iter().any(|other| other.doc_tok_idx == a.head)
+                    })
+                {
+                    return false;
+                }
+                elapsed_duration_surface(
+                    &amount
+                        .iter()
+                        .map(|a| a.surface.as_str())
+                        .collect::<String>(),
+                )
+                .is_some()
+            })
         })
-    })
 }
 
 // A finite progressive relative has a lexical action linked through て to
@@ -15900,7 +16270,8 @@ fn merge_adnominal_bunsetsus(
                 if let Some(mut to_b) = res.pop_if(|prev| {
                     ends_in_coord_to(prev)
                         && !(target == TargetVariant::ZhHant
-                            && elapsed_relative_after_coord(prev, &b, source, None))
+                            && (partner_before_elapsed(prev, &b, source)
+                                || elapsed_relative_after_coord(prev, &b, source, None)))
                         && !matches!(
                             b.role,
                             BunsetsuRole::ResidenceTogether | BunsetsuRole::ResidenceCount
@@ -15919,6 +16290,8 @@ fn merge_adnominal_bunsetsus(
 
                 if let Some(pred_b) = res.pop_if(|prev| {
                     is_prenominal_pred(prev)
+                        && !(target == TargetVariant::ZhHant
+                            && matches!(prev.atoms.as_slice(), [unit] if minute_before_argument(unit, &b.atoms, source)))
                         || target == TargetVariant::ZhHant
                             && (homework_relative::attached_predicate(prev, &b, source)
                                 || finite_adjective::voiced_past_modifier(prev, &b, source)
@@ -17961,6 +18334,237 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn elapsed_duration_keeps_the_action_and_its_conversation_partner() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        for s in ["先生と二時間話しました。", "二時間先生と話しました。"] {
+            assert_eq!(translate(s), "跟老師說了兩個小時。", "{s}");
+        }
+        for s in ["先生と三十分話しました。", "三十分先生と話しました。"] {
+            assert_eq!(translate(s), "跟老師說了三十分鐘。", "{s}");
+        }
+        assert_eq!(
+            translate("父は母と二時間歩きました。"),
+            "父親跟母親走了兩個小時。"
+        );
+        assert_eq!(
+            translate("先生と学生が二時間話しました。"),
+            "老師和學生說了兩個小時。"
+        );
+        assert_eq!(translate("先生と話しました。"), "跟老師說了。");
+        let mut actors = TranslationGlossary::new();
+        actors.actors.push(crate::schema::GlossaryEntry {
+            canonical: "先生".to_owned(),
+            surfaces: vec!["先生".to_owned()],
+            targets: std::collections::BTreeMap::from([(
+                TargetVariant::ZhHant,
+                "林老師".to_owned(),
+            )]),
+            ..Default::default()
+        });
+        for s in ["先生と二時間話しました。", "二時間先生と話しました。"] {
+            assert_eq!(
+                public_translate(s, &actors).target_text,
+                "跟林老師說了兩個小時。"
+            );
+        }
+        assert_eq!(
+            translate("二時間と三十分待ちました。"),
+            "二時間和三十分等待了。"
+        );
+        assert_eq!(
+            translate("二時間鈴木さんと話しました。"),
+            "跟鈴木小姐說了兩個小時。"
+        );
+        assert_eq!(
+            translate("一時間友達と本を読みました。"),
+            "跟朋友讀書讀了一個小時。"
+        );
+        assert_eq!(
+            translate("二時間その先生と話しました。"),
+            "跟那個老師說了兩個小時。"
+        );
+        assert_eq!(
+            translate("医者と二時間話しました。"),
+            "跟醫者說了兩個小時。"
+        );
+        assert_eq!(
+            translate("先生と二時間本を読みました。"),
+            "跟老師讀書讀了兩個小時。"
+        );
+    }
+
+    #[test]
+    fn elapsed_minutes_and_typed_arguments_stay_with_the_first_action() {
+        let mut terms = TranslationGlossary::new();
+        let entry = |source: &str, target: &str| crate::schema::GlossaryEntry {
+            canonical: source.to_owned(),
+            surfaces: vec![source.to_owned()],
+            targets: std::collections::BTreeMap::from([(TargetVariant::ZhHant, target.to_owned())]),
+            ..Default::default()
+        };
+        terms.actors.push(entry("森田", "莫里田"));
+        terms.objects.push(entry("設計図", "工程藍圖"));
+        for source in ["四十分友達と話しました。", "友達と四十分話しました。"]
+        {
+            assert_eq!(
+                public_translate(source, &terms).target_text,
+                "跟朋友說了四十分鐘。"
+            );
+        }
+        for source in [
+            "二時間森田と設計図を読みました。",
+            "森田と二時間設計図を読みました。",
+        ] {
+            assert_eq!(
+                public_translate(source, &terms).target_text,
+                "跟莫里田讀工程藍圖讀了兩個小時。"
+            );
+        }
+        let copied = public_translate(
+            "森田と二時間設計図を読んで、紙に『設計図』を書き写しました。",
+            &terms,
+        );
+        let (reading, writing) = copied.target_text.split_once('，').expect("two events");
+        assert_eq!(reading, "跟莫里田讀工程藍圖兩個小時");
+        assert!(writing.contains("『設計図』") && !writing.contains("小時"));
+        for source in [
+            "先生と二時間話して、三十分宿題をしました。",
+            "先生と二時間話して、私は三十分宿題をしました。",
+        ] {
+            let text = public_translate(source, &terms).target_text;
+            let (talk, homework) = text.split_once('，').expect("two events");
+            assert_eq!(talk, "跟老師說兩個小時");
+            assert!(
+                homework.contains("作業") && homework.contains("三十分鐘"),
+                "{text}"
+            );
+        }
+        let reversed = public_translate("私は三十分宿題をして、先生と二時間話しました。", &terms);
+        let (homework, talk) = reversed.target_text.split_once('，').expect("two events");
+        assert!(
+            homework.contains('做') && homework.contains("作業") && homework.contains("三十分鐘"),
+            "{homework}"
+        );
+        assert_eq!(talk, "跟老師說了兩個小時。");
+    }
+
+    #[test]
+    fn elapsed_talk_precedes_an_event_with_a_modified_object() {
+        let glossary = TranslationGlossary::new();
+        for reading in [
+            "十分な資料を読みました。",
+            "新しい本を読みました。",
+            "大切な手紙を読みました。",
+        ] {
+            let text = public_translate(&format!("先生と二時間話して、{reading}"), &glossary);
+            let (talk, object_and_action) = text.target_text.split_once('，').expect("two events");
+            assert_eq!(talk, "跟老師說兩個小時");
+            assert_eq!(
+                object_and_action,
+                public_translate(reading, &glossary).target_text
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_minutes_stay_with_their_action_next_to_an_adequacy_modifier() {
+        let terms = TranslationGlossary::new();
+        for (source, time) in [
+            ("資料を十分間読みました。", "十分鐘"),
+            ("十分間先生と話しました。", "十分鐘"),
+            ("十分間先生と本を読みました。", "十分鐘"),
+            ("資料を10分間読みました。", "10分鐘"),
+            ("三十分間待ちました。", "三十分鐘"),
+            ("先生と二時間話して、資料を十分間読みました。", "十分鐘"),
+        ] {
+            let text = public_translate(source, &terms).target_text;
+            assert!(
+                text.contains(time) && !text.contains("間十分"),
+                "{source} -> {text}"
+            );
+        }
+        let text = public_translate("十分な資料を読みました。", &terms).target_text;
+        assert!(text.contains("足夠的資料"), "{text}");
+        for source in ["資料を十分に読みました。", "十分に説明を聞きました。"]
+        {
+            let text = public_translate(source, &terms).target_text;
+            assert!(
+                text.contains("充分") && !text.contains("分鐘") && !text.contains("充分在"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn talking_time_precedes_copied_words_and_sequential_actions() {
+        let terms = TranslationGlossary::new();
+        for source in [
+            "先生と二時間話して、資料を読み、家に帰りました。",
+            "二時間先生と話して、本を読み、家に帰りました。",
+            "先生と二時間話して、資料を十分間読み、それから帰りました。",
+        ] {
+            let text = public_translate(source, &terms).target_text;
+            assert!(
+                text.starts_with("跟老師說兩個小時，")
+                    && text.contains('讀')
+                    && text.contains('回'),
+                "{text}"
+            );
+        }
+        for marker in ["と", "を"] {
+            let source = format!("先生と二時間話して、紙に『十分な資料』{marker}書き写しました。");
+            let rendered = public_translate(&source, &terms);
+            let (talk, copy) = rendered.target_text.split_once('，').unwrap();
+            assert_eq!(talk, "跟老師說兩個小時");
+            assert!(
+                copy.contains("『十分な資料』") && copy.contains("抄寫"),
+                "{copy}"
+            );
+        }
+        let rendered = public_translate("先生と二時間話して、難しい本を読んで帰りました。", &terms);
+        assert!(
+            rendered.target_text.starts_with("跟老師說兩個小時，"),
+            "{}",
+            rendered.target_text
+        );
+    }
+
+    #[test]
+    fn elapsed_actions_preceding_te_kara_keep_both_durations() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "先生と二時間話して、資料を十分間読んでから帰りました。",
+                "跟老師說兩個小時，讀資料十分鐘後，回去了。",
+            ),
+            (
+                "二時間先生と話して、資料を三十分読んでから、家に帰りました。",
+                "跟老師說兩個小時，讀資料三十分鐘後，回到家了。",
+            ),
+            (
+                "資料を十分間読んでから帰りました。",
+                "讀資料十分鐘後，回去了。",
+            ),
+            (
+                "十分な資料を読んでから帰りました。",
+                "讀足夠的資料後，回去了。",
+            ),
+            ("資料を読んだから帰りました。", "因為讀了資料，回去了。"),
+            (
+                "「十分間読んでから帰る」と紙に書き写しました。",
+                "「十分間読んでから帰る」給紙抄寫了。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn day_duration_belongs_to_the_activity_that_lasts() {
         let glossary = TranslationGlossary::new();
         for (source, expected) in [
@@ -18416,7 +19020,10 @@ mod clock_rule_tests {
             translate("一時間散歩して先生に電話しました。"),
             "散步一個小時，給老師打電話了。"
         );
-        assert_eq!(translate("先生と三十分話しました。"), "老師和三十分說了。");
+        assert_eq!(
+            translate("先生と三十分話しました。"),
+            "跟老師說了三十分鐘。"
+        );
     }
 
     #[test]
@@ -18771,16 +19378,16 @@ mod clock_rule_tests {
         case.head = Some(3);
         case.upos = Some(Upos::Adp);
         case.deprel = "case".to_owned();
-        assert!(super::elapsed_interposed_object(
+        assert!(super::elapsed_interposed_argument(
             &[noun.clone(), case.clone()],
             5
         ));
-        assert!(!super::elapsed_interposed_object(
+        assert!(!super::elapsed_interposed_argument(
             &[noun.clone(), case.clone()],
             6
         ));
         noun.is_locked = true;
-        assert!(!super::elapsed_interposed_object(&[noun, case], 5));
+        assert!(!super::elapsed_interposed_argument(&[noun, case], 5));
     }
 
     #[test]

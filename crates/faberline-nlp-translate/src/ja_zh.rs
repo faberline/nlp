@@ -4736,17 +4736,7 @@ fn classify_post_quote_clause(atoms: &[Atom]) -> PostQuoteKind {
         && atoms.iter().all(|atom| !atom.is_locked)
         && quote.surface == "と"
         && quote.head == verb.doc_tok_idx
-        && voice.surface == "声"
-        && voice.deprel == "obj"
-        && voice.head == verb.doc_tok_idx
-        && object.surface == "を"
-        && object.deprel == "case"
-        && object.head == voice.doc_tok_idx
-        && verb.upos == Some(Upos::Verb)
-        && matches!(
-            verb.lemma.as_deref().unwrap_or(&verb.surface),
-            "かける" | "掛ける"
-        )
+        && honorific::is_voice_report(voice, object, verb)
         && auxiliaries.iter().all(|a| {
             a.upos == Some(Upos::Aux)
                 && a.head == verb.doc_tok_idx

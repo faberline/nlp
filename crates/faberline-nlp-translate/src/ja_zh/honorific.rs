@@ -185,6 +185,45 @@ fn explained_noun(words: &[Atom]) -> Option<(String, String)> {
     Some((noun.clone(), noun))
 }
 
+pub(super) fn is_voice_report(voice: &Atom, case: &Atom, verb: &Atom) -> bool {
+    !voice.is_locked
+        && voice.surface == "声"
+        && voice.deprel == "obj"
+        && voice.head == verb.doc_tok_idx
+        && !case.is_locked
+        && case.surface == "を"
+        && case.deprel == "case"
+        && case.head == voice.doc_tok_idx
+        && !verb.is_locked
+        && verb.upos == Some(Upos::Verb)
+        && matches!(
+            verb.lemma.as_deref().unwrap_or(&verb.surface),
+            "かける" | "掛ける"
+        )
+}
+
+// Quotation marks can enclose an address or the words being discussed.
+// Follow the quotative particle to the predicate that owns this quotation.
+fn reported_speech(atoms: &[Atom], quoted: Span) -> bool {
+    let end = atoms.partition_point(|a| a.span.start_char < quoted.end_char);
+    let Some((marker, rest)) = atoms[end..].split_first() else {
+        return false;
+    };
+    if marker.is_locked || marker.surface != "と" || marker.head.is_none() {
+        return false;
+    }
+    let Some(verb) = rest.iter().find(|a| a.doc_tok_idx == marker.head) else {
+        return false;
+    };
+    if verb.is_locked || verb.upos != Some(Upos::Verb) || verb.deprel == "acl" {
+        return false;
+    }
+    matches!(
+        verb.lemma.as_deref().unwrap_or(&verb.surface),
+        "言う" | "話す" | "呼ぶ" | "伝える" | "聞く" | "尋ねる" | "答える" | "叫ぶ"
+    ) || rest.windows(2).any(|p| is_voice_report(&p[0], &p[1], verb))
+}
+
 impl HonorificContext {
     pub(super) fn enter_sentence(&mut self, paragraph: usize, atoms: &[Atom]) {
         if self.paragraph != Some(paragraph) {
@@ -409,8 +448,12 @@ impl HonorificContext {
             // At the start of an utterance, a comma or closing quote can end a
             // direct address without a particle. Written quotations are already
             // protected as one source span before the honorific pass.
+            let quotation = self.quoted_ranges.iter().find(|span| {
+                span.start_char <= suffix.span.start_char && suffix.span.end_char <= span.end_char
+            });
             let address = matches!(case.upos, Some(Upos::Punct))
                 && matches!(case.surface.as_str(), "、" | "，" | "」" | "』")
+                && quotation.is_none_or(|span| reported_speech(&atoms, *span))
                 && (suffix_idx == 1
                     || matches!(
                         atoms[suffix_idx - 2].surface.as_str(),
@@ -472,10 +515,7 @@ impl HonorificContext {
                 start -= 1;
             }
             let stem = joined(&atoms[start..suffix_idx]);
-            let in_quote = self.quoted_ranges.iter().any(|span| {
-                span.start_char <= suffix.span.start_char && suffix.span.end_char <= span.end_char
-            });
-            let binding = if in_quote {
+            let binding = if quotation.is_some() {
                 None
             } else {
                 self.bindings.get(&stem)

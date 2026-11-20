@@ -816,6 +816,110 @@ fn after_possessive_character_name(chars: &[char]) -> Option<&[char]> {
     strip_prefix(noun, "文字").or_else(|| strip_prefix(noun, "字"))
 }
 
+// A quote named as a sentence can be copied across an analysis sentence break.
+fn counted_quoted_sentence_copy(
+    chars: &[char],
+    scope: Span,
+    quote: Span,
+    after: &[char],
+    syntax: QuoteSyntax<'_>,
+) -> bool {
+    let Some(rest) =
+        strip_prefix(after, "という文を").or_else(|| strip_prefix(after, "と書かれた文を"))
+    else {
+        return false;
+    };
+    let start = scope.end_char - rest.len();
+    let first = syntax.tokens.partition_point(|t| t.span.start_char < start);
+    let Some(object) = first.checked_sub(1).and_then(|case| {
+        let t = &syntax.tokens[case];
+        (chars[t.span.start_char..t.span.end_char] == ['を'])
+            .then(|| syntax.head(case))
+            .flatten()
+    }) else {
+        return false;
+    };
+    let noun = &syntax.tokens[object];
+    if chars[noun.span.start_char..noun.span.end_char] != ['文'] {
+        return false;
+    }
+    let Some((predicate, verb)) = syntax
+        .tokens
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take_while(|(_, t)| t.span.end_char <= scope.end_char)
+        .find(|(_, t)| {
+            matches!(
+                t.lemma.as_deref(),
+                Some("写す" | "書く" | "読む" | "読み上げる")
+            )
+        })
+    else {
+        return false;
+    };
+    if noun.sentence != verb.sentence {
+        return false;
+    }
+    let intervening = &chars[start..verb.span.start_char];
+    let prior_start = chars[scope.start_char..quote.start_char]
+        .iter()
+        .rposition(|c| matches!(c, '。' | '！' | '？' | '!' | '?' | '\n'))
+        .map_or(scope.start_char, |i| scope.start_char + i + 1);
+    let before_quote = &chars[prior_start..quote.start_char];
+    if ['。', '！', '？', '!', '?', '「', '」', '『', '』', '\n']
+        .iter()
+        .any(|c| intervening.contains(c))
+        || [
+            "英語",
+            "英文",
+            "ローマ字",
+            "アルファベット",
+            "ひらがな",
+            "カタカナ",
+            "点字",
+            "中国語",
+        ]
+        .iter()
+        .any(|word| {
+            [intervening, before_quote].iter().any(|part| {
+                part.windows(word.chars().count())
+                    .any(|w| w.iter().copied().eq(word.chars()))
+            })
+        })
+    {
+        return false;
+    }
+    // Only an object of this act, or its adverbial punctuation-inclusion
+    // clause, links this named sentence to the action.
+    let linked = syntax.edge(object).is_some_and(|edge| {
+        edge.deprel == "obj"
+            && (edge.head == Some(predicate)
+                || edge.head.is_some_and(|head| {
+                    syntax.tokens[head].lemma.as_deref() == Some("含める")
+                        && syntax
+                            .edge(head)
+                            .is_some_and(|e| e.deprel == "advcl" && e.head == Some(predicate))
+                }))
+    });
+    let q_start = syntax
+        .tokens
+        .partition_point(|t| t.span.start_char < quote.start_char);
+    let q_end = syntax
+        .tokens
+        .partition_point(|t| t.span.start_char < quote.end_char);
+    linked
+        && q_start < q_end
+        && has_character_step(
+            chars,
+            scope,
+            q_start..q_end,
+            predicate,
+            [None, None],
+            syntax,
+        )
+}
+
 /// A plain writing verb can report a message. Keep the original spelling when
 /// the writer requests a particular word or explicitly copies it unchanged.
 fn quotes_exact_writing(
@@ -827,6 +931,9 @@ fn quotes_exact_writing(
     shared_writing_object: bool,
 ) -> FormMatch {
     let after = skip_space(&chars[last.end_char + 1..scope.end_char]);
+    if quote == last && counted_quoted_sentence_copy(chars, scope, quote, after, syntax) {
+        return FormMatch::CountedLiteral;
+    }
     let Some((&particle @ ('と' | 'を' | 'の'), tail)) = after.split_first() else {
         return FormMatch::Unspecified;
     };
@@ -986,7 +1093,22 @@ fn quotes_exact_writing(
                 && case.sentence == verb.sentence
                 && case.upos == Some(Upos::Adp)
         });
+    // A quote may attach through the count or its unchanged manner.
+    let counted_copy_attachment = copies
+        && particle == 'と'
+        && after_character_step(after_clause_comma(tail)).is_some()
+        && (first_in_quote..end_of_quote).any(|i| {
+            syntax.head(i).is_some_and(|head| {
+                let t = &syntax.tokens[head];
+                let word = &chars[t.span.start_char..t.span.end_char];
+                t.span.start_char >= start
+                    && t.span.end_char <= verb.span.start_char
+                    && syntax.head(head) == Some(predicate)
+                    && (word == ['字'] || word == ['文', '字'] || word == ['そ', 'の', 'ま', 'ま'])
+            })
+        });
     if !split_operand
+        && !counted_copy_attachment
         && !(first_in_quote..end_of_quote).any(|i| {
             attached(i)
                 || (particle == 'の'
@@ -2579,6 +2701,95 @@ mod tests {
                     );
                 }
                 assert_eq!(result.glossary_hits.len(), expected_hits, "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn counted_whole_quotes_keep_source_and_leave_other_glossary_hits() {
+        let mut glossary = glossary();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "受付".to_owned(),
+            surfaces: vec!["受付".to_owned()],
+            targets: [(TargetVariant::ZhHant, "櫃檯".to_owned())].into(),
+            pronoun_class: Default::default(),
+            speech_register: Default::default(),
+        });
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        for (source, preserved, hits) in [
+            (
+                "紙に「受付の前」と一字ずつそのまま写しました。受付を確認しました。",
+                Some("「受付の前」"),
+                1,
+            ),
+            (
+                "先生は「受付の前」を一字ずつ読みました。受付を確認しました。",
+                Some("「受付の前」"),
+                1,
+            ),
+            (
+                "「受付はどこですか？」という文を、疑問符も含めて一文字ずつそのままノートに写しました。受付を確認しました。",
+                Some("「受付はどこですか？」"),
+                1,
+            ),
+            (
+                "「明日は雨です。」と書かれた文を、句点も含めて一文字ずつそのままノートに写しました。",
+                Some("「明日は雨です。」"),
+                0,
+            ),
+            ("医師は「受付の前」と言いました。", None, 1),
+            (
+                "紙に「受付の前」と英語で一字ずつそのまま写しました。",
+                None,
+                1,
+            ),
+            (
+                "英文で「受付はどこですか？」という文を一文字ずつノートに写しました。",
+                None,
+                1,
+            ),
+            (
+                "「受付はどこですか？」という文を読みました。受付を一文字ずつ書きました。",
+                None,
+                2,
+            ),
+            (
+                "「受付はどこですか？」という文をノートに写しました。",
+                None,
+                1,
+            ),
+            ("「受付」の前に「ドイツ」を一字ずつ写しました。", None, 1),
+        ] {
+            let result =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            if let Some(quote) = preserved {
+                assert!(
+                    result.target_text.contains(quote),
+                    "{source}: {}",
+                    result.target_text
+                );
+            }
+            assert_eq!(
+                result.glossary_hits.len(),
+                hits,
+                "{source}: {}",
+                result.target_text
+            );
+            for hit in &result.glossary_hits {
+                let source_chars: Vec<_> = source.chars().collect();
+                let target_chars: Vec<_> = result.target_text.chars().collect();
+                assert_eq!(
+                    source_chars[hit.source_span.start_char..hit.source_span.end_char]
+                        .iter()
+                        .collect::<String>(),
+                    "受付"
+                );
+                assert_eq!(
+                    target_chars[hit.target_span.start_char..hit.target_span.end_char]
+                        .iter()
+                        .collect::<String>(),
+                    "櫃檯"
+                );
             }
         }
     }

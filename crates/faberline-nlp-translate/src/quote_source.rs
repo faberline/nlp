@@ -213,6 +213,7 @@ fn protect_sibling_forms(
     let mut first_in_list = 0;
     let mut first_for_comparison = 0;
     let mut first_for_writing = 0;
+    let mut first_for_counted_form = 0;
     let mut labelled = false;
     for (index, quote) in quotes.iter().enumerate() {
         let opening = quote.start_char - 1;
@@ -234,6 +235,9 @@ fn protect_sibling_forms(
             })
         {
             first_for_writing = index;
+            if join.is_none() {
+                first_for_counted_form = index;
+            }
         }
         if let Some(QuoteJoin::Conjunction(right_labelled)) = join {
             labelled &= right_labelled;
@@ -271,22 +275,47 @@ fn protect_sibling_forms(
         let shared_copy_object = index > first_in_list && after.starts_with(&['を']);
         let copies_form =
             copies_written_form(chars, after, scope.end_char, syntax, shared_copy_object);
-        let shared_writing_object = index > first_for_writing && after.starts_with(&['を']);
+        let shared_writing_object = index > first_for_counted_form && after.starts_with(&['を']);
         let written_operand =
             |word| quotes_exact_writing(chars, scope, *quote, word, syntax, shared_writing_object);
         let match_form = written_operand(*quote);
-        if match_form == FormMatch::TranslatedReading {
-            // An explicit target for this reading overrides a local 字 or
-            // を一文字ずつ label. Only its actual coordinated operands qualify.
-            for &word in &quotes[first_for_writing..index] {
-                if written_operand(word) == FormMatch::TranslatedReading {
-                    let earlier = protection_span(word, nested);
-                    protected.retain(|span| *span != earlier);
+        let counted = matches!(
+            match_form,
+            FormMatch::CountedLiteral | FormMatch::TranslatedReading
+        );
+        let exact_writing = matches!(match_form, FormMatch::Literal | FormMatch::CountedLiteral);
+        if counted || exact_writing {
+            let first = if counted {
+                first_for_counted_form
+            } else {
+                first_for_writing
+            };
+            let mut next_is_operand = true;
+            for i in (first..index).rev() {
+                let word = quotes[i];
+                let next = quotes[i + 1];
+                let gap = &chars[word.end_char + 1..next.start_char - 1];
+                // In 「A」、「B」を the analyser can attach A to B instead of
+                // the predicate. Follow this link only for a proven counted act.
+                let via_next = counted
+                    && next_is_operand
+                    && quote_join(gap) == Some(QuoteJoin::Enumeration)
+                    && quote_attaches_to_form(word, next, syntax);
+                next_is_operand = via_next || written_operand(word) == match_form;
+                if next_is_operand {
+                    let span = protection_span(word, nested);
+                    if exact_writing {
+                        protected.push(span);
+                    } else {
+                        protected.retain(|candidate| *candidate != span);
+                    }
                 }
             }
+        }
+        if match_form == FormMatch::TranslatedReading {
+            // The explicit target overrides local 字 or を一文字ずつ labels.
             continue;
         }
-        let exact_writing = match_form == FormMatch::Literal;
         let translation = source_translation_predicate(chars, scope, *quote, syntax);
         if measures_form
             || reads_word
@@ -297,14 +326,6 @@ fn protect_sibling_forms(
             || acts_on_written_form(before, after)
         {
             protected.push(protection_span(*quote, nested));
-        }
-        if exact_writing {
-            protected.extend(
-                quotes[first_for_writing..index]
-                    .iter()
-                    .filter(|&&word| written_operand(word) == FormMatch::Literal)
-                    .map(|&word| protection_span(word, nested)),
-            );
         }
         if let Some(predicate) = translation {
             protected.extend(
@@ -341,6 +362,22 @@ fn protect_sibling_forms(
                 .map(|&span| protection_span(span, nested)),
         );
     }
+}
+
+fn quote_attaches_to_form(word: Span, next: Span, syntax: QuoteSyntax<'_>) -> bool {
+    let first = syntax
+        .tokens
+        .partition_point(|t| t.span.start_char < word.start_char);
+    (first..syntax.tokens.len())
+        .take_while(|&i| syntax.tokens[i].span.end_char <= word.end_char)
+        .filter(|&i| syntax.tokens[i].upos != Some(Upos::Punct))
+        .filter_map(|i| syntax.head(i))
+        .any(|head| {
+            let target = &syntax.tokens[head];
+            next.start_char <= target.span.start_char
+                && target.span.end_char <= next.end_char
+                && target.upos != Some(Upos::Punct)
+        })
 }
 
 fn names_character_count(chars: &[char]) -> bool {
@@ -735,6 +772,7 @@ fn copies_written_form(
 enum FormMatch {
     Unspecified,
     Literal,
+    CountedLiteral,
     TranslatedReading,
 }
 
@@ -1043,7 +1081,11 @@ fn quotes_exact_writing(
             syntax,
         );
         if reads_word || letter_by_letter {
-            return FormMatch::when(letter_by_letter);
+            return if letter_by_letter {
+                FormMatch::CountedLiteral
+            } else {
+                FormMatch::Unspecified
+            };
         }
     }
     if copies {
@@ -2314,6 +2356,40 @@ mod tests {
                 "{source}"
             );
             assert_eq!(result.glossary_hits.len(), glosses, "{source}");
+        }
+    }
+
+    #[test]
+    fn comma_separated_quotes_follow_their_shared_character_operation() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        for (source, kept) in [
+            ("「ドイツ」、「受付」を紙に一字ずつ書きました。", true),
+            (
+                "「ドイツ」、「受付」、「係員」を紙に一字ずつ書きました。",
+                true,
+            ),
+            (
+                "「ドイツ」と「受付」、「係員」を紙に一字ずつ書きました。",
+                true,
+            ),
+            (
+                "先生は「ドイツ」、「受付」という字をそれぞれ一字ずつ声に出して読みました。",
+                true,
+            ),
+            ("先生は「ドイツ」、「受付」と言いました。", false),
+            (
+                "「ドイツ」、「受付」とは違う英単語を紙に一字ずつ書きました。",
+                false,
+            ),
+            (
+                "「ドイツ」、「受付」を英語で一字ずつ読み上げました。",
+                false,
+            ),
+        ] {
+            let result =
+                analyze_and_translate(source, &options, &glossary(), None, Backend::Onnx).unwrap();
+            assert_eq!(result.target_text.contains("「ドイツ」"), kept, "{source}");
+            assert_eq!(result.glossary_hits.is_empty(), kept, "{source}");
         }
     }
 

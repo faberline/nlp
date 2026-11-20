@@ -200,7 +200,11 @@ fn protected_date(atoms: &[Atom], start: usize, chars: &[char]) -> Option<(usize
             break;
         }
         if !atoms.get(end + 1).is_some_and(|c| {
-            !c.is_locked && matches!(c.surface.as_str(), "に" | "まで" | "の" | "は")
+            !c.is_locked
+                && matches!(
+                    c.surface.as_str(),
+                    "に" | "まで" | "の" | "は" | "と" | "か"
+                )
         }) {
             continue;
         }
@@ -235,17 +239,124 @@ fn protected_date(atoms: &[Atom], start: usize, chars: &[char]) -> Option<(usize
     None
 }
 
+struct TopicClock {
+    index: usize,
+    pause: Option<usize>,
+    question_end: usize,
+    advice: Option<(usize, usize)>,
+}
+
+// A verbal noun plus する forms one predicate. In an advice question the
+// event's ば is followed by the matrix predicate いいですか.
+fn clock_question_head(atoms: &[Atom], owner: usize) -> (usize, Option<(usize, usize)>) {
+    let Some(i) = atoms
+        .iter()
+        .position(|a| a.doc_tok_idx == Some(owner) && !a.is_locked)
+    else {
+        return (owner, None);
+    };
+    let action = &atoms[i];
+    if let [ba, good, cop, ka, ..] = &atoms[i + 1..]
+        && action.upos == Some(Upos::Verb)
+        && action.deprel == "advcl"
+        && action.head == good.doc_tok_idx
+        && ba.surface == "ば"
+        && ba.deprel == "mark"
+        && ba.head == Some(owner)
+        && matches!(good.surface.as_str(), "いい" | "よい")
+        && good.upos == Some(Upos::Adj)
+        && cop.surface == "です"
+        && cop.deprel == "cop"
+        && cop.head == good.doc_tok_idx
+        && ka.surface == "か"
+        && ka.deprel == "discourse"
+        && ka.head == good.doc_tok_idx
+        && atoms[i..=i + 4]
+            .windows(2)
+            .all(|p| !p[1].is_locked && p[0].span.end_char == p[1].span.start_char)
+        && let Some(matrix) = good.doc_tok_idx
+    {
+        return (matrix, Some((i, i + 3)));
+    }
+    if let Some(light) = atoms.get(i + 1)
+        && !light.is_locked
+        && light.lemma.as_deref() == Some("する")
+        && action.upos == Some(Upos::Verb)
+        && action.deprel == "advcl"
+        && action.span.end_char == light.span.start_char
+        && action.head == light.doc_tok_idx
+        && let Some(matrix) = light.doc_tok_idx
+    {
+        return (matrix, None);
+    }
+    (owner, None)
+}
+
+// Separate は markers introduce separate topics even if an omitted verb
+// makes the parser assign both dates and both destinations to one predicate.
+fn has_parallel_day_topics(
+    atoms: &[Atom],
+    owner: usize,
+    chars: &[char],
+    doc: &Document,
+) -> Option<bool> {
+    let mut previous = None;
+    let mut parallel = false;
+    for wa in atoms
+        .iter()
+        .filter(|a| !a.is_locked && a.surface == "は" && a.deprel == "case")
+    {
+        let Some(day) = doc.syntax.iter().find(|n| {
+            Some(n.token) == wa.head
+                && n.head == Some(owner)
+                && n.deprel == "nsubj"
+                && n.span.end_char == wa.span.start_char
+        }) else {
+            continue;
+        };
+        let mut start = day.span.start_char;
+        if chars.get(start..day.span.end_char) == Some(&['日'])
+            && let Some(number) = day.token.checked_sub(1).and_then(|i| doc.tokens.get(i))
+            && number.upos == Some(Upos::Num)
+            && number.span.end_char == start
+        {
+            start = number.span.start_char;
+        }
+        let surface = chars
+            .get(start..day.span.end_char)?
+            .iter()
+            .collect::<String>();
+        if spelled_report_day(&surface).is_none() {
+            continue;
+        }
+        if let Some(last) = previous {
+            if !chars
+                .get(last..start)?
+                .iter()
+                .any(|c| matches!(c, '、' | '，' | ','))
+            {
+                return None;
+            }
+            parallel = true;
+        }
+        previous = Some(wa.span.end_char);
+    }
+    Some(parallel)
+}
+
 // A は-marked day and a separately marked clock can describe the same event.
 // Their shared predicate licenses both arguments.
 fn topic_clock(
     atoms: &[Atom],
     start: usize,
     day_end: usize,
+    choice: bool,
     chars: &[char],
     doc: &Document,
-) -> Option<usize> {
+) -> Option<TopicClock> {
     let wa = atoms.get(day_end + 1)?;
-    if wa.is_locked || wa.surface != "は" || wa.deprel != "case" {
+    if wa.is_locked || !(wa.surface == "は" || choice && wa.surface == "に") || wa.deprel != "case"
+    {
         return None;
     }
     let day_surface = chars.get(atoms[start].span.start_char..wa.span.start_char)?;
@@ -270,45 +381,92 @@ fn topic_clock(
         return None;
     }
     let day = doc.syntax.iter().find(|node| Some(node.token) == wa.head)?;
-    if day.deprel != "nsubj" || day.span.end_char != wa.span.start_char {
+    // In のいずれかに the final に belongs to the selector, across か.
+    // The selector itself attaches to the event as an adverb or oblique.
+    let ka = &atoms[day_end];
+    let bare_selector = choice
+        && wa.surface == "に"
+        && ka.surface == "か"
+        && ka.head == Some(day.token)
+        && ka.span.start_char == day.span.end_char
+        && matches!(day.deprel.as_str(), "advmod" | "obl" | "iobj");
+    let direct_date = day.span.end_char == wa.span.start_char
+        && (day.deprel == "nsubj" || choice && matches!(day.deprel.as_str(), "obl" | "iobj"));
+    if !direct_date && !bare_selector {
         return None;
     }
     let owner = day.head?;
     if doc.tokens.get(owner)?.upos != Some(Upos::Verb) {
         return None;
     }
-    let clock = (day_end + 2..atoms.len()).find(|&i| {
+    let (clock, pause) = (day_end + 2..atoms.len()).chain(0..start).find_map(|i| {
         let time = &atoms[i];
-        chars.get(time.span.start_char..time.span.end_char) == Some(&['何', '時'])
-            && doc.syntax.iter().any(|node| {
+        if chars.get(time.span.start_char..time.span.end_char) != Some(&['何', '時'])
+            || !doc.syntax.iter().any(|node| {
                 node.span == time.span
                     && node.head == Some(owner)
                     && matches!(node.deprel.as_str(), "obl" | "iobj")
             })
-            && atoms.get(i + 1).is_some_and(|case| {
-                let last_case = if linked_case(case, time, time, "に") {
-                    i + 1
-                } else if linked_case(case, time, time, "まで")
-                    && atoms
-                        .get(i + 2)
-                        .is_some_and(|ni| linked_case(ni, time, case, "に"))
-                {
-                    i + 2
-                } else {
-                    return false;
-                };
-                // Any further particle attached to 何時 qualifies this clock.
-                // For example, 何時にだって asks about availability at any hour.
-                !atoms[last_case + 1..].iter().any(|a| {
-                    a.head == time.doc_tok_idx
-                        && matches!(a.upos, Some(Upos::Adp | Upos::Part | Upos::Sconj))
-                })
-            })
+        {
+            return None;
+        }
+        let case = atoms.get(i + 1)?;
+        let after_case = if linked_case(case, time, time, "に") {
+            i + 2
+        } else if linked_case(case, time, time, "まで")
+            && atoms
+                .get(i + 2)
+                .is_some_and(|ni| linked_case(ni, time, case, "に"))
+        {
+            i + 3
+        } else {
+            return None;
+        };
+        // Further particles attached to 何時 can express unrestricted hours.
+        if atoms[after_case..].iter().any(|a| {
+            a.head == time.doc_tok_idx
+                && matches!(a.upos, Some(Upos::Adp | Upos::Part | Upos::Sconj))
+        }) {
+            return None;
+        }
+        let mut pause = None;
+        if i < start {
+            let parallel = has_parallel_day_topics(atoms, owner, chars, doc)?;
+            for (offset, word) in atoms.get(after_case..start)?.iter().enumerate() {
+                if word.upos == Some(Upos::Verb) {
+                    return None;
+                }
+                if word.upos == Some(Upos::Punct) {
+                    // A pause inside direct speech can attach to the reporting
+                    // verb. The date, clock, and final question must still
+                    // belong to the same event inside or outside the quote.
+                    if pause.is_some()
+                        || word.is_locked
+                        || !matches!(word.surface.as_str(), "、" | "，" | ",")
+                        || word.deprel != "punct"
+                    {
+                        return None;
+                    }
+                    // Keep the commas that distinguish day–argument
+                    // pairs when this clock introduces several topics.
+                    if !parallel {
+                        pause = Some(after_case + offset);
+                    }
+                }
+            }
+        }
+        Some((i, pause))
     })?;
     // Use the question's source syntax even when the final punctuation was
     // taken out of the translation atoms. A bare ？ still belongs to its verb.
+    let (matrix, advice) = clock_question_head(atoms, owner);
+    if advice.is_some_and(|(action, _)| action <= clock.max(day_end)) {
+        return None;
+    }
     let end = doc.syntax.iter().find(|node| {
-        if node.head != Some(owner) || node.span.start_char < atoms[clock].span.end_char {
+        if node.head != Some(matrix)
+            || node.span.start_char < atoms[clock].span.end_char.max(wa.span.end_char)
+        {
             return false;
         }
         match chars.get(node.span.start_char..node.span.end_char) {
@@ -326,7 +484,28 @@ fn topic_clock(
             _ => false,
         }
     })?;
-    let object_quotes: Vec<_> = atoms[day_end + 2..clock]
+    // An enclosing written quotation belongs to the source-form renderer.
+    // A source question on the page is not a request for advice to the writer.
+    if (matrix != owner || wa.surface == "に")
+        && matches!(chars.get(end.span.end_char), Some('」' | '』' | '”' | '"'))
+        && doc
+            .syntax
+            .iter()
+            .find(|n| n.token == matrix)
+            .and_then(|n| n.head)
+            .and_then(|i| doc.tokens.get(i))
+            .and_then(|t| t.lemma.as_deref())
+            .is_some_and(|verb| matches!(verb, "書く" | "写す" | "読み取る" | "読む"))
+    {
+        return None;
+    }
+    let fronted = clock < start;
+    let object_words = if fronted {
+        &atoms[day_end + 2..]
+    } else {
+        &atoms[day_end + 2..clock]
+    };
+    let object_quotes: Vec<_> = object_words
         .windows(4)
         .filter_map(|words| {
             let [open, name, close, wo] = words else {
@@ -342,7 +521,7 @@ fn topic_clock(
             .then_some((open.span.start_char, close.span.start_char))
         })
         .collect();
-    if (wa.span.end_char..end.span.start_char).any(|at| {
+    if (wa.span.end_char.min(atoms[clock].span.start_char)..end.span.start_char).any(|at| {
         let c = chars[at];
         crate::ja_zh::is_quote_terminal(c)
             || matches!(c, '「' | '」' | '『' | '』' | '“' | '”' | '"')
@@ -352,14 +531,82 @@ fn topic_clock(
     }) {
         return None;
     }
-    Some(clock)
+    Some(TopicClock {
+        index: clock,
+        pause,
+        question_end: end.token,
+        advice,
+    })
+}
+
+// The case of an explicit day is on 日; in the shorter form it is on
+// いずれ or どちら, with the attached particle か between them.
+fn date_selection_case(tail: &[Atom]) -> Option<(usize, bool)> {
+    let [selector, ka, ..] = tail else {
+        return None;
+    };
+    if !matches!(selector.surface.as_str(), "いずれ" | "どちら")
+        || ka.surface != "か"
+        || ka.deprel != "discourse"
+        || selector.doc_tok_idx.is_none()
+        || ka.head != selector.doc_tok_idx
+    {
+        return None;
+    }
+    let i = tail.iter().take(5).position(|a| a.surface == "に")?;
+    if tail[..=i].iter().any(|a| a.is_locked) {
+        return None;
+    }
+    let ni = &tail[i];
+    match &tail[2..i] {
+        [] if linked_case(ni, selector, ka, "に") => Some((i, false)),
+        [no, day]
+            if day.surface == "日"
+                && linked_case(no, selector, ka, "の")
+                && selector.head == day.doc_tok_idx
+                && linked_case(ni, day, day, "に") =>
+        {
+            Some((i, true))
+        }
+        units => {
+            let last = units.last()?;
+            let text: String = units.iter().map(|a| a.surface.as_str()).collect();
+            (text.strip_suffix('日').and_then(calendar_number) == Some(1)
+                && linked_case(ni, last, last, "に"))
+            .then_some((i, true))
+        }
+    }
 }
 
 // Alternatives share は at the end of the last date. Read each complete
 // month and day before assigning the topic to the clock question.
-fn date_alternatives(atoms: &[Atom], first_end: usize, first: &str) -> (usize, String) {
+fn date_alternatives(
+    atoms: &[Atom],
+    first_end: usize,
+    first: &str,
+    chars: &[char],
+    doc: &Document,
+) -> (usize, String) {
     let mut end = first_end;
     let mut label = first.to_owned();
+    let next_date = |start| {
+        atoms.get(start)?;
+        day_at(atoms, start)
+            .filter(|d| d.month.is_some())
+            .map(|d| (d.end, render(&d)))
+            .or_else(|| protected_date(atoms, start, chars))
+    };
+    // A glossary can replace all date tokens. The particle still attaches
+    // to the original day token at the end of that same source span.
+    let attached = |case: &Atom, day: &Atom| {
+        case.head.is_some()
+            && (case.head == day.doc_tok_idx
+                || day.is_locked
+                    && case.head.and_then(|i| doc.tokens.get(i)).is_some_and(|t| {
+                        day.span.start_char <= t.span.start_char
+                            && day.span.end_char == t.span.end_char
+                    }))
+    };
     let after_comma = |i| {
         i + usize::from(
             atoms
@@ -372,8 +619,34 @@ fn date_alternatives(atoms: &[Atom], first_end: usize, first: &str) -> (usize, S
         let Some(join) = atoms.get(separator) else {
             break;
         };
+        // と normally adds dates. Require an explicit selector after both.
+        if join.surface == "と"
+            && !join.is_locked
+            && join.deprel == "case"
+            && attached(join, &atoms[end])
+            && let Some((next, text)) = next_date(separator + 1)
+            && let Some(no) = atoms.get(next + 1)
+            && !no.is_locked
+            && no.surface == "の"
+            && no.deprel == "case"
+            && attached(no, &atoms[next])
+        {
+            let tail = &atoms[next + 2..];
+            if let Some((ni, explicit_day)) = date_selection_case(tail)
+                && atoms[end..=next + 2 + ni]
+                    .windows(2)
+                    .all(|p| p[0].span.end_char == p[1].span.start_char)
+            {
+                label.push('或');
+                label.push_str(&text);
+                if explicit_day {
+                    label.push_str("其中一天");
+                }
+                return (next + 1 + ni, label);
+            }
+        }
         if join.is_locked
-            || !(join.surface == "か" && join.head == atoms[end].doc_tok_idx
+            || !(join.surface == "か" && attached(join, &atoms[end])
                 || join.upos == Some(Upos::Cconj)
                     && join.deprel == "cc"
                     && matches!(
@@ -384,12 +657,12 @@ fn date_alternatives(atoms: &[Atom], first_end: usize, first: &str) -> (usize, S
             break;
         }
         let next = after_comma(separator + 1);
-        let Some(day) = day_at(atoms, next).filter(|day| day.month.is_some()) else {
+        let Some((next_end, text)) = next_date(next) else {
             break;
         };
         label.push('或');
-        label.push_str(&render(&day));
-        end = day.end;
+        label.push_str(&text);
+        end = next_end;
     }
     (end, label)
 }
@@ -417,17 +690,50 @@ fn bind_detached_dates(
             } else {
                 continue;
             };
-        let (topic_end, topic_text) = date_alternatives(atoms, end, &text);
-        if let Some(clock) = topic_clock(atoms, start, topic_end, chars, doc) {
+        let (topic_end, topic_text) = date_alternatives(atoms, end, &text, chars, doc);
+        let choice = topic_end != end;
+        if let Some(found) = topic_clock(atoms, start, topic_end, choice, chars, doc) {
+            let clock = found.index;
+            if clock < start
+                && let Some(ka) = atoms.iter_mut().find(|a| {
+                    a.doc_tok_idx == Some(found.question_end) && !a.is_locked && a.surface == "か"
+                })
+            {
+                // A quoted object after the date can split a single event
+                // into rendered segments. Keep its verified question open.
+                ka.lemma = Some(super::FRONTED_CLOCK_KA.to_owned());
+            }
             let mut time = atoms[clock].clone();
             if !time.is_locked {
                 time.surface = "幾點".to_owned();
             }
+            if let Some((verb, cop)) = found.advice {
+                let action_id = atoms[verb].doc_tok_idx;
+                atoms[cop + 1].head = action_id;
+                atoms[verb].deprel = "root".to_owned();
+                atoms[verb].head = None;
+                atoms.drain(verb + 1..=cop);
+                time.surface.insert_str(0, "應該");
+            }
+            let temporal_choice = choice && atoms[topic_end + 1].surface == "に";
+            if temporal_choice {
+                if atoms[topic_end].surface == "か" {
+                    let selector = &atoms[topic_end - 1];
+                    let (token, event) = (selector.doc_tok_idx, selector.head);
+                    atoms[topic_end].doc_tok_idx = token;
+                    atoms[topic_end].head = event;
+                    atoms[topic_end].upos = Some(Upos::Noun);
+                }
+                atoms[topic_end + 1].surface = "は".to_owned();
+                atoms[topic_end].deprel = "nsubj".to_owned();
+            }
             time.is_locked = true;
             time.lemma = Some(super::CLOCK_QUESTION.to_owned());
-            let period = &atoms[clock - 1];
-            let period_index = if period.span.end_char == time.span.start_char
-                && (period.head == time.head || period.head == time.doc_tok_idx)
+            let period_index = if let Some(period) = clock.checked_sub(1).and_then(|i| atoms.get(i))
+                && period.span.end_char == time.span.start_char
+                && (period.head == time.head
+                    || period.head == time.doc_tok_idx
+                    || clock < start && period.head == atoms[start].doc_tok_idx)
                 && let Some(name) = match chars.get(period.span.start_char..period.span.end_char) {
                     Some(['午', '前']) => Some("上午"),
                     Some(['午', '後']) => Some("下午"),
@@ -447,7 +753,23 @@ fn bind_detached_dates(
                 clock
             };
             atoms.splice(period_index..=clock, [time]);
-            bind(atoms, start, topic_end, topic_text, DATE);
+            let shift = if clock < start {
+                clock - period_index
+            } else {
+                0
+            };
+            bind(atoms, start - shift, topic_end - shift, topic_text, DATE);
+            let after_date_case = start - shift + 2;
+            if temporal_choice
+                && atoms
+                    .get(after_date_case)
+                    .is_some_and(|a| !a.is_locked && a.surface == "、" && a.deprel == "punct")
+            {
+                atoms.remove(after_date_case);
+            }
+            if let Some(comma) = found.pause {
+                atoms.remove(comma - shift);
+            }
             continue;
         }
         let day = &atoms[end];
@@ -728,5 +1050,114 @@ impl DateContext {
             bind(atoms, day.start, day.end, text, DATE);
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod dated_question_tests {
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    fn translate(source: &str) -> String {
+        analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap()
+        .target_text
+    }
+
+    #[test]
+    fn date_keeps_the_kind_of_clock_in_a_request_for_advice() {
+        for (case, expected) in [
+            ("に", "11月12日應該幾點"),
+            ("までに", "11月12日最晚應該幾點"),
+        ] {
+            let s = format!("何時{case}、11月12日は市役所に申請書を提出すればいいですか。");
+            let out = translate(&s);
+            assert!(
+                out.starts_with(expected) && out.contains("申請書") && out.ends_with('？'),
+                "{out}"
+            );
+        }
+    }
+
+    #[test]
+    fn verbal_noun_keeps_each_dates_location_in_the_question() {
+        assert_eq!(
+            translate("何時までに、七月九日は駅で、七月十一日は港で集合しますか。"),
+            "最晚幾點，七月九日在車站，七月十一日在港口集合？"
+        );
+    }
+
+    #[test]
+    fn reported_advice_leaves_a_written_source_quotation_to_its_renderer() {
+        let question = "何時までに、11月12日は市役所に申請書を提出すればいいですか";
+        let spoken = translate(&format!("先生は「{question}」と言いました。"));
+        assert!(spoken.contains("11月12日最晚應該幾點"), "{spoken}");
+        let written = translate(&format!("「{question}」と一字ずつ紙に書きました。"));
+        assert!(!written.contains("11月12日最晚應該幾點"), "{written}");
+    }
+
+    #[test]
+    fn either_date_can_share_one_arrival_without_an_explicit_day_unit() {
+        for (clock, dates, expected, time) in [
+            (
+                "何時までに",
+                "十一月二日と十一月五日のいずれかに",
+                "十一月二日或十一月五日",
+                "最晚幾點",
+            ),
+            (
+                "何時に",
+                "11月2日と11月5日のいずれかの日に",
+                "11月2日或11月5日其中一天",
+                "幾點",
+            ),
+        ] {
+            let out = translate(&format!("{clock}、{dates}会館に来ますか。"));
+            assert!(
+                out.starts_with(expected)
+                    && out.contains(time)
+                    && out.contains("會館")
+                    && out.ends_with('？')
+                    && !out.contains('嗎'),
+                "{out}"
+            );
+            assert_eq!(out.contains("最晚"), clock.contains("まで"), "{out}");
+        }
+        let both = translate("何時までに、十一月二日と十一月五日のいずれにも会館に来ませんか。");
+        assert!(!both.contains('或'), "{both}");
+    }
+
+    #[test]
+    fn date_selection_is_distinct_from_joint_event_dates() {
+        for (dates, expected) in [
+            (
+                "11月19日と11月20日のいずれか一日に",
+                "11月19日或11月20日其中一天",
+            ),
+            ("11月19日か11月20日に", "11月19日或11月20日"),
+        ] {
+            let out = translate(&format!(
+                "何時までに、{dates}、会議室へ名簿を届ければいいですか。"
+            ));
+            assert!(
+                out.starts_with(expected)
+                    && out.contains("最晚應該幾點")
+                    && out.contains("會議室")
+                    && out.contains("名簿")
+                    && !out.contains('嗎'),
+                "{out}"
+            );
+        }
+        let both = translate("何時までに、11月19日と11月20日に、会議室へ名簿を届けますか。");
+        assert!(
+            both.contains("11月19日和11月20日") && !both.contains('或'),
+            "{both}"
+        );
     }
 }

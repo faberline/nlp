@@ -10,12 +10,15 @@ pub(super) fn is_argument_comma(atom: &Atom) -> bool {
     atom.lemma.as_deref() == Some(ARGUMENT_COMMA)
 }
 
-/// A reading comma can separate a fronted argument from the rest of one
-/// homework transfer. Keep real clause boundaries for the normal splitter.
+/// A reading comma can follow a fronted argument of a transfer.
+/// Keep real clause boundaries for the normal splitter.
 pub(super) fn mark_argument_commas(source: &mut [Atom], doc: &Document) {
     let is_comma = |a: &Atom| !a.is_locked && matches!(a.surface.as_str(), "、" | "，");
     if !source.iter().any(is_comma) {
         return;
+    }
+    if let Some(comma) = teaching_argument_pause(source, doc) {
+        source[comma].lemma = Some(ARGUMENT_COMMA.to_owned());
     }
     let mut objects = source
         .iter()
@@ -142,6 +145,104 @@ pub(super) fn mark_argument_commas(source: &mut [Atom], doc: &Document) {
     }
 }
 
+fn teaching_argument_pause(source: &[Atom], doc: &Document) -> Option<usize> {
+    let [_, _, _, relative, teacher, _, comma, rest @ ..] = source else {
+        return None;
+    };
+    if comma.is_locked
+        || !matches!(comma.surface.as_str(), "、" | "，")
+        || comma.deprel != "punct"
+        || comma.head != relative.doc_tok_idx
+        || assigned_lesson(relative, teacher, source).is_none()
+    {
+        return None;
+    }
+    let owner = teacher.head?;
+    let transfer = rest.iter().position(|atom| {
+        !atom.is_locked
+            && atom.deprel == "root"
+            && atom.doc_tok_idx == Some(owner)
+            && matches!(atom.lemma.as_deref(), Some("渡す" | "手渡す"))
+    })?;
+    let arguments = &rest[..transfer];
+    if arguments.iter().any(|atom| {
+        atom.upos == Some(Upos::Verb)
+            || matches!(
+                atom.surface.as_str(),
+                "、" | "，" | "。" | "「" | "」" | "『" | "』"
+            )
+    }) {
+        return None;
+    }
+    arguments
+        .windows(2)
+        .any(|pair| {
+            let [object, case] = pair else { return false };
+            super::handover::is_explicit_object(object, case, owner, doc)
+        })
+        .then_some(6)
+}
+
+/// Match the finite adnominal of a standalone teacher. A true name suffix
+/// has a different source span, with the name between the verb and 先生.
+fn assigned_lesson<'a>(verb: &Atom, teacher: &Atom, source: &'a [Atom]) -> Option<&'a Atom> {
+    if verb.is_locked
+        || teacher.is_locked
+        || verb.surface != "する"
+        || teacher.surface != "先生"
+        || verb.upos != Some(Upos::Verb)
+        || teacher.upos != Some(Upos::Noun)
+        || verb.deprel != "acl"
+        || verb.doc_tok_idx.is_none()
+        || teacher.doc_tok_idx.is_none()
+        || verb.head != teacher.doc_tok_idx
+        || verb.span.end_char != teacher.span.start_char
+    {
+        return None;
+    }
+    source.windows(6).find_map(|six| {
+        let [lesson, object_case, assignment, action, noun, noun_case] = six else {
+            return None;
+        };
+        if action.doc_tok_idx != verb.doc_tok_idx
+            || noun.doc_tok_idx != teacher.doc_tok_idx
+            || lesson.surface != "授業"
+            || lesson.upos != Some(Upos::Noun)
+            || lesson.deprel != "obj"
+            || lesson.head != verb.doc_tok_idx
+            || object_case.surface != "を"
+            || !dasu_case_link(lesson, object_case)
+            || assignment.surface != "担当"
+            || assignment.upos != Some(Upos::Noun)
+            || assignment.doc_tok_idx.is_none()
+            || assignment.head != verb.doc_tok_idx
+            || assignment.deprel != "compound"
+            || !dasu_case_link(teacher, noun_case)
+            || !matches!(
+                (teacher.deprel.as_str(), noun_case.surface.as_str()),
+                ("nsubj", "は" | "が") | ("iobj" | "obl", "に" | "へ")
+            )
+            || six.iter().any(|atom| atom.is_locked)
+            || six
+                .windows(2)
+                .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
+        {
+            return None;
+        }
+        // If another phrase belongs to the relative, leave it to the
+        // ordinary renderer so this reading cannot discard that phrase.
+        if source.iter().any(|atom| {
+            atom.head == verb.doc_tok_idx
+                && atom.deprel != "punct"
+                && atom.doc_tok_idx != lesson.doc_tok_idx
+                && atom.doc_tok_idx != assignment.doc_tok_idx
+        }) {
+            return None;
+        }
+        Some(lesson)
+    })
+}
+
 fn modifier_of<'a>(person: &Atom, source: &'a [Atom]) -> Option<&'a Atom> {
     source.iter().find(|a| {
         !a.is_locked
@@ -198,6 +299,9 @@ pub(super) fn asks_modifier_time(groups: &[Bunsetsu], source: &[Atom]) -> bool {
 }
 
 pub(super) fn modifies_classroom_argument(verb: &Atom, noun: &Atom, source: &[Atom]) -> bool {
+    if assigned_lesson(verb, noun, source).is_some() {
+        return true;
+    }
     !verb.is_locked
         && verb.upos == Some(Upos::Verb)
         && verb.deprel == "acl"
@@ -321,6 +425,23 @@ pub(super) fn fold(
     doc: &Document,
     target: TargetVariant,
 ) -> bool {
+    if let [assignment, verb] = predicate.atoms.as_slice()
+        && assignment.surface == "担当"
+        && let [teacher, _] = noun_group.atoms.as_slice()
+        && let Some(lesson) = assigned_lesson(verb, teacher, source)
+        && matches!(
+            groups.last().map(|group| group.atoms.as_slice()),
+            Some([object, case])
+                if !object.is_locked
+                    && object.doc_tok_idx == lesson.doc_tok_idx
+                    && case.surface == "を"
+                    && dasu_case_link(object, case)
+        )
+    {
+        groups.pop();
+        prepend_locked_atom(noun_group, "負責授課的".to_owned());
+        return true;
+    }
     let Some(verb) = predicate.atoms.first() else {
         return false;
     };
@@ -425,6 +546,46 @@ mod tests {
     use crate::{
         Backend, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
     };
+
+    #[test]
+    fn a_class_assignment_stays_with_the_teacher_it_modifies() {
+        for hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = hint;
+            let translate = |source| {
+                analyze_and_translate(
+                    source,
+                    &options,
+                    &TranslationGlossary::new(),
+                    None,
+                    Backend::Onnx,
+                )
+                .unwrap()
+                .target_text
+            };
+            assert_eq!(
+                translate("授業を担当する先生が来ました。"),
+                "負責授課的老師來了。"
+            );
+            let subject = translate("授業を担当する先生は、授業後に佐藤さんへ資料を渡しました。");
+            assert!(subject.starts_with("負責授課的老師下課後"), "{subject}");
+            let recipient = translate("授業を担当する先生に、佐藤さんが授業後に資料を渡しました。");
+            assert!(
+                recipient.starts_with("佐藤") && recipient.contains("給負責授課的老師"),
+                "{recipient}"
+            );
+            for (source, expected) in [
+                (
+                    "授業を担当する佐藤先生が来ました。",
+                    "擔當授業的佐藤老師來了。",
+                ),
+                ("会議を担当した先生が来ました。", "擔當會議的做的老師來了。"),
+                ("授業を担当する講師が来ました。", "擔當授業的講師來了。"),
+            ] {
+                assert_eq!(translate(source), expected, "{source}");
+            }
+        }
+    }
 
     #[test]
     fn transfers_follow_the_participant_modified_by_the_relative_clause() {

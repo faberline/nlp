@@ -14,6 +14,7 @@ mod copular_time;
 mod counted_object;
 mod daytime;
 mod finite_adjective;
+mod handover;
 mod homework_desire;
 mod homework_relative;
 mod nominal_possession;
@@ -6263,6 +6264,13 @@ fn translate_clause_atoms(
 
     if target == TargetVariant::ZhHant
         && !ctx.inside_quote
+        && let Some(text) = handover::before_travel(atoms, ctx.following, doc, ctx.source_chars)
+    {
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
         && let Some(text) =
             translate_elapsed_embedded_question(atoms, doc, sentence_idx, ctx, target)
     {
@@ -11372,7 +11380,14 @@ fn translate_clause_bunsetsus(
         .flat_map(|g| &g.atoms)
         .filter(|a| daytime::is_modifier(a))
         .find_map(|day| daytime::meeting_verb(source, day));
+    let handover = handover::resolve(&bunsetsus, ctx.source_chars, doc, target);
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if handover
+            .as_ref()
+            .is_some_and(|event| idx == event.object_group || idx == event.recipient_group)
+        {
+            continue;
+        }
         let protected_manner = b.atoms.iter().find(|a| {
             a.lemma.as_deref() == Some(application_form::LOCKED_ADJUNCT)
                 && a.head == form_manner_verb
@@ -13252,6 +13267,18 @@ fn translate_clause_bunsetsus(
     parts.extend(route);
     parts.extend(route_directions);
     parts.extend(transfer_prefix);
+    if let Some(event) = handover {
+        debug_assert!(
+            predicates
+                .iter()
+                .flat_map(|group| &group.atoms)
+                .any(|atom| { !atom.is_locked && atom.doc_tok_idx == Some(event.predicate) })
+        );
+        parts.push(format!("把{}", event.object));
+        verb_core = format!("{}{}", event.action, event.recipient);
+        // The completed handover is explicit without a second aspect marker.
+        post_verb_mods.retain(|modifier| modifier != "了");
+    }
     if let Some(object) = affected_object {
         parts.push(format!("把{object}"));
     }
@@ -23840,7 +23867,7 @@ fn route_marker(group: &Bunsetsu, source: &[Atom], motion: usize) -> Option<&'st
     {
         return None;
     }
-    if let Some(marker) = spatial_route_marker(place) {
+    if let Some(marker) = spatial_route_marker(&place.surface) {
         return Some(marker);
     }
     // 中 can also describe time. Verify the place in 公園の中 before moving
@@ -23866,15 +23893,15 @@ fn route_marker(group: &Bunsetsu, source: &[Atom], motion: usize) -> Option<&'st
                 && no.upos == Some(Upos::Adp)
                 && owner.span.end_char == no.span.start_char
                 && no.span.end_char == place.span.start_char
-                && (spatial_route_marker(owner).is_some()
+                && (spatial_route_marker(&owner.surface).is_some()
                     || is_existing_spatial_head(owner)
                     || matches!(owner.surface.as_str(), "庭" | "教室" | "建物" | "店"))
         })
         .then_some("在")
 }
 
-fn spatial_route_marker(place: &Atom) -> Option<&'static str> {
-    match place.surface.as_str() {
+fn spatial_route_marker(surface: &str) -> Option<&'static str> {
+    match surface {
         "道" | "道路" | "歩道" | "山道" | "坂道" | "車道" | "遊歩道" | "街道" | "小道" | "通路"
         | "廊下" | "路地" | "橋" | "海岸" | "河岸" | "川岸" | "国道" | "県道" | "林道" | "農道" => {
             Some("沿著")
@@ -23894,7 +23921,7 @@ fn governs_traversed_space(source: &[Atom], head: usize) -> bool {
             && place.deprel == "obj"
             && place.head == Some(head)
             && place.doc_tok_idx.is_some()
-            && (spatial_route_marker(place).is_some() || is_existing_spatial_head(place))
+            && (spatial_route_marker(&place.surface).is_some() || is_existing_spatial_head(place))
             && !wo.is_locked
             && wo.upos == Some(Upos::Adp)
             && wo.surface == "を"

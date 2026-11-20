@@ -1,5 +1,5 @@
 //! The service counter and the act of accepting applications share a Japanese noun.
-use super::{Atom, Upos, is_building_floor};
+use super::{Atom, Upos, dasu_case_link, is_building_floor, return_endpoint};
 
 pub(super) const COUNTER: &str = "櫃檯";
 pub(super) const SERVICE: &str = "受理";
@@ -14,6 +14,62 @@ pub(super) fn location_relation(inflection: &str) -> Option<&'static str> {
     }
 }
 
+// A nominal qualifier can mark an intake method or activity. Only an attached
+// place genitive, as in 図書館の受付, identifies a physical counterpart.
+fn has_only_place_qualifiers(atoms: &[Atom], counter: &Atom) -> bool {
+    atoms
+        .iter()
+        .enumerate()
+        .filter(|(_, modifier)| {
+            modifier.head == counter.doc_tok_idx
+                && matches!(
+                    modifier.deprel.as_str(),
+                    "compound" | "nmod" | "amod" | "nummod"
+                )
+        })
+        .all(|(index, modifier)| {
+            modifier.deprel == "nmod"
+                && return_endpoint::is_place(modifier)
+                && atoms.get(index + 1).is_some_and(|no| {
+                    no.surface == "の"
+                        && no.span.end_char == counter.span.start_char
+                        && dasu_case_link(modifier, no)
+                })
+        })
+}
+
+fn is_relative_counter_location(atoms: &[Atom], counter: &Atom, no: &Atom, place: &Atom) -> bool {
+    if !matches!(place.surface.as_str(), "前" | "横" | "隣" | "中" | "奥") || place.deprel != "obl"
+    {
+        return false;
+    }
+    let Some(predicate) = atoms
+        .iter()
+        .find(|a| a.doc_tok_idx == place.head && !a.is_locked && a.upos == Some(Upos::Verb))
+    else {
+        return false;
+    };
+    let lemma = predicate.lemma.as_deref().unwrap_or(&predicate.surface);
+    atoms.iter().any(|case| {
+        if case.head != place.doc_tok_idx || case.deprel != "case" {
+            return false;
+        }
+        match (case.surface.as_str(), lemma) {
+            ("に", "いる" | "ある") => {
+                matches!(predicate.lemma.as_deref(), Some("いる" | "ある"))
+            }
+            // An attached position of waiting or standing is spatial. 前に
+            // with a separate activity can still give a temporal relation.
+            ("で", "待つ") | ("に", "立つ") => {
+                no.span.end_char == place.span.start_char
+                    && dasu_case_link(place, case)
+                    && has_only_place_qualifiers(atoms, counter)
+            }
+            _ => false,
+        }
+    })
+}
+
 fn reading(atoms: &[Atom], index: usize) -> Option<&'static str> {
     let noun = atoms.get(index)?;
     if noun.is_locked || noun.surface != "受付" || noun.upos != Some(Upos::Noun) {
@@ -21,9 +77,7 @@ fn reading(atoms: &[Atom], index: usize) -> Option<&'static str> {
     }
     let head = noun.head?;
     let governor = atoms.iter().find(|a| a.doc_tok_idx == Some(head))?;
-    let particle = atoms
-        .get(index + 1)
-        .filter(|a| super::dasu_case_link(noun, a))?;
+    let particle = atoms.get(index + 1).filter(|a| dasu_case_link(noun, a))?;
     let case = particle.surface.as_str();
     let lemma = governor.lemma.as_deref().unwrap_or(&governor.surface);
     if matches!(noun.deprel.as_str(), "obj" | "nsubj" | "obl")
@@ -58,19 +112,7 @@ fn reading(atoms: &[Atom], index: usize) -> Option<&'static str> {
         {
             return Some(COUNTER);
         }
-        // 前 can also be a time. Require a location linked to an existential verb.
-        if matches!(governor.surface.as_str(), "前" | "横" | "隣" | "中" | "奥")
-            && governor.deprel == "obl"
-            && atoms
-                .iter()
-                .any(|a| a.head == Some(head) && a.surface == "に" && a.deprel == "case")
-            && atoms.iter().any(|a| {
-                a.doc_tok_idx == governor.head
-                    && !a.is_locked
-                    && a.upos == Some(Upos::Verb)
-                    && matches!(a.lemma.as_deref(), Some("いる" | "ある"))
-            })
-        {
+        if is_relative_counter_location(atoms, noun, particle, governor) {
             return Some(COUNTER);
         }
     }
@@ -99,6 +141,21 @@ fn reading(atoms: &[Atom], index: usize) -> Option<&'static str> {
             | super::application_form::SUBMIT
             | super::application_form::CAN_SUBMIT,
         ) => Some(COUNTER),
+        // In 受付で申請を受け付ける, the place and the object belong to
+        // the same acceptance predicate. Keep method-qualified 受付 separate.
+        ("obl" | "nsubj", "で", "受け付ける")
+            if has_only_place_qualifiers(atoms, noun)
+                && atoms.windows(2).any(|pair| {
+                    let [object, wo] = pair else { return false };
+                    object.head == Some(head)
+                        && object.deprel == "obj"
+                        && object.upos == Some(Upos::Noun)
+                        && wo.surface == "を"
+                        && dasu_case_link(object, wo)
+                }) =>
+        {
+            Some(COUNTER)
+        }
         ("nsubj", "は" | "が", "受け付ける") => Some(COUNTER),
         _ => None,
     }
@@ -287,7 +344,9 @@ pub(super) fn subject_before_counter(atoms: &[Atom]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use crate::{
+        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+    };
     use faberline_nlp::doc::model::Backend;
 
     #[test]
@@ -313,5 +372,61 @@ mod tests {
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
+    }
+
+    #[test]
+    fn physical_counter_belongs_to_the_action_that_proves_its_location() {
+        let translate = |source, glossary: &TranslationGlossary| {
+            analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap()
+        };
+        let empty = TranslationGlossary::new();
+        for (source, expected) in [
+            ("受付の前で待ちました。", "在櫃檯前面等待了。"),
+            ("受付の前に立ちました。", "在櫃檯前面站了。"),
+            ("受付で申請を受け付けます。", "在櫃檯受理申請。"),
+            ("受付で申請を受け付けない。", "在櫃檯不受理申請。"),
+            (
+                "図書館の受付で申請を受け付けます。",
+                "在圖書館的櫃檯受理申請。",
+            ),
+            ("受付の前に申請しました。", "在受付前面申請了。"),
+            ("受付が始まる前に待ちました。", "在受理開始的前面等待了。"),
+            ("申請の受付の前に立ちました。", "在申請的受付前面站了。"),
+            (
+                "オンライン受付で申請を受け付けます。",
+                "在オンライン受付受理申請。",
+            ),
+            (
+                "受付で案内して、別室では申請を受け付けます。",
+                "在受付說明，在另外的室受理申請。",
+            ),
+        ] {
+            assert_eq!(translate(source, &empty).target_text, expected, "{source}");
+        }
+
+        let mut glossary = TranslationGlossary::new();
+        glossary.places.push(GlossaryEntry {
+            canonical: "受付".to_owned(),
+            surfaces: vec!["受付".to_owned()],
+            targets: [(TargetVariant::ZhHant, "服務台".to_owned())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        });
+        let quoted = "「受付の前で待ちました」と一字ずつ紙に書きました。受付で申請を受け付けます。";
+        let result = translate(quoted, &glossary);
+        let text = &result.target_text;
+        assert!(text.contains("「受付の前で待ちました」"), "{text}");
+        assert!(text.ends_with("在服務台受理申請。"), "{text}");
+        assert_eq!(result.glossary_hits.len(), 1);
+        assert_eq!(result.glossary_hits[0].canonical, "受付");
+        assert_eq!(result.glossary_hits[0].sentence, Some(1));
     }
 }

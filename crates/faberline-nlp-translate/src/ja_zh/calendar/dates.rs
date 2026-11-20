@@ -619,10 +619,13 @@ fn date_alternatives(
         let Some(join) = atoms.get(separator) else {
             break;
         };
-        // と normally adds dates. Require an explicit selector after both.
-        if join.surface == "と"
-            && !join.is_locked
-            && join.deprel == "case"
+        // Both dates can precede an explicit selector. と adds the dates
+        // without that selector, while か can also introduce a bare choice.
+        if !join.is_locked
+            && matches!(
+                (join.surface.as_str(), join.deprel.as_str()),
+                ("と", "case") | ("か", "discourse")
+            )
             && attached(join, &atoms[end])
             && let Some((next, text)) = next_date(separator + 1)
             && let Some(no) = atoms.get(next + 1)
@@ -667,6 +670,59 @@ fn date_alternatives(
     (end, label)
 }
 
+// に marks the calendar date; は makes it the topic. Both particles
+// belong to the date that modifies the following verb.
+fn normalize_temporal_topic(
+    atoms: &mut Vec<Atom>,
+    start: usize,
+    end: usize,
+    chars: &[char],
+    doc: &Document,
+) -> bool {
+    let Some([ni, wa]) = atoms.get(end + 1..end + 3) else {
+        return false;
+    };
+    let day = &atoms[end];
+    let Some(day_id) = ni.head else { return false };
+    if ni.surface != "に"
+        || wa.surface != "は"
+        || [ni, wa]
+            .iter()
+            .any(|a| a.is_locked || a.deprel != "case" || a.head != Some(day_id))
+        || ni.span.start_char != day.span.end_char
+        || wa.span.start_char != ni.span.end_char
+    {
+        return false;
+    }
+    let Some(raw) = chars.get(atoms[start].span.start_char..day.span.end_char) else {
+        return false;
+    };
+    if !raw.contains(&'月') || spelled_report_day(&raw.iter().collect::<String>()).is_none() {
+        return false;
+    }
+    let Some(node) = doc.syntax.iter().find(|node| {
+        node.token == day_id
+            && node.span.start_char >= atoms[start].span.start_char
+            && node.span.end_char == day.span.end_char
+            && matches!(node.deprel.as_str(), "nsubj" | "obl" | "iobj")
+    }) else {
+        return false;
+    };
+    let Some(owner) = node.head else { return false };
+    if !atoms[end + 3..]
+        .iter()
+        .any(|atom| atom.doc_tok_idx == Some(owner) && atom.upos == Some(Upos::Verb))
+    {
+        return false;
+    }
+    atoms[end].doc_tok_idx = Some(day_id);
+    atoms[end].head = Some(owner);
+    atoms[end].deprel = node.deprel.clone();
+    atoms[end + 2].span.start_char = atoms[end + 1].span.start_char;
+    atoms.remove(end + 1);
+    true
+}
+
 fn bind_detached_dates(
     atoms: &mut Vec<Atom>,
     chars: &[char],
@@ -690,6 +746,7 @@ fn bind_detached_dates(
             } else {
                 continue;
             };
+        let temporal_topic = normalize_temporal_topic(atoms, start, end, chars, doc);
         let (topic_end, topic_text) = date_alternatives(atoms, end, &text, chars, doc);
         let choice = topic_end != end;
         if let Some(found) = topic_clock(atoms, start, topic_end, choice, chars, doc) {
@@ -770,6 +827,10 @@ fn bind_detached_dates(
             if let Some(comma) = found.pause {
                 atoms.remove(comma - shift);
             }
+            continue;
+        }
+        if temporal_topic {
+            bind(atoms, start, end, text, DATE);
             continue;
         }
         let day = &atoms[end];
@@ -1055,8 +1116,11 @@ impl DateContext {
 
 #[cfg(test)]
 mod dated_question_tests {
-    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use crate::{
+        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+    };
     use faberline_nlp::doc::model::Backend;
+    use std::collections::BTreeMap;
 
     fn translate(source: &str) -> String {
         analyze_and_translate(
@@ -1159,5 +1223,58 @@ mod dated_question_tests {
             both.contains("11月19日和11月20日") && !both.contains('或'),
             "{both}"
         );
+    }
+
+    #[test]
+    fn topical_date_and_explicit_alternatives_keep_their_own_events() {
+        let source = concat!(
+            "十一月六日には、九時に駅へ行きます。",
+            "十一月八日か十一月十日のいずれかに、何時に図書館へ行きますか。"
+        );
+        assert_eq!(
+            translate(source),
+            "十一月六日，在九點往車站去。十一月八日或十一月十日幾點往圖書館去？"
+        );
+        let mut glossary = TranslationGlossary::new();
+        for (date, label) in [
+            ("十一月六日", "指定六日"),
+            ("十一月八日", "指定八日"),
+            ("十一月十日", "指定十日"),
+        ] {
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: date.to_owned(),
+                surfaces: vec![date.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, label.to_owned())]),
+                ..GlossaryEntry::default()
+            });
+        }
+        let result = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(
+            result.target_text,
+            "指定六日，在九點往車站去。指定八日或指定十日幾點往圖書館去？"
+        );
+        assert_eq!(result.glossary_hits.len(), 3);
+        for (hit, (sentence, label)) in
+            result
+                .glossary_hits
+                .iter()
+                .zip([(0, "指定六日"), (1, "指定八日"), (1, "指定十日")])
+        {
+            let span = hit.target_span;
+            let translated: String = result
+                .target_text
+                .chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect();
+            assert_eq!((hit.sentence, translated.as_str()), (Some(sentence), label));
+        }
     }
 }

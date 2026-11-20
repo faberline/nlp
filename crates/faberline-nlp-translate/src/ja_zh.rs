@@ -13,6 +13,7 @@ mod copular_time;
 mod counted_object;
 mod finite_adjective;
 mod homework_desire;
+mod homework_relative;
 mod nominal_possession;
 mod payment_potential;
 mod return_endpoint;
@@ -247,6 +248,7 @@ pub(crate) fn translate_ja_sentence(
 
     if target == TargetVariant::ZhHant {
         calendar::bind_relative_contrast(&mut atoms, chars);
+        homework_relative::mark_argument_commas(&mut atoms, doc);
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
@@ -4389,6 +4391,12 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
             continue;
         }
 
+        if homework_relative::is_argument_comma(a) {
+            current.push(a.clone());
+            i += 1;
+            continue;
+        }
+
         // Clause-ending comma `、` / `，` or sentence-ending punctuation `。` / `！` / `？`
         if !a.is_locked
             && matches!(
@@ -6079,6 +6087,13 @@ fn translate_clause_atoms(
         return res;
     }
 
+    if target == TargetVariant::ZhHant
+        && let Some(text) =
+            homework_desire::reported(core_non_punct(atoms), doc, sentence_idx, target)
+    {
+        return (text, false);
+    }
+
     if let Some(res) = try_translate_toki_clause(atoms, doc, sentence_idx, target) {
         return res;
     }
@@ -6204,7 +6219,8 @@ fn translate_clause_atoms(
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
-        && let Some(text) = homework_desire::render(body, &norm_atoms, doc, sentence_idx, target)
+        && let Some(text) =
+            homework_desire::render(body, &norm_atoms, doc, sentence_idx, target, None)
     {
         return (text, false);
     }
@@ -6245,7 +6261,8 @@ fn translate_clause_atoms(
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
-        && let Some(homework) = try_translate_homework_transfer(&bunsetsus, body, doc, target, None)
+        && let Some(homework) =
+            try_translate_homework_transfer(&bunsetsus, body, doc, target, None, None)
     {
         return (homework, false);
     }
@@ -6529,6 +6546,7 @@ fn nominal_conditional_tail(atoms: &[Atom]) -> Option<(&[Atom], [Atom; 2])> {
     Some((body, [predicate, ba.clone()]))
 }
 
+#[derive(Copy, Clone, PartialEq, Eq)]
 enum ClassroomRole {
     Student,
     Teacher,
@@ -6570,13 +6588,16 @@ fn try_translate_homework_transfer(
     source: &[Atom],
     doc: &Document,
     target: TargetVariant,
-    desire: Option<(&str, bool)>,
+    desire: Option<homework_desire::Desire<'_>>,
+    relative: Option<ClassroomRole>,
 ) -> Option<String> {
     // Inspect the source before nominal groups render protected atoms.
-    // A normalized clock can pass if it has no glossary placeholder.
+    // Normalized dates and clocks retain their source heads. A glossary
+    // placeholder cannot supply a time or a classroom participant.
     if source.iter().any(|atom| {
         atom.is_locked
-            && (atom.lemma.as_deref() != Some(CLOCK_ATOM) || atom.surface.contains("[[PH"))
+            && (atom.surface.contains("[[PH")
+                || (atom.lemma.as_deref() != Some(CLOCK_ATOM) && !calendar::is_date(atom)))
     }) {
         return None;
     }
@@ -6621,12 +6642,14 @@ fn try_translate_homework_transfer(
     }
     let mut deadline = None;
     let mut continuation_end = None;
-    let mut has_clock_modifier = false;
+    let mut has_time_modifier = false;
     let mut asks_event_time = false;
     let mut subject = None;
     let mut recipient = None;
     let mut homework = None;
+    let mut recipient_before_subject = false;
     let mut adjuncts = Vec::new();
+    let mut intention_time = None;
     for bunsetsu in bunsetsus {
         if bunsetsu.sconj_tail.is_some()
             || (bunsetsu.sfp_tail.is_some() && !bunsetsu.atoms.last().is_some_and(is_terminal_ka))
@@ -6640,11 +6663,22 @@ fn try_translate_homework_transfer(
             deadline = Some((adjuncts.len(), bunsetsu));
             continue;
         }
+        if let [date, marker] = bunsetsu.atoms.as_slice()
+            && calendar::is_date(date)
+            && marker.surface == "に"
+            && dasu_case_link(date, marker)
+            && date.head == head
+        {
+            has_time_modifier = true;
+            asks_event_time |= calendar::question(date).is_some();
+            adjuncts.push(render_bunsetsu_obl(bunsetsu, target, false));
+            continue;
+        }
         if let Some((clock, marker)) = explicit_clock_case(bunsetsu) {
             if clock_case_governor(clock, marker, doc) != head {
                 return None;
             }
-            has_clock_modifier = true;
+            has_time_modifier = true;
             match marker.surface.as_str() {
                 "まで" => {
                     if continuation_end.is_some() {
@@ -6662,7 +6696,10 @@ fn try_translate_homework_transfer(
             }
             continue;
         }
-        if bunsetsu.role != BunsetsuRole::Obj && bunsetsu.atoms.iter().any(|atom| atom.is_locked) {
+        if bunsetsu.role != BunsetsuRole::Obj
+            && bunsetsu.atoms.iter().any(|atom| atom.is_locked)
+            && homework_relative::person(bunsetsu, source).is_none()
+        {
             return None;
         }
         if bunsetsu.role == BunsetsuRole::Predicate
@@ -6689,6 +6726,25 @@ fn try_translate_homework_transfer(
             adjuncts.push("什麼時候".to_owned());
             continue;
         }
+        // A subject followed by a comma-framed present or past time can
+        // locate its intention independently of the scheduled transfer.
+        if desire.is_some()
+            && let [time] = bunsetsu.atoms.as_slice()
+            && time.head == head
+            && matches!(
+                time.surface.as_str(),
+                "今" | "昨日" | "今朝" | "昨夜" | "昨晩" | "先週" | "先月" | "去年"
+            )
+            && source.iter().any(|a| {
+                homework_relative::is_argument_comma(a) && time.span.end_char == a.span.start_char
+            })
+            && let Some(label) = homework_desire::intention_adverb(time)
+        {
+            if intention_time.replace(label).is_some() {
+                return None;
+            }
+            continue;
+        }
         if is_event_daypart(bunsetsu, bunsetsus, source)
             || (matches!(bunsetsu.role, BunsetsuRole::Adv | BunsetsuRole::Other)
                 && bunsetsu.case_particle.is_none()
@@ -6703,7 +6759,9 @@ fn try_translate_homework_transfer(
         let [modifiers @ .., noun, marker] = bunsetsu.atoms.as_slice() else {
             return None;
         };
-        if noun.head != head || !dasu_case_link(noun, marker) {
+        if !dasu_case_link(noun, marker)
+            || (noun.head != head && !homework_relative::matrix_topic(noun, marker, head, source))
+        {
             return None;
         }
         match (noun.deprel.as_str(), marker.surface.as_str()) {
@@ -6720,10 +6778,17 @@ fn try_translate_homework_transfer(
                 } else {
                     return None;
                 }
-                has_clock_modifier = true;
+                has_time_modifier = true;
+            }
+            ("nsubj", "は")
+                if modifiers.is_empty()
+                    && let Some(time) = render_temporal_made_atom(noun) =>
+            {
+                adjuncts.push(time);
+                has_time_modifier = true;
             }
             ("nsubj", "は" | "が") if subject.is_none() => {
-                subject = Some(classroom_role(modifiers, noun)?);
+                subject = Some(homework_relative::person(bunsetsu, source)?);
             }
             ("obl" | "iobj", "に")
                 if desire.is_some()
@@ -6734,7 +6799,8 @@ fn try_translate_homework_transfer(
                 adjuncts.push(format!("在{time}"));
             }
             ("obl" | "iobj", "に") if recipient.is_none() => {
-                recipient = Some(classroom_role(modifiers, noun)?);
+                recipient = Some(homework_relative::person(bunsetsu, source)?);
+                recipient_before_subject = subject.is_none();
             }
             ("obl", "で")
                 if noun.surface == "教室"
@@ -6755,12 +6821,25 @@ fn try_translate_homework_transfer(
             _ => return None,
         }
     }
-    let ((subject_role, subject), (recipient_role, recipient)) = (subject?, recipient?);
     let homework = homework?;
-    let action = match (subject_role, recipient_role) {
-        (ClassroomRole::Student, ClassroomRole::Teacher) => format!("把{homework}交給{recipient}"),
-        (ClassroomRole::Teacher, ClassroomRole::Student) => format!("出{homework}給{recipient}"),
+    let (subject_role, subject, recipient) = match (subject, recipient, relative) {
+        (Some((actor, name)), Some((receiver, text)), None) if actor != receiver => {
+            (actor, name, Some(text))
+        }
+        // The modified person fills the missing argument of the relative clause.
+        (None, receiver, Some(actor)) if receiver.as_ref().is_none_or(|r| r.0 != actor) => {
+            (actor, String::new(), receiver.map(|r| r.1))
+        }
+        (Some((actor, name)), None, Some(receiver)) if actor != receiver => {
+            (actor, name, Some(String::new()))
+        }
         _ => return None,
+    };
+    let action = match (subject_role, recipient) {
+        (ClassroomRole::Student, Some(name)) => format!("把{homework}交給{name}"),
+        (ClassroomRole::Teacher, Some(name)) => format!("出{homework}給{name}"),
+        (ClassroomRole::Student, None) => format!("交{homework}"),
+        (ClassroomRole::Teacher, None) => format!("出{homework}"),
     };
     let (before_verb, verb, after_verb, passive) =
         synthesize_predicate_complex(std::slice::from_ref(predicate), true, target, None);
@@ -6768,7 +6847,7 @@ fn try_translate_homework_transfer(
         return None;
     }
     let mut continuation_tail = None;
-    let mut desire_prefix = desire.map(|(modal, _)| modal);
+    let mut desire_prefix = desire.map(|d| d.modal);
     if let Some((position, group)) = deadline {
         if continuation_end.is_some() {
             return None;
@@ -6776,7 +6855,7 @@ fn try_translate_homework_transfer(
         let time = render_bunsetsu_np(group, target);
         // Negation applies to completing the transfer by the deadline.
         let cutoff = match before_verb.as_slice() {
-            [] if desire.is_some_and(|(modal, _)| modal.ends_with("不想")) => {
+            [] if desire.is_some_and(|d| d.modal.ends_with("不想")) => {
                 format!("在{time}前")
             }
             [] => format!("最晚在{time}"),
@@ -6804,11 +6883,16 @@ fn try_translate_homework_transfer(
         }
         adjuncts.extend(before_verb);
     }
-    let mut parts = vec![subject.to_owned()];
+    let mut parts = vec![subject];
+    if let Some(time) = intention_time {
+        parts.push(time);
+        desire_prefix = desire_prefix.map(|modal| modal.strip_prefix("當時").unwrap_or(modal));
+    }
     if let Some(modal) = desire_prefix {
         parts.push(modal.to_owned());
     }
     parts.extend(adjuncts);
+    parts.extend(desire.and_then(|d| d.within).map(str::to_owned));
     parts.push(action);
     parts.extend(
         after_verb
@@ -6816,8 +6900,13 @@ fn try_translate_homework_transfer(
             .filter(|word| continuation_tail.is_none() || word != "了"),
     );
     parts.extend(continuation_tail);
-    if terminal_ka.is_some() || desire.is_some_and(|(_, question)| question) {
-        if desire.is_none() && deadline.is_none() && !has_clock_modifier {
+    if terminal_ka.is_some() || desire.is_some_and(|d| d.question) {
+        if desire.is_none()
+            && deadline.is_none()
+            && !has_time_modifier
+            && (relative.is_some() || !recipient_before_subject)
+            && !homework_relative::has_modified_person(bunsetsus, source)
+        {
             return None;
         }
         let asks_deadline_time = deadline.is_some_and(|(_, group)| {
@@ -6826,7 +6915,10 @@ fn try_translate_homework_transfer(
                 .iter()
                 .any(|atom| deadline_time_question(atom).is_some())
         });
-        if !asks_deadline_time && !asks_event_time {
+        if !asks_deadline_time
+            && !asks_event_time
+            && !homework_relative::asks_modifier_time(bunsetsus, source)
+        {
             parts.push("嗎".to_owned());
         }
     }
@@ -14547,6 +14639,16 @@ fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> 
     let mut cur: Vec<Atom> = Vec::new();
 
     for (idx, atom) in atoms.iter().enumerate() {
+        if homework_relative::is_argument_comma(atom) {
+            if !cur.is_empty() {
+                bunsetsus.push(classify_bunsetsu(
+                    std::mem::take(&mut cur),
+                    doc,
+                    sentence_idx,
+                ));
+            }
+            continue;
+        }
         cur.push(atom.clone());
         let is_func = is_bunsetsu_tail_atom(atom);
         let next = atoms.get(idx + 1);
@@ -14578,7 +14680,13 @@ fn group_into_bunsetsus(atoms: &[Atom], doc: &Document, sentence_idx: usize) -> 
         if !next_is_func
             && !next_is_aux
             && !keep_te_subsidiary
-            && (is_func || activity_adverb || !is_compound_noun_pair(atom, next))
+            && (is_func
+                || activity_adverb
+                || !is_compound_noun_pair(atom, next)
+                || next.is_some_and(|n| {
+                    is_honorific_suffix(&n.surface)
+                        && homework_relative::modifies_classroom_argument(atom, n, atoms)
+                }))
         {
             bunsetsus.push(classify_bunsetsu(
                 std::mem::take(&mut cur),
@@ -15417,7 +15525,10 @@ fn merge_adnominal_bunsetsus(
         if is_noun_bunsetsu(&b)
             || target == TargetVariant::ZhHant
                 && ends_in_genitive_no(&b)
-                && coordinated_elapsed_both_genitive(&res, &b, source)
+                && (coordinated_elapsed_both_genitive(&res, &b, source)
+                    || res
+                        .last()
+                        .is_some_and(|p| homework_relative::attached_predicate(p, &b, source)))
         {
             let is_sue_ni = b.case_particle.as_deref() == Some("に")
                 && b.atoms
@@ -15563,7 +15674,8 @@ fn merge_adnominal_bunsetsus(
                 if let Some(pred_b) = res.pop_if(|prev| {
                     is_prenominal_pred(prev)
                         || target == TargetVariant::ZhHant
-                            && (finite_adjective::voiced_past_modifier(prev, &b, source)
+                            && (homework_relative::attached_predicate(prev, &b, source)
+                                || finite_adjective::voiced_past_modifier(prev, &b, source)
                                 || is_elapsed_past_relative(prev, &b, source)
                                 || is_elapsed_progressive_relative(prev, &b, source))
                 }) {
@@ -15600,8 +15712,18 @@ fn merge_adnominal_bunsetsus(
                         continue;
                     }
 
+                    if target == TargetVariant::ZhHant
+                        && homework_relative::fold(&mut res, &pred_b, &mut b, source, doc, target)
+                    {
+                        continue;
+                    }
                     // Relative clause (`彼は` stops, `彼が書いた` merges into `手紙`).
-                    let acl_bunsetsus = take_adnominal_arguments(&mut res, pred_b, doc, false);
+                    let classroom = target == TargetVariant::ZhHant
+                        && homework_relative::attached_predicate(&pred_b, &b, source);
+                    let mut acl_bunsetsus = take_adnominal_arguments(&mut res, pred_b, doc, false);
+                    if classroom {
+                        homework_relative::arrival_times(&mut acl_bunsetsus, source);
+                    }
                     let (mut inner, _) = translate_clause_bunsetsus(
                         acl_bunsetsus,
                         source,

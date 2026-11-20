@@ -1017,7 +1017,7 @@ fn quotes_exact_writing(
     let mut unchanged = false;
     let mut writing_surface = false;
     let mut surface_after_operand = false;
-    let mut copy_destination = None;
+    let mut count_destination = None;
     let mut surface_has_foreign_text = false;
     let mut writes_in_japanese = false;
     for (i, token) in syntax.tokens[..predicate]
@@ -1068,9 +1068,10 @@ fn quotes_exact_writing(
         writing_surface |= surface;
         surface_after_operand |= surface && token.span.start_char >= start;
         if surface {
-            if copies {
-                copy_destination.get_or_insert(i);
-            } else {
+            if copies || (writes && attached(i)) {
+                count_destination.get_or_insert(i);
+            }
+            if !copies {
                 surface_has_foreign_text |=
                     has_foreign_surface_inscription(chars, scope, quote, syntax, i);
             }
@@ -1126,10 +1127,10 @@ fn quotes_exact_writing(
     // An explicit quoted writing operand can also name the place of the act
     // (入口に) without naming a material. A distinct object belongs to the verb.
     let directly_counted = after_character_step(after_clause_comma(tail)).is_some();
-    // In を一文字ずつノートに写す the analyzer can attach the count to the
-    // destination rather than to 写す. The destination itself modifies 写す.
+    // In を一字ずつ紙に書く or を一文字ずつノートに写す, the analyzer can
+    // attach the count to the destination of the same writing act.
     let counted_copy =
-        copies && particle == 'を' && (directly_counted || copy_destination.is_some());
+        copies && particle == 'を' && (directly_counted || count_destination.is_some());
     if reads_word
         || counted_copy
         || (copies && unchanged)
@@ -1145,7 +1146,7 @@ fn quotes_exact_writing(
             scope,
             first_in_quote..end_of_quote,
             predicate,
-            [voice, copy_destination],
+            [voice, count_destination],
             syntax,
         );
         if reads_word || letter_by_letter {
@@ -1155,6 +1156,24 @@ fn quotes_exact_writing(
                 FormMatch::Unspecified
             };
         }
+    }
+    // A surface before the quote is evidence for this reading of を only
+    // when the character count modifies the surface itself.
+    if writes
+        && particle == 'を'
+        && count_destination.is_some_and(|destination| {
+            syntax.tokens[destination].span.end_char < quote.start_char
+                && has_character_step(
+                    chars,
+                    scope,
+                    first_in_quote..end_of_quote,
+                    destination,
+                    [None, None],
+                    syntax,
+                )
+        })
+    {
+        return FormMatch::CountedLiteral;
     }
     if copies {
         let before = trim_space_end(&chars[scope.start_char..quote.start_char - 1]);
@@ -2579,6 +2598,9 @@ mod tests {
             options.source_hint = source_hint;
             for (source, literal) in [
                 ("「ドイツ」や「受付」を紙に一字ずつ書きました。", true),
+                ("「ドイツ」や「受付」を一字ずつ紙に書きました。", true),
+                ("「ドイツ」や「受付」を一字ずつ紙に書きませんでした。", true),
+                ("「ドイツ」や「受付」を一字ずつ書きました。", true),
                 (
                     "「ドイツ」や「受付」の文字を一字ずつ書きませんでした。",
                     true,
@@ -2593,6 +2615,11 @@ mod tests {
                 ),
                 ("「ドイツ」や「受付」を一字ずつノートに写さなかった。", true),
                 ("「ドイツ」や「受付」と言いました。", false),
+                ("「ドイツ」や「受付」を紙に書きました。", false),
+                (
+                    "「ドイツ」や「受付」を一字ずつ紙に英語で書きました。",
+                    false,
+                ),
                 (
                     "「ドイツ」や「受付」とは違う英単語を紙に一字ずつ書きました。",
                     false,
@@ -2615,6 +2642,43 @@ mod tests {
                 }
                 let hit_count = if literal { 0 } else { 2 };
                 assert_eq!(result.glossary_hits.len(), hit_count, "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_character_step_can_modify_the_surface_of_the_same_writing_action() {
+        let glossary = glossary();
+        for source_hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = source_hint;
+            for (source, literal) in [
+                ("「ドイツ」を一字ずつ紙に書きました。", true),
+                ("「ドイツ」を紙に一字ずつ書きました。", true),
+                ("一字ずつ紙に「ドイツ」を書きました。", true),
+                ("「ドイツ」を一文字ずつ黒板に書きませんでした。", true),
+                (
+                    "「ドイツ」と比べて「出口」を一字ずつ紙に書きました。",
+                    false,
+                ),
+                (
+                    "「ドイツ」と言った後、一字ずつ紙に「出口」を書きました。",
+                    false,
+                ),
+            ] {
+                let result =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                assert_eq!(
+                    result.target_text.contains("「ドイツ」"),
+                    literal,
+                    "{source}: {}",
+                    result.target_text
+                );
+                assert_eq!(result.glossary_hits.is_empty(), literal, "{source}");
+                if !literal {
+                    assert!(result.target_text.contains("「出口」"), "{source}");
+                }
             }
         }
     }

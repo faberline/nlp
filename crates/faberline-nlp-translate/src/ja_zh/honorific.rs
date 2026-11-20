@@ -246,7 +246,7 @@ fn voice_manner(atoms: &[Atom]) -> Option<&'static str> {
 
 pub(super) fn bind_voice_manners(atoms: &mut Vec<Atom>) {
     for i in (0..atoms.len().saturating_sub(2)).rev() {
-        let Some(text) = voice_manner(&atoms[i..i + 3]) else {
+        let Some(text) = atoms.get(i..i + 3).and_then(voice_manner) else {
             continue;
         };
         let mut manner = atoms[i + 1].clone();

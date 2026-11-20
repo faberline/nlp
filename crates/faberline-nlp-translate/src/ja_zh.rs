@@ -6995,6 +6995,8 @@ fn render_homework_transfer(
     {
         return None;
     }
+    let shared_actor = preceding_homework_actor(previous, verb)
+        .filter(|_| !source.iter().any(|a| a.deprel == "nsubj" && a.head == head));
     let mut deadline = None;
     let mut continuation_end = None;
     let mut has_time_modifier = false;
@@ -7051,9 +7053,39 @@ fn render_homework_transfer(
             }
             continue;
         }
+        let person = || {
+            homework_relative::person(bunsetsu, source).or_else(|| {
+                shared_actor?;
+                let [prefix, receiver, ni] = bunsetsu.atoms.as_slice() else {
+                    return None;
+                };
+                // The normal genitive renderer already supplied the modifier's translation.
+                // Check the original noun, の and recipient before using that text.
+                if !prefix.is_locked
+                    || prefix.doc_tok_idx.is_some()
+                    || !prefix.surface.ends_with('的')
+                    || ni.surface != "に"
+                    || !dasu_case_link(receiver, ni)
+                    || !source.windows(3).any(|w| {
+                        let [noun, no, person] = w else { return false };
+                        person.doc_tok_idx == receiver.doc_tok_idx
+                            && noun.upos == Some(Upos::Noun)
+                            && noun.deprel == "nmod"
+                            && noun.head == receiver.doc_tok_idx
+                            && no.surface == "の"
+                            && dasu_case_link(noun, no)
+                            && no.span.end_char == receiver.span.start_char
+                    })
+                {
+                    return None;
+                }
+                let (role, name) = classroom_role(&[], receiver)?;
+                Some((role, format!("{}{name}", prefix.surface)))
+            })
+        };
         if bunsetsu.role != BunsetsuRole::Obj
             && bunsetsu.atoms.iter().any(|atom| atom.is_locked)
-            && homework_relative::person(bunsetsu, source).is_none()
+            && person().is_none()
         {
             return None;
         }
@@ -7154,7 +7186,7 @@ fn render_homework_transfer(
                 adjuncts.push(format!("在{time}"));
             }
             ("obl" | "iobj", "に") if recipient.is_none() => {
-                recipient = Some(homework_relative::person(bunsetsu, source)?);
+                recipient = Some(person()?);
                 recipient_before_subject = subject.is_none();
             }
             ("obl", "で")
@@ -7188,12 +7220,12 @@ fn render_homework_transfer(
         (Some((actor, name)), None, Some(receiver)) if actor != receiver => {
             (actor, name, Some(String::new()))
         }
-        (None, receiver, None) => {
-            let actor = preceding_homework_actor(previous, verb)?;
-            if receiver.as_ref().is_some_and(|r| r.0 == actor) {
+        (None, Some((receiver, text)), None) => {
+            let actor = shared_actor?;
+            if receiver == actor {
                 return None;
             }
-            (actor, String::new(), receiver.map(|r| r.1))
+            (actor, String::new(), Some(text))
         }
         _ => return None,
     };
@@ -21185,7 +21217,15 @@ mod motion_endpoint_tests {
                 "学生は教室に入り、先生に宿題を出しました。",
                 "把作業交給老師了",
             ),
-            ("先生は学校に着いて、宿題を出しませんでした。", "沒有出作業"),
+            (
+                "先生は学校に着いて、宿題を出しませんでした。",
+                "沒有拿出作業",
+            ),
+            ("生徒は教室に着いて、宿題を出しました。", "拿出了作業"),
+            (
+                "生徒は三時に教室に着いて、四時に担任の先生に宿題を出しました。",
+                "在四點把作業交給擔任的老師了",
+            ),
             (
                 "先生は教室に着いて、生徒が先生に宿題を出しました。",
                 "學生把作業交給老師了",

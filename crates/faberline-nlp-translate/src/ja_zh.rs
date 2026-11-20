@@ -5339,9 +5339,15 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
                 return false;
             };
             let part = &next[index];
-            if let Some(argument) = next.get(index + 1..index + 3)
-                && argument[0].head == Some(root_id)
-                && minute_before_argument(part, argument, next)
+            // A て-clause can attach to the adjective of the next event's
+            // case-marked noun. Only follow a complete argument of that verb.
+            if !part.is_locked
+                && part.upos == Some(Upos::Adj)
+                && part.deprel == "amod"
+                && next[index + 1..].windows(2).any(|argument| {
+                    part.head == argument[0].doc_tok_idx
+                        && elapsed_interposed_argument(argument, root_id)
+                })
             {
                 return true;
             }
@@ -18162,6 +18168,24 @@ mod clock_rule_tests {
             "{homework}"
         );
         assert_eq!(talk, "跟老師說了兩個小時。");
+    }
+
+    #[test]
+    fn elapsed_talk_precedes_an_event_with_a_modified_object() {
+        let glossary = TranslationGlossary::new();
+        for reading in [
+            "十分な資料を読みました。",
+            "新しい本を読みました。",
+            "大切な手紙を読みました。",
+        ] {
+            let text = public_translate(&format!("先生と二時間話して、{reading}"), &glossary);
+            let (talk, object_and_action) = text.target_text.split_once('，').expect("two events");
+            assert_eq!(talk, "跟老師說兩個小時");
+            assert_eq!(
+                object_and_action,
+                public_translate(reading, &glossary).target_text
+            );
+        }
     }
 
     #[test]

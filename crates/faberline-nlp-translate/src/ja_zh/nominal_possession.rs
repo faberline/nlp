@@ -740,7 +740,21 @@ fn render_ellipsis(
         | "ではありませんでした" => "當時不是",
         _ => return None,
     };
-    let prefix = &body[..=at];
+    // それとも can introduce the second question after a sentence boundary.
+    // Its conjunction attaches to the owner carrying the omitted item.
+    let (copula, prefix) = match &body[..=at] {
+        [conjunction, rest @ ..]
+            if !conjunction.is_locked
+                && conjunction.surface == "それとも"
+                && conjunction.deprel == "cc"
+                && conjunction.head == body[at].doc_tok_idx
+                && copula == "是"
+                && ending == "嗎" =>
+        {
+            ("還是", rest)
+        }
+        prefix => (copula, prefix),
+    };
     let topic_case = prefix.iter().position(|a| {
         !a.is_locked && a.deprel == "case" && matches!(a.surface.as_str(), "は" | "が" | "も")
     });

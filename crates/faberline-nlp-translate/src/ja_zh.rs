@@ -4730,6 +4730,31 @@ enum PostQuoteKind {
 }
 
 fn classify_post_quote_clause(atoms: &[Atom]) -> PostQuoteKind {
+    // In direct speech, と声をかける reports what the speaker said. Both
+    // particles must attach to this speech predicate and its own object.
+    if let [quote, voice, object, verb, auxiliaries @ ..] = atoms
+        && atoms.iter().all(|atom| !atom.is_locked)
+        && quote.surface == "と"
+        && quote.head == verb.doc_tok_idx
+        && voice.surface == "声"
+        && voice.deprel == "obj"
+        && voice.head == verb.doc_tok_idx
+        && object.surface == "を"
+        && object.deprel == "case"
+        && object.head == voice.doc_tok_idx
+        && verb.upos == Some(Upos::Verb)
+        && matches!(
+            verb.lemma.as_deref().unwrap_or(&verb.surface),
+            "かける" | "掛ける"
+        )
+        && auxiliaries.iter().all(|a| {
+            a.upos == Some(Upos::Aux)
+                && a.head == verb.doc_tok_idx
+                && matches!(a.surface.as_str(), "た" | "まし" | "ます")
+        })
+    {
+        return PostQuoteKind::QuotePlainSay;
+    }
     let core: Vec<&str> = atoms
         .iter()
         .filter(|a| !is_punct_atom(a))

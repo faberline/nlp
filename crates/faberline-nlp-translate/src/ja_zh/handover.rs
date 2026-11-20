@@ -333,3 +333,97 @@ pub(super) fn resolve(
         action,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+    };
+    use faberline_nlp::doc::model::Backend;
+
+    const HS_12: &str = "授業を担当する先生は、授業後に佐藤さんへ資料を渡しました。";
+
+    #[test]
+    fn a_handover_keeps_its_owner_recipient_and_polarity() {
+        let glossary = TranslationGlossary::new();
+        for hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = hint;
+            for (source, expected) in [
+                (HS_12, "負責授課的老師下課後把資料交給佐藤。"),
+                ("先生は佐藤さんへ資料を渡しました。", "老師把資料交給佐藤。"),
+                ("先生は佐藤さんに資料を渡しました。", "老師把資料交給佐藤。"),
+                ("佐藤さんは先生へ資料を渡しました。", "佐藤把資料交給老師。"),
+                (
+                    "先生は佐藤さんに資料を渡しませんでした。",
+                    "老師沒有把資料交給佐藤。",
+                ),
+                ("先生は川を渡りました。", "老師渡過了川。"),
+                ("先生は佐藤さんの家へ行きました。", "老師往佐藤的家去了。"),
+                (
+                    "先生は佐藤さんに資料を渡してもらいました。",
+                    "佐藤幫老師遞給了資料。",
+                ),
+            ] {
+                let result =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                assert_eq!(result.target_text, expected, "{source}");
+            }
+            let literal = "「佐藤さんへ資料を渡す」";
+            let source = format!("紙に{literal}と一字ずつ写しました。");
+            let result =
+                analyze_and_translate(&source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert!(result.target_text.contains(literal));
+        }
+    }
+
+    #[test]
+    fn a_whole_object_and_actor_glossary_preserve_the_handover() {
+        let mut glossary = TranslationGlossary::new();
+        let entry = |source: &str, target: &str| GlossaryEntry {
+            canonical: source.to_owned(),
+            surfaces: vec![source.to_owned()],
+            targets: [(TargetVariant::ZhHant, target.to_owned())].into(),
+            ..GlossaryEntry::default()
+        };
+        glossary.actors.push(entry("佐藤さん", "佐藤代表"));
+        glossary.objects.push(entry("資料", "講義材料"));
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let result =
+            analyze_and_translate(HS_12, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_eq!(
+            result.target_text,
+            "負責授課的老師下課後把講義材料交給佐藤代表。"
+        );
+        let slice = |text: &str, start, end| {
+            text.chars()
+                .skip(start)
+                .take(end - start)
+                .collect::<String>()
+        };
+        let hits: Vec<_> = result
+            .glossary_hits
+            .iter()
+            .map(|hit| {
+                (
+                    slice(HS_12, hit.source_span.start_char, hit.source_span.end_char),
+                    slice(
+                        &result.target_text,
+                        hit.target_span.start_char,
+                        hit.target_span.end_char,
+                    ),
+                )
+            })
+            .collect();
+        assert_eq!(hits.len(), 2);
+        assert!(
+            hits.iter()
+                .any(|(src, dst)| src == "佐藤さん" && dst == "佐藤代表")
+        );
+        assert!(
+            hits.iter()
+                .any(|(src, dst)| src == "資料" && dst == "講義材料")
+        );
+    }
+}

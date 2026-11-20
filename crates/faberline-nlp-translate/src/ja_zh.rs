@@ -14,6 +14,7 @@ mod copular_time;
 mod counted_object;
 mod daytime;
 mod finite_adjective;
+mod handover;
 mod homework_desire;
 mod homework_relative;
 mod nominal_possession;
@@ -11372,7 +11373,14 @@ fn translate_clause_bunsetsus(
         .flat_map(|g| &g.atoms)
         .filter(|a| daytime::is_modifier(a))
         .find_map(|day| daytime::meeting_verb(source, day));
+    let handover = handover::resolve(&bunsetsus, ctx.source_chars, doc, target);
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if handover
+            .as_ref()
+            .is_some_and(|event| idx == event.object_group || idx == event.recipient_group)
+        {
+            continue;
+        }
         let protected_manner = b.atoms.iter().find(|a| {
             a.lemma.as_deref() == Some(application_form::LOCKED_ADJUNCT)
                 && a.head == form_manner_verb
@@ -13252,6 +13260,18 @@ fn translate_clause_bunsetsus(
     parts.extend(route);
     parts.extend(route_directions);
     parts.extend(transfer_prefix);
+    if let Some(event) = handover {
+        debug_assert!(
+            predicates
+                .iter()
+                .flat_map(|group| &group.atoms)
+                .any(|atom| { !atom.is_locked && atom.doc_tok_idx == Some(event.predicate) })
+        );
+        parts.push(format!("把{}", event.object));
+        verb_core = format!("{}{}", event.action, event.recipient);
+        // The completed handover is explicit without a second aspect marker.
+        post_verb_mods.retain(|modifier| modifier != "了");
+    }
     if let Some(object) = affected_object {
         parts.push(format!("把{object}"));
     }

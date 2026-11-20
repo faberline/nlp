@@ -17,7 +17,7 @@ pub(super) fn mark_argument_commas(source: &mut [Atom], doc: &Document) {
     if !source.iter().any(is_comma) {
         return;
     }
-    if let Some(comma) = teaching_argument_pause(source) {
+    if let Some(comma) = teaching_argument_pause(source, doc) {
         source[comma].lemma = Some(ARGUMENT_COMMA.to_owned());
     }
     let mut objects = source
@@ -145,7 +145,7 @@ pub(super) fn mark_argument_commas(source: &mut [Atom], doc: &Document) {
     }
 }
 
-fn teaching_argument_pause(source: &[Atom]) -> Option<usize> {
+fn teaching_argument_pause(source: &[Atom], doc: &Document) -> Option<usize> {
     let [_, _, _, relative, teacher, _, comma, rest @ ..] = source else {
         return None;
     };
@@ -157,10 +157,11 @@ fn teaching_argument_pause(source: &[Atom]) -> Option<usize> {
     {
         return None;
     }
+    let owner = teacher.head?;
     let transfer = rest.iter().position(|atom| {
         !atom.is_locked
             && atom.deprel == "root"
-            && atom.doc_tok_idx == teacher.head
+            && atom.doc_tok_idx == Some(owner)
             && matches!(atom.lemma.as_deref(), Some("渡す" | "手渡す"))
     })?;
     let arguments = &rest[..transfer];
@@ -177,11 +178,7 @@ fn teaching_argument_pause(source: &[Atom]) -> Option<usize> {
         .windows(2)
         .any(|pair| {
             let [object, case] = pair else { return false };
-            !object.is_locked
-                && object.deprel == "obj"
-                && object.head == teacher.head
-                && case.surface == "を"
-                && dasu_case_link(object, case)
+            super::handover::is_explicit_object(object, case, owner, doc)
         })
         .then_some(6)
 }

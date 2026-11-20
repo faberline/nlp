@@ -969,9 +969,89 @@ fn is_written_prohibition(
                 &subject_surface,
             )
     });
+    let event_context: String = tokens
+        .clone()
+        .filter(|&i| {
+            let mut current = i;
+            for depth in 0..=2 {
+                if current == verb {
+                    return true;
+                }
+                if !tokens.contains(&current)
+                    || matches!(syntax.tokens[current].upos, Some(Upos::Verb | Upos::Aux))
+                {
+                    return false;
+                }
+                if depth == 2
+                    && !syntax.edge(i).is_some_and(|edge| {
+                        matches!(edge.deprel.as_str(), "case" | "compound" | "fixed")
+                    })
+                {
+                    return false;
+                }
+                let Some(head) = syntax.head(current) else {
+                    return false;
+                };
+                current = head;
+            }
+            current == verb
+        })
+        .flat_map(|i| {
+            chars[syntax.tokens[i].span.start_char..syntax.tokens[i].span.end_char].iter()
+        })
+        .collect();
+    let natural_event = tokens.clone().any(|i| {
+        let Some(case) = syntax
+            .tokens
+            .get(i + 1)
+            .filter(|_| tokens.contains(&(i + 1)))
+        else {
+            return false;
+        };
+        let subject = &syntax.tokens[i];
+        let Some(edge) = syntax.edge(i) else {
+            return false;
+        };
+        let attached_to_event = edge.head == Some(verb)
+            || edge
+                .head
+                .filter(|head| tokens.contains(head))
+                .is_some_and(|head| {
+                    let manner = &syntax.tokens[head];
+                    chars[manner.span.start_char..manner.span.end_char] == ['静', 'か']
+                        && matches!(manner.upos, Some(Upos::Adj | Upos::Adv))
+                        && syntax.edge(head).is_some_and(|parent| {
+                            parent.deprel == "advcl" && parent.head == Some(verb)
+                        })
+                        && tokens.clone().any(|j| {
+                            let ending = &syntax.tokens[j];
+                            ending.span.start_char == manner.span.end_char
+                                && chars[ending.span.start_char..ending.span.end_char] == ['に']
+                                && syntax.head(j) == Some(head)
+                        })
+                });
+        let case_surface = &chars[case.span.start_char..case.span.end_char];
+        let subject_surface: String = chars[subject.span.start_char..subject.span.end_char]
+            .iter()
+            .collect();
+        edge.deprel == "nsubj"
+            && attached_to_event
+            && syntax.head(i + 1) == Some(i)
+            && (case_surface == ['は'] || case_surface == ['が'])
+            && !crate::ja_zh::is_explicit_second_person(&subject_surface)
+            && crate::ja_zh::is_natural_event(
+                syntax.tokens[verb]
+                    .lemma
+                    .as_deref()
+                    .unwrap_or(&verb_surface),
+                &subject_surface,
+                &event_context,
+            )
+    });
     syntax.tokens[verb].upos == Some(Upos::Verb)
         && !other_subject
         && !nonvolitional_subject
+        && !natural_event
         && !verb.checked_sub(1).is_some_and(|i| {
             i >= tokens.start
                 && syntax.tokens[i].span.end_char <= syntax.tokens[verb].span.start_char

@@ -12102,6 +12102,7 @@ fn translate_clause_bunsetsus(
     if target == TargetVariant::ZhHant
         && !verb_core.is_empty()
         && has_prohibitive_ending(core_non_punct(source))
+        && !follows_dark_sky_weather(source, doc, ctx)
     {
         pre_verb_mods.insert(0, "不要".to_owned());
     }
@@ -21041,6 +21042,47 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn natural_events_do_not_become_direct_prohibitions() {
+        let glossary = TranslationGlossary::new();
+        for source in [
+            "このドアは自動で開くな。",
+            "この機械は静かに動くな。",
+            "この棚は重みで倒れるな。",
+            "この布は日に当たると縮むな。",
+            "海は今朝荒れるな。",
+            "係員は客に「このドアは自動で開くな」と言いました。",
+            "空が暗い。明日は降るな。",
+            "紙に「このドアは自動で開くな」と書きました。",
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert!(!actual.contains("不要"), "{source}: {actual}");
+        }
+        for source in [
+            "君は窓を閉めるな。",
+            "この窓は閉めるな。",
+            "肩をすくめるな。",
+            "ナイフで切るな。",
+            "ドアを自動で開くな。",
+            "棚を手で倒すな。",
+            "次の駅で電車から降りるな。",
+            "空が暗い。君は窓を閉めるな。",
+            "空が暗い。「窓を閉めるな」と先生が言いました。",
+            "別のドアを自動で開いたら、このドアは開くな。",
+            "このドアが自動で開いたら、窓を開くな。",
+            "紙に「このドアが自動で開いたら、窓を開くな」と書きました。",
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert!(actual.contains("不要"), "{source}: {actual}");
+        }
+        let natural_writing =
+            public_translate("紙に「このドアは自動で開くな」と書きました。", &glossary).target_text;
+        assert!(!natural_writing.contains("このドアは自動で開くな"));
+        let command_writing =
+            public_translate("紙に「窓を閉めるな」と書きました。", &glossary).target_text;
+        assert!(command_writing.contains("窓を閉めるな"));
+    }
+
+    #[test]
     fn a_single_day_restricts_only_the_matching_day_in_the_next_sentence() {
         let glossary = TranslationGlossary::new();
         let jp = "試験は六月二日だけです。二日に学生が一人ずつ来ます。";
@@ -24753,6 +24795,27 @@ pub(crate) fn has_nonvolitional_subject(verb: &str, subject: &str) -> bool {
             ))
 }
 
+// These event cues describe how the subject itself changes. A topic alone,
+// or a causal particle used as an instrument, does not establish that.
+pub(crate) fn is_natural_event(verb: &str, subject: &str, event_context: &str) -> bool {
+    if is_explicit_second_person(subject) {
+        return false;
+    }
+    (verb == "開く"
+        && matches!(subject, "ドア" | "扉" | "門" | "窓")
+        && event_context.contains("自動で"))
+        || (verb == "動く"
+            && matches!(subject, "機械" | "機器" | "装置")
+            && event_context.contains("静かに"))
+        || (verb == "倒れる"
+            && matches!(subject, "棚" | "建物" | "木" | "柱")
+            && (event_context.contains("重みで") || event_context.contains("重量で")))
+        || (verb == "縮む"
+            && matches!(subject, "布" | "生地" | "服")
+            && (event_context.contains("日に当たると") || event_context.contains("日光に当たると")))
+        || (verb == "荒れる" && matches!(subject, "海" | "海面" | "海上"))
+}
+
 fn prohibitive_pair(verb: &Atom, marker: &Atom) -> bool {
     is_prohibitive_verb_base(verb)
         && !marker.is_locked
@@ -24771,6 +24834,63 @@ pub(crate) fn is_explicit_second_person(surface: &str) -> bool {
         surface,
         "あなた" | "貴方" | "あんた" | "お前" | "おまえ" | "君" | "きみ" | "貴様"
     )
+}
+
+// Resolve an omitted rain subject only from the adjacent, unquoted sky event.
+fn follows_dark_sky_weather(source: &[Atom], doc: &Document, ctx: &ClauseDiscourseCtx<'_>) -> bool {
+    if ctx.inside_quote {
+        return false;
+    }
+    let core = core_non_punct(source);
+    let [prefix @ .., verb, marker] = core else {
+        return false;
+    };
+    if verb.surface != "降る"
+        || marker.surface != "な"
+        || !prefix.iter().all(|atom| {
+            !atom.is_locked
+                && matches!(
+                    atom.surface.as_str(),
+                    "明日" | "今日" | "今夜" | "は" | "も"
+                )
+        })
+    {
+        return false;
+    }
+    let Some(sentence_idx) = verb
+        .doc_tok_idx
+        .and_then(|index| doc.tokens.get(index))
+        .map(|token| token.sentence)
+    else {
+        return false;
+    };
+    let Some(previous_idx) = sentence_idx.checked_sub(1) else {
+        return false;
+    };
+    let previous = &doc.segmentation.sentences[previous_idx];
+    let current = &doc.segmentation.sentences[sentence_idx];
+    if previous.paragraph != current.paragraph
+        || ctx.source_chars[previous.span.start_char..current.span.end_char]
+            .iter()
+            .any(|ch| matches!(ch, '「' | '」' | '『' | '』' | '“' | '”' | '"'))
+    {
+        return false;
+    }
+    doc.syntax.iter().any(|edge| {
+        if edge.sentence != previous_idx || edge.deprel != "nsubj" {
+            return false;
+        }
+        let Some(subject) = doc.tokens.get(edge.token) else {
+            return false;
+        };
+        let Some(predicate) = edge.head.and_then(|head| doc.tokens.get(head)) else {
+            return false;
+        };
+        ctx.source_chars[subject.span.start_char..subject.span.end_char] == ['空']
+            && (predicate.lemma.as_deref() == Some("暗い")
+                || ctx.source_chars[predicate.span.start_char..predicate.span.end_char]
+                    == ['暗', 'い'])
+    })
 }
 
 fn prohibitive_verb(atoms: &[Atom]) -> Option<&Atom> {
@@ -24829,9 +24949,58 @@ fn prohibitive_verb_with_reporter(atoms: &[Atom], has_reporter: bool) -> Option<
                 &subject.surface,
             )
     });
+    let direct_children: Vec<usize> = prefix
+        .iter()
+        .filter(|atom| {
+            !atom.is_locked
+                && atom.head == verb.doc_tok_idx
+                && !matches!(atom.upos, Some(Upos::Verb | Upos::Aux))
+                && (atom.deprel != "advcl" || atom.surface == "静か")
+        })
+        .filter_map(|atom| atom.doc_tok_idx)
+        .collect();
+    let event_context: String = prefix
+        .iter()
+        .filter(|atom| {
+            !atom.is_locked
+                && ((atom.head == verb.doc_tok_idx
+                    && !matches!(atom.upos, Some(Upos::Verb | Upos::Aux))
+                    && (atom.deprel != "advcl" || atom.surface == "静か"))
+                    || atom
+                        .head
+                        .is_some_and(|head| direct_children.contains(&head)))
+        })
+        .map(|atom| atom.surface.as_str())
+        .collect();
+    let has_explicit_addressee = prefix
+        .iter()
+        .any(|atom| !atom.is_locked && is_explicit_second_person(&atom.surface));
+    let natural_event = !has_explicit_addressee
+        && prefix.windows(2).any(|pair| {
+            let [subject, case] = pair else { return false };
+            let belongs_to_event = subject.head == verb.doc_tok_idx
+                || prefix.iter().any(|parent| {
+                    parent.doc_tok_idx == subject.head
+                        && parent.head == verb.doc_tok_idx
+                        && parent.deprel == "advcl"
+                        && parent.surface == "静か"
+                });
+            !subject.is_locked
+                && subject.deprel == "nsubj"
+                && belongs_to_event
+                && !case.is_locked
+                && matches!(case.surface.as_str(), "は" | "が")
+                && case.head == subject.doc_tok_idx
+                && is_natural_event(
+                    verb.lemma.as_deref().unwrap_or(&verb.surface),
+                    &subject.surface,
+                    &event_context,
+                )
+        });
     (prohibitive_pair(verb, marker)
         && !other_subject
         && !nonvolitional_subject
+        && !natural_event
         && (emphatic
             || !prefix
                 .last()

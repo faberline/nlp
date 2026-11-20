@@ -254,10 +254,12 @@ fn protect_sibling_forms(
         let copies_form =
             copies_written_form(chars, after, scope.end_char, syntax, shared_copy_object);
         let exact_writing = quotes_exact_writing(chars, scope, *quote, *quote, syntax);
+        let translation = source_translation_predicate(chars, scope, *quote, syntax);
         if measures_form
             || reads_word
             || copies_form
             || exact_writing
+            || translation.is_some()
             || describes_written_form(after)
             || acts_on_written_form(before, after)
         {
@@ -268,6 +270,14 @@ fn protect_sibling_forms(
                 quotes[first_for_comparison..index]
                     .iter()
                     .filter(|&&word| quotes_exact_writing(chars, scope, *quote, word, syntax))
+                    .map(|&word| protection_span(word, nested)),
+            );
+        }
+        if let Some(predicate) = translation {
+            protected.extend(
+                quotes[first_for_comparison..index]
+                    .iter()
+                    .filter(|&&word| quote_governs_translation(word, predicate, syntax))
                     .map(|&word| protection_span(word, nested)),
             );
         }
@@ -401,6 +411,96 @@ fn compares_objects(after: &[char]) -> bool {
         .iter()
         .any(|verb| strip_prefix(skip_space(rest), verb).is_some())
     })
+}
+
+// Protect the original operand of a translation. A quotation followed by
+// と can instead give the resulting translation or ordinary speech.
+fn source_translation_predicate(
+    chars: &[char],
+    scope: Span,
+    quote: Span,
+    syntax: QuoteSyntax<'_>,
+) -> Option<usize> {
+    let tail = skip_space(&chars[quote.end_char + 1..scope.end_char]);
+    let labelled_object = strip_prefix(tail, "という").and_then(after_word_name);
+    let relation = labelled_object.unwrap_or(tail);
+    if !matches!(relation.first(), Some('を' | 'は')) {
+        return None;
+    }
+    let relation_start = scope.end_char - relation.len();
+    if labelled_object.is_some() {
+        let case = syntax
+            .tokens
+            .partition_point(|t| t.span.start_char < relation_start);
+        if let Some(head) = syntax
+            .tokens
+            .get(case)
+            .filter(|t| t.span.start_char == relation_start)
+            .and_then(|_| syntax.head(case))
+            .and_then(|word| syntax.head(word))
+            .filter(|&index| {
+                source_translation_verb(chars, relation_start, scope.end_char, syntax, index)
+            })
+        {
+            return Some(head);
+        }
+    }
+    let first = syntax
+        .tokens
+        .partition_point(|t| t.span.start_char < quote.start_char);
+    syntax
+        .tokens
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take_while(|(_, t)| t.span.end_char <= quote.end_char)
+        .filter_map(|(index, _)| syntax.head(index))
+        .find(|&index| {
+            source_translation_verb(chars, relation_start, scope.end_char, syntax, index)
+        })
+}
+
+fn quote_governs_translation(quote: Span, predicate: usize, syntax: QuoteSyntax<'_>) -> bool {
+    let first = syntax
+        .tokens
+        .partition_point(|t| t.span.start_char < quote.start_char);
+    syntax
+        .tokens
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take_while(|(_, t)| t.span.end_char <= quote.end_char)
+        .any(|(index, _)| syntax.head(index) == Some(predicate))
+}
+
+fn source_translation_verb(
+    chars: &[char],
+    after: usize,
+    end: usize,
+    syntax: QuoteSyntax<'_>,
+    index: usize,
+) -> bool {
+    let verb = &syntax.tokens[index];
+    if verb.upos != Some(Upos::Verb) || verb.span.start_char <= after || verb.span.end_char > end {
+        return false;
+    }
+    let surface: String = chars[verb.span.start_char..verb.span.end_char]
+        .iter()
+        .collect();
+    match verb.lemma.as_deref().unwrap_or(&surface) {
+        "訳す" | "訳せる" | "翻訳する" | "直訳する" | "意訳する" => true,
+        "する" => index.checked_sub(1).is_some_and(|prev| {
+            let noun = &syntax.tokens[prev];
+            noun.span.start_char > after
+                && noun.span.end_char == verb.span.start_char
+                && syntax.head(prev) == Some(index)
+                && ["訳", "翻訳", "直訳", "意訳"].iter().any(|form| {
+                    strip_prefix(&chars[noun.span.start_char..noun.span.end_char], form)
+                        .is_some_and(|rest| rest.is_empty())
+                })
+        }),
+        _ => false,
+    }
 }
 
 fn compares_written_forms(after: &[char]) -> bool {
@@ -1291,6 +1391,37 @@ mod tests {
                 speech_register: Default::default(),
             }],
             ..TranslationGlossary::default()
+        }
+    }
+
+    #[test]
+    fn protects_the_source_operand_of_translation() {
+        for (source, kept) in [
+            ("「ドイツ」を英語に訳してください。ドイツへ行きます。", true),
+            ("英語に「ドイツ」を翻訳しました。ドイツへ行きます。", true),
+            (
+                "「ドイツ」という言葉を英語に訳しました。ドイツへ行きます。",
+                true,
+            ),
+            (
+                "「ドイツ」と「写真」を英語に翻訳しました。ドイツへ行きます。",
+                true,
+            ),
+            ("「ドイツ」を見て、「写真」を訳しました。", false),
+            ("英語を「ドイツ」と訳しました。", false),
+            ("「ドイツ」と英語で言いました。", false),
+        ] {
+            let translated = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(translated.target_text.contains("ドイツ"), kept, "{source}");
+            assert!(translated.target_text.contains("德國"), "{source}");
+            assert_eq!(translated.glossary_hits.len(), 1, "{source}");
         }
     }
 

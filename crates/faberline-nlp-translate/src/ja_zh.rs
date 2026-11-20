@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+mod application_form;
 mod calendar;
 pub(crate) use calendar::DateContext;
 mod copular_time;
@@ -210,6 +211,7 @@ pub(crate) fn translate_ja_sentence(
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
+        application_form::normalize(&mut atoms, chars, doc);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
         daytime::join_recipient_pauses(&mut atoms);
         nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target, chars);
@@ -441,7 +443,13 @@ pub(crate) fn translate_ja_sentence(
                             .0
                         });
                         out.push_str(&rendered);
-                        if let Some(p) = trailing_punct {
+                        if let Some(p) = trailing_punct
+                            && !(matches!(p.as_str(), "、" | "," | "，")
+                                && rendered.ends_with("，但是")
+                                && catoms.last().is_some_and(|a| {
+                                    a.lemma.as_deref() == Some(application_form::CONTRAST)
+                                }))
+                        {
                             out.push_str(&localize_punct(p));
                         }
                     } else if let Segment::Punct(p, _) = iseg {
@@ -710,6 +718,7 @@ pub(crate) fn translate_ja_sentence(
                     && trimmed_atoms.last().is_some_and(|a| {
                         !a.is_locked
                             && (is_clause_split_sconj(&a.surface)
+                                || a.lemma.as_deref() == Some(application_form::CONTRAST)
                                 || matches!(a.surface.as_str(), "と" | "でも" | "としても"))
                     });
 
@@ -4483,12 +4492,15 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
             && !is_source_kara
             && !nominal_possession::contains_copular_node(atoms, i, doc)
             && (is_clause_split_sconj(&a.surface)
+                || a.lemma.as_deref() == Some(application_form::CONTRAST)
                 || (a.surface == "し" && a.upos == Some(Upos::Sconj))
                 || (a.surface == "だけど" && current.len() >= 2))
             && i + 1 < atoms.len()
             && !is_punct_atom(&atoms[i + 1])
         {
-            flush_clause(&mut current, Some("，".to_owned()), &mut segments);
+            let punctuation =
+                (a.lemma.as_deref() != Some(application_form::CONTRAST)).then(|| "，".to_owned());
+            flush_clause(&mut current, punctuation, &mut segments);
             i += 1;
             continue;
         }
@@ -6241,6 +6253,13 @@ fn translate_clause_atoms(
     let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
     mark_return_arguments(&mut grouped, original_body, doc);
     for group in &mut grouped {
+        if group
+            .atoms
+            .iter()
+            .any(|a| a.lemma.as_deref() == Some(application_form::LOCKED_ADJUNCT))
+        {
+            group.role = BunsetsuRole::Adv;
+        }
         if deadline_governor(group, doc).is_some_and(|head| has_detached_voice_negation(body, head))
         {
             group.role = BunsetsuRole::DeadlineWithDetachedNegation;
@@ -10593,10 +10612,12 @@ fn translate_clause_bunsetsus(
                 || bunsetsus.iter().any(|group| {
                     group.atoms.iter().any(|time| {
                         time.head == ka.head
-                            && (calendar::asks_interval(time)
+                            && (time.lemma.as_deref() == Some(application_form::OFFICE)
+                                && matches!(time.surface.as_str(), "誰" | "だれ" | "どなた")
+                                || calendar::asks_interval(time)
                                 || match group.case_particle.as_deref() {
                                     Some("までに") => deadline_time_question(time).is_some(),
-                                    Some("に") => calendar::question(time).is_some(),
+                                    Some("に") => open_event_time(time).is_some(),
                                     _ => false,
                                 })
                     })
@@ -10654,6 +10675,37 @@ fn translate_clause_bunsetsus(
             .doc_tok_idx?;
         (bunsetsus.iter().filter(|b| return_goal(b, root)).count() == 1).then_some(root)
     });
+    let filing_verb = candidates
+        .iter()
+        .flat_map(|b| &b.atoms)
+        .find(|a| {
+            matches!(
+                a.lemma.as_deref(),
+                Some(application_form::SUBMIT | application_form::CAN_SUBMIT)
+            )
+        })
+        .and_then(|a| a.doc_tok_idx);
+    let mut filing_office = None;
+    let mut focused_filing_manner = None;
+    let form_manner_verb = filing_verb.or_else(|| {
+        source
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.lemma.as_deref(),
+                    Some(application_form::EXTRACTION_MANNER | application_form::LOCKED_ADJUNCT)
+                )
+            })
+            .filter_map(|a| a.head)
+            .find(|id| {
+                candidates
+                    .iter()
+                    .flat_map(|b| &b.atoms)
+                    .any(|v| v.doc_tok_idx == Some(*id))
+            })
+    });
+    let filing_together =
+        form_manner_verb.and_then(|verb| application_form::together(source, verb));
     let mut affected_object = None;
     let mut result_value = None;
     let mut setting_origin = None;
@@ -10668,6 +10720,93 @@ fn translate_clause_bunsetsus(
         .filter(|a| daytime::is_modifier(a))
         .find_map(|day| daytime::meeting_verb(source, day));
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        let protected_manner = b.atoms.iter().find(|a| {
+            a.lemma.as_deref() == Some(application_form::LOCKED_ADJUNCT)
+                && a.head == form_manner_verb
+        });
+        let focused_manner = |id: Option<usize>| {
+            source
+                .iter()
+                .any(|a| a.head == id && a.surface == "は" && a.deprel == "case")
+        };
+        if let Some(manner) = protected_manner {
+            if focused_manner(manner.doc_tok_idx)
+                || ctx.source_chars.get(manner.span.end_char.saturating_sub(1)) == Some(&'は')
+            {
+                focused_filing_manner = Some(manner.surface.clone());
+            } else {
+                adverbs.push(manner.surface.clone());
+            }
+            continue;
+        }
+        if let Some((manner, companion)) = filing_together {
+            if b.atoms.iter().any(|a| a.doc_tok_idx == Some(manner)) {
+                let label = companion.and_then(|(id, person)| {
+                    application_form::companion_label(
+                        source,
+                        id,
+                        person,
+                        &b,
+                        target,
+                        ctx.source_chars,
+                    )
+                });
+                let label = label.unwrap_or_else(|| "一起".to_owned());
+                if focused_manner(Some(manner)) {
+                    focused_filing_manner = Some(label);
+                } else {
+                    adverbs.push(label);
+                }
+                continue;
+            }
+            if let Some((id, _)) = companion
+                && b.atoms.iter().any(|a| a.doc_tok_idx == Some(id))
+            {
+                continue;
+            }
+        }
+        if let [reason] = b.atoms.as_slice()
+            && reason.lemma.as_deref() == Some(application_form::PURPOSE)
+        {
+            temporal_others.push(reason.surface.clone());
+            continue;
+        }
+        if b.case_particle.as_deref() == Some("に")
+            && let Some(time) = b
+                .atoms
+                .iter()
+                .find(|a| a.lemma.as_deref() == Some(application_form::TIME_QUESTION))
+        {
+            let label = render_bunsetsu_np(&b, target);
+            let label = label
+                .strip_suffix(&format!("的{}", time.surface))
+                .map_or_else(|| label.clone(), |day| format!("{day}{}", time.surface));
+            temporal_others.push(label);
+            continue;
+        }
+        if filing_verb.is_some()
+            && (matches!(
+                b.case_particle.as_deref(),
+                Some("に" | "へ" | "には" | "へは")
+            ) || b.atoms.windows(2).any(|pair| {
+                matches!(pair[0].surface.as_str(), "に" | "へ")
+                    && pair[1].surface == "は"
+                    && pair[0].head == pair[1].head
+            }))
+            && let Some(recipient) = b.atoms.iter().find(|a| {
+                matches!(
+                    a.lemma.as_deref(),
+                    Some(application_form::OFFICE | application_form::SHARED_FORM_RECIPIENT)
+                ) && a.head == filing_verb
+            })
+        {
+            let shared =
+                recipient.lemma.as_deref() == Some(application_form::SHARED_FORM_RECIPIENT);
+            let name = application_form::counted_recipient(source, recipient, ctx.source_chars)
+                .unwrap_or_else(|| render_bunsetsu_np(&b, target));
+            filing_office = Some((name, shared));
+            continue;
+        }
         if arrival_head.is_some()
             && b.role == BunsetsuRole::Subj
             && b.case_particle.as_deref() == Some("が")
@@ -10772,6 +10911,13 @@ fn translate_clause_bunsetsus(
                 "から" | "ので" => sconj_prefix = Some("因為"),
                 "からといって" => sconj_prefix = Some("即便因為"),
                 "が" if animate_contrast => sconj_prefix = Some("雖然"),
+                "が" if b
+                    .atoms
+                    .last()
+                    .is_some_and(|a| a.lemma.as_deref() == Some(application_form::CONTRAST)) =>
+                {
+                    sconj_suffix = Some("，但是")
+                }
                 "けれど" | "けれども" | "けど" | "のに" => sconj_suffix = Some("，但是"),
                 "だけど" => sconj_suffix = Some("，不過"),
                 "し" => sconj_suffix = Some("，而且"),
@@ -10967,11 +11113,7 @@ fn translate_clause_bunsetsus(
                             .iter()
                             .any(|a| is_clock_atom(a) || calendar::is_date(a)),
                         is_building_floor: b.atoms.iter().any(is_building_floor),
-                        deadline_endpoint: if b
-                            .atoms
-                            .iter()
-                            .any(|a| calendar::question(a).is_some())
-                        {
+                        deadline_endpoint: if b.atoms.iter().any(|a| open_event_time(a).is_some()) {
                             DeadlineEndpoint::Question { calendar: true }
                         } else if b.atoms.iter().any(|a| deadline_time_question(a).is_some()) {
                             DeadlineEndpoint::Question { calendar: false }
@@ -11175,6 +11317,15 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if let Some((office, shared)) = filing_office {
+        verb_core = if shared {
+            format!("{verb_core}給{office}")
+        } else if let Some(action) = verb_core.strip_prefix('能') {
+            format!("能向{office}{action}")
+        } else {
+            format!("向{office}{verb_core}")
+        };
+    }
     if let Some((span, action)) = daylight_meeting
         && matches!(verb_core.as_str(), "開" | "舉辦")
         && predicates
@@ -12329,6 +12480,7 @@ fn translate_clause_bunsetsus(
             }
         }
     }
+    parts.extend(focused_filing_manner);
     parts.extend(joint_companions);
     parts.extend(joint_participants);
     if joint_manner.is_some() {
@@ -15726,8 +15878,15 @@ fn deadline_weekday(surface: &str) -> Option<&'static str> {
 }
 
 // A time question can fill the endpoint slot just like a specified date or clock.
+fn open_event_time(atom: &Atom) -> Option<&str> {
+    if atom.lemma.as_deref() == Some(application_form::TIME_QUESTION) {
+        return Some(&atom.surface);
+    }
+    calendar::question(atom)
+}
+
 fn deadline_time_question(atom: &Atom) -> Option<&str> {
-    if let Some(day) = calendar::question(atom) {
+    if let Some(day) = open_event_time(atom) {
         return Some(day);
     }
     if atom.is_locked
@@ -18284,6 +18443,336 @@ mod clock_rule_tests {
             "{output}"
         );
         assert!(!output.contains("到下午兩點"), "{output}");
+    }
+
+    #[test]
+    fn form_purpose_and_departure_place_select_the_filing_action() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "明日までに講座の申込書を出します。",
+                "最晚在明天交課程報名表。",
+            ),
+            (
+                "学生は日本語講座の申込書を窓口に出しました。",
+                "學生向窗口交了日語課程報名表。",
+            ),
+            ("私は窓口に申込書を出したいです。", "我想向窗口交申請表。"),
+            ("私は窓口に申込書を出せます。", "我能向窗口交申請表。"),
+            (
+                "講座の申込書をかばんから出しました。",
+                "從包包拿出了課程報名表。",
+            ),
+            (
+                "入居申込書を管理会社に出しました。",
+                "向管理公司交了入住申請表。",
+            ),
+            (
+                "かばんから入居申込書を出しました。",
+                "從包包拿出了入住申請表。",
+            ),
+            ("入居申込書に名前を書きました。", "在入住申請表上寫了名字。"),
+            (
+                "私は英会話講座の申込書を提出しました。",
+                "我交了英語會話課程報名表。",
+            ),
+            ("かばんから本を出しました。", "從包包拿出了書。"),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+        for jp in [
+            "講座の申込書をテーブルに出しました。",
+            "母に見せるために講座の申込書を出しました。",
+        ] {
+            let text = public_translate(jp, &glossary).target_text;
+            assert!(
+                text.contains("拿出") && text.contains("課程報名表"),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn recipients_keep_their_own_time_and_number() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "私は入居申込書を昨日受付にいた職員に出しました。",
+                "我向昨天在櫃檯的職員交了入住申請表。",
+            ),
+            (
+                "私は入居申込書を受付に昨日いた職員に出しました。",
+                "我向昨天在櫃檯的職員交了入住申請表。",
+            ),
+            (
+                "私は入居申込書を受付にいた二人の職員に出しました。",
+                "我向當時在櫃檯的兩位職員交了入住申請表。",
+            ),
+            (
+                "私は昨日受付にいた二人の職員に入居申込書を出しました。",
+                "我向昨天在櫃檯的兩位職員交了入住申請表。",
+            ),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+    }
+
+    #[test]
+    fn a_linked_filing_can_share_the_extracted_form() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "私はかばんから入居申込書を出しましたが、管理会社には出しませんでした。",
+                "我從包包拿出了入住申請表，但是沒有交給管理公司。",
+            ),
+            (
+                "姉は入居申込書をかばんから出し、今日は母と一緒に窓口に出しました。",
+                "姊姊從包包拿出入住申請表，今天和母親一起交給窗口了。",
+            ),
+            (
+                "私は封筒から講座の申込書を出して、姉と一緒には窓口に出しませんでした。",
+                "我從封筒拿出課程報名表，沒有和姊姊一起交給窗口。",
+            ),
+            (
+                "私はかばんから入居申込書を出して、写真と一緒には管理会社には出しませんでした。",
+                "我從包包拿出入住申請表，沒有連同照片交給管理公司。",
+            ),
+            (
+                "私は青いかばんから講座の申込書を出して、さっき事務室にいた先生には出しませんでした。",
+                "我從藍的包包拿出課程報名表，沒有交給剛才在事務室的老師。",
+            ),
+            (
+                "父はかばんから入居申込書を出し、今日受付にいる二人の職員に出しました。",
+                "父親從包包拿出入住申請表，交給今天在櫃檯的兩位職員了。",
+            ),
+            (
+                "私はかばんから入居申込書を出して、管理会社には出しませんでした。",
+                "我從包包拿出入住申請表，沒有交給管理公司。",
+            ),
+            (
+                "私は申込書をかばんから出して、写真と一緒に受付に出しました。",
+                "我從包包拿出申請表，連同照片交給櫃檯了。",
+            ),
+            (
+                "私は申込書をかばんから出して、二人の職員と一緒に受付に出しました。",
+                "我從包包拿出申請表，和兩位職員一起交給櫃檯了。",
+            ),
+            (
+                "私は申込書をかばんから出して、受付にいた母と一緒に窓口に出しました。",
+                "我從包包拿出申請表，和當時在櫃檯的母親一起交給窗口了。",
+            ),
+            (
+                "私は講座の申込書をかばんから出して、受付に出しました。",
+                "我從包包拿出課程報名表，交給櫃檯了。",
+            ),
+            (
+                "私は入居申込書を昨日かばんから出し、今日受付に出しました。",
+                "我昨天從包包拿出入住申請表，今天交給櫃檯了。",
+            ),
+            (
+                "私は講座の申込書をかばんから出して窓口に出しませんでした。",
+                "我從包包拿出課程報名表，沒有交給窗口。",
+            ),
+            (
+                "私は講座の申込書をかばんから出して、受付に出しますか。",
+                "我從包包拿出課程報名表，交給櫃檯嗎？",
+            ),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+        for jp in [
+            "私は本と講座の申込書をかばんから出して、受付に出しました。",
+            "私は講座の申込書をかばんから出して、受付の箱から出しました。",
+            "私は講座の申込書をかばんから出して、受付に本を出しました。",
+            "私は講座の申込書をかばんから出して、父は受付に出しました。",
+            "私は入居申込書を昨日かばんから出しました。今日受付に出しました。",
+        ] {
+            assert!(
+                !public_translate(jp, &glossary).target_text.contains("交給"),
+                "{jp}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_application_keeps_the_purpose_and_the_recipient_clause() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "私は部屋を借りるために入居申込書を管理会社に出しました。",
+                "我為了租房間向管理公司交了入住申請表。",
+            ),
+            (
+                "私は入居申込書を受付にいた職員に出しました。",
+                "我向當時在櫃檯的職員交了入住申請表。",
+            ),
+            (
+                "私は受付にいた職員に入居申込書を出しました。",
+                "我向當時在櫃檯的職員交了入住申請表。",
+            ),
+            (
+                "姉は管理会社にいる担当者に入居申込書を出しました。",
+                "姊姊向在管理公司的負責人交了入住申請表。",
+            ),
+            (
+                "私は料理教室の申込書を窓口に来た人に出しました。",
+                "我向來到窗口的人交了烹飪課程報名表。",
+            ),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+        let taken = public_translate(
+            "私は部屋を借りるために入居申込書をかばんから出しました。",
+            &glossary,
+        )
+        .target_text;
+        assert!(
+            taken.contains("為了租房間") && taken.contains("從包包") && taken.contains("拿出"),
+            "{taken}"
+        );
+    }
+
+    #[test]
+    fn filing_time_and_person_keep_their_own_cases() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "姉は大家に入居申込書を出しました。",
+                "姊姊向房東交了入住申請表。",
+            ),
+            (
+                "姉はかばんから入居申込書を出しましたが、大家には出しませんでした。",
+                "姊姊從包包拿出了入住申請表，但是沒有交給房東。",
+            ),
+            (
+                "私は大家と一緒に入居申込書を窓口に出しました。",
+                "我和房東一起向窗口交了入住申請表。",
+            ),
+            (
+                "私は大家と一緒に入居申込書を出しました。",
+                "我和房東一起交了入住申請表。",
+            ),
+            (
+                "私は写真と一緒に入居申込書を出しました。",
+                "我連同照片交了入住申請表。",
+            ),
+            (
+                "私は大家と一緒にかばんから入居申込書を出しました。",
+                "我從包包和房東一起拿出了入住申請表。",
+            ),
+            (
+                "私は大家のかばんと一緒に窓口に入居申込書を出しました。",
+                "我連同房東的包包向窗口交了入住申請表。",
+            ),
+            (
+                "私は大家のかばんから入居申込書を出しました。",
+                "我從房東的包包拿出了入住申請表。",
+            ),
+            (
+                "私は昨日受付にいた大家に入居申込書を出しました。",
+                "我向昨天在櫃檯的房東交了入住申請表。",
+            ),
+            (
+                "私は二人の大家に入居申込書を出しました。",
+                "我向兩位房東交了入住申請表。",
+            ),
+            (
+                "学生は何時に講座の申込書を窓口に出しますか。",
+                "學生幾點向窗口交課程報名表？",
+            ),
+            (
+                "学生は明日の何時に講座の申込書を出しますか。",
+                "學生明天幾點交課程報名表？",
+            ),
+            (
+                "学生は何時に入居申込書を管理会社に出しますか。",
+                "學生幾點向管理公司交入住申請表？",
+            ),
+            (
+                "学生は講座の申込書を受付の先生に出しました。",
+                "學生向櫃檯的老師交了課程報名表。",
+            ),
+            (
+                "学生は講座の申込書を受付にいる先生に出しました。",
+                "學生向在櫃檯的老師交了課程報名表。",
+            ),
+            (
+                "学生は入居申込書を窓口の人に出しました。",
+                "學生向窗口的人交了入住申請表。",
+            ),
+            (
+                "学生は何時にかばんから講座の申込書を出しますか。",
+                "學生幾點從包包拿出課程報名表？",
+            ),
+            ("私は誰に講座の申込書を出しますか。", "我向誰交課程報名表？"),
+        ] {
+            assert_eq!(public_translate(jp, &glossary).target_text, zh, "{jp}");
+        }
+    }
+
+    #[test]
+    fn protected_application_names_still_have_a_source_and_destination() {
+        for (jp, key, expected) in [
+            (
+                "私は大家と一緒にかばんから入居申込書を出しました。",
+                "大家と一緒に",
+                "我從包包指定值拿出了入住申請表。",
+            ),
+            (
+                "私は大家と一緒にかばんから入居申込書を出しました。",
+                "かばんから",
+                "我和房東一起指定值拿出了入住申請表。",
+            ),
+            (
+                "私は大家のかばんから入居申込書を出しました。",
+                "大家のかばんから",
+                "我指定值拿出了入住申請表。",
+            ),
+            (
+                "姉はかばんから入居申込書を出して、大家には出しませんでした。",
+                "大家",
+                "姊姊從包包拿出入住申請表，沒有交給指定值。",
+            ),
+            ("講座の申込書を出す。", "講座の申込書", "交指定值。"),
+            (
+                "姉は入居申込書をかばんから出し、今日は母と一緒に窓口に出しました。",
+                "母と一緒に",
+                "姊姊從包包拿出入住申請表，今天指定值交給窗口了。",
+            ),
+            (
+                "私は封筒から講座の申込書を出して、姉と一緒には窓口に出しませんでした。",
+                "姉と一緒には",
+                "我從封筒拿出課程報名表，沒有指定值交給窗口。",
+            ),
+            (
+                "窓口に日本語講座の申込書を出す。",
+                "日本語講座",
+                "向窗口交指定值報名表。",
+            ),
+            (
+                "入居申込書を管理会社に出しました。",
+                "管理会社",
+                "向指定值交了入住申請表。",
+            ),
+            (
+                "かばんから住宅の申込書を出す。",
+                "住宅の申込書",
+                "從包包拿出指定值。",
+            ),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: key.to_owned(),
+                surfaces: vec![key.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "指定值".to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            assert_eq!(
+                public_translate(jp, &glossary).target_text,
+                expected,
+                "{key}"
+            );
+        }
     }
 
     #[test]
@@ -22335,7 +22824,7 @@ fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool)
                 format!("用{core}")
             }
         }
-        Some("に") if b.atoms.iter().any(|a| calendar::question(a).is_some()) => core,
+        Some("に") if b.atoms.iter().any(|a| open_event_time(a).is_some()) => core,
         Some("に") | Some("で") => {
             if core.starts_with('在')
                 || (core.starts_with("[[PH") && b.atoms.iter().any(is_clock_atom))
@@ -23078,6 +23567,21 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
 }
 
 fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upos>) -> String {
+    if lemma == Some(application_form::PROTECTED_VERB) {
+        return surface.to_owned();
+    }
+    if lemma == Some(application_form::RENT) {
+        return "租".to_owned();
+    }
+    if lemma == Some(application_form::ATTEND) {
+        return "參加".to_owned();
+    }
+    if lemma == Some(application_form::SUBMIT) {
+        return "交".to_owned();
+    }
+    if lemma == Some(application_form::CAN_SUBMIT) {
+        return "能交".to_owned();
+    }
     if lemma == Some(BUILDING_FLOOR)
         && let Some(label) = surface.strip_suffix('階')
     {

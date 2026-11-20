@@ -13427,18 +13427,19 @@ fn translate_clause_bunsetsus(
                 post_verb_mods.retain(|modifier| modifier != "了");
             }
             Some(calendar::DayRole::Activity) if !passive_agent_needed => {
-                // Attach the measure to the activity itself without making
-                // a separate claim that a check or recording was completed.
+                // Put the past marker on the duration. The first phrase names
+                // the activity without claiming a separate completed event.
                 let aspect = if post_verb_mods.iter().any(|modifier| modifier == "了") {
                     post_verb_mods.retain(|modifier| modifier != "了");
                     "了"
                 } else {
                     ""
                 };
-                parts.push(format!("對{object}"));
-                let only = if focus.is_some() { "僅" } else { "" };
-                verb_core = format!("進行{aspect}為期{only}{days}的{verb_core}");
-                objs.clear();
+                let scope = if focus.is_some() { "只" } else { "前後" };
+                parts.push(verb_core.clone());
+                parts.append(&mut objs);
+                parts.push("，".to_owned());
+                verb_core = format!("{scope}持續{aspect}{days}");
             }
             Some(calendar::DayRole::ResultState(action) | calendar::DayRole::Change(action)) => {
                 parts.push(format!("把{object}"));
@@ -19074,7 +19075,7 @@ mod clock_rule_tests {
         for (source, expected) in [
             (
                 "管理人は四日間、入口を見張りました。",
-                "管理人對入口進行了為期四天的監視。",
+                "管理人監視入口，前後持續了四天。",
             ),
             (
                 "管理人は四日間、入口を閉鎖しました。",
@@ -19147,7 +19148,7 @@ mod clock_rule_tests {
             ..GlossaryEntry::default()
         });
         let measured = public_translate("私は五日間、予約記録を確認しました。", &glossary);
-        assert_eq!(measured.target_text, "我對登記記錄進行了為期五天的確認。");
+        assert_eq!(measured.target_text, "我確認登記記錄，前後持續了五天。");
         let [hit] = measured.glossary_hits.as_slice() else {
             panic!("expected one glossary hit inside the object");
         };
@@ -19161,13 +19162,13 @@ mod clock_rule_tests {
         assert_eq!(
             hit.target_span,
             Span {
-                start_char: 2,
-                end_char: 4
+                start_char: 3,
+                end_char: 5
             }
         );
 
         let limited = public_translate("私は五日間だけ予約記録を確認しました。", &glossary);
-        assert_eq!(limited.target_text, "我對登記記錄進行了為期僅五天的確認。");
+        assert_eq!(limited.target_text, "我確認登記記錄，只持續了五天。");
         assert_eq!(limited.glossary_hits.len(), 1);
 
         let separated = public_translate("予約、記録を確認しました。", &glossary);

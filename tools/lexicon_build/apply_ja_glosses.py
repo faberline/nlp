@@ -137,7 +137,10 @@ def apply_reviewed_345(by_surface: dict[str, list[list[str]]]) -> int:
             corrected = old[:6] + [new, merge_meta(old[7], "-")]
             if row == corrected:
                 continue
-            if row != old:
+            # The base builder emits blank counterparts. Earlier overlays may
+            # fill them, so accept only the exact blank or shipped identity.
+            blank = row[:6] == old[:6] and row[6] == "-" and row[7] in ("-", old[7])
+            if row != old and not blank:
                 raise ValueError(f"unexpected row for {surface}: {row!r}")
             row[:] = corrected
             updated += 1

@@ -1236,7 +1236,7 @@ fn has_ambiguous_quoted_sky_context(
             return false;
         };
         if predicate.sentence != previous_sentence
-            || !syntax.edge(head).is_some_and(|edge| edge.deprel == "root")
+            || syntax.edge(head).is_none_or(|edge| edge.deprel != "root")
             || !(predicate.lemma.as_deref() == Some("暗い")
                 || surface(head) == Some(&['暗', 'い'][..]))
         {

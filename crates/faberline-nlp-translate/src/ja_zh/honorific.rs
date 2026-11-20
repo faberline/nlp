@@ -221,7 +221,7 @@ fn addressed_verb(verb: &Atom) -> Option<&'static str> {
 
 // A size determiner attached to 声 and marked by で describes how an
 // action sounds. The same phrase can occur on either side of a quotation.
-pub(super) fn voice_manner(atoms: &[Atom]) -> Option<&'static str> {
+fn voice_manner(atoms: &[Atom]) -> Option<&'static str> {
     let [size, voice, case] = atoms else {
         return None;
     };
@@ -241,6 +241,23 @@ pub(super) fn voice_manner(atoms: &[Atom]) -> Option<&'static str> {
         "大きな" => Some("大聲"),
         "小さな" => Some("小聲"),
         _ => None,
+    }
+}
+
+pub(super) fn bind_voice_manners(atoms: &mut Vec<Atom>) {
+    for i in (0..atoms.len().saturating_sub(2)).rev() {
+        let Some(text) = voice_manner(&atoms[i..i + 3]) else {
+            continue;
+        };
+        let mut manner = atoms[i + 1].clone();
+        manner.span.start_char = atoms[i].span.start_char;
+        manner.span.end_char = atoms[i + 2].span.end_char;
+        manner.surface = text.to_owned();
+        manner.lemma = None;
+        manner.upos = Some(Upos::Adv);
+        manner.deprel = "advmod".into();
+        manner.is_locked = true;
+        atoms.splice(i..i + 3, [manner]);
     }
 }
 

@@ -6281,6 +6281,7 @@ fn translate_clause_atoms(
     let mut merged_atoms = apply_phrase_matches(&attributed);
     if target == TargetVariant::ZhHant {
         bind_tidied_tabletops(&mut merged_atoms);
+        honorific::bind_voice_manners(&mut merged_atoms);
     }
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {
@@ -23186,11 +23187,6 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
 }
 
 fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool) -> String {
-    if target == TargetVariant::ZhHant
-        && let Some(manner) = honorific::voice_manner(&b.atoms)
-    {
-        return manner.to_owned();
-    }
     let core = render_bunsetsu_np(b, target);
     if core.is_empty() {
         return core;

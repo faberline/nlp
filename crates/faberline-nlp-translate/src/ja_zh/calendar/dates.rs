@@ -255,7 +255,8 @@ fn topic_clock(
     // A following は can mark an entire date list. Its final day alone is
     // not the topic.
     if let [.., previous, join] = &atoms[..start]
-        && matches!(join.surface.as_str(), "と" | "や" | "・" | "、")
+        && (matches!(join.surface.as_str(), "と" | "や" | "・" | "、" | "か")
+            || join.upos == Some(Upos::Cconj))
         && chars.get(previous.span.end_char.checked_sub(1)?) == Some(&'日')
     {
         return None;
@@ -276,41 +277,108 @@ fn topic_clock(
                     && node.head == Some(owner)
                     && matches!(node.deprel.as_str(), "obl" | "iobj")
             })
-            && !atoms[i + 1..].iter().any(|particle| {
-                particle.head == time.doc_tok_idx
-                    && matches!(particle.surface.as_str(), "か" | "も" | "でも")
-            })
             && atoms.get(i + 1).is_some_and(|case| {
-                linked_case(case, time, time, "に")
-                    || (linked_case(case, time, time, "まで")
-                        && atoms
-                            .get(i + 2)
-                            .is_some_and(|ni| linked_case(ni, time, case, "に")))
+                let last_case = if linked_case(case, time, time, "に") {
+                    i + 1
+                } else if linked_case(case, time, time, "まで")
+                    && atoms
+                        .get(i + 2)
+                        .is_some_and(|ni| linked_case(ni, time, case, "に"))
+                {
+                    i + 2
+                } else {
+                    return false;
+                };
+                // Any further particle attached to 何時 qualifies this clock.
+                // For example, 何時にだって asks about availability at any hour.
+                !atoms[last_case + 1..].iter().any(|a| {
+                    a.head == time.doc_tok_idx
+                        && matches!(a.upos, Some(Upos::Adp | Upos::Part | Upos::Sconj))
+                })
             })
     })?;
-    let ka = atoms[clock + 1..].iter().find(|a| {
-        !a.is_locked && a.surface == "か" && a.deprel == "discourse" && a.head == Some(owner)
+    // Use the question's source syntax even when the final punctuation was
+    // taken out of the translation atoms. A bare ？ still belongs to its verb.
+    let end = doc.syntax.iter().find(|node| {
+        if node.head != Some(owner) || node.span.start_char < atoms[clock].span.end_char {
+            return false;
+        }
+        match chars.get(node.span.start_char..node.span.end_char) {
+            Some(['？' | '?']) => node.deprel == "punct",
+            Some(['か']) => {
+                node.deprel == "discourse"
+                    && chars[node.span.end_char..]
+                        .iter()
+                        .find(|c| !c.is_whitespace())
+                        .is_none_or(|c| {
+                            crate::ja_zh::is_quote_terminal(*c)
+                                || matches!(c, '」' | '』' | '”' | '"')
+                        })
+            }
+            _ => false,
+        }
     })?;
-    if chars[ka.span.end_char..]
-        .iter()
-        .find(|c| !c.is_whitespace())
-        .is_some_and(|c| {
-            !crate::ja_zh::is_quote_terminal(*c) && !matches!(c, '」' | '』' | '”' | '"')
+    let object_quotes: Vec<_> = atoms[day_end + 2..clock]
+        .windows(4)
+        .filter_map(|words| {
+            let [open, name, close, wo] = words else {
+                return None;
+            };
+            (matches!(
+                (open.surface.as_str(), close.surface.as_str()),
+                ("「", "」") | ("『", "』")
+            ) && (name.is_locked || matches!(name.upos, Some(Upos::Noun | Upos::Propn)))
+                && !wo.is_locked
+                && wo.surface == "を"
+                && (wo.head == Some(owner) || name.head == Some(owner)))
+            .then_some((open.span.start_char, close.span.start_char))
         })
-    {
-        return None;
-    }
-    if chars
-        .get(wa.span.end_char..ka.span.end_char)?
-        .iter()
-        .any(|c| {
-            matches!(c, '「' | '」' | '『' | '』' | '“' | '”' | '"')
-                || crate::ja_zh::is_quote_terminal(*c)
-        })
-    {
+        .collect();
+    if (wa.span.end_char..end.span.start_char).any(|at| {
+        let c = chars[at];
+        crate::ja_zh::is_quote_terminal(c)
+            || matches!(c, '「' | '」' | '『' | '』' | '“' | '”' | '"')
+                && !object_quotes
+                    .iter()
+                    .any(|&(left, right)| at == left || at == right)
+    }) {
         return None;
     }
     Some(clock)
+}
+
+// Alternatives share は at the end of the last date. Read each complete
+// month and day before assigning the topic to the clock question.
+fn date_alternatives(atoms: &[Atom], first_end: usize, first: &str) -> (usize, String) {
+    let mut end = first_end;
+    let mut label = first.to_owned();
+    while let Some(join) = atoms.get(end + 1) {
+        if join.is_locked
+            || !(join.surface == "か" && join.head == atoms[end].doc_tok_idx
+                || join.upos == Some(Upos::Cconj)
+                    && join.deprel == "cc"
+                    && matches!(
+                        join.surface.as_str(),
+                        "または" | "又は" | "あるいは" | "或いは" | "もしくは" | "若しくは"
+                    ))
+        {
+            break;
+        }
+        let next = end
+            + 2
+            + usize::from(
+                atoms
+                    .get(end + 2)
+                    .is_some_and(|a| !a.is_locked && a.surface == "、"),
+            );
+        let Some(day) = day_at(atoms, next).filter(|day| day.month.is_some()) else {
+            break;
+        };
+        label.push('或');
+        label.push_str(&render(&day));
+        end = day.end;
+    }
+    (end, label)
 }
 
 fn bind_detached_dates(
@@ -336,7 +404,8 @@ fn bind_detached_dates(
             } else {
                 continue;
             };
-        if let Some(clock) = topic_clock(atoms, start, end, chars, doc) {
+        let (topic_end, topic_text) = date_alternatives(atoms, end, &text);
+        if let Some(clock) = topic_clock(atoms, start, topic_end, chars, doc) {
             let mut time = atoms[clock].clone();
             if !time.is_locked {
                 time.surface = "幾點".to_owned();
@@ -365,7 +434,7 @@ fn bind_detached_dates(
                 clock
             };
             atoms.splice(period_index..=clock, [time]);
-            bind(atoms, start, end, text, DATE);
+            bind(atoms, start, topic_end, topic_text, DATE);
             continue;
         }
         let day = &atoms[end];

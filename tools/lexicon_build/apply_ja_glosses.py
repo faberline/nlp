@@ -14,7 +14,7 @@ Strict A2 rules:
   2. Never modify `cost` or any column other than `counterpart` (col 6) and `meta` (col 7)
      on existing rows; fill unglossed (`cols[6] == '-'`) rows. Reviewed exceptions
      replace the `午後` identity gloss and four A4 glosses with first-party
-     source glosses after matching the previously shipped rows. Four audited
+     source glosses after matching the previously shipped rows. Five audited
      mixed-POS corrections are applied after the existing overlays, matching
      each previously shipped row exactly.
   3. Only insert missing rows (<= 35 total) for the explicit closed paradigms and
@@ -114,7 +114,7 @@ def apply_cldr_territory_glosses(by_surface: dict[str, list[list[str]]]) -> int:
 
 
 def apply_reviewed_345(by_surface: dict[str, list[list[str]]]) -> int:
-    """Apply four audited corrections after the existing gloss overlays."""
+    """Apply five audited corrections after the existing gloss overlays."""
     updated = 0
     seen: set[str] = set()
     with REVIEWED_345_TSV.open(encoding="utf-8") as table:
@@ -144,8 +144,8 @@ def apply_reviewed_345(by_surface: dict[str, list[list[str]]]) -> int:
                 raise ValueError(f"unexpected row for {surface}: {row!r}")
             row[:] = corrected
             updated += 1
-    if seen != {"供応", "敷衍", "パンチ", "気絶"}:
-        raise ValueError("reviewed corrections must contain exactly the four audited surfaces")
+    if seen != {"供応", "敷衍", "パンチ", "気絶", "暗算"}:
+        raise ValueError("reviewed corrections must contain exactly the five audited surfaces")
     return updated
 
 

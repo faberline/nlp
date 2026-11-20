@@ -10220,6 +10220,18 @@ fn elapsed_partner(noun: &Atom, marker: &Atom, context: &[Atom]) -> bool {
 // The parser can attach 十分 to a companion or an object as an adjective.
 // Confirm the complete quantity and case argument against the same event.
 fn minute_before_argument(unit: &Atom, argument: &[Atom], source: &[Atom]) -> bool {
+    let (argument, end, explicit_duration) = match argument {
+        [suffix, rest @ ..]
+            if suffix.surface == "間"
+                && !suffix.is_locked
+                && suffix.head == unit.head
+                && suffix.span.start_char == unit.span.end_char
+                && unit.surface.ends_with('分') =>
+        {
+            (rest, suffix.span.end_char, true)
+        }
+        _ => (argument, unit.span.end_char, false),
+    };
     let [noun, _case] = argument else {
         return false;
     };
@@ -10227,10 +10239,11 @@ fn minute_before_argument(unit: &Atom, argument: &[Atom], source: &[Atom]) -> bo
         && unit.upos == Some(Upos::Adj)
         && unit.deprel == "amod"
         && unit.head == noun.doc_tok_idx
-        && unit.span.end_char == noun.span.start_char
-        && source.iter().any(|a| {
-            !a.is_locked && a.upos == Some(Upos::Num) && a.span.end_char == unit.span.start_char
-        })
+        && end == noun.span.start_char
+        && (explicit_duration
+            || source.iter().any(|a| {
+                !a.is_locked && a.upos == Some(Upos::Num) && a.span.end_char == unit.span.start_char
+            }))
         && noun.head.is_some_and(|id| {
             elapsed_interposed_argument(argument, id)
                 && elapsed_attached_before(source, id, Some(noun.span.start_char))
@@ -18228,6 +18241,8 @@ mod clock_rule_tests {
         let terms = TranslationGlossary::new();
         for (source, time) in [
             ("資料を十分間読みました。", "十分鐘"),
+            ("十分間先生と話しました。", "十分鐘"),
+            ("十分間先生と本を読みました。", "十分鐘"),
             ("資料を10分間読みました。", "10分鐘"),
             ("三十分間待ちました。", "三十分鐘"),
             ("先生と二時間話して、資料を十分間読みました。", "十分鐘"),

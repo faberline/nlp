@@ -1105,6 +1105,7 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
 const CLOCK_ATOM: &str = "__ja_clock_atom";
 // A typed compound time created only while assembling a continuation endpoint.
 const TEMPORAL_MADE_COMPOUND_ATOM: &str = "__ja_temporal_made_compound";
+const GLOSSARY_TIME_NOUN: &str = "__ja_glossary_time_noun";
 // An opaque component in an explicitly period-qualified clock-shaped phrase.
 // Its value remains unknown and its placeholder remains untouched.
 const OPAQUE_PERIOD_CLOCK: &str = "__ja_opaque_period_clock";
@@ -1689,6 +1690,18 @@ fn build_sentence_atoms(
                         ) => daytime::glossary_role(
                             &chars[lk.source_span.start_char..lk.source_span.end_char],
                         )
+                        .or_else(|| {
+                            let term: String = chars
+                                [lk.source_span.start_char..lk.source_span.end_char]
+                                .iter()
+                                .collect();
+                            (is_daypart_surface(&term)
+                                || faberline_nlp::lexicon::lookup_ja(&term).is_some_and(|entry| {
+                                    entry.sem_class
+                                        == Some(faberline_nlp::lexicon::SemanticClass::Time)
+                                }))
+                            .then_some(GLOSSARY_TIME_NOUN)
+                        })
                         .map(str::to_owned),
                         (
                             LockOrigin::Glossary {
@@ -11173,6 +11186,10 @@ fn translate_clause_bunsetsus(
                         if let Some(question) = deadline_time_question(time) {
                             until = Some(question.to_owned());
                             open_past_endpoint = true;
+                        } else if time.is_locked
+                            && time.lemma.as_deref() == Some(GLOSSARY_TIME_NOUN)
+                        {
+                            until = Some(time.surface.clone());
                         }
                         if until.is_some() {
                             past_until = true;
@@ -12049,9 +12066,17 @@ fn translate_clause_bunsetsus(
         && !obliques
             .iter()
             .any(|o| o.case_particle.as_deref() == Some("まで"));
+    let seated_until = past_until && verb_core == "坐";
     let format_directional_goal = |arg: &PlacedArg, raw_np: &str| {
         if direct_negative_physical_go && arg.physical_goal_head == negative_go_head {
             raw_np.to_owned()
+        } else if seated_until && arg.case_particle.as_deref() == Some("に") {
+            let place = raw_np.strip_prefix('到').unwrap_or(raw_np);
+            if matches!(place, "椅子" | "長椅" | "凳子" | "沙發" | "地板") {
+                format!("在{place}上")
+            } else {
+                format!("在{place}")
+            }
         } else {
             format_goal_tail(&verb_core, raw_np, arg.is_building_floor && !is_negative_go)
         }
@@ -12488,7 +12513,11 @@ fn translate_clause_bunsetsus(
                 parts.push(format!("到{time}為止"));
             } else {
                 // The endpoint follows the full activity, including a direct object.
-                temporal_made_tails.push(format!("到{time}"));
+                temporal_made_tails.push(if seated_until {
+                    format!("，直到{time}")
+                } else {
+                    format!("到{time}")
+                });
             }
         } else if o.case_particle.as_deref() == Some("までに") {
             // Earliest completion is unrestricted. The stated time itself is

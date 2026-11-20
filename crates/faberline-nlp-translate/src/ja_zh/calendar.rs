@@ -530,7 +530,7 @@ pub(super) fn normalize_time_taken(atoms: &mut Vec<Atom>) {
 
 // Keep a count of days with the explicit upper-bound marker. Here に
 // belongs to 以内, not to a calendar date or to a new selected value.
-fn normalize_day_limits(atoms: &mut Vec<Atom>) {
+pub(super) fn normalize_day_limits(atoms: &mut Vec<Atom>, doc: &Document, source_chars: &[char]) {
     for marker in (1..atoms.len()).rev() {
         let Some(ni) = atoms.get(marker) else {
             continue;
@@ -575,12 +575,18 @@ fn normalize_day_limits(atoms: &mut Vec<Atom>) {
         {
             start -= 1;
         }
-        if start == day
-            || atoms[..start].last().is_some_and(|previous| {
-                previous.span.end_char == atoms[start].span.start_char
-                    && previous.surface.ends_with('月')
-                    && previous.head == unit.doc_tok_idx
+        // Consult the original month token even when the translation atoms
+        // contain a glossary placeholder or the date uses separated parts.
+        let calendar_day = unit.doc_tok_idx.is_some_and(|day_id| {
+            doc.syntax.iter().any(|month| {
+                month.head == Some(day_id)
+                    && month.span.start_char < month.span.end_char
+                    && month.span.end_char <= atoms[start].span.start_char
+                    && source_chars.get(month.span.end_char - 1) == Some(&'月')
             })
+        });
+        if start == day
+            || calendar_day
             || atoms[start..=marker].iter().any(|atom| atom.is_locked)
             || atoms[start..=marker]
                 .windows(2)
@@ -1461,7 +1467,6 @@ fn expression(atoms: &[Atom], end: usize, contrasts_recurrence: bool) -> Option<
 }
 
 pub(super) fn normalize(atoms: &mut Vec<Atom>, contrasts_recurrence: bool) {
-    normalize_day_limits(atoms);
     // Work from the right: binding a count can collapse both the counted
     // phrase and its day interval. Start the date pass with the resulting spans.
     quantities::normalize_habit(atoms);

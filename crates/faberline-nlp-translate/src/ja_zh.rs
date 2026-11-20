@@ -6507,6 +6507,7 @@ fn translate_clause_atoms(
         daytime::bind(&mut norm_atoms, body, doc);
         order_noun::bind(&mut norm_atoms, body, ctx.source_chars);
     }
+    calendar::normalize_day_limits(&mut norm_atoms, doc, ctx.source_chars);
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
@@ -13342,8 +13343,13 @@ fn translate_clause_bunsetsus(
         parts.extend(joint_participants.take());
     }
     // A span of days before a negation measures how long the action did
-    // not occur. It does not imply that an event of that length took place.
+    // not occur. A measured change or its new total stays with the negated
+    // verb so it does not become the duration of the negation.
     if predicate_is_negative
+        && !matches!(
+            day_role,
+            Some(calendar::DayRole::Change(_) | calendar::DayRole::NewLength(_))
+        )
         && let Some(days) = elapsed_duration.take_if(|amount| amount.ends_with('天'))
     {
         parts.push(if focus.is_some() {
@@ -19082,6 +19088,14 @@ mod clock_rule_tests {
                 "係員は展示期間を四日間に延長しました。",
                 "工作人員把展示期間延長到四天了。",
             ),
+            (
+                "係員は展示期間を四日間に延長しませんでした。",
+                "工作人員沒有把展示期間延長到四天。",
+            ),
+            (
+                "係員は展示期間を四日間延長しませんでした。",
+                "工作人員沒有把展示期間延長四天。",
+            ),
             ("五日間、体温を記録していました。", "那五天裡持續記錄體溫。"),
         ] {
             assert_eq!(
@@ -19094,13 +19108,33 @@ mod clock_rule_tests {
 
     #[test]
     fn day_limit_does_not_reinterpret_a_calendar_date() {
-        let glossary = TranslationGlossary::new();
+        let mut glossary = TranslationGlossary::new();
         assert_eq!(
             public_translate("五日以内に予約記録を確認します。", &glossary).target_text,
             "在五天以內確認預約記錄。"
         );
         let dated = public_translate("四月五日以内に予約記録を確認します。", &glossary).target_text;
         assert!(dated.contains("四月") && !dated.contains("五天"), "{dated}");
+        let spaced =
+            public_translate("四月 五日以内に予約記録を確認します。", &glossary).target_text;
+        assert!(
+            spaced.contains("四月") && !spaced.contains("五天"),
+            "{spaced}"
+        );
+
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "四月".to_owned(),
+            surfaces: vec!["四月".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "四月".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let locked = public_translate("四月五日以内に予約記録を確認します。", &glossary);
+        assert_eq!(locked.glossary_hits.len(), 1);
+        assert!(
+            locked.target_text.contains("四月") && !locked.target_text.contains("五天"),
+            "{}",
+            locked.target_text,
+        );
     }
 
     #[test]

@@ -254,10 +254,18 @@ fn topic_clock(
     }
     // A following は can mark an entire date list. Its final day alone is
     // not the topic.
-    if let [.., previous, join] = &atoms[..start]
-        && (matches!(join.surface.as_str(), "と" | "や" | "・" | "、" | "か")
-            || join.upos == Some(Upos::Cconj))
-        && chars.get(previous.span.end_char.checked_sub(1)?) == Some(&'日')
+    let before = &atoms[..start];
+    let is_join = |a: &Atom| {
+        matches!(a.surface.as_str(), "と" | "や" | "・" | "、" | "か")
+            || a.upos == Some(Upos::Cconj)
+    };
+    if before.last().is_some_and(is_join)
+        && before
+            .iter()
+            .rev()
+            .find(|a| !is_join(a))
+            .and_then(|a| chars[..a.span.end_char].last())
+            == Some(&'日')
     {
         return None;
     }
@@ -352,7 +360,18 @@ fn topic_clock(
 fn date_alternatives(atoms: &[Atom], first_end: usize, first: &str) -> (usize, String) {
     let mut end = first_end;
     let mut label = first.to_owned();
-    while let Some(join) = atoms.get(end + 1) {
+    let after_comma = |i| {
+        i + usize::from(
+            atoms
+                .get(i)
+                .is_some_and(|a: &Atom| !a.is_locked && a.surface == "、"),
+        )
+    };
+    loop {
+        let separator = after_comma(end + 1);
+        let Some(join) = atoms.get(separator) else {
+            break;
+        };
         if join.is_locked
             || !(join.surface == "か" && join.head == atoms[end].doc_tok_idx
                 || join.upos == Some(Upos::Cconj)
@@ -364,13 +383,7 @@ fn date_alternatives(atoms: &[Atom], first_end: usize, first: &str) -> (usize, S
         {
             break;
         }
-        let next = end
-            + 2
-            + usize::from(
-                atoms
-                    .get(end + 2)
-                    .is_some_and(|a| !a.is_locked && a.surface == "、"),
-            );
+        let next = after_comma(separator + 1);
         let Some(day) = day_at(atoms, next).filter(|day| day.month.is_some()) else {
             break;
         };

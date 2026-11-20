@@ -20207,6 +20207,16 @@ mod clock_rule_tests {
         let glossary = TranslationGlossary::new();
         for (jp, expected) in [
             ("三月三日は何時に帰りますか。", "三月三日幾點回去？"),
+            ("五月四日は何時に帰る？", "五月四日幾點回去？"),
+            ("五月四日は何時までに帰る？", "五月四日最晚幾點回去？"),
+            (
+                "三月三日か五月五日は何時に帰りますか。",
+                "三月三日或五月五日幾點回去？",
+            ),
+            (
+                "三月三日、または五月五日は何時までに帰りますか。",
+                "三月三日或五月五日最晚幾點回去？",
+            ),
             ("三月三日は何時までに帰りますか。", "三月三日最晚幾點回去？"),
             ("六月七日は午後何時に帰りますか。", "六月七日下午幾點回去？"),
             ("１２月２４日は何時に帰りますか。", "12月24日幾點回去？"),
@@ -20236,9 +20246,14 @@ mod clock_rule_tests {
             &glossary,
         );
         assert!(!report.target_text.contains("「三月三日"));
-        let any_hour = public_translate("三月三日は何時にでも帰れますか。", &glossary);
-        assert!(!any_hour.target_text.contains("幾點"));
-        assert!(any_hour.target_text.ends_with("嗎？"));
+        for particle in ["でも", "だって", "でさえ"] {
+            let any_hour = public_translate(
+                &format!("三月三日は何時に{particle}帰れますか。"),
+                &glossary,
+            );
+            assert!(!any_hour.target_text.contains("幾點"));
+            assert!(any_hour.target_text.ends_with("嗎？"));
+        }
     }
 
     #[test]

@@ -599,7 +599,6 @@ fn quotes_exact_writing(
     let end_of_quote = syntax
         .tokens
         .partition_point(|t| t.span.start_char < quote.end_char);
-    let contents = &syntax.tokens[first_in_quote..end_of_quote];
     let attached = |i| syntax.head(i) == Some(predicate);
     if !(first_in_quote..end_of_quote).any(attached) {
         return false;
@@ -613,11 +612,24 @@ fn quotes_exact_writing(
         .rev()
         .take_while(|(_, t)| t.sentence == verb.sentence && t.span.start_char >= scope.start_char)
     {
-        if (first_in_quote..end_of_quote).contains(&i) || !attached(i) {
+        if (first_in_quote..end_of_quote).contains(&i) {
             continue;
         }
         let word = &chars[token.span.start_char..token.span.end_char];
         let case = &chars[token.span.end_char..verb.span.start_char];
+        // Before an opening quote, the analyser can attach the paper to the
+        // quoted adjective or verb. The paper itself lies outside the quote.
+        let via_quote = i < first_in_quote
+            && syntax
+                .head(i)
+                .is_some_and(|head| (first_in_quote..end_of_quote).contains(&head));
+        let surface = (attached(i) || via_quote)
+            && case.starts_with(&['に'])
+            && is_writing_surface(chars, scope.start_char, token.span.end_char, syntax);
+        writing_surface |= surface;
+        if !attached(i) {
+            continue;
+        }
         let other_language = word.ends_with(&['語']) && word != ['日', '本', '語'];
         let camera = ["カメラ", "スマホ", "スマートフォン", "携帯", "携帯電話"]
             .iter()
@@ -631,11 +643,6 @@ fn quotes_exact_writing(
         }
         if token.upos == Some(Upos::Adv) && word == ['そ', 'の', 'ま', 'ま'] {
             unchanged = true;
-        }
-        if case.starts_with(&['に'])
-            && is_writing_surface(chars, scope.start_char, token.span.end_char, syntax)
-        {
-            writing_surface = true;
         }
     }
     if copies {
@@ -651,13 +658,72 @@ fn quotes_exact_writing(
         return unchanged && (written_source || writing_surface);
     }
 
-    let word = contents.len() == 1
-        || (!contents.is_empty()
-            && contents
-                .iter()
-                .all(|t| matches!(t.upos, Some(Upos::Noun | Upos::Propn))));
     unchanged
-        || (particle == 'と' && word && is_writing_instruction(chars, scope, syntax, predicate))
+        || (particle == 'と'
+            && is_written_phrase(chars, first_in_quote..end_of_quote, syntax)
+            && (is_writing_instruction(chars, scope, syntax, predicate)
+                || (writing_surface
+                    && describes_writing(chars, verb.span.start_char, scope.end_char))))
+}
+
+/// An inflected word or a noun phrase can be the inscription. A quoted
+/// proposition with its own subject or object still reports its meaning.
+fn is_written_phrase(
+    chars: &[char],
+    tokens: std::ops::Range<usize>,
+    syntax: QuoteSyntax<'_>,
+) -> bool {
+    let mut roots = 0;
+    for i in tokens.clone() {
+        let token = &syntax.tokens[i];
+        let Ok(n) = syntax
+            .dependencies
+            .binary_search_by_key(&i, |edge| edge.token)
+        else {
+            return false;
+        };
+        let edge = &syntax.dependencies[n];
+        if !edge.head.is_some_and(|head| tokens.contains(&head)) {
+            roots += 1;
+            continue;
+        }
+        let surface = &chars[token.span.start_char..token.span.end_char];
+        match edge.deprel.as_str() {
+            "compound" | "fixed" | "flat" | "amod" | "nummod" | "nmod" | "det" => {}
+            "case" if surface == ['の'] => {}
+            "aux"
+                if ["ない", "なかっ", "た", "だ"]
+                    .iter()
+                    .any(|s| surface.iter().copied().eq(s.chars())) => {}
+            _ => return false,
+        }
+    }
+    roots == 1
+}
+
+fn describes_writing(chars: &[char], start: usize, end: usize) -> bool {
+    let phrase = &chars[start..end];
+    [
+        "書く",
+        "書いた",
+        "書かない",
+        "書かなかった",
+        "書きます",
+        "書きました",
+        "書きません",
+        "書きませんでした",
+    ]
+    .iter()
+    .filter_map(|form| strip_prefix(phrase, form))
+    .any(|tail| {
+        let tail = skip_space(tail);
+        matches!(
+            tail.first(),
+            None | Some('。' | '？' | '！' | '?' | '!' | '、' | 'と' | 'が')
+        ) || ["後", "あと", "前", "から", "ので", "けれど"]
+            .iter()
+            .any(|link| strip_prefix(tail, link).is_some())
+    })
 }
 
 fn is_writing_instruction(
@@ -1733,6 +1799,51 @@ mod tests {
             for &fragment in fragments {
                 assert_eq!(
                     result.target_text.matches(fragment).count(),
+                    1,
+                    "{source}: {}",
+                    result.target_text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn writing_on_a_surface_distinguishes_an_inscription_from_a_report() {
+        for (source, fragments) in [
+            (
+                "紙に「写真」と書きました。写真を買いました。",
+                &["「写真」", "照片"][..],
+            ),
+            (
+                "私は紙に「写真」と書きませんでした。写真を買いました。",
+                &["「写真」", "照片"],
+            ),
+            ("「写真」と紙に書かなかった。", &["「写真」"]),
+            ("黒板に「走る」と書いた。", &["「走る」"]),
+            ("「赤い」とノートに書きます。", &["「赤い」"]),
+            ("紙に「食べない」と書きました。", &["「食べない」"]),
+            ("紙に「青い車」と書きました。", &["「青い車」"]),
+            ("紙に「三日間」と書きました。", &["「三日間」"]),
+            ("紙に「写真を買った」と書きました。", &["照片"]),
+            ("紙に「先生が写真を買いました」と書きました。", &["照片"]),
+            ("紙を見て、「写真」と言いました。", &["照片"]),
+            ("紙に「写真」と英語で書きました。", &["照片"]),
+            (
+                "ドイツは紙に「ドイツ」と書きました。",
+                &["「ドイツ」", "德國"],
+            ),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            for &frag in fragments {
+                assert_eq!(
+                    result.target_text.matches(frag).count(),
                     1,
                     "{source}: {}",
                     result.target_text

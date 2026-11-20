@@ -214,14 +214,18 @@ fn protect_sibling_forms(
                 || strip_prefix(after, "という")
                     .and_then(|tail| skip_space(tail).first())
                     .is_some_and(|&number| matches_list_count(number, list_count)));
-        let reads_word = names_source_reading(
-            if counts_words {
-                before_list
-            } else {
-                before_joined
-            },
-            after,
-        );
+        let reading_start = if counts_words {
+            first_in_list
+        } else {
+            first_for_comparison
+        };
+        let first_quote = quotes[reading_start].start_char - 1;
+        let reads_word = names_source_reading(&chars[scope.start_char..first_quote], after, || {
+            !ends_in_reading_material(chars, scope.start_char, first_quote, syntax)
+                && quotes[reading_start..=index].iter().all(|form| {
+                    !ends_in_reading_material(chars, form.start_char, form.end_char, syntax)
+                })
+        });
         let shared_copy_object = index > first_in_list && after.starts_with(&['を']);
         let copies_form =
             copies_written_form(chars, after, scope.end_char, syntax, shared_copy_object);
@@ -725,7 +729,51 @@ fn after_word_name(nominal: &[char]) -> Option<&[char]> {
         .map(skip_space)
 }
 
-fn names_source_reading(before: &[char], after: &[char]) -> bool {
+fn ends_in_reading_material(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    syntax: QuoteSyntax<'_>,
+) -> bool {
+    let text = trim_space_end(&chars[start..end]);
+    // A title introduced by a genre, or the reading material itself, can refer
+    // to how its contents are read. 本 inside 日本 is not a material noun.
+    [
+        "本",
+        "絵本",
+        "教科書",
+        "雑誌",
+        "新聞",
+        "記事",
+        "小説",
+        "物語",
+        "落語",
+        "詩",
+        "漫画",
+        "マンガ",
+        "作品",
+        "書籍",
+        "論文",
+        "手紙",
+        "資料",
+        "文章",
+        "説明書",
+        "参考書",
+        "辞書",
+        "楽譜",
+    ]
+    .iter()
+    .filter_map(|name| strip_suffix(text, name))
+    .any(|prefix| {
+        prefix.is_empty()
+            || syntax
+                .tokens
+                .binary_search_by_key(&(start + prefix.len()), |t| t.span.start_char)
+                .is_ok()
+    })
+}
+
+fn names_source_reading(before: &[char], after: &[char], bare_word: impl FnOnce() -> bool) -> bool {
     let labels = WORD_NAMES
         .iter()
         .chain(["漢字", "仮名", "片仮名", "平仮名"].iter());
@@ -757,10 +805,10 @@ fn names_source_reading(before: &[char], after: &[char]) -> bool {
     let relation = named_word.unwrap_or(after);
     if let Some(attribute) = relation.strip_prefix(&['の']).map(skip_space) {
         // 読み方 can also mean how to read a book or a newspaper.
-        let is_reading = explicit_word
-            && ["読み方", "よみかた", "読み", "よみ"]
-                .iter()
-                .any(|name| strip_prefix(attribute, name).is_some_and(noun_boundary));
+        let is_reading = ["読み方", "よみかた", "読み", "よみ"]
+            .iter()
+            .any(|name| strip_prefix(attribute, name).is_some_and(noun_boundary))
+            && (explicit_word || bare_word());
         return is_reading
             || [
                 "音読み",
@@ -1630,6 +1678,17 @@ mod tests {
             ("「写真」という語の意味を教えてください。", &[], &["照片"]),
             ("「新聞」の読み方を教えてください。", &[], &["報紙"]),
             ("物語「新聞」の読み方を教えてください。", &[], &["報紙"]),
+            ("小説「写真」の読み方を教えてください。", &[], &["照片"]),
+            (
+                "日本語の授業で「ドイツ」の読み方を教えてください。",
+                &["「ドイツ」"],
+                &[],
+            ),
+            (
+                "「ドイツ」と「申込書」の読み方を教えてください。",
+                &["「ドイツ」", "「申込書」"],
+                &[],
+            ),
             (
                 "「写真」と言ってから「駅」という語のよみかたを聞きました。",
                 &["「駅」"],
@@ -1658,6 +1717,48 @@ mod tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn reading_inside_reported_speech_keeps_glossary_hits_on_outer_occurrences() {
+        let mut glossary = TranslationGlossary::default();
+        for (surface, target) in [("写真", "彩色照片"), ("駅", "中央車站")] {
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: surface.to_owned(),
+                surfaces: vec![surface.to_owned()],
+                targets: [(TargetVariant::ZhHant, target.to_owned())].into(),
+                pronoun_class: Default::default(),
+                speech_register: Default::default(),
+            });
+        }
+        let source = "先生は学生に『「写真」と「駅」の読み方を調べてください』と言い、そのあと駅で写真を見せました。";
+        let result = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        let (speech, after) = result.target_text.split_once('』').unwrap();
+        assert!(
+            speech.contains("「写真」") && speech.contains("「駅」"),
+            "{}",
+            result.target_text
+        );
+        assert!(!speech.contains("彩色照片") && !speech.contains("中央車站"));
+        assert!(
+            after.contains("彩色照片") && after.contains("中央車站"),
+            "{after}"
+        );
+        let boundary = source.chars().position(|c| c == '』').unwrap();
+        assert_eq!(result.glossary_hits.len(), 2);
+        assert!(
+            result
+                .glossary_hits
+                .iter()
+                .all(|hit| hit.source_span.start_char > boundary)
+        );
     }
 
     #[test]

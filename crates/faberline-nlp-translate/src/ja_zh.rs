@@ -829,7 +829,7 @@ pub(crate) fn translate_ja_sentence(
                         && !inside_quote
                         && matches!(trailing_punct.as_deref(), None | Some("、" | "，"))
                     {
-                        elapsed_te_before_following(trimmed_atoms, &segments[seg_idx + 1..])
+                        elapsed_te_before_following(trimmed_atoms, &segments[seg_idx + 1..], doc)
                     } else { None },
                     elapsed_modal_applied: None,
                     inside_quote,
@@ -5223,7 +5223,11 @@ struct ClauseDiscourseCtx<'a> {
 
 // A quoted object can divide the next clause into segments. Only the
 // material outside that object supplies syntactic evidence for its verb.
-fn elapsed_te_before_following(first: &[Atom], following: &[Segment]) -> Option<usize> {
+fn elapsed_te_before_following(
+    first: &[Atom],
+    following: &[Segment],
+    doc: &Document,
+) -> Option<usize> {
     let tail_after_object = |tail: &[Atom]| {
         tail.first()
             .is_some_and(|case| !case.is_locked && matches!(case.surface.as_str(), "を" | "と"))
@@ -5235,19 +5239,19 @@ fn elapsed_te_before_following(first: &[Atom], following: &[Segment]) -> Option<
                 trailing_punct: None,
                 ..
             },
-            Segment::Quote { inner_atoms, .. },
+            Segment::Quote { span, .. },
             Segment::Clause { atoms: tail, .. },
             ..,
         ] if tail_after_object(tail) && !prefix.iter().any(|a| a.upos == Some(Upos::Verb)) => {
             let outside: Vec<_> = prefix.iter().chain(tail).cloned().collect();
-            parallel_elapsed_te(first, &outside, Some((inner_atoms, &tail[0])))
+            parallel_elapsed_te(first, &outside, Some((*span, &tail[0], doc)))
         }
         [
-            Segment::Quote { inner_atoms, .. },
+            Segment::Quote { span, .. },
             Segment::Clause { atoms: tail, .. },
             ..,
         ] if tail_after_object(tail) => {
-            parallel_elapsed_te(first, tail, Some((inner_atoms, &tail[0])))
+            parallel_elapsed_te(first, tail, Some((*span, &tail[0], doc)))
         }
         [Segment::Clause { atoms, .. }, ..] => parallel_elapsed_te(first, atoms, None),
         _ => None,
@@ -5259,7 +5263,7 @@ fn elapsed_te_before_following(first: &[Atom], following: &[Segment]) -> Option<
 fn parallel_elapsed_te(
     first: &[Atom],
     next: &[Atom],
-    quoted_argument: Option<(&[Atom], &Atom)>,
+    quoted_argument: Option<(Span, &Atom, &Document)>,
 ) -> Option<usize> {
     if first.iter().chain(next).any(|a| {
         a.doc_tok_idx.is_none()
@@ -5355,11 +5359,12 @@ fn parallel_elapsed_te(
             }
             // The parser can link the first action to a word inside the
             // quoted argument. Its outer particle connects it to this verb.
-            if quoted_argument.is_some_and(|(inner, particle)| {
+            if quoted_argument.is_some_and(|(span, particle, doc)| {
                 particle.upos == Some(Upos::Adp)
                     && particle.head == Some(root_id)
-                    && head.is_some()
-                    && inner.iter().any(|word| word.doc_tok_idx == head)
+                    && head.and_then(|i| doc.tokens.get(i)).is_some_and(|word| {
+                        span.start_char < word.span.start_char && word.span.end_char < span.end_char
+                    })
             }) {
                 return true;
             }

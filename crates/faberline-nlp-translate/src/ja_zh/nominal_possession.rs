@@ -394,7 +394,15 @@ pub(super) fn contains_copular_node(atoms: &[Atom], at: usize, doc: &Document) -
 fn owner_atom(a: &Atom, doc: &Document) -> bool {
     matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
         && (!a.is_locked
-            || matches!(a.lemma.as_deref(), Some(MODIFIED_NOUN | PROTECTED_COMPOUND))
+            || matches!(
+                a.lemma.as_deref(),
+                Some(
+                    MODIFIED_NOUN
+                        | PROTECTED_COMPOUND
+                        | super::honorific::PERSON_WITH_SUFFIX
+                        | super::honorific::DEFINED_ALIAS
+                )
+            )
             || whole_nominal_lock(a, doc))
 }
 
@@ -1531,6 +1539,31 @@ mod tests {
             "那頂雲帽當時既不是母親的，也不是妹妹的雲帽。"
         );
         assert_eq!(result.glossary_hits.len(), 2);
+    }
+
+    #[test]
+    fn honorific_owners_keep_glossary_names_and_question_scope() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.actors.push(crate::GlossaryEntry {
+            canonical: "佐藤".into(),
+            surfaces: vec!["佐藤".into()],
+            targets: [(TargetVariant::ZhHant, "佐藤代表".into())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        });
+        let source = "この本は佐藤さんのですか。";
+        assert_eq!(translate(source), "這本書是佐藤的嗎？");
+        let result = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(result.target_text, "這本書是佐藤代表的嗎？");
+        assert_eq!(result.glossary_hits.len(), 1);
     }
 
     #[test]

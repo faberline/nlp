@@ -27,6 +27,9 @@ use crate::lock::{LockOrigin, SpanLockTable};
 use crate::schema::{ClauseAlignment, GlossaryKind, SentenceConditioning, TargetVariant};
 use crate::variant::{convert_zh_text_to_target, convert_zh_text_to_target_with_spans};
 
+mod honorific;
+pub(crate) use honorific::HonorificContext;
+
 /// Returns `true` if `text` contains Hiragana or Katakana and no Hangul.
 pub(crate) fn has_kana_no_hangul(text: &str) -> bool {
     let mut has_kana = false;
@@ -205,9 +208,15 @@ pub(crate) fn translate_ja_sentence(
     written_form_continuation: Option<Span>,
     dates: &mut DateContext,
     prior_letter_distribution: Option<PriorLetterDistribution>,
+    honorifics: &mut HonorificContext,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
-    let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    honorifics.enter_sentence(doc.segmentation.sentences[sentence_idx].paragraph, &atoms);
+    if let Some(definition) = honorifics.definition(&atoms, lock_table) {
+        return definition.render(doc, sentence_idx, target);
+    }
+    let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
@@ -940,8 +949,15 @@ pub(crate) fn translate_ja_sentence(
                         && matches!(p, "、" | "，")
                         && matches!(segments.get(seg_idx + 1), Some(Segment::Clause { atoms: following, .. })
                             if calendar::continues_habitual_action(trimmed_atoms, following, chars));
+                    let continued_subject = matches!(trimmed_atoms, [name, topic]
+                        if name.lemma.as_deref() == Some(honorific::DEFINED_ALIAS)
+                            && name.deprel == "nsubj" && topic.surface == "は"
+                            && topic.deprel == "case" && topic.head == name.doc_tok_idx
+                            && matches!(segments.get(seg_idx + 1), Some(Segment::Clause { atoms, .. })
+                                if atoms.iter().any(|verb| verb.upos == Some(Upos::Verb) && verb.doc_tok_idx == name.head)));
                     if !(suppress_cleft_comma
                         || inside_habitual_action
+                        || (continued_subject && matches!(p, "、" | ","))
                         || (rendered.ends_with('？') && matches!(p, "。" | "？" | "?"))
                         || ((p == "、" || p == ",")
                             && (rendered.ends_with("，就立刻")
@@ -1033,9 +1049,12 @@ pub(crate) fn translate_ja_sentence(
 
 /// Translate an inline Japanese fragment (such as a heading or list item body) that already has
 /// `[[PHk]]` placeholders masked.
-pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> String {
+pub(crate) fn translate_ja_fragment(
+    masked: &str,
+    target: TargetVariant,
+) -> (String, Vec<crate::TranslateUnknown>) {
     if masked.trim().is_empty() {
-        return masked.to_owned();
+        return (masked.to_owned(), Vec::new());
     }
     let doc = faberline_nlp::doc::analyze_document(
         masked,
@@ -1049,6 +1068,7 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
     let mut out = String::new();
     let mut cursor = 0usize;
     let mut dates = DateContext::default();
+    let mut honorifics = HonorificContext::default();
     for (si, sent) in doc.segmentation.sentences.iter().enumerate() {
         if sent.span.start_char > cursor {
             for &c in &chars[cursor..sent.span.start_char] {
@@ -1070,6 +1090,7 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
             None,
             &mut dates,
             None,
+            &mut honorifics,
         );
         out.push_str(&tr);
         cursor = sent.span.end_char;
@@ -1079,11 +1100,12 @@ pub(crate) fn translate_ja_fragment(masked: &str, target: TargetVariant) -> Stri
             out.push(c);
         }
     }
-    if out.is_empty() {
+    let text = if out.is_empty() {
         convert_zh_text_to_target(masked, target)
     } else {
         out
-    }
+    };
+    (text, honorifics.unknown)
 }
 
 // Marker used only for atoms synthesized by the clock recognizer.  Protected

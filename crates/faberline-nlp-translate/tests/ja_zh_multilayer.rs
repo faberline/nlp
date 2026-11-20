@@ -1659,50 +1659,197 @@ fn complex_benefactive_controls_keep_the_original_subject() {
 }
 
 #[test]
-fn everyday_sov_to_svo_and_honorifics_both_scripts() {
-    let src = "私は図書館で本を読みます。美咲さんは佐藤先生に手紙を書いた。";
-
-    let hant = analyze_and_translate(
-        src,
+fn a_quoted_definition_resolves_a_later_honorific_in_its_paragraph() {
+    let source = "「すず」は、先生のあだ名です。すずさんは、ここにいます。";
+    let doc = analyze_and_translate(
+        source,
         &TranslateOptions::new(TargetVariant::ZhHant),
         &TranslationGlossary::new(),
         None,
         Backend::Onnx,
     )
     .unwrap();
-    assert_valid_ja_zh_doc(src, &hant);
-    assert!(
-        hant.target_text.contains("圖書館") && hant.target_text.contains("讀書"),
-        "hant SOV->SVO failed: {}",
-        hant.target_text
-    );
-    assert!(
-        hant.target_text.contains("美咲小姐")
-            && hant.target_text.contains("佐藤老師")
-            && hant.target_text.contains("信"),
-        "hant honorific/false-friend failed: {}",
-        hant.target_text
-    );
-
-    let hans = analyze_and_translate(
-        src,
-        &TranslateOptions::new(TargetVariant::ZhHans),
+    assert_valid_ja_zh_doc(source, &doc);
+    assert_eq!(doc.target_text, "「すず」是老師的綽號。すず在這裡。");
+    let noun = "「にゃん」は、黒い猫のことです。にゃんさんは、ここにいます。";
+    let doc = analyze_and_translate(
+        noun,
+        &TranslateOptions::new(TargetVariant::ZhHant),
         &TranslationGlossary::new(),
         None,
         Backend::Onnx,
     )
     .unwrap();
-    assert_valid_ja_zh_doc(src, &hans);
-    assert!(
-        hans.target_text.contains("图书馆") && hans.target_text.contains("读书"),
-        "hans SOV->SVO failed: {}",
-        hans.target_text
+    assert_valid_ja_zh_doc(noun, &doc);
+    assert_eq!(doc.target_text, "「黑貓」指的是黑的貓。黑貓在這裡。");
+    let subject = doc
+        .clause_alignments
+        .iter()
+        .find(|a| a.sentence == 1)
+        .unwrap();
+    assert_eq!(
+        doc.target_text
+            .chars()
+            .skip(subject.target_span.start_char)
+            .take(subject.target_span.end_char - subject.target_span.start_char)
+            .collect::<String>(),
+        "黑貓"
     );
-    assert!(
-        hans.target_text.contains("佐藤老师"),
-        "hans honorific failed: {}",
-        hans.target_text
+}
+
+#[test]
+fn an_unresolved_kana_subject_retains_its_full_original_scalar_span() {
+    let end = "ことりさんは、ここにいます。";
+    for (prefix, structural) in [
+        ("", false),
+        ("雪です。", false),
+        ("「つばめ」は、私の友だちのあだ名です。", false),
+        ("「ことり」は、友人のあだ名ではありません。", false),
+        (
+            "「ことり」は、友人のあだ名です。「ことり」は、友人のあだ名ではありません。",
+            false,
+        ),
+        (
+            "「ことり」は、友人のあだ名です。「ことり」は、`定義`です。",
+            false,
+        ),
+        (
+            "先生は「聞いてください。『ことり』は、友人のあだ名です。」と言いました。",
+            false,
+        ),
+        (
+            "「ことり」は、友人のあだ名です。「ことり」は、小さな鳥のことです。",
+            false,
+        ),
+        ("「ことり」は、私の友だちのあだ名です。\n\n", false),
+        ("`「ことり」は友人のあだ名です`。", false),
+        ("# `長い前置き🦜`、", true),
+        ("- `長い前置き🦜`、", true),
+    ] {
+        let source = format!("{prefix}{end}");
+        let doc = analyze_and_translate(
+            &source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        let [unknown] = doc.unknown.as_slice() else {
+            panic!("{source}: {:?}", doc.unknown)
+        };
+        let start = prefix.chars().count();
+        assert_eq!(
+            unknown.kind,
+            faberline_nlp_translate::TranslateUnknownKind::LowConfidence
+        );
+        assert_eq!(
+            unknown.source_span,
+            Span {
+                start_char: start,
+                end_char: start + 5
+            },
+            "{source}"
+        );
+        assert_eq!(unknown.sentence.is_none(), structural, "{source}");
+        assert!(
+            doc.target_text.contains("ことりさん"),
+            "{source}: {}",
+            doc.target_text
+        );
+        assert_eq!(doc.target_sha256, sha256_hex(&doc.target_text));
+    }
+}
+
+#[test]
+fn a_protected_label_or_mention_keeps_its_own_rendering() {
+    let source = "「アリス」は、先生のあだ名です。アリスさんは、ここにいます。";
+    let doc = analyze_and_translate(
+        source,
+        &TranslateOptions::new(TargetVariant::ZhHant),
+        &actor_glossary("Alice"),
+        None,
+        Backend::Onnx,
+    )
+    .unwrap();
+    assert_valid_ja_zh_doc(source, &doc);
+    assert_eq!(doc.sentences[0].target_text, "「Alice」是老師的綽號。");
+    let subject = doc
+        .clause_alignments
+        .iter()
+        .find(|a| a.sentence == 0)
+        .unwrap()
+        .target_span;
+    assert_eq!(
+        doc.target_text
+            .chars()
+            .skip(subject.start_char)
+            .take(subject.end_char - subject.start_char)
+            .collect::<String>(),
+        "「Alice」"
     );
+    assert_eq!(doc.glossary_hits.len(), 2);
+    for hit in &doc.glossary_hits {
+        assert_eq!(
+            doc.target_text
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect::<String>(),
+            "Alice"
+        );
+    }
+    let opaque = "「ことり」は、先生のあだ名です。`ことりさん`は、ここにいます。";
+    let doc = analyze_and_translate(
+        opaque,
+        &TranslateOptions::new(TargetVariant::ZhHant),
+        &TranslationGlossary::new(),
+        None,
+        Backend::Onnx,
+    )
+    .unwrap();
+    assert_eq!(doc.opaque_spans.len(), 1);
+    assert!(doc.sentences[1].target_text.contains("`ことりさん`"));
+    assert!(doc.unknown.is_empty());
+}
+
+#[test]
+fn everyday_sov_to_svo_and_honorifics_both_scripts() {
+    let src = "私は図書館で本を読みます。美咲さんは佐藤先生に手紙を書いた。";
+    for (variant, library, read, to_teacher, write) in [
+        (TargetVariant::ZhHant, "圖書館", "讀書", "給佐藤老師", '寫'),
+        (TargetVariant::ZhHans, "图书馆", "读书", "给佐藤老师", '写'),
+    ] {
+        let doc = analyze_and_translate(
+            src,
+            &TranslateOptions::new(variant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(src, &doc);
+        assert_eq!(doc.sentences.len(), 2);
+        let reading = &doc.sentences[0].target_text;
+        assert!(
+            reading
+                .split_once(library)
+                .is_some_and(|(subject, action)| subject.contains('我') && action.contains(read)),
+            "{reading}"
+        );
+        let letter = &doc.sentences[1].target_text;
+        assert!(
+            letter.starts_with("美咲")
+                && letter.contains(to_teacher)
+                && letter
+                    .split_once(write)
+                    .is_some_and(|(_, object)| object.contains('信')),
+            "{letter}"
+        );
+        for title in ["小姐", "女士", "先生", "太太", "夫人"] {
+            assert!(!letter.contains(title), "{letter}");
+        }
+    }
 }
 
 #[test]

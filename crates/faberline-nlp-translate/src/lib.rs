@@ -261,6 +261,7 @@ pub fn translate_document(
     let mut out_unknown: Vec<TranslateUnknown> = Vec::new();
     let mut consumed_direct_reports = HashMap::new();
     let mut dates = ja_zh::DateContext::default();
+    let mut honorifics = ja_zh::HonorificContext::default();
 
     for (span, item) in items {
         if span.start_char > cursor {
@@ -371,6 +372,7 @@ pub fn translate_document(
                     direct_quote_placements.get(&si),
                     &written_quotes,
                     &mut dates,
+                    &mut honorifics,
                 );
 
                 let start = target_char_pos;
@@ -762,6 +764,7 @@ fn translate_single_sentence(
     direct_quote: Option<&ja_zh::DirectQuotePlacement>,
     written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
     dates: &mut ja_zh::DateContext,
+    honorifics: &mut ja_zh::HonorificContext,
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
@@ -941,6 +944,7 @@ fn translate_single_sentence(
                 .map(|quote| quote.span),
             dates,
             prior_letter_distribution,
+            honorifics,
         );
         let mut clause_spans: Vec<Span> = clause_alignments
             .iter()
@@ -960,7 +964,7 @@ fn translate_single_sentence(
             Some(Score(900)),
             conditioning,
             options,
-            Vec::new(),
+            std::mem::take(&mut honorifics.unknown),
             clause_alignments,
         );
     }
@@ -1389,9 +1393,11 @@ fn translate_structural_block(
                 };
             }
             let body_offset = raw_slice
-                .find(body)
-                .map(|b| raw_slice[..b].chars().count())
-                .unwrap_or(0);
+                .trim_end()
+                .strip_suffix(body)
+                .expect("unwrapped heading body is its source suffix")
+                .chars()
+                .count();
             let body_span = Span {
                 start_char: op.span.start_char + body_offset,
                 end_char: op.span.start_char + body_offset + body.chars().count(),
@@ -1522,7 +1528,14 @@ fn translate_inline_fragment(
     }
     let converted =
         if seq2seq.is_none() && options.target.is_zh() && ja_zh::has_kana_no_hangul(body) {
-            ja_zh::translate_ja_fragment(&masked, options.target)
+            let (translated, fragment_unknown) =
+                ja_zh::translate_ja_fragment(&masked, options.target);
+            for mut entry in fragment_unknown {
+                entry.source_span = fragment_source_span(entry.source_span, body_span, &lock_table);
+                entry.sentence = None;
+                unks.push(entry);
+            }
+            translated
         } else if (has_han && options.target.is_zh()) || (ascii_only && options.target.is_en()) {
             convert_fragment_preserving_placeholders(&masked, options.target)
         } else if let Some(loaded) = seq2seq {
@@ -1569,6 +1582,35 @@ fn translate_inline_fragment(
         hits,
         unknowns: unks,
         used_japanese_term: false,
+    }
+}
+
+/// Map a masked fragment's scalar positions back to the original document.
+fn fragment_source_span(masked: Span, body: Span, locks: &SpanLockTable) -> Span {
+    let project = |position: usize, end: bool| {
+        let mut source_cursor = body.start_char;
+        let mut masked_cursor = 0;
+        for lock in &locks.locks {
+            let marker_start = masked_cursor + (lock.source_span.start_char - source_cursor);
+            if position <= marker_start {
+                break;
+            }
+            let marker_end = marker_start + lock.placeholder.chars().count();
+            if position < marker_end {
+                return if end {
+                    lock.source_span.end_char
+                } else {
+                    lock.source_span.start_char
+                };
+            }
+            masked_cursor = marker_end;
+            source_cursor = lock.source_span.end_char;
+        }
+        source_cursor + position - masked_cursor
+    };
+    Span {
+        start_char: project(masked.start_char, false),
+        end_char: project(masked.end_char, true),
     }
 }
 

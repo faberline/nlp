@@ -5,7 +5,7 @@ use super::*;
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Context {
     question_mark: bool,
-    before_comma: bool,
+    pub(super) before_comma: bool,
     time_head: Option<usize>,
     preceding_until: Option<usize>,
     reported_predicate: Option<usize>,
@@ -552,6 +552,78 @@ fn literal_colour(name: &str, colour: &str) -> bool {
     VISIBLE_SURFACES.contains(&name) || colour != "藍" && green_or_unripe(name)
 }
 
+// These are the concrete animals also recognized as possible matrix actors.
+fn animal_noun(raw: &str) -> bool {
+    matches!(raw, "犬" | "猫" | "鳥" | "馬")
+}
+
+// が links a subject to the adjective. In attributives the same subject can
+// take の, which the parser attaches as a noun modifier of the following noun.
+// Only take that reading for a compatible part/whole pair.
+fn attributive_part(
+    prefix: &[Atom],
+    adj: &Atom,
+    whole: &str,
+    chars: &[char],
+) -> Option<(usize, String)> {
+    let [.., part, case] = prefix else {
+        return None;
+    };
+    let part_id = part.doc_tok_idx?;
+    if case.is_locked || case.deprel != "case" || case.head != Some(part_id) {
+        return None;
+    }
+    match (case.surface.as_str(), part.deprel.as_str()) {
+        ("が", "nsubj") if part.head == adj.doc_tok_idx => {}
+        ("の", "nmod") if part.head == adj.head => {}
+        _ => return None,
+    }
+    let end = prefix.len() - 2;
+    let start = prefix[..end]
+        .iter()
+        .rposition(|a| a.is_locked || a.deprel != "compound" || a.head != Some(part_id))
+        .map_or(0, |i| i + 1);
+    // A possessor or another modifier belongs to the part itself.
+    if (part.is_locked && start != end) || prefix[..start].iter().any(|a| a.head == Some(part_id)) {
+        return None;
+    }
+    let raw: String = chars
+        .get(prefix[start].span.start_char..part.span.end_char)?
+        .iter()
+        .collect();
+    let label = match whole {
+        "車" | "バス" | "トラック" | "電車" => match raw.as_str() {
+            "屋根" => "車頂",
+            "窓" => "車窗",
+            "ドア" => "車門",
+            _ => return None,
+        },
+        "家" | "建物" => match raw.as_str() {
+            "屋根" => "屋頂",
+            "窓" => "窗戶",
+            "ドア" => "門",
+            _ => return None,
+        },
+        animal if animal_noun(animal) => match raw.as_str() {
+            "目" | "眼" => "眼睛",
+            "耳" => "耳朵",
+            "鼻" => "鼻子",
+            "羽" | "羽根" if animal == "鳥" => "羽毛",
+            "毛" if animal != "鳥" => "毛",
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some((
+        start,
+        if part.is_locked {
+            part.surface.clone()
+        } else {
+            label.to_owned()
+        },
+    ))
+}
+
 // Bind an inflected adjective and its own auxiliaries to the exact noun that
 // it modifies. Leave the original clause source available to the matrix verb.
 pub(super) fn bind_attributives<'a>(
@@ -640,28 +712,17 @@ fn attributive_at(
         .count();
     let n = i + aux + 1;
     let noun = atoms.get(n)?;
-    if aux == 0
-        || noun.doc_tok_idx != Some(adj.head?)
+    if noun.doc_tok_idx != Some(adj.head?)
         || nominal_possession::original_pos(noun, doc) != Some(Upos::Noun)
     {
         return None;
     }
     let (past, negative) = inflection(adj, &atoms[i + 1..n])?;
-    let lemma = adj.lemma.as_deref()?;
+    let lemma = adj.lemma.as_deref().unwrap_or(&adj.surface);
     let raw: String = chars
         .get(noun.span.start_char..noun.span.end_char)?
         .iter()
         .collect();
-    if let Some(colour) = hue(lemma) {
-        if !literal_colour(&raw, colour) {
-            return None;
-        }
-    } else if !(gradable(lemma) || matches!(lemma, "新しい" | "古い" | "安い"))
-        || uncertain_sense(lemma, &raw)
-    {
-        return None;
-    }
-
     let mut start = i;
     if let [.., degree] = &atoms[..i]
         && degree.deprel == "advmod"
@@ -723,7 +784,64 @@ fn attributive_at(
         start -= len;
         when = text;
     }
-    // A separate comparison, subject (e.g. 屋根が白かった車), or other
+    let part = attributive_part(&atoms[..start], adj, &raw, chars);
+    if part.is_some()
+        && hue(lemma).is_none()
+        && !matches!(
+            lemma,
+            "大きい" | "小さい" | "広い" | "狭い" | "厚い" | "薄い" | "長い" | "短い"
+        )
+    {
+        return None;
+    }
+    // A linked degree must stay inside the noun phrase, even without auxiliaries.
+    if aux == 0 && part.is_none() && description_start == i {
+        return None;
+    }
+    if let Some(colour) = hue(lemma) {
+        if part.is_none() && !literal_colour(&raw, colour) && !animal_noun(&raw) {
+            return None;
+        }
+    } else if !(gradable(lemma) || matches!(lemma, "新しい" | "古い" | "安い"))
+        || uncertain_sense(lemma, &raw)
+    {
+        return None;
+    }
+    if let Some((part_start, label)) = part {
+        start = part_start;
+        when.insert_str(0, &label);
+    }
+    // A glossary entry can make Xの a single token. There is no longer a
+    // separate case arc to establish the holder. Keep the opaque term whole.
+    if atoms[..start].last().is_some_and(|a| {
+        a.is_locked
+            && matches!(
+                chars
+                    .get(a.span.start_char..a.span.end_char)
+                    .and_then(|s| s.last()),
+                Some('の' | 'が')
+            )
+    }) {
+        return None;
+    }
+    // An unbound Xの beside an animal may be the holder of the colour.
+    // A verified human possessor (母の白かった猫) can remain outside the phrase.
+    if animal_noun(&raw)
+        && atoms[..start].windows(2).any(|pair| {
+            let [owner, case] = pair else { return false };
+            owner.deprel == "nmod"
+                && owner.head == noun.doc_tok_idx
+                && !case.is_locked
+                && case.surface == "の"
+                && case.deprel == "case"
+                && case.head == owner.doc_tok_idx
+                && !(owner.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM)
+                    || !owner.is_locked && is_demonstrative_person_noun(owner))
+        })
+    {
+        return None;
+    }
+    // A separate comparison, unbound subject, or other
     // adverb can describe a part of the noun or change the degree of the
     // property. Do not move that predicate onto the whole noun.
     if atoms[..start].iter().enumerate().any(|(at, a)| {
@@ -755,7 +873,17 @@ fn attributive_at(
         start -= 1;
         phrase.push(det.clone());
     }
-    phrase.extend_from_slice(&atoms[description_start..=n]);
+    phrase.extend_from_slice(&atoms[description_start..i]);
+    let mut adjective = adj.clone();
+    if let Some(colour) = hue(lemma) {
+        // The noun renderer takes pretranslated atoms verbatim. Keep the hue
+        // selected from the source lemma, including 茶色い.
+        // The linked Japanese auxiliaries still supply its tense and negation.
+        adjective.surface = colour.to_owned();
+        adjective.is_locked = true;
+    }
+    phrase.push(adjective);
+    phrase.extend_from_slice(&atoms[i + 1..=n]);
     let mut noun = nominal_possession::modified_noun(&phrase, doc, chars, Some(&when))?.pop()?;
     noun.span.start_char = atoms[start].span.start_char;
     Some((start..=n, noun))
@@ -819,10 +947,8 @@ fn separate_modified_argument(
                 || !earlier.is_locked
                     && earlier.upos != Some(Upos::Propn)
                     && is_demonstrative_person_noun(earlier)
-                || matches!(
-                    raw.as_str(),
-                    "子" | "子供" | "子ども" | "犬" | "猫" | "鳥" | "馬"
-                );
+                || matches!(raw.as_str(), "子" | "子供" | "子ども")
+                || animal_noun(&raw);
             actor
                 && matches!(
                     verb.lemma.as_deref(),
@@ -1418,14 +1544,78 @@ mod tests {
         ] {
             assert_eq!(translate(jp), expected, "{jp}");
         }
-        for jp in [
-            "白かった車より軽かった箱を運びました。",
-            "屋根が白かった車を買いました。",
+        let comparison = translate("白かった車より軽かった箱を運びました。");
+        assert!(!comparison.contains("當時很輕的箱子"), "{comparison}");
+    }
+
+    #[test]
+    fn a_degree_stays_with_the_adjective_that_owns_it() {
+        assert_eq!(
+            translate("とても黒い猫がゆっくり歩きました。"),
+            "非常黑的貓慢慢地走了。"
+        );
+        assert_eq!(
+            translate("この犬はとても速く走ります。"),
+            "這狗非常快快地跑。"
+        );
+    }
+
+    #[test]
+    fn animal_colour_and_named_part_stay_with_their_source_noun() {
+        for (source, expected) in [
+            ("黒かった犬を見ました。", "看了當時是黑色的狗。"),
+            ("目の青かった猫を見ました。", "看了眼睛當時是藍色的貓。"),
+            (
+                "耳の白くなかった犬を見ました。",
+                "看了耳朵當時不是白色的狗。",
+            ),
+            ("茶色かった馬を見ました。", "看了當時是棕色的馬。"),
+            ("茶色くなかった猫を見ました。", "看了當時不是棕色的貓。"),
+            ("母の黒かった犬を見ました。", "看了母親的當時是黑色的狗。"),
+            ("黒くなかった犬を見ました。", "看了當時不是黑色的狗。"),
+            ("屋根が白かった車を買いました。", "買了車頂當時是白色的車。"),
+            (
+                "屋根が黒くなかった家を見ました。",
+                "看了屋頂當時不是黑色的家。",
+            ),
+            ("屋根が白い車を見ました。", "看了車頂是白色的車。"),
+            ("窓が赤かった車を見ました。", "看了車窗當時是紅色的車。"),
+            (
+                "白かった車と黒かった犬を見ました。",
+                "看了當時是白色的車和當時是黑色的狗。",
+            ),
         ] {
-            let s = translate(jp);
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        // が alone cannot establish that an observer is part of the car.
+        let observed = translate("母が白かった車を見ました。");
+        assert!(observed.starts_with("母親看了"), "{observed}");
+    }
+
+    #[test]
+    fn a_lock_across_the_part_case_cannot_give_its_colour_to_the_whole_animal() {
+        for locked in ["目の", "の"] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(crate::GlossaryEntry {
+                canonical: locked.into(),
+                surfaces: vec![locked.into()],
+                targets: [(TargetVariant::ZhHant, "指定詞甲".into())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            });
+            let text = analyze_and_translate(
+                "目の青かった猫を見ました。",
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap()
+            .target_text;
             assert!(
-                !s.contains("當時很輕的箱子") && !s.contains("當時是白色的車。"),
-                "{jp}: {s}"
+                text.contains("指定詞甲") && !text.contains("當時是藍色的貓"),
+                "{text}"
             );
         }
     }

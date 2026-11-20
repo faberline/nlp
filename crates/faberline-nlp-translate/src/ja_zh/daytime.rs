@@ -517,47 +517,6 @@ fn bind_saury_meal(atoms: &mut Vec<Atom>, source: &[Atom]) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
-    use faberline_nlp::doc::model::Backend;
-
-    #[test]
-    fn a_meal_and_its_fish_object_follow_the_same_cooking_action() {
-        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
-        options.source_hint = Some(TargetVariant::Ja);
-        let translate = |source| {
-            analyze_and_translate(
-                source,
-                &options,
-                &TranslationGlossary::new(),
-                None,
-                Backend::Onnx,
-            )
-            .unwrap()
-            .target_text
-        };
-        for (source, expected) in [
-            ("夕食にさんまを焼きました。", "晚餐烤了秋刀魚。"),
-            ("昼ご飯にさんまを食べました。", "午餐吃了秋刀魚。"),
-            ("朝食にさんまを煮ました。", "早餐煮了秋刀魚。"),
-            ("夕食にさんまを焼きませんでした。", "晚餐沒有烤秋刀魚。"),
-        ] {
-            assert_eq!(translate(source), expected, "{source}");
-        }
-        assert!(
-            translate("紙に「夕食にさんまを焼きました」と一字ずつそのまま写しました。")
-                .contains("「夕食にさんまを焼きました」")
-        );
-        for source in [
-            "明石家さんまがテレビに出ました。",
-            "夕食に魚を買い、台所でさんまを焼きました。",
-        ] {
-            assert!(!translate(source).contains("秋刀魚"), "{source}");
-        }
-    }
-}
-
 fn time_modifier(word: &Atom, end: usize, owner: usize, also: bool) -> Atom {
     let mut day = word.clone();
     if !day.is_locked {
@@ -684,6 +643,47 @@ pub(super) fn join_recipient_pauses(atoms: &mut Vec<Atom>) {
         });
         if joins {
             atoms.remove(split);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    #[test]
+    fn a_meal_and_its_fish_object_follow_the_same_cooking_action() {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        let translate = |source| {
+            analyze_and_translate(
+                source,
+                &options,
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap()
+            .target_text
+        };
+        for (source, expected) in [
+            ("夕食にさんまを焼きました。", "晚餐烤了秋刀魚。"),
+            ("昼ご飯にさんまを食べました。", "午餐吃了秋刀魚。"),
+            ("朝食にさんまを煮ました。", "早餐煮了秋刀魚。"),
+            ("夕食にさんまを焼きませんでした。", "晚餐沒有烤秋刀魚。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        assert!(
+            translate("紙に「夕食にさんまを焼きました」と一字ずつそのまま写しました。")
+                .contains("「夕食にさんまを焼きました」")
+        );
+        for source in [
+            "明石家さんまがテレビに出ました。",
+            "夕食に魚を買い、台所でさんまを焼きました。",
+        ] {
+            assert!(!translate(source).contains("秋刀魚"), "{source}");
         }
     }
 }

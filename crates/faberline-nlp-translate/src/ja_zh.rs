@@ -6234,7 +6234,10 @@ fn translate_clause_atoms(
     } else {
         std::borrow::Cow::Borrowed(phrases)
     };
-    let merged_atoms = apply_phrase_matches(&attributed);
+    let mut merged_atoms = apply_phrase_matches(&attributed);
+    if target == TargetVariant::ZhHant {
+        bind_tidied_tabletops(&mut merged_atoms);
+    }
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
@@ -13942,6 +13945,83 @@ fn join_zh_parts(parts: &[String]) -> String {
     out
 }
 
+// In 机の上を片付ける, 上 is the object being tidied. When it marks
+// a location, a source, or the position of another object, it stays spatial.
+fn bind_tidied_tabletops(atoms: &mut Vec<Atom>) {
+    for start in (0..atoms.len().saturating_sub(3)).rev() {
+        let Some([table, no, top, tail, ..]) = atoms.get(start..) else {
+            continue;
+        };
+        if table.is_locked
+            || !matches!(table.surface.as_str(), "机" | "テーブル")
+            || table.deprel != "nmod"
+            || table.head != top.doc_tok_idx
+            || no.surface != "の"
+            || !linked_letter_case(table, no)
+            || no.span.end_char != top.span.start_char
+            || top.is_locked
+            || top.surface != "上"
+            || top.deprel != "obj"
+        {
+            continue;
+        }
+        let focus = !tail.is_locked
+            && matches!(tail.surface.as_str(), "だけ" | "のみ")
+            && tail.deprel == "discourse"
+            && tail.head == top.doc_tok_idx
+            && tail.span.start_char == top.span.end_char;
+        let case_index = start + 3 + usize::from(focus);
+        let Some(case) = atoms.get(case_index) else {
+            continue;
+        };
+        if case.is_locked
+            || case.surface != "を"
+            || case.upos != Some(Upos::Adp)
+            || case.deprel != "case"
+            || case.head != top.doc_tok_idx
+            || case.span.start_char
+                != if focus {
+                    tail.span.end_char
+                } else {
+                    top.span.end_char
+                }
+        {
+            continue;
+        }
+        let Some(verb) = atoms.iter().position(|a| {
+            !a.is_locked
+                && a.doc_tok_idx.is_some()
+                && a.doc_tok_idx == top.head
+                && a.upos == Some(Upos::Verb)
+                && (a.lemma.as_deref().unwrap_or(&a.surface) == "片付ける"
+                    || a.surface == "片付け" && a.lemma.as_deref() == Some("片付く"))
+        }) else {
+            continue;
+        };
+        let mut tabletop = top.clone();
+        tabletop.span.start_char = table.span.start_char;
+        tabletop.surface = "桌面".to_owned();
+        tabletop.is_locked = true;
+        if focus {
+            // Move the object restriction onto the same tidying action.
+            let owner = top.head;
+            atoms.swap(case_index - 1, case_index);
+            let only = &mut atoms[case_index];
+            only.surface = "只".to_owned();
+            only.upos = Some(Upos::Adv);
+            only.head = owner;
+            only.deprel = "advmod".to_owned();
+            only.is_locked = true;
+        }
+        // The continuative 片付け can be parsed as intransitive 片付く.
+        // Its explicit を object establishes the transitive reading here.
+        if atoms[verb].lemma.as_deref() == Some("片付く") {
+            atoms[verb].lemma = Some("片付ける".to_owned());
+        }
+        atoms.splice(start..start + 3, [tabletop]);
+    }
+}
+
 fn apply_phrase_matches(atoms: &[Atom]) -> Vec<Atom> {
     let mut out = Vec::with_capacity(atoms.len());
     let mut i = 0usize;
@@ -20196,6 +20276,28 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn a_tidied_tabletop_keeps_its_owner_and_other_spatial_roles() {
+        for (source, expected) in [
+            ("私は机の上を片付けました。", "我收拾了桌面。"),
+            ("妹は今日テーブルの上を片付けます。", "妹妹今天收拾桌面。"),
+            ("母は部屋の机の上を片付けました。", "母親收拾了房間的桌面。"),
+            ("学生は机の上を片付けなかった。", "學生沒有收拾桌面。"),
+            ("私は机の上だけを片付けました。", "我只收拾了桌面。"),
+            ("本は机の上にあります。", "書桌上面有書。"),
+            ("机の上から本を取りました。", "從書桌上面拿取了書。"),
+            ("私は机の下を片付けました。", "我收拾了書桌下面。"),
+            ("私は机の上を見ました。", "我看了書桌上面。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        let books = translate("私は机の上の本を片付けました。");
+        assert!(
+            books.contains("書桌") && books.ends_with("的書。"),
+            "{books}"
+        );
+    }
+
+    #[test]
     fn dayparts_mark_event_time_without_displacing_destinations_or_recipients() {
         for (source, expected) in [
             ("私は夕方に帰ります。", "我傍晚回去。"),
@@ -20223,10 +20325,7 @@ mod motion_endpoint_tests {
     #[test]
     fn daylight_stays_with_its_activity_and_preserves_the_recipient() {
         for (source, expected) in [
-            (
-                "係員は日中に机の上を片付けました。",
-                "係員白天收拾了書桌上面。",
-            ),
+            ("係員は日中に机の上を片付けました。", "係員白天收拾了桌面。"),
             ("父は日中には本を読みました。", "父親白天讀了書。"),
             ("母は日中にも働きます。", "母親白天也工作。"),
             ("日中に会議を開きました。", "白天召開了會議。"),

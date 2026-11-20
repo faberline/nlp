@@ -423,8 +423,12 @@ fn source_translation_predicate(
 ) -> Option<usize> {
     let tail = skip_space(&chars[quote.end_char + 1..scope.end_char]);
     let labelled_object = strip_prefix(tail, "という").and_then(after_word_name);
-    let relation = labelled_object.unwrap_or(tail);
-    if !matches!(relation.first(), Some('を' | 'は')) {
+    let operand = labelled_object.unwrap_or(tail);
+    let relation = ["だけ", "のみ"]
+        .iter()
+        .find_map(|focus| strip_prefix(operand, focus))
+        .map_or(operand, skip_space);
+    if !matches!(relation.first(), Some('を' | 'は' | 'も')) {
         return None;
     }
     let relation_start = scope.end_char - relation.len();
@@ -489,6 +493,14 @@ fn source_translation_verb(
         .collect();
     match verb.lemma.as_deref().unwrap_or(&surface) {
         "訳す" | "訳せる" | "翻訳する" | "直訳する" | "意訳する" => true,
+        "訳" | "翻訳" | "直訳" | "意訳" => {
+            syntax.tokens.get(index + 1).is_some_and(|suffix| {
+                syntax.head(index) == Some(index + 1)
+                    && suffix.span.start_char == verb.span.end_char
+                    && suffix.span.end_char <= end
+                    && suffix.lemma.as_deref() == Some("する")
+            })
+        }
         "する" => index.checked_sub(1).is_some_and(|prev| {
             let noun = &syntax.tokens[prev];
             noun.span.start_char > after
@@ -1397,6 +1409,11 @@ mod tests {
     #[test]
     fn protects_the_source_operand_of_translation() {
         for (source, kept) in [
+            (
+                "「ドイツ」だけを英語に訳してください。ドイツへ行きます。",
+                true,
+            ),
+            ("「ドイツ」も英語に直訳しました。ドイツへ行きます。", true),
             ("「ドイツ」を英語に訳してください。ドイツへ行きます。", true),
             ("英語に「ドイツ」を翻訳しました。ドイツへ行きます。", true),
             (

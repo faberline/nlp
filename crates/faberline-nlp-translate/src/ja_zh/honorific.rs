@@ -219,6 +219,31 @@ fn addressed_verb(verb: &Atom) -> Option<&'static str> {
     }
 }
 
+// A size determiner attached to 声 and marked by で describes how an
+// action sounds. The same phrase can occur on either side of a quotation.
+pub(super) fn voice_manner(atoms: &[Atom]) -> Option<&'static str> {
+    let [size, voice, case] = atoms else {
+        return None;
+    };
+    if atoms.iter().any(|a| a.is_locked)
+        || voice.doc_tok_idx.is_none()
+        || size.head != voice.doc_tok_idx
+        || size.deprel != "det"
+        || voice.surface != "声"
+        || !matches!(voice.deprel.as_str(), "obl" | "obl:arg")
+        || case.surface != "で"
+        || case.deprel != "case"
+        || case.head != voice.doc_tok_idx
+    {
+        return None;
+    }
+    match size.surface.as_str() {
+        "大きな" => Some("大聲"),
+        "小さな" => Some("小聲"),
+        _ => None,
+    }
+}
+
 pub(super) fn named_call(inner: &[Atom], report: &[Atom]) -> Option<String> {
     let [name, rest @ ..] = inner else {
         return None;
@@ -253,22 +278,7 @@ pub(super) fn named_call(inner: &[Atom], report: &[Atom]) -> Option<String> {
     let spoken = addressed_verb(verb)?;
     let how = match manner {
         [] => "",
-        [size, voice, case]
-            if manner.iter().all(|a| !a.is_locked)
-                && size.head == voice.doc_tok_idx
-                && size.deprel == "det"
-                && voice.surface == "声"
-                && voice.head == verb.doc_tok_idx
-                && case.surface == "で"
-                && case.deprel == "case"
-                && case.head == voice.doc_tok_idx =>
-        {
-            match size.surface.as_str() {
-                "大きな" => "大聲",
-                "小さな" => "小聲",
-                _ => return None,
-            }
-        }
+        [_, voice, _] if voice.head == verb.doc_tok_idx => voice_manner(manner)?,
         _ => return None,
     };
     Some(format!("{how}{spoken}"))

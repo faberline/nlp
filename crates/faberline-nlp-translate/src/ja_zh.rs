@@ -23186,6 +23186,11 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
 }
 
 fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool) -> String {
+    if target == TargetVariant::ZhHant
+        && let Some(manner) = honorific::voice_manner(&b.atoms)
+    {
+        return manner.to_owned();
+    }
     let core = render_bunsetsu_np(b, target);
     if core.is_empty() {
         return core;

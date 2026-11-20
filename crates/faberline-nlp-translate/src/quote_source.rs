@@ -848,6 +848,13 @@ fn is_written_phrase(
         match edge.deprel.as_str() {
             "compound" | "fixed" | "flat" | "amod" | "nummod" | "nmod" | "det" => {}
             "case" if surface == ['の'] => {}
+            // に forms an adverb from an adjective, as in 静かに.
+            "case"
+                if surface == ['に']
+                    && edge.head.is_some_and(|head| {
+                        let word = &syntax.tokens[head];
+                        word.upos == Some(Upos::Adj) || word.upos_candidates.contains(&Upos::Adj)
+                    }) => {}
             "aux"
                 if ["ない", "なかっ", "た", "だ"]
                     .iter()
@@ -2096,6 +2103,13 @@ mod tests {
                 &["「駅はどこですか？」"],
             ),
             ("ノートに「駅はどこですか？」と書きました。", &["車站"]),
+            ("紙に「静かに」と書きました。", &["「静かに」"]),
+            ("紙に「丁寧に」と書きました。", &["「丁寧に」"]),
+            (
+                "ノートに「十分に」と書いてから、田中さんに本を送りました。",
+                &["「十分に」", "給田中"],
+            ),
+            ("紙に「十分に休んだ」と書きました。", &["休息"]),
             (
                 "黒板の「駅はどこですか？」をカメラで写しました。",
                 &["車站"],

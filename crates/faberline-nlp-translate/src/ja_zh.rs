@@ -144,6 +144,7 @@ enum BunsetsuRole {
         additive: bool,
     },
     DeadlineWithDetachedNegation,
+    ProhibitiveUntil,
     MotionPurpose,
     PurposeModifier,
     ProposalModifier,
@@ -271,6 +272,9 @@ pub(crate) fn translate_ja_sentence(
     if target == TargetVariant::ZhHant {
         calendar::bind_relative_contrast(&mut atoms, chars);
         homework_relative::mark_argument_commas(&mut atoms, doc);
+        recover_prohibitive_verb_forms(&mut atoms);
+        normalize_spoken_prohibitive_report(&mut atoms);
+        bind_prohibitive_written_form(&mut atoms, lock_table);
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
@@ -445,6 +449,7 @@ pub(crate) fn translate_ja_sentence(
                                 false,
                                 &ClauseDiscourseCtx {
                                     source_chars: chars,
+                                    locks: Some(lock_table),
                                     inside_quote: true,
                                     elapsed_modal_applied: elapsed_modal_applied.clone(),
                                     following: &inner_segs[idx + 1..],
@@ -532,6 +537,7 @@ pub(crate) fn translate_ja_sentence(
                             false,
                             &ClauseDiscourseCtx {
                                 source_chars: chars,
+                                locks: Some(lock_table),
                                 inside_quote: true,
                                 following: &inner_segs[idx + 1..],
                                 adjective: finite_adjective::Context::in_quote(
@@ -840,6 +846,7 @@ pub(crate) fn translate_ja_sentence(
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
+                    locks: Some(lock_table),
                     following: &segments[seg_idx + 1..],
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
@@ -5308,6 +5315,7 @@ struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
     contrasts_recurrence: bool,
     source_chars: &'a [char],
+    locks: Option<&'a SpanLockTable>,
     following: &'a [Segment],
     preceding_activity: &'a [Atom],
     return_trip: Option<ReturnTrip>,
@@ -6400,6 +6408,7 @@ fn translate_clause_atoms(
         sentence_idx,
         conditioning,
         allow_pro_drop_inject,
+        ctx,
         target,
     ) {
         return res;
@@ -6498,6 +6507,9 @@ fn translate_clause_atoms(
 
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
+    if target == TargetVariant::ZhHant {
+        mark_prohibitive_until(&mut grouped, body, doc, ctx);
+    }
     mark_return_arguments(&mut grouped, original_body, doc);
     for group in &mut grouped {
         if group
@@ -7238,7 +7250,7 @@ fn render_homework_transfer(
         (ClassroomRole::Teacher, None) => format!("出{homework}"),
     };
     let (before_verb, verb, after_verb, passive) =
-        synthesize_predicate_complex(std::slice::from_ref(predicate), false, target, None);
+        synthesize_predicate_complex(std::slice::from_ref(predicate), false, target, None, None);
     if verb != "拿出" || passive {
         return None;
     }
@@ -9182,6 +9194,7 @@ fn try_translate_indirect_directive(
     sentence_idx: usize,
     conditioning: Option<&SentenceConditioning>,
     allow_pro_drop_inject: bool,
+    ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> Option<(String, bool)> {
     let core_len = atoms
@@ -9193,16 +9206,41 @@ fn try_translate_indirect_directive(
         return None;
     }
 
-    let you_idx = (1..core.len().saturating_sub(2)).rfind(|&i| {
-        !core[i].is_locked
-            && core[i].surface == "よう"
-            && !core[i + 1].is_locked
-            && core[i + 1].surface == "に"
-            && !core[i - 1].is_locked
-            && matches!(core[i - 1].upos, Some(Upos::Verb | Upos::Aux | Upos::Adj))
-    })?;
-
-    let pred_atoms = &core[you_idx + 2..];
+    let prohibition_marker = (target == TargetVariant::ZhHant)
+        .then(|| {
+            (2..core.len() - 1).rfind(|&idx| {
+                let marker = &core[idx];
+                !marker.is_locked
+                    && marker.surface == "と"
+                    && marker.upos == Some(Upos::Adp)
+                    && marker.span.start_char == core[idx - 1].span.end_char
+                    && prohibitive_report_verb(&core[..idx], doc, ctx).is_some()
+            })
+        })
+        .flatten();
+    let (content_end, report_start) = if let Some(idx) = prohibition_marker {
+        let after_marker = idx + 1;
+        let focused = core.get(after_marker).is_some_and(|atom| {
+            !atom.is_locked
+                && atom.surface == "は"
+                && matches!(atom.upos, Some(Upos::Adp | Upos::Part))
+        });
+        (idx, after_marker + usize::from(focused))
+    } else {
+        let idx = (1..core.len().saturating_sub(2)).rfind(|&i| {
+            !core[i].is_locked
+                && core[i].surface == "よう"
+                && !core[i + 1].is_locked
+                && core[i + 1].surface == "に"
+                && !core[i - 1].is_locked
+                && matches!(core[i - 1].upos, Some(Upos::Verb | Upos::Aux | Upos::Adj))
+        })?;
+        (idx, idx + 2)
+    };
+    let prohibited_action =
+        prohibition_marker.and_then(|idx| prohibitive_report_verb(&core[..idx], doc, ctx));
+    let prohibition = prohibited_action.is_some();
+    let pred_atoms = &core[report_start..];
     if pred_atoms.iter().any(|a| {
         !a.is_locked
             && matches!(
@@ -9227,16 +9265,23 @@ fn try_translate_indirect_directive(
     let is_directive_verb = matches!(
         v_lemma,
         "言う" | "伝える" | "頼む" | "求める" | "命じる" | "指示する"
-    ) || head_verb.surface.starts_with("言")
-        || head_verb.surface.starts_with("伝え")
-        || head_verb.surface.starts_with("頼")
-        || head_verb.surface.starts_with("求め")
-        || head_verb.surface.starts_with("命じ");
-    if !is_directive_verb {
+    ) || (!prohibition
+        && ["言", "伝え", "頼", "求め", "命じ"]
+            .iter()
+            .any(|prefix| head_verb.surface.starts_with(prefix)));
+    if !is_directive_verb
+        || (prohibition
+            && (!std::ptr::eq(head_verb, &pred_atoms[0])
+                || pred_atoms[1..].iter().any(|a| {
+                    a.is_locked
+                        || !(matches!(a.upos, Some(Upos::Aux | Upos::Part))
+                            || matches!(a.surface.as_str(), "けど" | "けれど" | "けれども" | "が"))
+                })))
+    {
         return None;
     }
 
-    let prefix_bunsetsus = group_into_bunsetsus(&core[..you_idx], doc, sentence_idx);
+    let prefix_bunsetsus = group_into_bunsetsus(&core[..content_end], doc, sentence_idx);
     let mut matrix_subjs: Vec<String> = Vec::new();
     let mut matrix_recips: Vec<String> = Vec::new();
     let mut consumed_atoms = 0usize;
@@ -9246,7 +9291,33 @@ fn try_translate_indirect_directive(
             && b.case_particle
                 .as_deref()
                 .is_some_and(|cp| matches!(cp, "は" | "が"));
-        let is_recip_ni = b.role == BunsetsuRole::IObj && b.case_particle.as_deref() == Some("に");
+        let is_recip_ni = b.role == BunsetsuRole::IObj
+            && b.case_particle.as_deref() == Some("に")
+            && prohibited_action.is_none_or(|verb| {
+                // Keep a local goal or participant with the prohibited action.
+                // The parser can attach a listener to an action such as 走る,
+                // which does not take a personal に argument.
+                is_person_like_bunsetsu(b)
+                    && (b.atoms.iter().any(|a| {
+                        a.upos != Some(Upos::Adp)
+                            && head_verb.doc_tok_idx.is_some()
+                            && a.head == head_verb.doc_tok_idx
+                    }) || matches!(
+                        verb.lemma.as_deref().unwrap_or(&verb.surface),
+                        "走る"
+                            | "待つ"
+                            | "止まる"
+                            | "騒ぐ"
+                            | "休む"
+                            | "黙る"
+                            | "笑う"
+                            | "泣く"
+                            | "座る"
+                            | "眠る"
+                            | "寝る"
+                            | "泳ぐ"
+                    ))
+            });
         if (is_topic_subj && matrix_subjs.is_empty() && matrix_recips.is_empty())
             || (is_recip_ni && matrix_recips.is_empty())
         {
@@ -9264,7 +9335,7 @@ fn try_translate_indirect_directive(
         }
     }
 
-    let sub_atoms = &core[consumed_atoms..you_idx];
+    let sub_atoms = &core[consumed_atoms..content_end];
     if sub_atoms.is_empty() {
         return None;
     }
@@ -9274,20 +9345,33 @@ fn try_translate_indirect_directive(
         sentence_idx,
         None,
         false,
-        &ClauseDiscourseCtx::default(),
+        &ClauseDiscourseCtx {
+            source_chars: ctx.source_chars,
+            locks: ctx.locks,
+            ..Default::default()
+        },
         target,
     );
     if sub_zh.is_empty() {
         return None;
     }
 
-    let pred_is_neg = pred_atoms.iter().any(|a| {
-        !a.is_locked
-            && matches!(
-                a.surface.as_str(),
-                "ない" | "なかった" | "ません" | "ませんでした" | "ず" | "ぬ"
-            )
-    });
+    let split_polite_neg = prohibition
+        && pred_atoms.windows(2).any(|pair| {
+            !pair[0].is_locked
+                && !pair[1].is_locked
+                && pair[0].surface == "ませ"
+                && pair[1].surface == "ん"
+                && pair[0].span.end_char == pair[1].span.start_char
+        });
+    let pred_is_neg = split_polite_neg
+        || pred_atoms.iter().any(|a| {
+            !a.is_locked
+                && matches!(
+                    a.surface.as_str(),
+                    "ない" | "なかった" | "ません" | "ませんでした" | "ず" | "ぬ"
+                )
+        });
     let pred_is_past = pred_atoms.iter().any(|a| {
         !a.is_locked
             && matches!(
@@ -9320,8 +9404,8 @@ fn try_translate_indirect_directive(
     let recip = matrix_recips.join("");
     let verb_zh = if v_lemma == "言う" || head_verb.surface.starts_with("言") {
         if recip.is_empty() {
-            "說要"
-        } else if pred_is_neg {
+            if prohibition { "說" } else { "說要" }
+        } else if pred_is_neg || prohibition {
             "叫"
         } else {
             "要"
@@ -9340,11 +9424,18 @@ fn try_translate_indirect_directive(
     out.push_str(verb_zh);
     if !recip.is_empty() {
         out.push_str(&recip);
-        if verb_zh == "轉告" {
+        if verb_zh == "轉告" && !prohibition {
             out.push('要');
         }
     }
     out.push_str(&sub_zh);
+    if prohibition
+        && pred_atoms
+            .last()
+            .is_some_and(|a| matches!(a.surface.as_str(), "けど" | "けれど" | "けれども" | "が"))
+    {
+        out.push_str("，但是");
+    }
 
     Some((out, false))
 }
@@ -11111,6 +11202,12 @@ fn translate_clause_bunsetsus(
     let mut go_together = Vec::new();
     let mut to_complements: Vec<(String, bool)> = Vec::new();
     let mut predicates: Vec<Bunsetsu> = Vec::new();
+    let until_addressee = prohibitive_until_addressee(&bunsetsus, source, doc, ctx);
+    let until_recipient = prohibitive_until_speech_recipient(&bunsetsus, source, doc, ctx);
+    let until_time = prohibitive_until_speech_time(&bunsetsus, source, doc, ctx);
+    let mut deferred_until_addressee: Option<(usize, String)> = None;
+    let mut deferred_until_recipient: Option<String> = None;
+    let mut deferred_until_time: Option<String> = None;
     let mut others: Vec<String> = Vec::new();
     let mut sconj_prefix: Option<&'static str> = None;
     let mut sconj_suffix: Option<&'static str> = None;
@@ -11373,6 +11470,19 @@ fn translate_clause_bunsetsus(
         .filter(|a| daytime::is_modifier(a))
         .find_map(|day| daytime::meeting_verb(source, day));
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if let [time, case] = b.atoms.as_slice()
+            && until_time == time.doc_tok_idx
+            && until_time.is_some()
+            && !case.is_locked
+            && case.surface == "に"
+            && case.head == until_time
+        {
+            let time = render_bunsetsu_np(&b, target);
+            if !time.is_empty() {
+                deferred_until_time = Some(time);
+                continue;
+            }
+        }
         let protected_manner = b.atoms.iter().find(|a| {
             a.lemma.as_deref() == Some(application_form::LOCKED_ADJUNCT)
                 && a.head == form_manner_verb
@@ -11736,6 +11846,11 @@ fn translate_clause_bunsetsus(
                             is_person_like,
                         });
                     } else {
+                        if until_addressee.is_some_and(|id| {
+                            b.atoms.iter().any(|atom| atom.doc_tok_idx == Some(id))
+                        }) {
+                            deferred_until_addressee = Some((subj_entries.len(), s.clone()));
+                        }
                         subj_entries.push(PlacedSubj {
                             text: s,
                             has_mo,
@@ -11749,6 +11864,15 @@ fn translate_clause_bunsetsus(
             BunsetsuRole::Obl
             | BunsetsuRole::ExplicitDeadline { .. }
             | BunsetsuRole::DeadlineWithDetachedNegation => {
+                if until_recipient
+                    .is_some_and(|id| b.atoms.iter().any(|atom| atom.doc_tok_idx == Some(id)))
+                {
+                    let recipient = render_bunsetsu_np(&b, target);
+                    if !recipient.is_empty() {
+                        deferred_until_recipient = Some(format!("對{recipient}"));
+                        continue;
+                    }
+                }
                 let is_inst = b.case_particle.as_deref() == Some("で")
                     && ((!is_place_location_bunsetsu(&b.atoms)
                         && is_instrument_bunsetsu(&b.atoms))
@@ -11869,6 +11993,12 @@ fn translate_clause_bunsetsus(
             BunsetsuRole::IObj => {
                 let s = render_bunsetsu_iobj(&b, target);
                 if !s.is_empty() {
+                    if until_recipient
+                        .is_some_and(|id| b.atoms.iter().any(|atom| atom.doc_tok_idx == Some(id)))
+                    {
+                        deferred_until_recipient = Some(s);
+                        continue;
+                    }
                     iobjs.push(PlacedArg {
                         text: s,
                         case_particle: b.case_particle.clone(),
@@ -11900,7 +12030,7 @@ fn translate_clause_bunsetsus(
                     objs.push(text);
                 }
             }
-            BunsetsuRole::Predicate => {
+            BunsetsuRole::Predicate | BunsetsuRole::ProhibitiveUntil => {
                 predicates.push(b);
             }
             BunsetsuRole::Punct => {}
@@ -12019,8 +12149,68 @@ fn translate_clause_bunsetsus(
     });
 
     // Synthesize predicate complex.
+    let prohibited = (target == TargetVariant::ZhHant
+        && !has_weather_forecast(source, doc, ctx)
+        && !has_weather_cloud_context(source, doc, ctx)
+        && !has_reported_weather_judgment(source, doc, ctx)
+        && !has_ambiguous_sky_context(source, doc, ctx))
+    .then(|| prohibitive_verb(core_non_punct(source), doc, ctx))
+    .flatten()
+    .filter(|action| {
+        predicates
+            .iter()
+            .flat_map(|group| &group.atoms)
+            .any(|atom| atom.doc_tok_idx == action.doc_tok_idx)
+    });
+    let local_prohibition = predicates
+        .iter()
+        .any(|group| group.role == BunsetsuRole::ProhibitiveUntil)
+        .then_some(prohibited)
+        .flatten()
+        .and_then(|action| action.doc_tok_idx);
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
-        synthesize_predicate_complex(&predicates, past_until, target, transfer);
+        synthesize_predicate_complex(&predicates, past_until, target, transfer, local_prohibition);
+    if local_prohibition.is_some()
+        && let Some((index, addressee)) = deferred_until_addressee
+        && let Some(position) = verb_core.find("之前不要")
+        && index < subj_entries.len()
+    {
+        verb_core.insert_str(position + "之前".len(), &addressee);
+        subj_entries.remove(index);
+    }
+    if let Some(recipient) = deferred_until_recipient {
+        if local_prohibition.is_some()
+            && let Some(position) = verb_core.find("不要")
+        {
+            verb_core.insert_str(position + "不要".len(), &recipient);
+        } else {
+            iobjs.push(PlacedArg {
+                text: recipient,
+                case_particle: Some("に".to_owned()),
+                is_instrument_de: false,
+                is_spatial_made: false,
+                temporal_made_time: None,
+                is_event_time: false,
+                is_building_floor: false,
+                deadline_endpoint: DeadlineEndpoint::Calendar,
+                deadline_has_detached_negation: false,
+                is_event_time_ni: false,
+                transfer_dative: false,
+                physical_goal_head: None,
+            });
+        }
+    }
+    let until_prefix = if local_prohibition.is_some() {
+        verb_core.find("之前").and_then(|position| {
+            let end = position + "之前".len();
+            verb_core[end..].contains("不要").then(|| {
+                let action = verb_core.split_off(end);
+                std::mem::replace(&mut verb_core, action)
+            })
+        })
+    } else {
+        None
+    };
     if let Some(state) = bounded_state {
         verb_core = state.to_owned();
         post_verb_mods.retain(|m| m != "著");
@@ -12031,6 +12221,9 @@ fn translate_clause_bunsetsus(
     if open_past_object && !open_past_endpoint {
         pre_verb_mods.retain(|m| m != "一直");
         pre_verb_mods.push("都在".to_owned());
+    }
+    if prohibited.is_some() && local_prohibition.is_none() && !verb_core.is_empty() {
+        pre_verb_mods.insert(0, "不要".to_owned());
     }
     if let Some(shika) = focus {
         if shika {
@@ -12943,6 +13136,10 @@ fn translate_clause_bunsetsus(
         parts.extend(connectors);
         parts.extend(subjects);
     }
+    if let Some(until) = until_prefix {
+        parts.push(until);
+    }
+    parts.extend(deferred_until_time);
 
     if (ctx.in_kuseni_follow || ctx.in_noni_follow) && sconj_prefix.is_none() {
         parts.push("卻".to_owned());
@@ -15866,8 +16063,224 @@ fn is_elapsed_past_relative(predicate: &Bunsetsu, noun: &Bunsetsu, source: &[Ato
                 .is_some_and(|id| elapsed_owned_by(source, id)))
 }
 
+// A predicate ending in まで is a deadline for the action selected by な.
+// Keep that event out of the main predicate and away from a following noun.
+fn mark_prohibitive_until(
+    groups: &mut [Bunsetsu],
+    source: &[Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx,
+) {
+    let Some(action) = prohibitive_verb(core_non_punct(source), doc, ctx) else {
+        return;
+    };
+    for group in groups {
+        let until = group
+            .atoms
+            .iter()
+            .find(|atom| !atom.is_locked && atom.surface == "まで" && atom.deprel == "case");
+        if until.is_some_and(|until| {
+            !source.iter().any(|case| {
+                !case.is_locked
+                    && case.surface == "に"
+                    && case.deprel == "case"
+                    && case.head == until.head
+                    && case.span.start_char == until.span.end_char
+            }) && group
+                .atoms
+                .iter()
+                .any(|event| event.doc_tok_idx == until.head)
+                && source.iter().any(|event| {
+                    !event.is_locked
+                        && matches!(event.upos, Some(Upos::Verb | Upos::Aux))
+                        && event.doc_tok_idx == until.head
+                        && event.head == action.doc_tok_idx
+                        && event.deprel == "obl"
+                })
+        }) {
+            group.role = BunsetsuRole::ProhibitiveUntil;
+        }
+    }
+}
+
+// Keep an explicit second-person addressee with the prohibited action, even
+// when the parser attaches the topic to the earlier until-event.
+fn prohibitive_until_addressee(
+    groups: &[Bunsetsu],
+    source: &[Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx,
+) -> Option<usize> {
+    let action = prohibitive_verb(core_non_punct(source), doc, ctx)?.doc_tok_idx?;
+    let mut deadlines = groups
+        .iter()
+        .filter(|group| group.role == BunsetsuRole::ProhibitiveUntil)
+        .flat_map(|group| &group.atoms)
+        .filter(|atom| !atom.is_locked && atom.surface == "まで" && atom.deprel == "case")
+        .filter_map(|atom| atom.head);
+    let deadline = deadlines.next()?;
+    if deadlines.next().is_some() {
+        return None;
+    }
+    let mut people = source.windows(2).filter_map(|pair| {
+        let [person, case] = pair else { return None };
+        let person_surface = if person.is_locked {
+            if person.lemma.as_deref() != Some(LOCKED_RESIDENT_ATOM) {
+                return None;
+            }
+            ctx.source_chars
+                .get(person.span.start_char..person.span.end_char)?
+                .iter()
+                .collect::<String>()
+        } else {
+            person.surface.clone()
+        };
+        if case.is_locked
+            || person.deprel != "nsubj"
+            || !is_explicit_second_person(&person_surface)
+            || !matches!(case.surface.as_str(), "は" | "が")
+            || case.head != person.doc_tok_idx
+        {
+            return None;
+        }
+        let competing_deadline_subject = source.windows(2).any(|pair| {
+            let [other, particle] = pair else {
+                return false;
+            };
+            (!other.is_locked || other.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM))
+                && other.doc_tok_idx.is_some()
+                && !particle.is_locked
+                && other.doc_tok_idx != person.doc_tok_idx
+                && other.deprel == "nsubj"
+                && other.head == Some(deadline)
+                && particle.surface == "が"
+                && particle.head == other.doc_tok_idx
+        });
+        let dark_deadline = source.iter().any(|middle| {
+            !middle.is_locked
+                && middle.doc_tok_idx == person.head
+                && middle.head == Some(deadline)
+                && middle.surface == "暗く"
+                && source.iter().any(|event| {
+                    event.doc_tok_idx == Some(deadline)
+                        && event.lemma.as_deref().unwrap_or(&event.surface) == "なる"
+                })
+        });
+        let belongs = person.head == Some(action)
+            || (case.surface == "は" && (competing_deadline_subject || dark_deadline));
+        belongs.then_some(person.doc_tok_idx).flatten()
+    });
+    let addressee = people.next()?;
+    if people.next().is_some()
+        || source.iter().any(|other| {
+            (!other.is_locked || other.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM))
+                && other.doc_tok_idx.is_some()
+                && other.deprel == "nsubj"
+                && other.head == Some(action)
+                && other.doc_tok_idx != Some(addressee)
+        })
+    {
+        return None;
+    }
+    Some(addressee)
+}
+
+// A person marked に is the addressee of 話す, not the actor of the
+// preceding until-event. Keep it next to that speech action.
+fn prohibitive_until_speech_recipient(
+    groups: &[Bunsetsu],
+    source: &[Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx,
+) -> Option<usize> {
+    use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
+    if !groups
+        .iter()
+        .any(|group| group.role == BunsetsuRole::ProhibitiveUntil)
+    {
+        return None;
+    }
+    let action = prohibitive_verb(core_non_punct(source), doc, ctx)?;
+    if action.lemma.as_deref().unwrap_or(&action.surface) != "話す" {
+        return None;
+    }
+    let mut recipients = source.windows(2).filter_map(|pair| {
+        let [person, case] = pair else { return None };
+        ((!person.is_locked || person.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM))
+            && !case.is_locked
+            && person.doc_tok_idx.is_some()
+            && is_person_like_atom(person)
+            && (person.is_locked
+                || (!is_time_or_place_bunsetsu(pair)
+                    && !source_time_head(person)
+                    && !lookup_ja(&person.surface).is_some_and(|hit| {
+                        matches!(
+                            hit.sem_class,
+                            Some(SemanticClass::Time | SemanticClass::Location)
+                        )
+                    })))
+            && matches!(person.deprel.as_str(), "obl" | "iobj")
+            && person.head == action.doc_tok_idx
+            && case.surface == "に"
+            && case.head == person.doc_tok_idx)
+            .then_some(person.doc_tok_idx)
+            .flatten()
+    });
+    let recipient = recipients.next()?;
+    recipients.next().is_none().then_some(recipient)
+}
+
+// Keep a source-linked event time with the prohibited speech, not with the
+// motion verb inside the preceding until-event.
+fn prohibitive_until_speech_time(
+    groups: &[Bunsetsu],
+    source: &[Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx,
+) -> Option<usize> {
+    use faberline_nlp::doc::EntityKind;
+
+    if !groups
+        .iter()
+        .any(|group| group.role == BunsetsuRole::ProhibitiveUntil)
+    {
+        return None;
+    }
+    let action = prohibitive_verb(core_non_punct(source), doc, ctx)?;
+    if action.lemma.as_deref().unwrap_or(&action.surface) != "話す" {
+        return None;
+    }
+    let mut times = source.windows(2).filter_map(|pair| {
+        let [time, case] = pair else { return None };
+        let id = time.doc_tok_idx?;
+        let token = doc.tokens.get(id)?;
+        let date = doc.entities.iter().any(|entity| {
+            matches!(
+                entity.kind,
+                EntityKind::Date | EntityKind::RelativeDate | EntityKind::Time
+            ) && entity.sentence == token.sentence
+                && entity.span == token.span
+        });
+        (!time.is_locked
+            && token.span == time.span
+            && time.head == action.doc_tok_idx
+            && matches!(time.deprel.as_str(), "obl" | "iobj")
+            && !case.is_locked
+            && case.surface == "に"
+            && case.upos == Some(Upos::Adp)
+            && case.deprel == "case"
+            && case.head == Some(id)
+            && time.span.end_char == case.span.start_char
+            && (date || source_time_head(time)))
+        .then_some(id)
+    });
+    let time = times.next()?;
+    times.next().is_none().then_some(time)
+}
+
 fn is_prenominal_pred(b: &Bunsetsu) -> bool {
-    if b.sconj_tail.is_some()
+    if b.role == BunsetsuRole::ProhibitiveUntil
+        || b.sconj_tail.is_some()
         || b.sfp_tail.is_some()
         || b.atoms
             .windows(2)
@@ -16960,7 +17373,7 @@ fn fold_nominalized_deadline_ability(
         return;
     }
     let (before, _, after, passive) =
-        synthesize_predicate_complex(std::slice::from_ref(matrix), false, target, None);
+        synthesize_predicate_complex(std::slice::from_ref(matrix), false, target, None, None);
     let modal = match (before.as_slice(), after.as_slice(), passive) {
         ([], [], false) => "可以",
         ([], [past], false) if past == "了" => "得以",
@@ -18256,14 +18669,19 @@ mod kana_noun_rule_tests {
 #[cfg(test)]
 mod clock_rule_tests {
     use super::{
-        Atom, CLOCK_ATOM, OPAQUE_PERIOD_CLOCK, clock_number, is_clock_atom, normalize_clock_atoms,
-        render_clock_surface,
+        Atom, CLOCK_ATOM, ClauseDiscourseCtx, OPAQUE_PERIOD_CLOCK, clock_number,
+        has_reported_weather_judgment, has_weather_cloud_context, is_clock_atom,
+        normalize_clock_atoms, normalized_sentence_atoms, render_clock_surface,
     };
+    use crate::SpanLockTable;
     use crate::{
         GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
     };
     use faberline_nlp::doc::model::Backend;
-    use faberline_nlp::{Span, doc::Upos};
+    use faberline_nlp::{
+        Span,
+        doc::{Token, Upos},
+    };
     use std::collections::BTreeMap;
 
     fn atom(surface: &str, start: usize, locked: bool) -> Atom {
@@ -20874,6 +21292,1233 @@ mod clock_rule_tests {
         assert!(
             !ambiguous.target_text.contains("每三天") && !ambiguous.target_text.contains("三號")
         );
+    }
+
+    #[test]
+    fn direct_prohibition_preserves_the_action_and_reporting_scope() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("走るな。", "不要跑。"),
+            ("ここで待つな。", "不要在這裡等待。"),
+            ("この窓を開けるな！", "不要打開這窗戶！"),
+            (
+                "母は『窓を開けるな』と言いました。",
+                "母親說『不要打開窗戶』。",
+            ),
+            ("「駅」と書くな。", "不要寫「駅」。"),
+            (
+                "先生は「写真」と書くなと言いました。",
+                "老師說不要寫「写真」。",
+            ),
+            ("先生は学生に走るなと言いました。", "老師叫學生不要跑。"),
+            ("先生が学生に走るなと言いました。", "老師叫學生不要跑。"),
+            ("先生は「走るな」と言いました。", "老師說「不要跑」。"),
+            (
+                "先生は『「写真」と書くな』と言いました。",
+                "老師說『不要寫「写真」』。",
+            ),
+            ("先生は走るなと言いませんでした。", "老師沒說不要跑。"),
+            ("触るなって言った。", "說不要觸摸。"),
+            ("出るな、戻れ。", "不要出去，回來。"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn direct_prohibition_leaves_near_non_prohibitions_unchanged() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("「駅」と書け。", "「駅」寫。"),
+            ("「駅」と書かないでください。", "「駅」請不要寫。"),
+            ("走らない。", "不跑。"),
+            ("静かだな。", "安靜。"),
+            ("よく走るな。", "經常跑。"),
+            ("よく走るなあ。", "經常跑。"),
+            ("本を読めるな。", "讀る書。"),
+            ("私にもできるな。", "給我能夠。"),
+            (
+                "先生は「私にもできるな」と言いました。",
+                "老師說「給我能夠」。",
+            ),
+            ("明日は雨が降るな。", "明天下雨。"),
+            (
+                "先生は「明日は雨が降るな」と言いました。",
+                "老師說「明天下雨」。",
+            ),
+            (
+                "母は私に彼が先に眠るなと言いました。",
+                "當母親他先に給我睡覺說了時。",
+            ),
+            ("元気な子が走りました。", "有精神的子跑了。"),
+            ("先生は走ると言いました。", "當老師跑說了時。"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn written_prohibition_keeps_the_source_while_speech_is_translated() {
+        let glossary = TranslationGlossary::new();
+        for (source, literal) in [
+            ("紙に「開けるな」と書きました。", "「開けるな」"),
+            ("紙に「窓を開けるな」と書きました。", "「窓を開けるな」"),
+            ("紙に「窓を開けるな！」と書きました。", "「窓を開けるな！」"),
+            ("紙に「窓を開けるな。」と書きました。", "「窓を開けるな。」"),
+            ("紙に「窓を開けるな」と書いてください。", "「窓を開けるな」"),
+            ("案内板には「窓を開けるな」とあります。", "「窓を開けるな」"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual.matches(literal).count(), 1, "{source}: {actual}");
+        }
+        assert_eq!(
+            public_translate("先生は「窓を開けるな」と言いました。", &glossary).target_text,
+            "老師說「不要打開窗戶」。"
+        );
+        for source in [
+            "紙に「窓を開けるな」と英語で書きました。",
+            "母への手紙に「窓を開けるな」と書きました。",
+            "英語だけの案内板には「窓を開けるな」とあります。",
+            "紙に「よく走るな」と書きました。",
+            "紙に「よく　走るな」と書きました。",
+            "紙に「本を読めるな」と書きました。",
+            "紙に「私にもできるな」と書きました。",
+            "ノートには「明日は雨が降るな」とあります。",
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            let quote = source
+                .split('「')
+                .nth(1)
+                .unwrap()
+                .split('」')
+                .next()
+                .unwrap();
+            assert!(!actual.contains(quote), "{source}: {actual}");
+        }
+        let message = public_translate("紙に「写真を買った」と書きました。", &glossary).target_text;
+        assert!(message.contains("照片"), "{message}");
+        let addressee = public_translate("お前が走るな。", &glossary).target_text;
+        assert!(addressee.contains("不要"), "{addressee}");
+        let future_ban = public_translate("明日は学校に行くな。", &glossary).target_text;
+        assert!(future_ban.contains("不要"), "{future_ban}");
+    }
+
+    #[test]
+    fn prohibition_requires_an_action_the_addressee_can_control() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("雨は降るな。", "下雨。"),
+            ("雪は降るな。", "下雪。"),
+            ("風は吹くな。", "風吹風。"),
+            ("天気は晴れるな。", "天氣放晴。"),
+            ("この窓は風で閉まるな。", "這窗戶在風關閉。"),
+            ("このドアは風で閉まるな。", "這門在風關閉。"),
+            ("この機械は動けるな。", "這機械動ける。"),
+            ("この機械はうごけるな。", "這機械うごける。"),
+            ("この機械は壊れるな。", "這機械故障。"),
+            ("動けるな。", "動ける。"),
+            ("うごけるな。", "うごける。"),
+            ("帰れるな。", "回去る。"),
+            (
+                "先生が学生に「雨は明日降るな」と言いました。",
+                "老師給學生說「明天下雨」。",
+            ),
+            ("看板には「雨は降るな」とあります。", "給看板，「下雨」有。"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual, expected, "{source}");
+        }
+        for source in [
+            "君は窓を閉めるな。",
+            "この窓は閉めるな。",
+            "この窓は開けるな。",
+            "子供は走るな。",
+            "子供に食事をあたえるな。",
+            "人を貶めるな。",
+            "首をすくめるな。",
+            "明日は学校に行くな。",
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert!(actual.contains("不要"), "{source}: {actual}");
+        }
+        for (source, literal) in [
+            ("紙に「人を貶めるな」と書きました。", "「人を貶めるな」"),
+            ("紙に「首をすくめるな」と書きました。", "「首をすくめるな」"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual.matches(literal).count(), 1, "{source}: {actual}");
+        }
+    }
+
+    #[test]
+    fn natural_events_do_not_become_direct_prohibitions() {
+        let glossary = TranslationGlossary::new();
+        for source in [
+            "このドアは自動で開くな。",
+            "この機械は静かに動くな。",
+            "この棚は重みで倒れるな。",
+            "この布は日に当たると縮むな。",
+            "海は今朝荒れるな。",
+            "雨は明日も降るな。",
+            "天気予報では明日も降るな。",
+            "昨日は電車に乗った。天気予報では明日も降るな。",
+            "明日は雨が降るな。",
+            "先生は学生に「明日は雨が降るな」と言いました。",
+            "係員は客に「このドアは自動で開くな」と言いました。",
+            "空が暗い。明日は降るな。",
+            "今日は朝だ。空が暗い。明日は降るな。",
+            "コードは`x`です。\n\n空が暗い。明日は降るな。",
+            "コードは`x`です。空が暗い。明日は降るな。",
+            "John’s book。空が暗い。明日は降るな。",
+            "空が暗い`補足`。明日は降るな。",
+            "保存先は C:\\tmp。空が暗い。明日は降るな。",
+            "男は「電車に乗る」と言った。空が暗い。明日は降るな。",
+            "男は電車に乗ると言った。空が暗い。明日は降るな。",
+            "男は電車に乗ると書いた。空が暗い。明日は降るな。",
+            "空が暗い。そうだよ、明日は降るな。",
+            "空が暗い。これは冬だよ、明日は降るな。",
+            "今日は山に登る。空が暗い。明日は降るな。",
+            "今日は電車に乗る。空が暗い。明日は降るな。",
+            "男は「敵は降伏を迫った」と言った。空が暗い。明日は降るな。",
+            "紙に「このドアは自動で開くな」と書きました。",
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert!(!actual.contains("不要"), "{source}: {actual}");
+        }
+        for source in [
+            "君は窓を閉めるな。",
+            "この窓は閉めるな。",
+            "肩をすくめるな。",
+            "ナイフで切るな。",
+            "ドアを自動で開くな。",
+            "棚を手で倒すな。",
+            "次の駅で電車から降りるな。",
+            "明日は飛行機を降りるな。",
+            "まだ飛行機から降りるな。",
+            "山を下るな。",
+            "今は山を下るな。",
+            "君は明日ここで飛行機を降りるな。",
+            "天気予報を聞いて、飛行機から降りるな。",
+            "雨よ、明日は降るな。",
+            "雨よ、天気予報では明日も降るな。",
+            "「そうだ。終わり」天気予報では雨よ明日は降るな。",
+            "天気予報では『雨よ』君よ明日は降るな。",
+            "天気予報では君よ『雨よ』明日は降るな。",
+            "天気予報では君は明日は降るな。",
+            "空が暗い。雨よ、明日は降るな。",
+            "「空が暗い。雨よ、明日は降るな。」",
+            "敵に降るな。",
+            "空が暗い。君は窓を閉めるな。",
+            "空が暗い。「窓を閉めるな」と先生が言いました。",
+            "先生は「空が暗い」と言った。「雨よ、明日は降るな」と母が言った。",
+            "紙に「空が暗い」と書きました。「雨よ、明日は降るな」と書きました。",
+            "今日は飛行機に乗る。空が暗い。明日は降りるな。",
+            "別のドアを自動で開いたら、このドアは開くな。",
+            "このドアが自動で開いたら、窓を開くな。",
+            "紙に「このドアが自動で開いたら、窓を開くな」と書きました。",
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert!(actual.contains("不要"), "{source}: {actual}");
+        }
+        let natural_writing =
+            public_translate("紙に「このドアは自動で開くな」と書きました。", &glossary).target_text;
+        assert!(!natural_writing.contains("このドアは自動で開くな"));
+        let command_writing =
+            public_translate("紙に「窓を閉めるな」と書きました。", &glossary).target_text;
+        assert!(command_writing.contains("窓を閉めるな"));
+        let separated =
+            public_translate("君は電車を降りるな。空が暗い。明日は降るな。", &glossary).target_text;
+        assert_eq!(separated.matches("不要").count(), 1, "{separated}");
+        // These do not establish the omitted subject. Preserve the baseline
+        // without claiming that the quote is a command or a weather report.
+        for (source, baseline) in [
+            (
+                "先生は「空が暗い。明日は降るな」と言いました。",
+                "老師「天空很昏暗。明天下」說了。",
+            ),
+            ("「空が暗い。明日は降るな。」", "「天空很昏暗。明天下。」"),
+            (
+                "空が暗い。「そうだ」、明日は降るな。",
+                "天空很昏暗。「是那樣」，明天下。",
+            ),
+            (
+                "「空が暗い。『そうだ』、明日は降るな。」",
+                "「天空很昏暗。『是那樣』，明天下。」",
+            ),
+            (
+                "紙に「空が暗い。明日は降るな」と書きました。",
+                "給紙「天空很昏暗。明天下」寫了。",
+            ),
+            (
+                "看板には「空が暗い。明日は降るな」とあります。",
+                "給看板「天空很昏暗。明天下」有。",
+            ),
+            (
+                "紙に「空が暗い。『そうだ』、明日は降るな」と書きました。",
+                "給紙「天空很昏暗。『是那樣』，明天下」寫了。",
+            ),
+            (
+                "紙に「天気予報では明日も降るな」と書きました。",
+                "給紙，「明天在天氣予報也下」寫了。",
+            ),
+            (
+                "紙に「空が暗い。`note`、明日は降るな」と書きました。",
+                "給紙「天空很昏暗。`note`，明天下」寫了。",
+            ),
+            (
+                "「空が暗い。‘John’s 雨よ’、明日は降るな。」",
+                "「天空很昏暗。John’s雨喔，明天下。」",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                baseline,
+                "{source}"
+            );
+        }
+        for source in [
+            "紙に「空が暗い。明日は降るな」とそのまま書きました。",
+            "紙に「空が暗い。明日は降るな」をそのまま写しました。",
+            "紙に「雨よ、明日は降るな」と書きました。",
+            "紙に「空が暗い。雨よ、明日は降るな」と書きました。",
+            "紙に「天気予報では田中さんよ、明日は降るな」と書きました。",
+        ] {
+            let quote = source
+                .rsplit('「')
+                .next()
+                .unwrap()
+                .split('」')
+                .next()
+                .unwrap();
+            let written = public_translate(source, &glossary).target_text;
+            assert!(written.contains(quote), "{source}: {written}");
+        }
+        for source in [
+            "空が暗い。先生は明日は降るなと言った。",
+            "空が暗い。先生は明日は降るなと言いました。",
+        ] {
+            let reported = public_translate(source, &glossary).target_text;
+            assert!(reported.contains("老師"), "{source}: {reported}");
+        }
+        for source in [
+            "空が暗い。先生は学生に走るなと言った。",
+            "空が暗い。先生は明日は飛行機を降りるなと言った。",
+        ] {
+            let reported = public_translate(source, &glossary).target_text;
+            assert!(
+                reported.contains("老師") && reported.contains("不要"),
+                "{source}: {reported}"
+            );
+        }
+    }
+
+    #[test]
+    fn prohibitions_do_not_negate_the_until_event() {
+        let glossary = TranslationGlossary::new();
+        for (source, action, deadline) in [
+            ("君は暗くなるまで山を下るな。", "順流而下", "昏暗"),
+            ("合図があるまで待つな。", "等待", "合圖"),
+            ("雨が降るまで行くな。", "去", "下雨"),
+            ("暗くなるまで窓を開けるな。", "打開", "昏暗"),
+            (
+                "飛行機が着陸した。客室乗務員は乗客に「合図があるまで降りるな」と言いました。",
+                "下來",
+                "合圖",
+            ),
+            (
+                "先生は学生に「合図があるまで下るな」と言いました。",
+                "順流而下",
+                "合圖",
+            ),
+            (
+                "先生が学生に合図があるまで下るなと言いました。",
+                "順流而下",
+                "合圖",
+            ),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert_eq!(actual.matches("不要").count(), 1, "{source}: {actual}");
+            assert!(
+                actual.contains(&format!("不要{action}")),
+                "{source}: {actual}"
+            );
+            assert!(
+                actual.contains(deadline) && actual.contains("之前"),
+                "{source}: {actual}"
+            );
+            assert!(
+                actual.find("之前") < actual.find(&format!("不要{action}")),
+                "{source}: {actual}"
+            );
+            if source.contains("先生") {
+                assert!(
+                    actual.contains("老師") && actual.contains("學生"),
+                    "{source}: {actual}"
+                );
+            }
+            if source.contains("乗客") {
+                assert!(
+                    actual.contains("乘務員") && actual.contains("乘客"),
+                    "{source}: {actual}"
+                );
+            }
+        }
+        // `までに` is a different deadline form. Keep its prior behavior
+        // outside the new until-event rule.
+        assert_eq!(
+            public_translate("合図があるまでに降りるな。", &glossary).target_text,
+            "合圖不要有到在下來。"
+        );
+        for (source, event_subject, event_action, object) in [
+            ("君は私が戻るまで部屋に入るな。", "我", "回來", "房間"),
+            ("私が戻るまで君は部屋に入るな。", "我", "回來", "房間"),
+            ("私は帰るまで君は部屋に入るな。", "我", "回去", "房間"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            let positions = [event_subject, event_action, "之前", "你", "不要", object]
+                .map(|part| actual.find(part).expect(source));
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "{source}: {actual}"
+            );
+        }
+        let dark = public_translate("君は暗くなるまで山を下るな。", &glossary).target_text;
+        assert!(
+            dark.find("昏暗") < dark.find("之前")
+                && dark.find("之前") < dark.find('你')
+                && dark.find('你') < dark.find("不要順流而下"),
+            "{dark}"
+        );
+        for (source, event) in [
+            ("君が戻るまで部屋に入るな。", "回來"),
+            ("君が寝るまで私を起こすな。", "睡"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert!(
+                actual.find('你') < actual.find(event)
+                    && actual.find(event) < actual.find("之前")
+                    && actual.find("之前") < actual.find("不要"),
+                "{source}: {actual}"
+            );
+        }
+        for source in [
+            "君は先生が来るまで学生に話すな。",
+            "先生が来るまで君は学生に話すな。",
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            let positions = ["老師", "來", "之前", "你", "不要", "學生", "說"]
+                .map(|part| actual.find(part).expect(source));
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "{source}: {actual}"
+            );
+        }
+        let negative_until =
+            public_translate("雨が降らないまま朝になるまで外へ出るな。", &glossary).target_text;
+        assert!(
+            negative_until.find("不下") < negative_until.find("之前")
+                && negative_until.find("之前") < negative_until.find("不要出去"),
+            "{negative_until}"
+        );
+    }
+
+    #[test]
+    fn until_speech_time_is_not_a_recipient() {
+        let glossary = TranslationGlossary::new();
+        for (source, time) in [
+            ("先生が来るまで夜中に話すな。", "夜中"),
+            ("先生が来るまで午後に話すな。", "下午"),
+            ("先生が来るまで明後日に話すな。", "後天"),
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert!(!actual.contains(&format!("對{time}")), "{source}: {actual}");
+            assert!(
+                actual.find("之前") < actual.find(time),
+                "{source}: {actual}"
+            );
+            assert!(actual.find(time) < actual.find("說"), "{source}: {actual}");
+        }
+    }
+
+    #[test]
+    fn until_roles_preserve_actor_and_signal_glossary_spans() {
+        let mut glossary = TranslationGlossary::new();
+        for (source, target) in [("君", "指定你"), ("学生", "指定學生")] {
+            glossary.actors.push(GlossaryEntry {
+                canonical: source.to_owned(),
+                surfaces: vec![source.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, target.to_owned())]),
+                ..GlossaryEntry::default()
+            });
+        }
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "合図".to_owned(),
+            surfaces: vec!["合図".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "信號".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        for (source, order, expected_hits) in [
+            (
+                "君は先生が来るまで学生に話すな。",
+                vec!["老師", "來", "之前", "指定你", "不要", "指定學生", "說"],
+                vec![("君", "指定你"), ("学生", "指定學生")],
+            ),
+            (
+                "飛行機が着陸した。客室乗務員は乗客に「合図があるまで降りるな」と言いました。",
+                vec!["乘務員", "乘客", "信號", "之前", "不要", "下來"],
+                vec![("合図", "信號")],
+            ),
+        ] {
+            let result = public_translate(source, &glossary);
+            let positions: Vec<usize> = order
+                .into_iter()
+                .map(|part| result.target_text.find(part).expect(source))
+                .collect();
+            assert!(
+                positions.windows(2).all(|pair| pair[0] < pair[1]),
+                "{source}: {}",
+                result.target_text
+            );
+            assert_eq!(result.glossary_hits.len(), expected_hits.len(), "{source}");
+            for (hit, (original, target)) in result.glossary_hits.iter().zip(expected_hits) {
+                let source_text: String = source
+                    .chars()
+                    .skip(hit.source_span.start_char)
+                    .take(hit.source_span.end_char - hit.source_span.start_char)
+                    .collect();
+                let target_text: String = result
+                    .target_text
+                    .chars()
+                    .skip(hit.target_span.start_char)
+                    .take(hit.target_span.end_char - hit.target_span.start_char)
+                    .collect();
+                assert_eq!(
+                    (source_text.as_str(), target_text.as_str()),
+                    (original, target)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn until_recipient_actor_target_can_match_a_time_word() {
+        let source = "先生が来るまで学生に話すな。";
+        let mut glossary = TranslationGlossary::new();
+        glossary.actors.push(GlossaryEntry {
+            canonical: "学生".to_owned(),
+            surfaces: vec!["学生".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "今日".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let result = public_translate(source, &glossary);
+        assert!(
+            result.target_text.contains("不要對今日說"),
+            "{}",
+            result.target_text
+        );
+        let hit = &result.glossary_hits[0];
+        assert_eq!(
+            source
+                .chars()
+                .skip(hit.source_span.start_char)
+                .take(hit.source_span.end_char - hit.source_span.start_char)
+                .collect::<String>(),
+            "学生"
+        );
+        assert_eq!(
+            result
+                .target_text
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect::<String>(),
+            "今日"
+        );
+    }
+
+    #[test]
+    fn natural_rain_subject_keeps_its_role_with_a_glossary() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "雨".to_owned(),
+            surfaces: vec!["雨".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "雨水".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        for source in ["明日は雨が降るな。", "雨は明日も降るな。"] {
+            let plain = public_translate(source, &TranslationGlossary::new()).target_text;
+            let result = public_translate(source, &glossary);
+            assert!(!plain.contains("不要"), "{source}: {plain}");
+            assert!(
+                !result.target_text.contains("不要"),
+                "{source}: {}",
+                result.target_text
+            );
+            assert!(
+                result.target_text.contains("雨水"),
+                "{source}: {}",
+                result.target_text
+            );
+            assert_eq!(result.glossary_hits.len(), 1, "{source}");
+            let hit = &result.glossary_hits[0];
+            assert_eq!(
+                source
+                    .chars()
+                    .skip(hit.source_span.start_char)
+                    .take(hit.source_span.end_char - hit.source_span.start_char)
+                    .collect::<String>(),
+                "雨"
+            );
+            assert_eq!(
+                result
+                    .target_text
+                    .chars()
+                    .skip(hit.target_span.start_char)
+                    .take(hit.target_span.end_char - hit.target_span.start_char)
+                    .collect::<String>(),
+                "雨水"
+            );
+        }
+    }
+
+    #[test]
+    fn weather_time_glossary_keeps_the_evidence_scoped() {
+        let mut glossary = TranslationGlossary::new();
+        for (source, target) in [("明日", "隔天"), ("そろそろ", "快要")] {
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: source.to_owned(),
+                surfaces: vec![source.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, target.to_owned())]),
+                ..GlossaryEntry::default()
+            });
+        }
+        for source in [
+            "雨雲レーダーを見た気象予報士は「明日は降るな」と判断した。",
+            "空が暗い。明日は降るな。",
+            "雨雲が広がった。そろそろ降るな。",
+        ] {
+            let plain = public_translate(source, &TranslationGlossary::new()).target_text;
+            let result = public_translate(source, &glossary);
+            assert!(!plain.contains("不要"), "{source}: {plain}");
+            assert!(
+                !result.target_text.contains("不要"),
+                "{source}: {}",
+                result.target_text
+            );
+            assert_eq!(result.glossary_hits.len(), 1, "{source}");
+            let hit = &result.glossary_hits[0];
+            let original: String = source
+                .chars()
+                .skip(hit.source_span.start_char)
+                .take(hit.source_span.end_char - hit.source_span.start_char)
+                .collect();
+            let translated: String = result
+                .target_text
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect();
+            assert!(
+                [("明日", "隔天"), ("そろそろ", "快要")]
+                    .contains(&(original.as_str(), translated.as_str()))
+            );
+        }
+        let vocative = public_translate("雨よ、明日は降るな。", &glossary).target_text;
+        assert!(vocative.contains("不要"), "{vocative}");
+        glossary.actors.push(GlossaryEntry {
+            canonical: "雨".to_owned(),
+            surfaces: vec!["雨".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "小雨".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let actor_vocative = public_translate("雨よ、明日は降るな。", &glossary).target_text;
+        assert!(
+            actor_vocative.contains("小雨") && actor_vocative.contains("不要"),
+            "{actor_vocative}"
+        );
+    }
+
+    #[test]
+    fn natural_event_modifiers_keep_their_roles_with_glossaries() {
+        for (source, term, target) in [
+            ("このドアは自動で開くな。", "自動", "自動裝置"),
+            ("この機械は静かに動くな。", "静か", "安靜"),
+            ("この機械は静かに動くな。", "静かに", "安靜地"),
+            ("この棚は重みで倒れるな。", "重み", "重量"),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, target.to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            let plain = public_translate(source, &TranslationGlossary::new()).target_text;
+            let result = public_translate(source, &glossary);
+            assert!(!plain.contains("不要"), "{source}: {plain}");
+            assert!(
+                !result.target_text.contains("不要"),
+                "{source}: {}",
+                result.target_text
+            );
+            assert_eq!(
+                result.glossary_hits.len(),
+                1,
+                "{source}: {}",
+                result.target_text
+            );
+            let hit = &result.glossary_hits[0];
+            let original: String = source
+                .chars()
+                .skip(hit.source_span.start_char)
+                .take(hit.source_span.end_char - hit.source_span.start_char)
+                .collect();
+            let translated: String = result
+                .target_text
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect();
+            assert_eq!((original.as_str(), translated.as_str()), (term, target));
+        }
+    }
+
+    #[test]
+    fn forecast_glossary_keeps_the_existing_weather_evidence() {
+        let source = "天気予報では明日も降るな。";
+        let doc = faberline_nlp::doc::analyze_document(
+            source,
+            &faberline_nlp::doc::Options {
+                enrich_morphology: true,
+                cpu_syntax: true,
+                ..Default::default()
+            },
+        );
+        let chars: Vec<char> = source.chars().collect();
+        let locks = SpanLockTable::build(vec![(
+            1,
+            Span {
+                start_char: 0,
+                end_char: 4,
+            },
+            "氣象預報".to_owned(),
+            super::LockOrigin::Glossary {
+                canonical: "天気予報".to_owned(),
+                kind: super::GlossaryKind::DomainTerm,
+            },
+            true,
+        )]);
+        let tokens: Vec<&Token> = doc.tokens.iter().filter(|t| t.sentence == 0).collect();
+        let atoms = normalized_sentence_atoms(0, &chars, &doc, &tokens, &locks);
+        let ctx = ClauseDiscourseCtx {
+            source_chars: &chars,
+            locks: Some(&locks),
+            ..Default::default()
+        };
+        assert!(super::has_weather_forecast(&atoms, &doc, &ctx), "{atoms:?}");
+        let mut missing_compound = doc.clone();
+        missing_compound.syntax.retain(|edge| edge.token != 0);
+        assert!(!super::has_weather_forecast(
+            &atoms,
+            &missing_compound,
+            &ctx
+        ));
+        let mut missing_action = atoms.clone();
+        let verb = missing_action
+            .iter_mut()
+            .find(|atom| atom.surface == "降る")
+            .unwrap();
+        verb.doc_tok_idx = None;
+        missing_action[0].head = None;
+        assert!(!super::has_weather_forecast(&missing_action, &doc, &ctx));
+        for origin in [
+            super::LockOrigin::QuotedSource,
+            super::LockOrigin::InlineOpaque(faberline_nlp::doc::OpaqueKind::Code),
+            super::LockOrigin::Glossary {
+                canonical: "天気予報".to_owned(),
+                kind: super::GlossaryKind::Actor,
+            },
+        ] {
+            let other_locks = SpanLockTable::build(vec![(
+                1,
+                Span {
+                    start_char: 0,
+                    end_char: 4,
+                },
+                "氣象預報".to_owned(),
+                origin,
+                true,
+            )]);
+            let other_ctx = ClauseDiscourseCtx {
+                source_chars: &chars,
+                locks: Some(&other_locks),
+                ..Default::default()
+            };
+            assert!(!super::has_weather_forecast(&atoms, &doc, &other_ctx));
+        }
+        let no_locks = SpanLockTable::new();
+        let raw = normalized_sentence_atoms(0, &chars, &doc, &tokens, &no_locks);
+        let raw_ctx = ClauseDiscourseCtx {
+            source_chars: &chars,
+            locks: Some(&no_locks),
+            ..Default::default()
+        };
+        assert!(super::has_weather_forecast(&raw, &doc, &raw_ctx), "{raw:?}");
+        for index in 0..4 {
+            let mut missing = raw.clone();
+            missing[index].doc_tok_idx = None;
+            assert!(
+                !super::has_weather_forecast(&missing, &doc, &raw_ctx),
+                "missing token {index}"
+            );
+        }
+        let mut missing_case = doc.clone();
+        missing_case.syntax.retain(|edge| edge.token != 2);
+        assert!(!super::has_weather_forecast(&raw, &missing_case, &raw_ctx));
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "天気予報".to_owned(),
+            surfaces: vec!["天気予報".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "氣象預報".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let plain = public_translate(source, &TranslationGlossary::new()).target_text;
+        let result = public_translate(source, &glossary);
+        let locked = &result.target_text;
+        assert!(!plain.contains("不要"), "{plain}");
+        assert!(!locked.contains("不要"), "{locked}");
+        assert!(locked.contains("氣象預報"), "{locked}");
+        assert_eq!(result.glossary_hits.len(), 1);
+        let hit = &result.glossary_hits[0];
+        assert_eq!(
+            source
+                .chars()
+                .skip(hit.source_span.start_char)
+                .take(hit.source_span.end_char - hit.source_span.start_char)
+                .collect::<String>(),
+            "天気予報"
+        );
+        assert_eq!(
+            locked
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect::<String>(),
+            "氣象預報"
+        );
+        for source in [
+            "天気予報 では明日も降るな。",
+            "天気予報で　は明日も降るな。",
+        ] {
+            let plain = public_translate(source, &TranslationGlossary::new()).target_text;
+            let locked = public_translate(source, &glossary).target_text;
+            assert!(
+                !plain.contains("不要") && !locked.contains("不要"),
+                "{source}: {plain} / {locked}"
+            );
+        }
+    }
+
+    #[test]
+    fn glossary_modifiers_and_places_keep_clear_prohibitions() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "静かに".to_owned(),
+            surfaces: vec!["静かに".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "安靜地".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        glossary.places.push(GlossaryEntry {
+            canonical: "学校".to_owned(),
+            surfaces: vec!["学校".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "指定學校".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        for source in ["静かに走るな。", "静かに窓を閉めるな。", "学校に行くな。"]
+        {
+            let plain = public_translate(source, &TranslationGlossary::new()).target_text;
+            let result = public_translate(source, &glossary);
+            assert!(
+                plain.contains("不要") && result.target_text.contains("不要"),
+                "{source}: {plain} / {}",
+                result.target_text
+            );
+            assert_eq!(
+                result.glossary_hits.len(),
+                1,
+                "{source}: {}",
+                result.target_text
+            );
+        }
+    }
+
+    #[test]
+    fn actor_glossaries_keep_addressees_and_reporters_in_prohibitions() {
+        let mut glossary = TranslationGlossary::new();
+        for (source, target) in [("君", "指定你"), ("先生", "指定老師"), ("学生", "指定學生")]
+        {
+            glossary.actors.push(GlossaryEntry {
+                canonical: source.to_owned(),
+                surfaces: vec![source.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, target.to_owned())]),
+                ..GlossaryEntry::default()
+            });
+        }
+        for (source, order) in [
+            ("君が走るな。", vec!["指定你", "不要", "跑"]),
+            (
+                "先生が学生に走るなと言いました。",
+                vec!["指定老師", "指定學生", "不要", "跑"],
+            ),
+            (
+                "君は先生が来るまで学生に話すな。",
+                vec!["指定老師", "來", "之前", "指定你", "不要", "指定學生", "說"],
+            ),
+        ] {
+            let result = public_translate(source, &glossary);
+            assert_eq!(
+                result.target_text.matches("不要").count(),
+                1,
+                "{source}: {}",
+                result.target_text
+            );
+            let positions: Vec<_> = order
+                .iter()
+                .map(|part| result.target_text.find(part).expect(source))
+                .collect();
+            assert!(
+                positions.windows(2).all(|p| p[0] < p[1]),
+                "{source}: {}",
+                result.target_text
+            );
+            for hit in &result.glossary_hits {
+                let original: String = source
+                    .chars()
+                    .skip(hit.source_span.start_char)
+                    .take(hit.source_span.end_char - hit.source_span.start_char)
+                    .collect();
+                let translated: String = result
+                    .target_text
+                    .chars()
+                    .skip(hit.target_span.start_char)
+                    .take(hit.target_span.end_char - hit.target_span.start_char)
+                    .collect();
+                assert!(
+                    [("君", "指定你"), ("先生", "指定老師"), ("学生", "指定學生")]
+                        .contains(&(original.as_str(), translated.as_str()))
+                );
+            }
+        }
+        let source = "君は天気予報では明日は降るな。";
+        let plain = public_translate(source, &TranslationGlossary::new()).target_text;
+        let locked = public_translate(source, &glossary).target_text;
+        assert_eq!(
+            plain.contains("不要"),
+            locked.contains("不要"),
+            "{source}: {plain} / {locked}"
+        );
+        assert!(locked.contains("指定你"), "{locked}");
+    }
+
+    #[test]
+    fn multi_token_actor_lock_preserves_the_source_and_target_spans() {
+        let source = "あなた方は走るな。";
+        let mut glossary = TranslationGlossary::new();
+        glossary.actors.push(GlossaryEntry {
+            canonical: "あなた方".to_owned(),
+            surfaces: vec!["あなた方".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "指定各位".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let result = public_translate(source, &glossary);
+        assert_eq!(result.glossary_hits.len(), 1, "{}", result.target_text);
+        let hit = &result.glossary_hits[0];
+        assert_eq!(
+            source
+                .chars()
+                .skip(hit.source_span.start_char)
+                .take(hit.source_span.end_char - hit.source_span.start_char)
+                .collect::<String>(),
+            "あなた方"
+        );
+        assert_eq!(
+            result
+                .target_text
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect::<String>(),
+            "指定各位"
+        );
+    }
+
+    #[test]
+    fn unknown_locked_subject_does_not_force_prohibition_or_forecast() {
+        for source in ["君が走るな。", "君は天気予報では明日は降るな。"] {
+            let chars: Vec<char> = source.chars().collect();
+            let doc = faberline_nlp::doc::analyze_document(
+                source,
+                &faberline_nlp::doc::Options {
+                    enrich_morphology: true,
+                    cpu_syntax: true,
+                    ..Default::default()
+                },
+            );
+            let lock = |origin| {
+                SpanLockTable::build(vec![(
+                    1,
+                    Span {
+                        start_char: 0,
+                        end_char: 1,
+                    },
+                    "指定你".to_owned(),
+                    origin,
+                    true,
+                )])
+            };
+            let actors = lock(super::LockOrigin::Glossary {
+                canonical: "君".to_owned(),
+                kind: super::GlossaryKind::Actor,
+            });
+            let quoted = lock(super::LockOrigin::QuotedSource);
+            let tokens: Vec<&Token> = doc
+                .tokens
+                .iter()
+                .filter(|token| token.sentence == 0)
+                .collect();
+            let atoms = normalized_sentence_atoms(0, &chars, &doc, &tokens, &actors);
+            let core = super::core_non_punct(&atoms);
+            let [subject, case, .., verb, _] = core else {
+                panic!("{source}: {core:?}")
+            };
+            assert!(
+                subject.is_locked
+                    && subject.deprel == "nsubj"
+                    && subject.head == verb.doc_tok_idx
+                    && case.head == subject.doc_tok_idx,
+                "{source}: {core:?}"
+            );
+            let known = ClauseDiscourseCtx {
+                source_chars: &chars,
+                locks: Some(&actors),
+                ..Default::default()
+            };
+            let no_locks = ClauseDiscourseCtx {
+                source_chars: &chars,
+                ..Default::default()
+            };
+            let no_source = ClauseDiscourseCtx {
+                locks: Some(&actors),
+                ..Default::default()
+            };
+            let opaque = ClauseDiscourseCtx {
+                source_chars: &chars,
+                locks: Some(&quoted),
+                ..Default::default()
+            };
+            for unknown in [&no_locks, &no_source, &opaque] {
+                assert!(
+                    super::prohibitive_verb(core, &doc, unknown).is_none(),
+                    "{source}"
+                );
+            }
+            let mut missing_syntax = atoms.clone();
+            missing_syntax[0].doc_tok_idx = None;
+            missing_syntax[0].head = None;
+            missing_syntax[0].deprel.clear();
+            missing_syntax[1].head = None;
+            assert!(
+                super::prohibitive_verb(super::core_non_punct(&missing_syntax), &doc, &known)
+                    .is_none(),
+                "{source}"
+            );
+            if source == "君が走るな。" {
+                assert!(super::prohibitive_verb(core, &doc, &known).is_some());
+            } else {
+                assert!(
+                    super::has_weather_forecast(&atoms[2..], &doc, &known),
+                    "{atoms:?}"
+                );
+                for ctx in [&known, &no_locks, &no_source, &opaque] {
+                    assert!(!super::has_weather_forecast(&atoms, &doc, ctx), "{source}");
+                }
+                assert!(!super::has_weather_forecast(&missing_syntax, &doc, &known));
+            }
+        }
+    }
+
+    #[test]
+    fn incomplete_modifier_evidence_does_not_force_a_prohibition() {
+        let source = "この機械は静かに動くな。";
+        let chars: Vec<char> = source.chars().collect();
+        let doc = faberline_nlp::doc::analyze_document(
+            source,
+            &faberline_nlp::doc::Options {
+                enrich_morphology: true,
+                cpu_syntax: true,
+                ..Default::default()
+            },
+        );
+        let locks = SpanLockTable::build(vec![(
+            1,
+            Span {
+                start_char: 5,
+                end_char: 8,
+            },
+            "安靜地".to_owned(),
+            super::LockOrigin::Glossary {
+                canonical: "静かに".to_owned(),
+                kind: super::GlossaryKind::DomainTerm,
+            },
+            true,
+        )]);
+        let tokens: Vec<&Token> = doc
+            .tokens
+            .iter()
+            .filter(|token| token.sentence == 0)
+            .collect();
+        let atoms = normalized_sentence_atoms(0, &chars, &doc, &tokens, &locks);
+        let core = super::core_non_punct(&atoms);
+        let modifier = core.iter().find(|atom| atom.is_locked).unwrap();
+        let action = core.iter().find(|atom| atom.surface == "動く").unwrap();
+        assert!(doc.syntax.iter().any(|edge| {
+            edge.head == action.doc_tok_idx
+                && edge.deprel == "advcl"
+                && doc.tokens.get(edge.token).is_some_and(|token| {
+                    modifier.span.start_char <= token.span.start_char
+                        && token.span.end_char <= modifier.span.end_char
+                })
+        }));
+        let ctx = ClauseDiscourseCtx {
+            source_chars: &chars,
+            locks: Some(&locks),
+            ..Default::default()
+        };
+        assert!(super::prohibition_subject_source(modifier, &doc, &ctx).is_none());
+        assert!(super::prohibitive_verb(core, &doc, &ctx).is_none());
+        let no_locks = ClauseDiscourseCtx {
+            source_chars: &chars,
+            ..Default::default()
+        };
+        assert!(super::prohibitive_verb(core, &doc, &no_locks).is_none());
+    }
+
+    #[test]
+    fn weather_evidence_does_not_cross_a_report_or_an_addressee() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("雨雲が広がった。そろそろ降るな。", "雨雲擴展了。差不多下。"),
+            (
+                "雨雲レーダーを見た気象予報士は「明日は降るな」と判断した。",
+                "看了雨雲レーダー的氣象予報士「明天下」判斷了。",
+            ),
+            (
+                "紙に「雨雲が広がった。そろそろ降るな」と書きました。",
+                "給紙「雨雲擴展了。差不多下」寫了。",
+            ),
+            (
+                "看板には「雨雲が広がった。そろそろ降るな」とあります。",
+                "給看板「雨雲擴展了。差不多下」有。",
+            ),
+            (
+                "「雨雲が広がった。そろそろ降るな」と先生は言った。",
+                "「雨雲擴展了。差不多下」老師說了。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        for source in [
+            "雨雲が広がった。雨よ、そろそろ降るな。",
+            "雨雲が広がった。雨雲よ、そろそろ降るな。",
+            "雨雲が広がった。ここでそろそろ降るな。",
+            "雨雲レーダーを見た気象予報士は「雨よ、明日は降るな」と判断した。",
+            "雨雲を見た男は、君に「山を下るな」と言った。",
+            "雨雲が広がった。「そろそろ降るな」と先生が言った。",
+            "「雨雲が広がった」と先生が言った。そろそろ降るな。",
+        ] {
+            let actual = public_translate(source, &glossary).target_text;
+            assert!(actual.contains("不要"), "{source}: {actual}");
+        }
+        let wish = public_translate("先生は「明日は降るな」と祈った。", &glossary).target_text;
+        assert!(wish.contains("祈禱"), "{wish}");
+    }
+
+    #[test]
+    fn negated_or_questioned_clouds_are_not_positive_weather_evidence() {
+        for source in [
+            "雨雲が広がらなかった。そろそろ降るな。",
+            "雨雲が広がりませんでした。そろそろ降るな。",
+            "雨雲が広がったか。そろそろ降るな。",
+            "雨雲が広がったのだろうか。そろそろ降るな。",
+            "雨雲が広がった。絶対降るな。",
+            "雨雲が広がった。降るな。",
+        ] {
+            let doc = faberline_nlp::doc::analyze_document(
+                source,
+                &faberline_nlp::doc::Options {
+                    enrich_morphology: true,
+                    cpu_syntax: true,
+                    ..Default::default()
+                },
+            );
+            let chars: Vec<char> = source.chars().collect();
+            let sentence = doc.segmentation.sentences.len() - 1;
+            let sent_tokens: Vec<&Token> = doc
+                .tokens
+                .iter()
+                .filter(|token| token.sentence == sentence)
+                .collect();
+            let locks = SpanLockTable::build(Vec::new());
+            let atoms = normalized_sentence_atoms(sentence, &chars, &doc, &sent_tokens, &locks);
+            let ctx = ClauseDiscourseCtx {
+                source_chars: &chars,
+                ..Default::default()
+            };
+            assert!(!has_weather_cloud_context(&atoms, &doc, &ctx), "{source}");
+        }
+    }
+
+    #[test]
+    fn quoted_weather_judgment_requires_the_same_positive_observation() {
+        for source in [
+            "雨雲レーダーを見なかった気象予報士は「明日は降るな」と判断した。",
+            "雨雲レーダーを見た気象予報士は「明日は降るな」と判断しなかった。",
+            "雨雲レーダーを見た気象予報士の友人は「明日は降るな」と判断した。",
+            "雨雲レーダーを見た気象予報士は「明日は降るな」と祈った。",
+        ] {
+            let doc = faberline_nlp::doc::analyze_document(
+                source,
+                &faberline_nlp::doc::Options {
+                    enrich_morphology: true,
+                    cpu_syntax: true,
+                    ..Default::default()
+                },
+            );
+            let chars: Vec<char> = source.chars().collect();
+            let start = chars.iter().position(|ch| *ch == '「').unwrap() + 1;
+            let end = chars.iter().position(|ch| *ch == '」').unwrap();
+            let sent_tokens: Vec<&Token> = doc.tokens.iter().collect();
+            let locks = SpanLockTable::build(Vec::new());
+            let atoms = normalized_sentence_atoms(0, &chars, &doc, &sent_tokens, &locks);
+            let quote: Vec<Atom> = atoms
+                .into_iter()
+                .filter(|atom| atom.span.start_char >= start && atom.span.end_char <= end)
+                .collect();
+            let ctx = ClauseDiscourseCtx {
+                source_chars: &chars,
+                ..Default::default()
+            };
+            assert!(
+                !has_reported_weather_judgment(&quote, &doc, &ctx),
+                "{source}"
+            );
+        }
     }
 
     #[test]
@@ -24513,6 +26158,1359 @@ fn localize_honorific(name: &str, suffix: &str) -> String {
     }
 }
 
+// A dictionary verb may be split into a stem and an auxiliary before な.
+// Join it only when the complete surface has its own verb entry.
+fn recover_prohibitive_verb_forms(atoms: &mut Vec<Atom>) {
+    let mut index = 0;
+    while index + 2 < atoms.len() {
+        let [verb, ending, marker] = &atoms[index..index + 3] else {
+            break;
+        };
+        let surface = format!("{}{}", verb.surface, ending.surface);
+        if !verb.is_locked
+            && verb.upos == Some(Upos::Verb)
+            && verb.doc_tok_idx.is_some()
+            && !ending.is_locked
+            && ending.upos == Some(Upos::Aux)
+            && ending.surface == "る"
+            && !marker.is_locked
+            && marker.upos == Some(Upos::Part)
+            && marker.surface == "な"
+            && marker.head == verb.doc_tok_idx
+            && verb.span.end_char == ending.span.start_char
+            && ending.span.end_char == marker.span.start_char
+            && faberline_nlp::lexicon::lookup_ja(&surface).is_some_and(|entry| {
+                entry.upos_candidates.contains(&Upos::Verb)
+                    && entry.infl == Some("ichidan")
+                    && entry.counterpart.as_deref().is_some_and(|meaning| {
+                        !meaning.starts_with('能') && !meaning.starts_with("可以")
+                    })
+            })
+        {
+            let mut whole = verb.clone();
+            whole.surface = surface.clone();
+            whole.lemma = Some(surface);
+            whole.span.end_char = ending.span.end_char;
+            atoms.splice(index..index + 2, [whole]);
+        }
+        index += 1;
+    }
+}
+
+fn is_prohibitive_verb_base(verb: &Atom) -> bool {
+    !verb.is_locked
+        && verb.doc_tok_idx.is_some()
+        && matches!(verb.upos, Some(Upos::Verb | Upos::Aux))
+        && verb
+            .surface
+            .ends_with(['う', 'く', 'ぐ', 'す', 'つ', 'ぬ', 'ぶ', 'む', 'る'])
+        && !is_ambiguous_potential(&verb.surface)
+}
+
+// A whole-token potential may have no embedded gloss. Keep the known motion
+// potential ambiguous; do not infer ability from spelling alone, because a
+// separate ichidan verb can have the same shape as a godan potential.
+pub(crate) fn is_ambiguous_potential(surface: &str) -> bool {
+    matches!(surface, "動ける" | "うごける")
+        || faberline_nlp::lexicon::lookup_ja(surface).is_some_and(|entry| {
+            entry
+                .counterpart
+                .as_deref()
+                .is_some_and(|meaning| meaning.starts_with('能') || meaning.starts_with("可以"))
+        })
+}
+
+// A precipitation or self-closing event with its own physical subject does
+// not establish an action controlled by the addressee.
+pub(crate) fn has_nonvolitional_subject(verb: &str, subject: &str) -> bool {
+    (verb == "降る" && matches!(subject, "雨" | "雪" | "雹" | "霰" | "霙" | "みぞれ"))
+        || (verb == "吹く" && subject == "風")
+        || (matches!(verb, "晴れる" | "曇る") && matches!(subject, "天気" | "空"))
+        || (verb == "閉まる" && !is_explicit_second_person(subject))
+        || (verb == "壊れる"
+            && matches!(
+                subject,
+                "機械" | "機器" | "装置" | "車" | "時計" | "窓" | "ドア" | "扉"
+            ))
+}
+
+// These event cues describe how the subject itself changes. A topic alone,
+// or a causal particle used as an instrument, does not establish that.
+pub(crate) fn is_natural_event(verb: &str, subject: &str, event_context: &str) -> bool {
+    if is_explicit_second_person(subject) {
+        return false;
+    }
+    (verb == "開く"
+        && matches!(subject, "ドア" | "扉" | "門" | "窓")
+        && event_context.contains("自動で"))
+        || (verb == "動く"
+            && matches!(subject, "機械" | "機器" | "装置")
+            && event_context.contains("静かに"))
+        || (verb == "倒れる"
+            && matches!(subject, "棚" | "建物" | "木" | "柱")
+            && (event_context.contains("重みで") || event_context.contains("重量で")))
+        || (verb == "縮む"
+            && matches!(subject, "布" | "生地" | "服")
+            && (event_context.contains("日に当たると") || event_context.contains("日光に当たると")))
+        || (verb == "荒れる" && matches!(subject, "海" | "海面" | "海上"))
+}
+
+// These existing natural-event readings depend on a modifier such as
+// 自動で or 静かに. Without that evidence their role is unresolved.
+fn natural_event_needs_modifier(verb: &str, subject: &str) -> bool {
+    match verb {
+        "開く" => matches!(subject, "ドア" | "扉" | "門" | "窓"),
+        "動く" => matches!(subject, "機械" | "機器" | "装置"),
+        "倒れる" => matches!(subject, "棚" | "建物" | "木" | "柱"),
+        "縮む" => matches!(subject, "布" | "生地" | "服"),
+        _ => false,
+    }
+}
+
+fn prohibitive_pair(verb: &Atom, marker: &Atom) -> bool {
+    is_prohibitive_verb_base(verb)
+        && !marker.is_locked
+        && marker.upos == Some(Upos::Part)
+        && marker.surface == "な"
+        && marker.span.start_char == verb.span.end_char
+        && marker.head == verb.doc_tok_idx
+}
+
+pub(crate) fn is_explicit_second_person(surface: &str) -> bool {
+    matches!(
+        surface,
+        "あなた" | "貴方" | "あんた" | "お前" | "おまえ" | "君" | "きみ" | "貴様"
+    )
+}
+
+// The top opener's position identifies its entire enclosing quote stack.
+pub(crate) fn quote_scope_relation_from(
+    chars: &[char],
+    start: usize,
+    left: usize,
+    right: usize,
+    opaque: &[faberline_nlp::doc::Opaque],
+) -> Option<bool> {
+    quote_scope_relation_inner(chars, start, left, right, |index| {
+        opaque_contains(opaque, index)
+    })
+}
+
+pub(crate) fn quote_scope_relations_from(
+    chars: &[char],
+    start: usize,
+    positions: &[usize],
+    right: usize,
+    opaque: &[faberline_nlp::doc::Opaque],
+) -> Option<Vec<bool>> {
+    quote_scope_relations_inner(chars, start, positions, right, |index| {
+        opaque_contains(opaque, index)
+    })
+}
+
+fn opaque_contains(opaque: &[faberline_nlp::doc::Opaque], index: usize) -> bool {
+    let next = opaque.partition_point(|span| span.span.end_char <= index);
+    opaque
+        .get(next)
+        .is_some_and(|span| span.span.start_char <= index && index < span.span.end_char)
+}
+
+fn document_quote_scope(doc: &Document, chars: &[char], left: usize, right: usize) -> bool {
+    let paragraphs = &doc.segmentation.paragraphs;
+    let index = paragraphs.partition_point(|paragraph| paragraph.span.end_char <= left);
+    if !paragraphs.get(index).is_some_and(|paragraph| {
+        paragraph.span.start_char <= left && right <= paragraph.span.end_char
+    }) {
+        return false;
+    }
+    relative_document_quote_scope(chars, left, right, |index| {
+        opaque_contains(&doc.segmentation.opaque, index)
+    })
+}
+
+// Only scan between the two events. A closing mark without an opening mark
+// in this interval leaves the current outer quotation, so the scopes differ.
+fn relative_document_quote_scope(
+    chars: &[char],
+    left: usize,
+    right: usize,
+    is_opaque: impl Fn(usize) -> bool,
+) -> bool {
+    if left > right || right > chars.len() || is_opaque(right) {
+        return false;
+    }
+    let mut stack = Vec::new();
+    for (index, &ch) in chars.iter().enumerate().take(right).skip(left) {
+        if is_opaque(index) {
+            continue;
+        }
+        if ch == '’' && is_word_apostrophe(chars, index) {
+            continue;
+        }
+        match ch {
+            '「' | '『' | '“' | '‘' => stack.push(ch),
+            '’' if stack.last() != Some(&'‘') => return false,
+            '」' | '』' | '”' | '’' => {
+                let expected = match ch {
+                    '」' => '「',
+                    '』' => '『',
+                    '”' => '“',
+                    _ => '‘',
+                };
+                if stack.pop() != Some(expected) {
+                    return false;
+                }
+            }
+            // An ASCII quote can open or close an outer quotation.
+            '"' | '`' | '\\' => return false,
+            _ => {}
+        }
+    }
+    stack.is_empty()
+}
+
+fn is_word_apostrophe(chars: &[char], index: usize) -> bool {
+    index
+        .checked_sub(1)
+        .and_then(|previous| chars.get(previous))
+        .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        && chars
+            .get(index + 1)
+            .is_some_and(|ch| ch.is_ascii_alphanumeric())
+}
+
+fn quote_scope_relation_inner(
+    chars: &[char],
+    start: usize,
+    left: usize,
+    right: usize,
+    is_opaque: impl Fn(usize) -> bool,
+) -> Option<bool> {
+    quote_scope_relations_inner(chars, start, &[left], right, is_opaque)?
+        .first()
+        .copied()
+}
+
+fn quote_scope_relations_inner(
+    chars: &[char],
+    start: usize,
+    positions: &[usize],
+    right: usize,
+    is_opaque: impl Fn(usize) -> bool,
+) -> Option<Vec<bool>> {
+    if start > right
+        || right > chars.len()
+        || positions
+            .iter()
+            .any(|&pos| pos < start || pos > right || is_opaque(pos))
+        || positions.windows(2).any(|pair| pair[0] > pair[1])
+        || is_opaque(right)
+    {
+        return None;
+    }
+    let mut stack: Vec<(char, usize)> = Vec::new();
+    let mut scopes = Vec::with_capacity(positions.len());
+    let mut next = 0;
+    for (index, &ch) in chars.iter().enumerate().take(right).skip(start) {
+        while positions.get(next) == Some(&index) {
+            scopes.push(stack.last().map(|(_, open)| *open));
+            next += 1;
+        }
+        if is_opaque(index) {
+            continue;
+        }
+        if ch == '’' && is_word_apostrophe(chars, index) {
+            continue;
+        }
+        match ch {
+            '「' | '『' | '“' | '‘' => stack.push((ch, index)),
+            '’' if stack.last().is_none_or(|(open, _)| *open != '‘') => return None,
+            '」' | '』' | '”' | '’' => {
+                let expected = match ch {
+                    '」' => '「',
+                    '』' => '『',
+                    '”' => '“',
+                    _ => '‘',
+                };
+                if stack.pop().is_none_or(|(open, _)| open != expected) {
+                    return None;
+                }
+            }
+            '"' => {
+                if stack.last().is_some_and(|(open, _)| *open == '"') {
+                    stack.pop();
+                } else {
+                    stack.push(('"', index));
+                }
+            }
+            // Opaque or escaped content needs its own source-range handling.
+            '`' | '\\' => return None,
+            _ => {}
+        }
+    }
+    while positions.get(next) == Some(&right) {
+        scopes.push(stack.last().map(|(_, open)| *open));
+        next += 1;
+    }
+    if next != positions.len() {
+        return None;
+    }
+    let current_scope = stack.last().map(|(_, open)| *open);
+    Some(
+        scopes
+            .into_iter()
+            .map(|scope| scope == current_scope)
+            .collect(),
+    )
+}
+
+fn has_prior_vocative(doc: &Document, ctx: &ClauseDiscourseCtx<'_>, verb: &Atom) -> bool {
+    let Some(sentence_idx) = verb
+        .doc_tok_idx
+        .and_then(|index| doc.tokens.get(index))
+        .map(|token| token.sentence)
+    else {
+        return false;
+    };
+    let edges = syntax_for_sentence(doc, sentence_idx);
+    let positions: Vec<usize> = edges
+        .iter()
+        .filter(|edge| edge.deprel == "discourse")
+        .filter_map(|edge| {
+            let token = doc.tokens.get(edge.token)?;
+            let head = edge.head?;
+            let word = doc.tokens.get(head)?;
+            let head_edge = edges.binary_search_by_key(&head, |item| item.token).ok()?;
+            (token.span.end_char <= verb.span.start_char
+                && ctx
+                    .source_chars
+                    .get(token.span.start_char..token.span.end_char)
+                    == Some(&['よ'][..])
+                && matches!(word.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+                && (edges[head_edge].deprel == "nmod"
+                    || (edges[head_edge].deprel == "obl"
+                        && !edges
+                            .iter()
+                            .any(|case| case.head == Some(head) && case.deprel == "case"))))
+            .then_some(token.span.start_char)
+        })
+        .collect();
+    if positions.is_empty() {
+        return false;
+    }
+    has_same_scope_prior_position(
+        ctx.source_chars,
+        &positions,
+        verb.span.start_char,
+        &doc.segmentation.opaque,
+    )
+}
+
+// Scan backwards once. A complete inner quote is skipped; crossing the
+// opener of the current quote makes every earlier candidate out of scope.
+fn has_same_scope_prior_position(
+    chars: &[char],
+    positions: &[usize],
+    right: usize,
+    opaque: &[faberline_nlp::doc::Opaque],
+) -> bool {
+    if right > chars.len() || positions.is_empty() || positions.windows(2).any(|p| p[0] > p[1]) {
+        return false;
+    }
+    let mut next = positions.len();
+    let mut closers = Vec::new();
+    for index in (positions[0]..right).rev() {
+        if !opaque_contains(opaque, index) {
+            let ch = chars[index];
+            if ch != '’' || !is_word_apostrophe(chars, index) {
+                match ch {
+                    '」' => closers.push('「'),
+                    '』' => closers.push('『'),
+                    '”' => closers.push('“'),
+                    '’' => closers.push('‘'),
+                    '「' | '『' | '“' | '‘' => {
+                        if closers.pop() != Some(ch) {
+                            return false;
+                        }
+                    }
+                    '"' => {
+                        if closers.last() == Some(&'"') {
+                            closers.pop();
+                        } else {
+                            closers.push('"');
+                        }
+                    }
+                    '`' | '\\' => return false,
+                    _ => {}
+                }
+            }
+        }
+        while next > 0 && positions[next - 1] == index {
+            if closers.is_empty() {
+                return true;
+            }
+            next -= 1;
+        }
+    }
+    false
+}
+
+fn syntax_for_sentence(doc: &Document, sentence: usize) -> &[faberline_nlp::doc::SyntaxToken] {
+    let first = doc.syntax.partition_point(|edge| edge.sentence < sentence);
+    let end = doc.syntax.partition_point(|edge| edge.sentence <= sentence);
+    &doc.syntax[first..end]
+}
+
+fn tokens_for_sentence(doc: &Document, sentence: usize) -> &[Token] {
+    let first = doc
+        .tokens
+        .partition_point(|token| token.sentence < sentence);
+    let end = doc
+        .tokens
+        .partition_point(|token| token.sentence <= sentence);
+    &doc.tokens[first..end]
+}
+
+fn event_is_negated_or_questioned(
+    doc: &Document,
+    edges: &[faberline_nlp::doc::SyntaxToken],
+    event: usize,
+    chars: &[char],
+) -> bool {
+    edges.iter().any(|edge| {
+        let Some(token) = doc.tokens.get(edge.token) else {
+            return false;
+        };
+        let negative = edge.head == Some(event)
+            && (matches!(token.upos, Some(Upos::Aux | Upos::Sconj))
+                && matches!(
+                    token.lemma.as_deref(),
+                    Some("ない" | "ぬ" | "ず" | "ません")
+                )
+                || (token.upos == Some(Upos::Aux)
+                    && chars.get(token.span.start_char..token.span.end_char) == Some(&['ん'][..])
+                    && edge.token.checked_sub(1).is_some_and(|previous| {
+                        doc.tokens.get(previous).is_some_and(|previous_token| {
+                            previous_token.span.end_char == token.span.start_char
+                                && chars.get(
+                                    previous_token.span.start_char..previous_token.span.end_char,
+                                ) == Some(&['ま', 'せ'][..])
+                                && edges
+                                    .iter()
+                                    .any(|item| item.token == previous && item.head == Some(event))
+                        })
+                    })));
+        let question = edge.deprel == "discourse"
+            && token.upos == Some(Upos::Part)
+            && chars.get(token.span.start_char..token.span.end_char) == Some(&['か'][..])
+            && {
+                let mut head = edge.head;
+                let mut linked = false;
+                for _ in 0..3 {
+                    let Some(id) = head else { break };
+                    if id == event {
+                        linked = true;
+                        break;
+                    }
+                    head = edges
+                        .binary_search_by_key(&id, |item| item.token)
+                        .ok()
+                        .and_then(|index| {
+                            let parent = &edges[index];
+                            matches!(parent.deprel.as_str(), "aux" | "obl" | "mark" | "cop")
+                                .then_some(parent.head)
+                                .flatten()
+                        });
+                }
+                linked
+            };
+        negative || question
+    })
+}
+
+fn has_weather_forecast(source: &[Atom], doc: &Document, ctx: &ClauseDiscourseCtx<'_>) -> bool {
+    if ctx.source_chars.is_empty() {
+        return false;
+    }
+    let [prefix @ .., verb, marker] = core_non_punct(source) else {
+        return false;
+    };
+    if verb.surface != "降る" || marker.surface != "な" {
+        return false;
+    }
+    let Some(action_id) = verb.doc_tok_idx else {
+        return false;
+    };
+    let Some(action) = doc
+        .tokens
+        .get(action_id)
+        .filter(|token| token.span == verb.span)
+    else {
+        return false;
+    };
+    let linked = |atom: &Atom, head: usize, relation: &str| {
+        atom.doc_tok_idx.is_some_and(|id| {
+            !atom.is_locked
+                && atom.head == Some(head)
+                && atom.deprel == relation
+                && doc.tokens.get(id).is_some_and(|token| {
+                    token.span == atom.span && token.sentence == action.sentence
+                })
+                && doc.syntax.iter().any(|edge| {
+                    edge.token == id
+                        && edge.sentence == action.sentence
+                        && edge.head == Some(head)
+                        && edge.deprel == relation
+                })
+        })
+    };
+    let space_gap = |left: &Atom, right: &Atom| {
+        ctx.source_chars
+            .get(left.span.end_char..right.span.start_char)
+            .is_some_and(|gap| gap.iter().all(|ch| ch.is_whitespace()))
+    };
+    let forecast = prefix.windows(4).any(|words| {
+        let [weather, forecast, case, topic] = words else {
+            return false;
+        };
+        let Some(forecast_id) = forecast.doc_tok_idx else {
+            return false;
+        };
+        words.iter().all(|word| !word.is_locked)
+            && weather.surface == "天気"
+            && forecast.surface == "予報"
+            && case.surface == "で"
+            && topic.surface == "は"
+            && linked(weather, forecast_id, "compound")
+            && linked(forecast, action_id, &forecast.deprel)
+            && linked(case, forecast_id, "case")
+            && case.upos == Some(Upos::Adp)
+            && linked(topic, forecast_id, "case")
+            && topic.upos == Some(Upos::Adp)
+            && space_gap(weather, forecast)
+            && space_gap(forecast, case)
+            && space_gap(case, topic)
+    }) || prefix.windows(3).any(|words| {
+        let [forecast, case, topic] = words else {
+            return false;
+        };
+        if !forecast.is_locked
+            || case.is_locked
+            || topic.is_locked
+            || case.surface != "で"
+            || topic.surface != "は"
+            || ctx
+                .source_chars
+                .get(forecast.span.start_char..forecast.span.end_char)
+                != Some(&['天', '気', '予', '報'][..])
+            || !ctx.locks.is_some_and(|table| {
+                table.locks.iter().any(|lock| {
+                    lock.mandatory
+                        && lock.source_span == forecast.span
+                        && lock.placeholder == forecast.surface
+                        && matches!(
+                            lock.origin,
+                            LockOrigin::Glossary {
+                                kind: GlossaryKind::DomainTerm,
+                                ..
+                            }
+                        )
+                })
+            })
+        {
+            return false;
+        }
+        let Some(id) = forecast.doc_tok_idx else {
+            return false;
+        };
+        let Some(last) = doc.tokens.get(id) else {
+            return false;
+        };
+        let complete_tokens = last.span == forecast.span
+            || id.checked_sub(1).is_some_and(|first_id| {
+                doc.tokens.get(first_id).is_some_and(|first| {
+                    first.span.start_char == forecast.span.start_char
+                        && first.span.end_char == last.span.start_char
+                        && last.span.end_char == forecast.span.end_char
+                        && first.sentence == last.sentence
+                        && doc.syntax.iter().any(|edge| {
+                            edge.token == first_id
+                                && edge.deprel == "compound"
+                                && edge.head == Some(id)
+                        })
+                })
+            });
+        complete_tokens
+            && last.sentence == action.sentence
+            && doc.syntax.iter().any(|edge| {
+                edge.token == id
+                    && edge.sentence == action.sentence
+                    && edge.head == Some(action_id)
+                    && edge.deprel == forecast.deprel
+            })
+            && forecast.head == Some(action_id)
+            && linked(case, id, "case")
+            && case.upos == Some(Upos::Adp)
+            && linked(topic, id, "case")
+            && topic.upos == Some(Upos::Adp)
+            && space_gap(forecast, case)
+            && space_gap(case, topic)
+    });
+    forecast
+        && !prefix.iter().any(|atom| {
+            prohibition_subject_source(atom, doc, ctx)
+                .is_some_and(|(surface, _)| is_explicit_second_person(&surface))
+        })
+        && !prefix.windows(2).any(|pair| {
+            let [subject, case] = pair else { return false };
+            subject.is_locked
+                && !case.is_locked
+                && matches!(case.surface.as_str(), "は" | "が" | "に")
+                && prohibition_subject_source(subject, doc, ctx).is_none()
+        })
+        && document_quote_scope(
+            doc,
+            ctx.source_chars,
+            verb.span.start_char,
+            verb.span.start_char,
+        )
+        && !has_prior_vocative(doc, ctx, verb)
+}
+
+// A complete domain glossary lock can retain a known time role. The source
+// token, dependency and any attached case must all remain in this clause.
+fn locked_weather_time(
+    atom: &Atom,
+    next: Option<&Atom>,
+    verb: &Atom,
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx,
+    adverb_only: bool,
+) -> bool {
+    if !atom.is_locked {
+        return false;
+    }
+    let Some((surface, false)) = prohibition_subject_source(atom, doc, ctx) else {
+        return false;
+    };
+    let (Some(id), Some(action_id)) = (atom.doc_tok_idx, verb.doc_tok_idx) else {
+        return false;
+    };
+    let (Some(token), Some(action)) = (doc.tokens.get(id), doc.tokens.get(action_id)) else {
+        return false;
+    };
+    if token.sentence != action.sentence
+        || atom.head != Some(action_id)
+        || !doc.syntax.iter().any(|edge| {
+            edge.token == id
+                && edge.sentence == token.sentence
+                && edge.head == Some(action_id)
+                && edge.deprel == atom.deprel
+        })
+    {
+        return false;
+    }
+    if token.upos == Some(Upos::Adv) && atom.deprel == "advmod" {
+        return surface == "そろそろ"
+            || faberline_nlp::lexicon::lookup_ja(&surface)
+                .is_some_and(|entry| entry.sem_class == Some(SemanticClass::Time));
+    }
+    !adverb_only
+        && matches!(surface.as_str(), "明日" | "今日" | "今夜")
+        && matches!(atom.deprel.as_str(), "nsubj" | "obl")
+        && next.is_some_and(|case| {
+            !case.is_locked
+                && matches!(case.surface.as_str(), "は" | "も")
+                && case.upos == Some(Upos::Adp)
+                && case.deprel == "case"
+                && case.head == Some(id)
+                && case.span.start_char == atom.span.end_char
+        })
+}
+
+// A stated rain-cloud event can ground the immediately following observation.
+// Require the subject and its predicate to be linked in the prior sentence;
+// an unrelated cloud mention or a different quotation is insufficient.
+fn has_weather_cloud_context(
+    source: &[Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx<'_>,
+) -> bool {
+    let [prefix @ .., verb, marker] = core_non_punct(source) else {
+        return false;
+    };
+    if verb.surface != "降る"
+        || marker.surface != "な"
+        || prefix.is_empty()
+        || !prefix.iter().enumerate().all(|(index, atom)| {
+            (!atom.is_locked
+                && atom.upos == Some(Upos::Adv)
+                && atom.deprel == "advmod"
+                && atom.head == verb.doc_tok_idx
+                && (atom.surface == "そろそろ"
+                    || faberline_nlp::lexicon::lookup_ja(&atom.surface)
+                        .is_some_and(|entry| entry.sem_class == Some(SemanticClass::Time))))
+                || locked_weather_time(atom, prefix.get(index + 1), verb, doc, ctx, true)
+        })
+        || has_prior_vocative(doc, ctx, verb)
+    {
+        return false;
+    }
+    let Some(sentence_idx) = verb
+        .doc_tok_idx
+        .and_then(|index| doc.tokens.get(index))
+        .map(|token| token.sentence)
+    else {
+        return false;
+    };
+    let Some(previous_idx) = sentence_idx.checked_sub(1) else {
+        return false;
+    };
+    let Some(previous) = doc.segmentation.sentences.get(previous_idx) else {
+        return false;
+    };
+    let Some(current) = doc.segmentation.sentences.get(sentence_idx) else {
+        return false;
+    };
+    if previous.paragraph != current.paragraph {
+        return false;
+    }
+    let edges = syntax_for_sentence(doc, previous_idx);
+    edges.iter().any(|subject_edge| {
+        if subject_edge.deprel != "nsubj" {
+            return false;
+        }
+        let Some(subject) = doc.tokens.get(subject_edge.token) else {
+            return false;
+        };
+        let Some(predicate_id) = subject_edge.head else {
+            return false;
+        };
+        let Some(predicate) = doc.tokens.get(predicate_id) else {
+            return false;
+        };
+        let Some(subject_chars) = ctx
+            .source_chars
+            .get(subject.span.start_char..subject.span.end_char)
+        else {
+            return false;
+        };
+        let is_rain_cloud = subject_chars == ['雨', '雲']
+            || (subject_chars == ['雲']
+                && edges.iter().any(|compound| {
+                    compound.deprel == "compound"
+                        && compound.head == Some(subject_edge.token)
+                        && doc.tokens.get(compound.token).is_some_and(|word| {
+                            word.span.end_char == subject.span.start_char
+                                && ctx
+                                    .source_chars
+                                    .get(word.span.start_char..word.span.end_char)
+                                    == Some(&['雨'][..])
+                        })
+                }));
+        is_rain_cloud
+            && predicate.lemma.as_deref() == Some("広がる")
+            && edges
+                .iter()
+                .any(|root| root.token == predicate_id && root.deprel == "root")
+            && !event_is_negated_or_questioned(doc, edges, predicate_id, ctx.source_chars)
+            && document_quote_scope(
+                doc,
+                ctx.source_chars,
+                predicate.span.end_char,
+                verb.span.start_char,
+            )
+    })
+}
+
+// A forecaster's quoted judgment can be tied to the cloud radar that the same
+// person observed. Do not use a person's job title or another quote alone.
+fn has_reported_weather_judgment(
+    source: &[Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx<'_>,
+) -> bool {
+    let [prefix @ .., verb, marker] = core_non_punct(source) else {
+        return false;
+    };
+    if verb.surface != "降る"
+        || marker.surface != "な"
+        || !prefix.iter().enumerate().all(|(index, atom)| {
+            (!atom.is_locked
+                && (matches!(
+                    atom.surface.as_str(),
+                    "明日" | "今日" | "今夜" | "は" | "も"
+                ) || (atom.upos == Some(Upos::Adv)
+                    && atom.deprel == "advmod"
+                    && atom.head == verb.doc_tok_idx)))
+                || locked_weather_time(atom, prefix.get(index + 1), verb, doc, ctx, false)
+        })
+        || has_prior_vocative(doc, ctx, verb)
+    {
+        return false;
+    }
+    let Some(action_id) = verb.doc_tok_idx else {
+        return false;
+    };
+    let Some(action) = doc.tokens.get(action_id) else {
+        return false;
+    };
+    let edges = syntax_for_sentence(doc, action.sentence);
+    let edge = |id| {
+        edges
+            .binary_search_by_key(&id, |edge| edge.token)
+            .ok()
+            .map(|index| &edges[index])
+    };
+    let Some(report_id) = edge(action_id).and_then(|edge| edge.head) else {
+        return false;
+    };
+    let Some(report) = doc.tokens.get(report_id) else {
+        return false;
+    };
+    if report.lemma.as_deref() != Some("判断する")
+        || !edge(report_id).is_some_and(|edge| edge.deprel == "root")
+        || event_is_negated_or_questioned(doc, edges, report_id, ctx.source_chars)
+    {
+        return false;
+    }
+    let Some(&open) = prefix
+        .first()
+        .and_then(|first| first.span.start_char.checked_sub(1))
+        .and_then(|index| ctx.source_chars.get(index))
+    else {
+        return false;
+    };
+    let close = match open {
+        '「' => '」',
+        '『' => '』',
+        _ => return false,
+    };
+    let Some(tail) = ctx.source_chars.get(marker.span.end_char..) else {
+        return false;
+    };
+    let mut offset = 0;
+    while tail.get(offset).is_some_and(|ch| ch.is_whitespace()) {
+        offset += 1;
+    }
+    if tail.get(offset) != Some(&close) {
+        return false;
+    }
+    offset += 1;
+    while tail.get(offset).is_some_and(|ch| ch.is_whitespace()) {
+        offset += 1;
+    }
+    let to_start = marker.span.end_char + offset;
+    if tail.get(offset) != Some(&'と')
+        || !edges.iter().any(|item| {
+            item.head == Some(report_id)
+                && doc.tokens.get(item.token).is_some_and(|token| {
+                    token.span.start_char == to_start && token.span.end_char == to_start + 1
+                })
+        })
+    {
+        return false;
+    }
+    let compound_is = |head: usize, expected: &str| {
+        let Some(word) = doc.tokens.get(head) else {
+            return false;
+        };
+        let Some(start) = word.span.end_char.checked_sub(expected.chars().count()) else {
+            return false;
+        };
+        let Some(surface) = ctx.source_chars.get(start..word.span.end_char) else {
+            return false;
+        };
+        if !surface.iter().copied().eq(expected.chars())
+            || (start..word.span.end_char)
+                .any(|index| opaque_contains(&doc.segmentation.opaque, index))
+        {
+            return false;
+        }
+        let first = doc
+            .tokens
+            .partition_point(|token| token.span.end_char <= start);
+        doc.tokens[first..]
+            .iter()
+            .enumerate()
+            .take_while(|(_, token)| token.span.start_char < word.span.end_char)
+            .all(|(offset, token)| {
+                let id = first + offset;
+                token.span.start_char >= start
+                    && token.span.end_char <= word.span.end_char
+                    && (id == head
+                        || edge(id).is_some_and(|edge| {
+                            edge.deprel == "compound" && edge.head == Some(head)
+                        }))
+            })
+    };
+    edges.iter().any(|subject| {
+        subject.deprel == "nsubj"
+            && matches!(subject.head, Some(head) if head == action_id || head == report_id)
+            && compound_is(subject.token, "気象予報士")
+            && edges.iter().any(|observed| {
+                observed.deprel == "acl"
+                    && observed.head == Some(subject.token)
+                    && !event_is_negated_or_questioned(doc, edges, observed.token, ctx.source_chars)
+                    && doc
+                        .tokens
+                        .get(observed.token)
+                        .is_some_and(|token| token.lemma.as_deref() == Some("見る"))
+                    && edges.iter().any(|object| {
+                        object.deprel == "obj"
+                            && object.head == Some(observed.token)
+                            && compound_is(object.token, "雨雲レーダー")
+                    })
+            })
+    })
+}
+
+// Keep the existing output when an adjacent sky statement leaves the omitted
+// subject ambiguous. This does not resolve an unstated speaker or event.
+fn has_ambiguous_sky_context(
+    source: &[Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx<'_>,
+) -> bool {
+    let core = core_non_punct(source);
+    let [prefix @ .., verb, marker] = core else {
+        return false;
+    };
+    if verb.surface != "降る"
+        || marker.surface != "な"
+        || !prefix.iter().enumerate().all(|(index, atom)| {
+            (!atom.is_locked
+                && matches!(
+                    atom.surface.as_str(),
+                    "明日" | "今日" | "今夜" | "は" | "も"
+                ))
+                || locked_weather_time(atom, prefix.get(index + 1), verb, doc, ctx, false)
+        })
+    {
+        return false;
+    }
+    let Some(sentence_idx) = verb
+        .doc_tok_idx
+        .and_then(|index| doc.tokens.get(index))
+        .map(|token| token.sentence)
+    else {
+        return false;
+    };
+    let Some(previous_idx) = sentence_idx.checked_sub(1) else {
+        return false;
+    };
+    let Some(previous) = doc.segmentation.sentences.get(previous_idx) else {
+        return false;
+    };
+    let Some(current) = doc.segmentation.sentences.get(sentence_idx) else {
+        return false;
+    };
+    if previous.paragraph != current.paragraph {
+        return false;
+    }
+    // The caller can split a vocative into an earlier clause in this same
+    // sentence. Do not lose that explicit addressee at the clause boundary.
+    if has_prior_vocative(doc, ctx, verb) {
+        return false;
+    }
+    let previous_edges = syntax_for_sentence(doc, previous_idx);
+    previous_edges.iter().any(|edge| {
+        if edge.deprel != "nsubj" {
+            return false;
+        }
+        let Some(subject) = doc.tokens.get(edge.token) else {
+            return false;
+        };
+        let Some(predicate) = edge.head.and_then(|head| doc.tokens.get(head)) else {
+            return false;
+        };
+        let Some(subject_chars) = ctx
+            .source_chars
+            .get(subject.span.start_char..subject.span.end_char)
+        else {
+            return false;
+        };
+        let Some(predicate_chars) = ctx
+            .source_chars
+            .get(predicate.span.start_char..predicate.span.end_char)
+        else {
+            return false;
+        };
+        subject_chars == ['空']
+            && document_quote_scope(
+                doc,
+                ctx.source_chars,
+                predicate.span.end_char,
+                verb.span.start_char,
+            )
+            && edge.head.is_some_and(|head| {
+                previous_edges.iter().any(|predicate_edge| {
+                    predicate_edge.token == head
+                        && predicate_edge.sentence == previous_idx
+                        && predicate_edge.deprel == "root"
+                })
+            })
+            && !tokens_for_sentence(doc, previous_idx)
+                .iter()
+                .any(|token| matches!(token.upos, Some(Upos::Verb | Upos::Aux)))
+            && (predicate.lemma.as_deref() == Some("暗い") || predicate_chars == ['暗', 'い'])
+    })
+}
+
+// Read a locked subject only when its complete source token and glossary
+// origin are known. Opaque and partial locks do not establish a role.
+fn prohibition_subject_source(
+    atom: &Atom,
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx,
+) -> Option<(String, bool)> {
+    if !atom.is_locked {
+        return Some((atom.surface.clone(), false));
+    }
+    let token = doc.tokens.get(atom.doc_tok_idx?)?;
+    if token.span != atom.span {
+        return None;
+    }
+    let lock = ctx.locks?.locks.iter().find(|lock| {
+        lock.mandatory && lock.source_span == atom.span && lock.placeholder == atom.surface
+    })?;
+    let actor = match &lock.origin {
+        LockOrigin::Glossary {
+            kind: GlossaryKind::Actor,
+            ..
+        } => true,
+        LockOrigin::Glossary {
+            kind: GlossaryKind::DomainTerm,
+            ..
+        } => false,
+        _ => return None,
+    };
+    let chars = ctx
+        .source_chars
+        .get(atom.span.start_char..atom.span.end_char)?;
+    Some((chars.iter().collect(), actor))
+}
+
+fn prohibitive_verb<'a>(
+    atoms: &'a [Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx,
+) -> Option<&'a Atom> {
+    prohibitive_verb_with_reporter(atoms, doc, ctx, false)
+}
+
+fn prohibitive_report_verb<'a>(
+    atoms: &'a [Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx,
+) -> Option<&'a Atom> {
+    prohibitive_verb_with_reporter(atoms, doc, ctx, true)
+}
+
+fn prohibitive_verb_with_reporter<'a>(
+    atoms: &'a [Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx,
+    has_reporter: bool,
+) -> Option<&'a Atom> {
+    let (body, emphatic) = match atoms {
+        [body @ .., tail] if !tail.is_locked && tail.surface == "よ" => (body, true),
+        _ => (atoms, false),
+    };
+    let [prefix @ .., verb, marker] = body else {
+        return None;
+    };
+    let belongs_to_event = |subject: &Atom| {
+        subject.head == verb.doc_tok_idx
+            || prefix.iter().any(|parent| {
+                parent.doc_tok_idx == subject.head
+                    && parent.head == verb.doc_tok_idx
+                    && parent.deprel == "advcl"
+                    && prohibition_subject_source(parent, doc, ctx)
+                        .is_some_and(|(surface, actor)| !actor && surface == "静か")
+            })
+    };
+    // An unverified subject cannot safely be treated as either an addressee
+    // or an observed event. Preserve the unknown state.
+    if prefix.windows(2).any(|pair| {
+        let [subject, case] = pair else { return false };
+        subject.is_locked
+            && !case.is_locked
+            && matches!(case.surface.as_str(), "は" | "が")
+            && ((subject.deprel == "nsubj"
+                && belongs_to_event(subject)
+                && case.head == subject.doc_tok_idx)
+                || subject.doc_tok_idx.is_none()
+                || subject.head.is_none()
+                || case.head.is_none())
+            && prohibition_subject_source(subject, doc, ctx).is_none()
+    }) {
+        return None;
+    }
+    let known_addressee = prefix.iter().any(|atom| {
+        prohibition_subject_source(atom, doc, ctx)
+            .is_some_and(|(surface, _)| is_explicit_second_person(&surface))
+    });
+    // An opaque modifier can hide the evidence for an existing natural-event
+    // reading. Limit the fallback to a linked subject and those predicates.
+    if prefix.iter().any(|modifier| {
+        modifier.is_locked
+            && prohibition_subject_source(modifier, doc, ctx).is_none()
+            && doc.syntax.iter().any(|edge| {
+                edge.head == verb.doc_tok_idx
+                    && matches!(edge.deprel.as_str(), "advcl" | "advmod" | "obl")
+                    && doc.tokens.get(edge.token).is_some_and(|token| {
+                        modifier.span.start_char <= token.span.start_char
+                            && token.span.end_char <= modifier.span.end_char
+                    })
+            })
+            && prefix.windows(2).any(|pair| {
+                let [subject, case] = pair else { return false };
+                let linked = subject.head == verb.doc_tok_idx
+                    || subject.head.is_some_and(|head| {
+                        doc.tokens.get(head).is_some_and(|token| {
+                            modifier.span.start_char <= token.span.start_char
+                                && token.span.end_char <= modifier.span.end_char
+                        }) && doc
+                            .syntax
+                            .iter()
+                            .any(|edge| edge.token == head && edge.head == verb.doc_tok_idx)
+                    });
+                subject.deprel == "nsubj"
+                    && linked
+                    && !case.is_locked
+                    && matches!(case.surface.as_str(), "は" | "が")
+                    && case.head == subject.doc_tok_idx
+                    && prohibition_subject_source(subject, doc, ctx).is_some_and(
+                        |(surface, actor)| {
+                            !actor
+                                && natural_event_needs_modifier(
+                                    verb.lemma.as_deref().unwrap_or(&verb.surface),
+                                    &surface,
+                                )
+                        },
+                    )
+            })
+    }) {
+        return None;
+    }
+    let reporter = has_reporter
+        .then(|| {
+            prefix.windows(2).position(|pair| {
+                let [subject, case] = pair else {
+                    return false;
+                };
+                subject.deprel == "nsubj"
+                    && subject.head == verb.doc_tok_idx
+                    && prohibition_subject_source(subject, doc, ctx).is_some_and(|(_, actor)| {
+                        actor || (!subject.is_locked && is_person_like_atom(subject))
+                    })
+                    && !case.is_locked
+                    && matches!(case.surface.as_str(), "は" | "が")
+                    && case.head == subject.doc_tok_idx
+            })
+        })
+        .flatten();
+    let other_subject = prefix.windows(2).enumerate().any(|(index, pair)| {
+        let [subject, case] = pair else { return false };
+        subject.deprel == "nsubj"
+            && subject.head == verb.doc_tok_idx
+            && !case.is_locked
+            && case.surface == "が"
+            && case.head == subject.doc_tok_idx
+            && prohibition_subject_source(subject, doc, ctx)
+                .is_some_and(|(surface, _)| !is_explicit_second_person(&surface))
+            && Some(index) != reporter
+    });
+    let nonvolitional_subject = prefix.windows(2).any(|pair| {
+        let [subject, case] = pair else { return false };
+        subject.deprel == "nsubj"
+            && subject.head == verb.doc_tok_idx
+            && !case.is_locked
+            && matches!(case.surface.as_str(), "は" | "が")
+            && case.head == subject.doc_tok_idx
+            && prohibition_subject_source(subject, doc, ctx).is_some_and(|(surface, actor)| {
+                !actor
+                    && has_nonvolitional_subject(
+                        verb.lemma.as_deref().unwrap_or(&verb.surface),
+                        &surface,
+                    )
+            })
+    });
+    let event_atom = |atom: &Atom| {
+        prohibition_subject_source(atom, doc, ctx)
+            .and_then(|(surface, actor)| (!actor).then_some(surface))
+    };
+    let event_upos = |atom: &Atom| {
+        if atom.is_locked {
+            atom.doc_tok_idx
+                .and_then(|id| doc.tokens.get(id))
+                .and_then(|token| token.upos)
+        } else {
+            atom.upos
+        }
+    };
+    let direct_children: Vec<usize> = prefix
+        .iter()
+        .filter(|atom| {
+            atom.head == verb.doc_tok_idx
+                && !matches!(event_upos(atom), Some(Upos::Verb | Upos::Aux))
+                && event_atom(atom)
+                    .is_some_and(|surface| atom.deprel != "advcl" || surface == "静か")
+        })
+        .filter_map(|atom| atom.doc_tok_idx)
+        .collect();
+    let event_context: String = prefix
+        .iter()
+        .filter(|atom| {
+            event_atom(atom).is_some_and(|surface| {
+                (atom.head == verb.doc_tok_idx
+                    && !matches!(event_upos(atom), Some(Upos::Verb | Upos::Aux))
+                    && (atom.deprel != "advcl" || surface == "静か"))
+                    || atom
+                        .head
+                        .is_some_and(|head| direct_children.contains(&head))
+            })
+        })
+        .filter_map(event_atom)
+        .collect();
+    let natural_event = !known_addressee
+        && prefix.windows(2).any(|pair| {
+            let [subject, case] = pair else { return false };
+            subject.deprel == "nsubj"
+                && belongs_to_event(subject)
+                && !case.is_locked
+                && matches!(case.surface.as_str(), "は" | "が")
+                && case.head == subject.doc_tok_idx
+                && prohibition_subject_source(subject, doc, ctx).is_some_and(|(surface, actor)| {
+                    !actor
+                        && is_natural_event(
+                            verb.lemma.as_deref().unwrap_or(&verb.surface),
+                            &surface,
+                            &event_context,
+                        )
+                })
+        });
+    (prohibitive_pair(verb, marker)
+        && !other_subject
+        && !nonvolitional_subject
+        && !natural_event
+        && (emphatic
+            || !prefix
+                .last()
+                .is_some_and(|a| !a.is_locked && a.surface == "よく")))
+    .then_some(verb)
+}
+
+// After a bare verb and before a speech verb, recover な + って when the
+// tokenizer reads なって as the inflection of なる.
+fn normalize_spoken_prohibitive_report(atoms: &mut [Atom]) {
+    for index in 0..atoms.len().saturating_sub(3) {
+        let [verb, merged, te, report] = &atoms[index..index + 4] else {
+            continue;
+        };
+        if !is_prohibitive_verb_base(verb)
+            || merged.is_locked
+            || te.is_locked
+            || report.is_locked
+            || merged.surface != "なっ"
+            || merged.lemma.as_deref() != Some("なる")
+            || te.surface != "て"
+            || !matches!(report.lemma.as_deref(), Some("言う" | "伝える"))
+            || verb.span.end_char != merged.span.start_char
+            || merged.span.end_char != te.span.start_char
+            || te.span.end_char != report.span.start_char
+        {
+            continue;
+        }
+        let head = verb.doc_tok_idx;
+        let boundary = merged.span.start_char + 1;
+        let marker = &mut atoms[index + 1];
+        marker.surface = "な".to_owned();
+        marker.lemma = None;
+        marker.upos = Some(Upos::Part);
+        marker.span.end_char = boundary;
+        marker.head = head;
+        let quote = &mut atoms[index + 2];
+        quote.surface = "と".to_owned();
+        quote.lemma = None;
+        quote.upos = Some(Upos::Adp);
+        quote.span.start_char = boundary;
+    }
+}
+
+fn protected_written_quote(atoms: &[Atom], locks: &SpanLockTable) -> Option<(usize, Atom)> {
+    let lock_for = |atom: &Atom| {
+        locks.locks.iter().find(|lock| {
+            atom.is_locked
+                && lock.origin == LockOrigin::QuotedSource
+                && lock.source_span == atom.span
+                && lock.placeholder == atom.surface
+        })
+    };
+    if let [open, original, close, ..] = atoms
+        && !open.is_locked
+        && !close.is_locked
+        && matches!(
+            (open.surface.as_str(), close.surface.as_str()),
+            ("「", "」") | ("『", "』")
+        )
+        && lock_for(original).is_some()
+    {
+        let mut literal = original.clone();
+        literal.surface = format!("{}{}{}", open.surface, original.surface, close.surface);
+        literal.span = Span {
+            start_char: open.span.start_char,
+            end_char: close.span.end_char,
+        };
+        return Some((3, literal));
+    }
+    // A nested quotation is already locked with its brackets.
+    let first = atoms.first()?;
+    let source = &lock_for(first)?.replacement;
+    matches!(
+        (source.chars().next(), source.chars().next_back()),
+        (Some('「'), Some('」')) | (Some('『'), Some('』'))
+    )
+    .then(|| (1, first.clone()))
+}
+
+// Keep a protected written form with its command, outside the speech splitter.
+fn bind_prohibitive_written_form(atoms: &mut Vec<Atom>, locks: &SpanLockTable) {
+    let mut index = 0;
+    while index < atoms.len() {
+        let Some((quote_len, literal)) = protected_written_quote(&atoms[index..], locks) else {
+            index += 1;
+            continue;
+        };
+        let quote_end = index + quote_len;
+        let Some((quotative, rest)) = atoms[quote_end..].split_first() else {
+            break;
+        };
+        let writer = rest
+            .iter()
+            .take_while(|atom| !atom.is_locked && !is_punct_atom(atom))
+            .position(|atom| atom.upos == Some(Upos::Verb));
+        if !quotative.is_locked
+            && quotative.surface == "と"
+            && quotative.upos == Some(Upos::Adp)
+            && let Some(writer) = writer
+            && let [write, marker, tail @ ..] = &rest[writer..]
+            && write.lemma.as_deref().unwrap_or(&write.surface) == "書く"
+            && prohibitive_pair(write, marker)
+            && tail.first().is_none_or(|atom| {
+                !atom.is_locked
+                    && (is_punct_atom(atom) || matches!(atom.surface.as_str(), "よ" | "と"))
+            })
+        {
+            let mut object_case = quotative.clone();
+            object_case.surface = "を".to_owned();
+            atoms.splice(index..=quote_end, [literal, object_case]);
+        }
+        index += 1;
+    }
+}
+
 fn predicate_is_imperative(b: &Bunsetsu) -> bool {
     b.atoms
         .iter()
@@ -24532,6 +27530,7 @@ fn synthesize_predicate_complex(
     past_until: bool,
     target: TargetVariant,
     transfer: Option<GivingReceivingPredicate>,
+    local_prohibition: Option<usize>,
 ) -> (Vec<String>, String, Vec<String>, bool) {
     if predicates.is_empty() {
         return (Vec::new(), String::new(), Vec::new(), false);
@@ -24542,6 +27541,15 @@ fn synthesize_predicate_complex(
     let mut durative_gloss_index = None;
     let mut post: Vec<String> = Vec::new();
     let mut passive_agent = false;
+
+    let local_until = local_prohibition.and_then(|_| {
+        predicates
+            .iter()
+            .filter(|group| group.role == BunsetsuRole::ProhibitiveUntil)
+            .flat_map(|group| &group.atoms)
+            .find(|atom| !atom.is_locked && atom.surface == "まで" && atom.deprel == "case")
+            .and_then(|atom| atom.doc_tok_idx)
+    });
 
     let all_atoms: Vec<&Atom> = predicates.iter().flat_map(|b| b.atoms.iter()).collect();
     let surfaces: Vec<&str> = all_atoms.iter().map(|a| a.surface.as_str()).collect();
@@ -24813,6 +27821,10 @@ fn synthesize_predicate_complex(
             }
             continue;
         }
+        if a.doc_tok_idx == local_until && local_until.is_some() {
+            cores.push("之前".to_owned());
+            continue;
+        }
         if is_predicate_aux_or_tail(&a.surface) {
             continue;
         }
@@ -24835,8 +27847,11 @@ fn synthesize_predicate_complex(
             .or_else(|| a.surface.strip_suffix("される"))
             .or_else(|| a.surface.strip_suffix("された"))
             .unwrap_or(&a.surface);
-        let tr = translate_single_ja_term(surf_clean, a.lemma.as_deref(), a.upos);
+        let mut tr = translate_single_ja_term(surf_clean, a.lemma.as_deref(), a.upos);
         if !tr.is_empty() {
+            if a.doc_tok_idx == local_prohibition && local_prohibition.is_some() {
+                tr.insert_str(0, "不要");
+            }
             if a.upos == Some(Upos::Verb) && tr.ends_with(['著', '着']) {
                 durative_gloss_index = Some(cores.len());
             }

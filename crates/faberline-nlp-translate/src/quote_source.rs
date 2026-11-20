@@ -1,5 +1,5 @@
 use faberline_nlp::Span;
-use faberline_nlp::doc::{Document, SyntaxToken, Token, Upos};
+use faberline_nlp::doc::{Document, Opaque, SyntaxToken, Token, Upos};
 
 const FORM_NAMES: &[&str] = &[
     "文字数",
@@ -63,6 +63,7 @@ pub(crate) struct WrittenForm {
 struct QuoteSyntax<'a> {
     tokens: &'a [Token],
     dependencies: &'a [SyntaxToken],
+    opaque: &'a [Opaque],
 }
 
 impl<'a> QuoteSyntax<'a> {
@@ -100,6 +101,7 @@ pub(crate) fn plan_written_form_quotes(chars: &[char], doc: &Document) -> Vec<Ve
     let syntax = QuoteSyntax {
         tokens: &doc.tokens,
         dependencies: &doc.syntax,
+        opaque: &segmentation.opaque,
     };
     let mut by_sentence = vec![Vec::new(); segmentation.sentences.len()];
     let sentences = &segmentation.sentences;
@@ -1195,10 +1197,17 @@ fn quotes_exact_writing(
     }
 
     let label = particle == 'と' && is_written_phrase(chars, first_in_quote..end_of_quote, syntax);
+    let prohibition = particle == 'と'
+        && is_written_prohibition(
+            chars,
+            first_in_quote..end_of_quote,
+            syntax,
+            quote.start_char,
+        );
     if states_inscription {
         // 「…」とある states an inscription when it has an explicit surface.
         return FormMatch::when(
-            label
+            (label || prohibition)
                 && writing_surface
                 && matches_written_form(
                     phrase,
@@ -1215,16 +1224,497 @@ fn quotes_exact_writing(
         );
     }
 
+    let instruction = is_writing_instruction(chars, scope, syntax, predicate);
     FormMatch::when(
         unchanged
-            || (label
-                && (is_writing_instruction(chars, scope, syntax, predicate)
+            || (label && instruction)
+            || ((label || prohibition)
+                && ((writing_surface && instruction)
                     || describes_writing(phrase, |tail| {
                         (writing_surface && ends_inscription_statement(tail))
                             || modified_writing_surface(chars, scope, syntax, predicate, tail)
                                 .is_some()
                     }))),
     )
+}
+
+// A command written on a named surface is an inscription even when it has
+// an object. Keep this separate from ordinary quoted propositions and speech.
+fn is_written_prohibition(
+    chars: &[char],
+    tokens: std::ops::Range<usize>,
+    syntax: QuoteSyntax<'_>,
+    quote_start: usize,
+) -> bool {
+    let Some(marker) = tokens.clone().rev().find(|&i| {
+        let word = &syntax.tokens[i];
+        !chars[word.span.start_char..word.span.end_char]
+            .iter()
+            .all(|c| matches!(c, '！' | '!' | '？' | '?' | '。' | '．' | '.'))
+    }) else {
+        return false;
+    };
+    let word = &syntax.tokens[marker];
+    if word.upos != Some(Upos::Part) || chars[word.span.start_char..word.span.end_char] != ['な'] {
+        return false;
+    }
+    let Some(verb) = syntax.head(marker).filter(|head| tokens.contains(head)) else {
+        return false;
+    };
+    let verb_surface: String = chars[syntax.tokens[verb].span.start_char..word.span.start_char]
+        .iter()
+        .collect();
+    if crate::ja_zh::is_ambiguous_potential(&verb_surface) {
+        return false;
+    }
+    if verb_surface == "降る"
+        && (has_ambiguous_quoted_sky_context(chars, tokens.clone(), syntax, verb, quote_start)
+            || has_quoted_weather_forecast(chars, tokens.clone(), syntax, verb, quote_start))
+    {
+        return false;
+    }
+    let other_subject = tokens.clone().any(|i| {
+        let Some(case) = syntax
+            .tokens
+            .get(i + 1)
+            .filter(|_| tokens.contains(&(i + 1)))
+        else {
+            return false;
+        };
+        let subject = &syntax.tokens[i];
+        let is_subject = syntax
+            .dependencies
+            .binary_search_by_key(&i, |edge| edge.token)
+            .ok()
+            .is_some_and(|edge| syntax.dependencies[edge].deprel == "nsubj");
+        is_subject
+            && syntax.head(i) == Some(verb)
+            && syntax.head(i + 1) == Some(i)
+            && chars[case.span.start_char..case.span.end_char] == ['が']
+            && !crate::ja_zh::is_explicit_second_person(
+                &chars[subject.span.start_char..subject.span.end_char]
+                    .iter()
+                    .collect::<String>(),
+            )
+    });
+    let nonvolitional_subject = tokens.clone().any(|i| {
+        let Some(case) = syntax
+            .tokens
+            .get(i + 1)
+            .filter(|_| tokens.contains(&(i + 1)))
+        else {
+            return false;
+        };
+        let subject = &syntax.tokens[i];
+        let is_subject = syntax
+            .dependencies
+            .binary_search_by_key(&i, |edge| edge.token)
+            .ok()
+            .is_some_and(|edge| syntax.dependencies[edge].deprel == "nsubj");
+        let case_surface = &chars[case.span.start_char..case.span.end_char];
+        let subject_surface: String = chars[subject.span.start_char..subject.span.end_char]
+            .iter()
+            .collect();
+        is_subject
+            && syntax.head(i) == Some(verb)
+            && syntax.head(i + 1) == Some(i)
+            && (case_surface == ['は'] || case_surface == ['が'])
+            && crate::ja_zh::has_nonvolitional_subject(
+                syntax.tokens[verb]
+                    .lemma
+                    .as_deref()
+                    .unwrap_or(&verb_surface),
+                &subject_surface,
+            )
+    });
+    let event_context: String = tokens
+        .clone()
+        .filter(|&i| {
+            let mut current = i;
+            for depth in 0..=2 {
+                if current == verb {
+                    return true;
+                }
+                if !tokens.contains(&current)
+                    || matches!(syntax.tokens[current].upos, Some(Upos::Verb | Upos::Aux))
+                {
+                    return false;
+                }
+                if depth == 2
+                    && !syntax.edge(i).is_some_and(|edge| {
+                        matches!(edge.deprel.as_str(), "case" | "compound" | "fixed")
+                    })
+                {
+                    return false;
+                }
+                let Some(head) = syntax.head(current) else {
+                    return false;
+                };
+                current = head;
+            }
+            current == verb
+        })
+        .flat_map(|i| {
+            chars[syntax.tokens[i].span.start_char..syntax.tokens[i].span.end_char].iter()
+        })
+        .collect();
+    let natural_event = tokens.clone().any(|i| {
+        let Some(case) = syntax
+            .tokens
+            .get(i + 1)
+            .filter(|_| tokens.contains(&(i + 1)))
+        else {
+            return false;
+        };
+        let subject = &syntax.tokens[i];
+        let Some(edge) = syntax.edge(i) else {
+            return false;
+        };
+        let attached_to_event = edge.head == Some(verb)
+            || edge
+                .head
+                .filter(|head| tokens.contains(head))
+                .is_some_and(|head| {
+                    let manner = &syntax.tokens[head];
+                    chars[manner.span.start_char..manner.span.end_char] == ['静', 'か']
+                        && matches!(manner.upos, Some(Upos::Adj | Upos::Adv))
+                        && syntax.edge(head).is_some_and(|parent| {
+                            parent.deprel == "advcl" && parent.head == Some(verb)
+                        })
+                        && tokens.clone().any(|j| {
+                            let ending = &syntax.tokens[j];
+                            ending.span.start_char == manner.span.end_char
+                                && chars[ending.span.start_char..ending.span.end_char] == ['に']
+                                && syntax.head(j) == Some(head)
+                        })
+                });
+        let case_surface = &chars[case.span.start_char..case.span.end_char];
+        let subject_surface: String = chars[subject.span.start_char..subject.span.end_char]
+            .iter()
+            .collect();
+        edge.deprel == "nsubj"
+            && attached_to_event
+            && syntax.head(i + 1) == Some(i)
+            && (case_surface == ['は'] || case_surface == ['が'])
+            && !crate::ja_zh::is_explicit_second_person(&subject_surface)
+            && crate::ja_zh::is_natural_event(
+                syntax.tokens[verb]
+                    .lemma
+                    .as_deref()
+                    .unwrap_or(&verb_surface),
+                &subject_surface,
+                &event_context,
+            )
+    });
+    syntax.tokens[verb].upos == Some(Upos::Verb)
+        && !other_subject
+        && !nonvolitional_subject
+        && !natural_event
+        && !verb.checked_sub(1).is_some_and(|i| {
+            i >= tokens.start
+                && syntax.tokens[i].span.end_char <= syntax.tokens[verb].span.start_char
+                && chars[syntax.tokens[i].span.end_char..syntax.tokens[verb].span.start_char]
+                    .iter()
+                    .all(|c| c.is_whitespace())
+                && chars[syntax.tokens[i].span.start_char..syntax.tokens[i].span.end_char]
+                    == ['よ', 'く']
+        })
+        && tokens
+            .clone()
+            .filter(|&i| syntax.tokens[i].upos == Some(Upos::Verb))
+            .count()
+            == 1
+        && marker.checked_sub(1).is_some_and(|i| {
+            i >= tokens.start
+                && syntax.tokens[i].span.end_char == word.span.start_char
+                && if i == verb {
+                    let surface = &chars[syntax.tokens[verb].span.start_char..word.span.start_char];
+                    surface.last().is_some_and(|c| {
+                        matches!(
+                            c,
+                            'う' | 'く' | 'ぐ' | 'す' | 'つ' | 'ぬ' | 'ぶ' | 'む' | 'る'
+                        )
+                    }) && !faberline_nlp::lexicon::lookup_ja(&surface.iter().collect::<String>())
+                        .is_some_and(|entry| {
+                            entry.counterpart.as_deref().is_some_and(|meaning| {
+                                meaning.starts_with('能') || meaning.starts_with("可以")
+                            })
+                        })
+                } else {
+                    let ending = &syntax.tokens[i];
+                    let stem = &syntax.tokens[verb];
+                    ending.upos == Some(Upos::Aux)
+                        && syntax.head(i) == Some(verb)
+                        && stem.span.end_char == ending.span.start_char
+                        && chars[ending.span.start_char..ending.span.end_char] == ['る']
+                        && faberline_nlp::lexicon::lookup_ja(
+                            &chars[stem.span.start_char..ending.span.end_char]
+                                .iter()
+                                .collect::<String>(),
+                        )
+                        .is_some_and(|entry| {
+                            entry.upos_candidates.contains(&Upos::Verb)
+                                && entry.infl == Some("ichidan")
+                                && entry.counterpart.as_deref().is_some_and(|meaning| {
+                                    !meaning.starts_with('能') && !meaning.starts_with("可以")
+                                })
+                        })
+                }
+        })
+}
+
+// An adjacent sky statement inside this quotation does not establish whether
+// an omitted subject is a weather report or a command. Leave it to the normal
+// translation path rather than treating the quotation as a written command.
+fn has_ambiguous_quoted_sky_context(
+    chars: &[char],
+    tokens: std::ops::Range<usize>,
+    syntax: QuoteSyntax<'_>,
+    verb: usize,
+    quote_start: usize,
+) -> bool {
+    let Some(current) = syntax.tokens.get(verb) else {
+        return false;
+    };
+    if !syntax.tokens.get(tokens.start).is_some_and(|token| {
+        quote_start <= token.span.start_char && token.span.start_char <= current.span.start_char
+    }) {
+        return false;
+    }
+    let Some(previous_sentence) = current.sentence.checked_sub(1) else {
+        return false;
+    };
+    let surface = |i: usize| {
+        let token = syntax.tokens.get(i)?;
+        chars.get(token.span.start_char..token.span.end_char)
+    };
+    let mut prefix_indices = Vec::new();
+    let mut prefix_positions = Vec::new();
+    for i in tokens.clone() {
+        let Some(token) = syntax.tokens.get(i) else {
+            return false;
+        };
+        if token.sentence == current.sentence && token.span.end_char <= current.span.start_char {
+            let opaque_index = syntax
+                .opaque
+                .partition_point(|opaque| opaque.span.end_char <= token.span.start_char);
+            if let Some(opaque) = syntax.opaque.get(opaque_index)
+                && opaque.span.start_char < token.span.end_char
+                && token.span.start_char < opaque.span.end_char
+            {
+                if opaque.span.start_char <= token.span.start_char
+                    && token.span.start_char < token.span.end_char
+                    && token.span.end_char <= opaque.span.end_char
+                {
+                    continue;
+                }
+                // Never hide a token that is only partly opaque.
+                return false;
+            }
+            prefix_indices.push(i);
+            prefix_positions.push(token.span.start_char);
+        }
+    }
+    let Some(same_scopes) = crate::ja_zh::quote_scope_relations_from(
+        chars,
+        quote_start,
+        &prefix_positions,
+        current.span.start_char,
+        syntax.opaque,
+    ) else {
+        return false;
+    };
+    if same_scopes.len() != prefix_indices.len()
+        || !prefix_indices
+            .into_iter()
+            .zip(same_scopes)
+            .all(|(i, same_scope)| {
+                surface(i).is_some_and(|word| {
+                    let Some(token) = syntax.tokens.get(i) else {
+                        return false;
+                    };
+                    !same_scope
+                        || (token.upos == Some(Upos::Punct)
+                            && (word == ['、']
+                                || word == ['「']
+                                || word == ['」']
+                                || word == ['『']
+                                || word == ['』']
+                                || word == ['“']
+                                || word == ['”']
+                                || word == ['‘']
+                                || word == ['’']
+                                || word == ['"']))
+                        || word == ['明', '日']
+                        || word == ['今', '日']
+                        || word == ['今', '夜']
+                        || word == ['は']
+                        || word == ['も']
+                })
+            })
+    {
+        return false;
+    }
+    if tokens.clone().any(|i| {
+        syntax.tokens.get(i).is_some_and(|token| {
+            token.sentence == previous_sentence
+                && matches!(token.upos, Some(Upos::Verb | Upos::Aux))
+        })
+    }) {
+        return false;
+    }
+    tokens.clone().any(|i| {
+        let Some(subject) = syntax.tokens.get(i) else {
+            return false;
+        };
+        if subject.sentence != previous_sentence || surface(i) != Some(&['空'][..]) {
+            return false;
+        }
+        let Some(edge) = syntax.edge(i).filter(|edge| edge.deprel == "nsubj") else {
+            return false;
+        };
+        let Some(head) = edge.head.filter(|head| tokens.contains(head)) else {
+            return false;
+        };
+        let Some(predicate) = syntax.tokens.get(head) else {
+            return false;
+        };
+        if predicate.sentence != previous_sentence
+            || syntax.edge(head).is_none_or(|edge| edge.deprel != "root")
+            || !(predicate.lemma.as_deref() == Some("暗い")
+                || surface(head) == Some(&['暗', 'い'][..]))
+        {
+            return false;
+        }
+        crate::ja_zh::quote_scope_relation_from(
+            chars,
+            quote_start,
+            predicate.span.end_char,
+            current.span.start_char,
+            syntax.opaque,
+        ) == Some(true)
+    })
+}
+
+// A forecast attached to this event gives an explicit weather context. Keep
+// a vocative outside this rule, since it can address the rain directly.
+fn has_quoted_weather_forecast(
+    chars: &[char],
+    tokens: std::ops::Range<usize>,
+    syntax: QuoteSyntax<'_>,
+    verb: usize,
+    quote_start: usize,
+) -> bool {
+    let Some(action) = syntax.tokens.get(verb) else {
+        return false;
+    };
+    if !syntax.tokens.get(tokens.start).is_some_and(|token| {
+        quote_start <= token.span.start_char && token.span.start_char <= action.span.start_char
+    }) {
+        return false;
+    }
+    let surface = |i: usize| {
+        let token = syntax.tokens.get(i)?;
+        chars.get(token.span.start_char..token.span.end_char)
+    };
+    let mut address_positions = Vec::new();
+    for i in tokens.clone().filter(|&i| i < verb) {
+        let Some(token) = syntax.tokens.get(i) else {
+            return false;
+        };
+        if token.sentence != action.sentence {
+            continue;
+        }
+        let Some(word) = surface(i) else {
+            return false;
+        };
+        let is_second_person =
+            crate::ja_zh::is_explicit_second_person(&word.iter().collect::<String>());
+        let is_vocative = word == ['よ']
+            && syntax.edge(i).is_some_and(|edge| {
+                edge.deprel == "discourse"
+                    && edge
+                        .head
+                        .filter(|head| tokens.contains(head))
+                        .is_some_and(|head| {
+                            syntax.tokens.get(head).is_some_and(|subject| {
+                                matches!(subject.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+                            }) && syntax
+                                .edge(head)
+                                .is_some_and(|subject_edge| subject_edge.deprel == "nmod")
+                        })
+            });
+        if !is_second_person && !is_vocative {
+            continue;
+        }
+        address_positions.push(token.span.start_char);
+    }
+    let Some(address_scopes) = crate::ja_zh::quote_scope_relations_from(
+        chars,
+        quote_start,
+        &address_positions,
+        action.span.start_char,
+        syntax.opaque,
+    ) else {
+        return false;
+    };
+    if address_scopes.len() != address_positions.len()
+        || address_scopes.into_iter().any(|same| same)
+    {
+        return false;
+    }
+    let mut forecast_positions = Vec::new();
+    for i in tokens.clone() {
+        let Some(forecast) = i.checked_add(1).filter(|index| tokens.contains(index)) else {
+            continue;
+        };
+        let Some(particle) = i.checked_add(2).filter(|index| tokens.contains(index)) else {
+            continue;
+        };
+        let Some(topic) = i.checked_add(3).filter(|index| tokens.contains(index)) else {
+            continue;
+        };
+        let Some(forecast_token) = syntax.tokens.get(forecast) else {
+            return false;
+        };
+        if i < verb
+            && topic < verb
+            && surface(i) == Some(&['天', '気'][..])
+            && surface(forecast) == Some(&['予', '報'][..])
+            && surface(particle) == Some(&['で'][..])
+            && surface(topic) == Some(&['は'][..])
+            && forecast_token.sentence == action.sentence
+            && syntax
+                .edge(i)
+                .is_some_and(|edge| edge.deprel == "compound" && edge.head == Some(forecast))
+            && syntax.edge(forecast).is_some_and(|edge| {
+                matches!(edge.deprel.as_str(), "nsubj" | "obl" | "advmod")
+                    && edge.head == Some(verb)
+            })
+            && syntax
+                .edge(particle)
+                .is_some_and(|edge| edge.deprel == "case" && edge.head == Some(forecast))
+            && syntax
+                .edge(topic)
+                .is_some_and(|edge| edge.deprel == "case" && edge.head == Some(forecast))
+        {
+            forecast_positions.push(forecast_token.span.start_char);
+        }
+    }
+    if forecast_positions.is_empty() {
+        return false;
+    }
+    let Some(forecast_scopes) = crate::ja_zh::quote_scope_relations_from(
+        chars,
+        quote_start,
+        &forecast_positions,
+        action.span.start_char,
+        syntax.opaque,
+    ) else {
+        return false;
+    };
+    forecast_scopes.len() == forecast_positions.len()
+        && forecast_scopes.into_iter().any(|same| same)
 }
 
 // A character count belongs to this reading or writing act only when it

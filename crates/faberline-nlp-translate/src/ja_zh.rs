@@ -3418,7 +3418,7 @@ fn te_help_request<'a>(
                 && deadline_time_question(time).is_none()
                 && !te_help_has_following_focus(arguments, end)
                 && has_temporal_deadline(&arguments[..end], doc)
-                && deadline_case_governor(&group[2], doc) == Some(action_idx))
+                && time_case_governor(&group[2], doc) == Some(action_idx))
             .then_some(start..end)
         });
     let deadline = deadlines.next();
@@ -6876,7 +6876,7 @@ fn try_translate_homework_transfer(
         (ClassroomRole::Teacher, None) => format!("出{homework}"),
     };
     let (before_verb, verb, after_verb, passive) =
-        synthesize_predicate_complex(std::slice::from_ref(predicate), true, target, None);
+        synthesize_predicate_complex(std::slice::from_ref(predicate), false, target, None);
     if verb != "拿出" || passive {
         return None;
     }
@@ -10478,6 +10478,7 @@ fn translate_clause_bunsetsus(
     let mut residence = None;
     let mut residence_additive = false;
     let mut additional_residences = Vec::new();
+    let mut past_until = false;
     let mut residence_duration = String::new();
     let mut residence_manners = Vec::new();
     let mut adverbs: Vec<String> = Vec::new();
@@ -11157,12 +11158,16 @@ fn translate_clause_bunsetsus(
                     render_bunsetsu_obl(&b, target, is_inst)
                 };
                 if !s.is_empty() {
+                    let until = temporal_made_time(&b);
+                    if until.is_some() && target == TargetVariant::ZhHant {
+                        past_until |= past_progressive_at_endpoint(&b, source, doc);
+                    }
                     obliques.push(PlacedArg {
                         text: s,
                         case_particle: b.case_particle.clone(),
                         is_instrument_de: is_inst,
                         is_spatial_made: is_spatial_made_bunsetsu(&b),
-                        temporal_made_time: temporal_made_time(&b),
+                        temporal_made_time: until,
                         is_event_time: b
                             .atoms
                             .iter()
@@ -11371,7 +11376,10 @@ fn translate_clause_bunsetsus(
 
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
-        synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+        synthesize_predicate_complex(&predicates, past_until, target, transfer);
+    if past_until && adverbs.iter().any(|adv| adv == "一直") {
+        pre_verb_mods.retain(|modifier| modifier != "一直");
+    }
     if let Some(shika) = focus {
         if shika {
             pre_verb_mods.retain(|m| m != "不" && m != "沒有");
@@ -16196,10 +16204,10 @@ fn deadline_governor(group: &Bunsetsu, doc: &Document) -> Option<usize> {
     if let Some(date) = group.atoms.iter().find(|a| calendar::is_date(a)) {
         return date.head;
     }
-    deadline_case_governor(group.atoms.last()?, doc)
+    time_case_governor(group.atoms.last()?, doc)
 }
 
-fn deadline_case_governor(case: &Atom, doc: &Document) -> Option<usize> {
+fn time_case_governor(case: &Atom, doc: &Document) -> Option<usize> {
     // Even on a normalized clock, the case marker retains the original time token.
     let time = case.head?;
     doc.syntax.iter().find(|node| node.token == time)?.head
@@ -22140,6 +22148,27 @@ mod motion_endpoint_tests {
     }
 
     #[test]
+    fn past_progressive_activity_continues_until_its_own_endpoint() {
+        for (source, expected) in [
+            ("私は六時まで働いていた。", "我一直工作到六點。"),
+            ("私は夕方まで本を読んでいました。", "我一直讀書到傍晚。"),
+            ("私は昼までずっと働いていました。", "我一直工作到中午。"),
+            (
+                "係員は昼まで机の上を片付けていました。",
+                "係員一直收拾桌面到中午。",
+            ),
+            ("私は六時まで働いています。", "我正在工作到六點。"),
+            ("私は六時まで働いていなかった。", "我到六點為止沒有工作。"),
+            (
+                "私は六時まで待って、その後で働いていました。",
+                "我等待到六點，在然後正在工作。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
     fn compound_temporal_made_keeps_both_time_parts_after_the_activity() {
         for (source, expected) in [
             (
@@ -22233,7 +22262,7 @@ fn clock_case_governor(clock: &Atom, marker: &Atom, doc: &Document) -> Option<us
     if *original_marker == marker.span {
         let time = &doc.tokens.get(marker.head?)?.span;
         if time.start_char >= clock.span.start_char && time.end_char <= clock.span.end_char {
-            return deadline_case_governor(marker, doc);
+            return time_case_governor(marker, doc);
         }
         return None;
     }
@@ -22359,6 +22388,50 @@ fn merge_temporal_made_anchor(b: &mut Bunsetsu, modifier: &[Atom]) -> bool {
     head.lemma = Some(TEMPORAL_MADE_COMPOUND_ATOM.to_owned());
     head.is_locked = true;
     true
+}
+
+// In V-て/で いる, the time belongs to V. The final past auxiliary
+// belongs to いる. A separate past predicate cannot license this reading.
+fn past_progressive_at_endpoint(group: &Bunsetsu, source: &[Atom], doc: &Document) -> bool {
+    let Some(owner) = group
+        .atoms
+        .last()
+        .and_then(|case| time_case_governor(case, doc))
+    else {
+        return false;
+    };
+    let Some(index) = source.iter().position(|a| a.doc_tok_idx == Some(owner)) else {
+        return false;
+    };
+    let [action, te, iru, ending @ ..] = &source[index..] else {
+        return false;
+    };
+    let past = match ending {
+        [polite, past, ..]
+            if polite.lemma.as_deref() == Some("ます")
+                && polite.upos == Some(Upos::Aux)
+                && polite.head == iru.doc_tok_idx =>
+        {
+            past
+        }
+        [past, ..] => past,
+        [] => return false,
+    };
+    action.upos == Some(Upos::Verb)
+        && action.deprel == "advcl"
+        && action.head == iru.doc_tok_idx
+        && te.upos == Some(Upos::Sconj)
+        && matches!(te.surface.as_str(), "て" | "で")
+        && te.head == Some(owner)
+        && iru.lemma.as_deref() == Some("いる")
+        && iru.deprel == "root"
+        && past.upos == Some(Upos::Aux)
+        && past.surface == "た"
+        && past.head == iru.doc_tok_idx
+        && source[index..]
+            .iter()
+            .take_while(|a| a.span.start_char <= past.span.start_char)
+            .all(|a| !a.is_locked)
 }
 
 // Only a typed time with adjacent, bare まで licenses the continuation
@@ -23257,7 +23330,7 @@ fn predicate_is_imperative(b: &Bunsetsu) -> bool {
 /// Returns `(pre_verb_mods, verb_core, post_verb_mods, needs_passive_agent)`.
 fn synthesize_predicate_complex(
     predicates: &[Bunsetsu],
-    _has_obj: bool,
+    past_until: bool,
     target: TargetVariant,
     transfer: Option<GivingReceivingPredicate>,
 ) -> (Vec<String>, String, Vec<String>, bool) {
@@ -23299,7 +23372,8 @@ fn synthesize_predicate_complex(
             }
         })
         .collect();
-    let has_te_iru = aspect_joined.contains("ている")
+    let has_te_iru = past_until
+        || aspect_joined.contains("ている")
         || aspect_joined.contains("ていた")
         || aspect_joined.contains("てる")
         || aspect_joined.contains("てた")
@@ -23498,7 +23572,7 @@ fn synthesize_predicate_complex(
         && !has_neg
         && !has_neg_past
     {
-        pre.push("正在".to_owned());
+        pre.push(if past_until { "一直" } else { "正在" }.to_owned());
     }
     if has_sugiru {
         pre.push("太".to_owned());

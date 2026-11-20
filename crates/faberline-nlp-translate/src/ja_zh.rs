@@ -6320,6 +6320,7 @@ fn translate_clause_atoms(
     let mut merged_atoms = apply_phrase_matches(&attributed);
     if target == TargetVariant::ZhHant {
         bind_tidied_tabletops(&mut merged_atoms);
+        localize_sufficiency(&mut merged_atoms);
     }
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {
@@ -9953,6 +9954,40 @@ fn mark_residence_place(groups: &mut Vec<Bunsetsu>, source: &[Atom]) {
 }
 
 // A bare elapsed quantity must touch its action and retain a dependency to it.
+// 十分な describes a sufficient quantity. 十分に describes the degree of
+// an action. Neither construction supplies the number of elapsed minutes.
+fn localize_sufficiency(atoms: &mut Vec<Atom>) {
+    for i in (1..atoms.len()).rev() {
+        let (word, marker) = (&atoms[i - 1], &atoms[i]);
+        if word.is_locked
+            || marker.is_locked
+            || word.surface != "十分"
+            || word.upos != Some(Upos::Adj)
+            || word.doc_tok_idx.is_none()
+            || marker.head != word.doc_tok_idx
+            || word.span.end_char != marker.span.start_char
+            || starts_inside_elapsed_number(atoms, i - 1)
+        {
+            continue;
+        }
+        if marker.surface == "な" && word.deprel == "amod" {
+            atoms[i - 1].surface = "足夠".to_owned();
+            atoms[i - 1].lemma = None;
+        } else if marker.surface == "に"
+            && marker.deprel == "case"
+            && matches!(word.deprel.as_str(), "advcl" | "amod" | "advmod")
+        {
+            let mut adverb = word.clone();
+            adverb.surface = "充分".to_owned();
+            adverb.lemma = None;
+            adverb.upos = Some(Upos::Adv);
+            adverb.deprel = "advmod".to_owned();
+            adverb.span.end_char = marker.span.end_char;
+            atoms.splice(i - 1..=i, [adverb]);
+        }
+    }
+}
+
 fn elapsed_duration_surface(text: &str) -> Option<String> {
     if text == "何時間" {
         return Some("幾個小時".to_owned());
@@ -18254,7 +18289,15 @@ mod clock_rule_tests {
             );
         }
         let text = public_translate("十分な資料を読みました。", &terms).target_text;
-        assert!(!text.contains("分鐘"), "{text}");
+        assert!(text.contains("足夠的資料"), "{text}");
+        for source in ["資料を十分に読みました。", "十分に説明を聞きました。"]
+        {
+            let text = public_translate(source, &terms).target_text;
+            assert!(
+                text.contains("充分") && !text.contains("分鐘") && !text.contains("充分在"),
+                "{text}"
+            );
+        }
     }
 
     #[test]

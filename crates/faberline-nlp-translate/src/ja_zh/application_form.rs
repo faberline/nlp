@@ -573,7 +573,7 @@ fn office_name(a: &mut Atom) {
     }
     let name = match a.surface.as_str() {
         "窓口" => "窗口",
-        "受付" => "櫃檯",
+        "受付" => super::reception::COUNTER,
         _ => return,
     };
     a.surface = name.to_owned();
@@ -609,7 +609,7 @@ fn noun_text(words: &[Atom], chars: &[char]) -> String {
         .iter()
         .collect();
     match raw.as_str() {
-        "受付" => "櫃檯".to_owned(),
+        "受付" => super::reception::COUNTER.to_owned(),
         "窓口" => "窗口".to_owned(),
         "管理会社" => "管理公司".to_owned(),
         "担当者" => "負責人".to_owned(),
@@ -903,10 +903,10 @@ fn located_recipient(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
             .map(|a| a.surface.as_str())
             .collect::<String>();
         let relation = match (action == "来る", conjugation.as_str()) {
-            (false, "") => "在",
-            (false, "た") => "當時在",
-            (false, "ない") => "不在",
-            (false, "なかった") => "當時不在",
+            (false, form) => match super::reception::location_relation(form) {
+                Some(text) => text,
+                None => continue,
+            },
             (true, "" | "た") => "來到",
             (true, "ない") => "不來",
             (true, "なかった") => "沒來",

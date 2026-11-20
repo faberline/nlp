@@ -915,6 +915,11 @@ fn is_written_prohibition(
     if crate::ja_zh::is_ambiguous_potential(&verb_surface) {
         return false;
     }
+    if verb_surface == "降る"
+        && has_ambiguous_quoted_sky_context(chars, tokens.clone(), syntax, verb)
+    {
+        return false;
+    }
     let other_subject = tokens.clone().any(|i| {
         let Some(case) = syntax
             .tokens
@@ -1103,6 +1108,85 @@ fn is_written_prohibition(
                         })
                 }
         })
+}
+
+// An adjacent sky statement inside this quotation does not establish whether
+// an omitted subject is a weather report or a command. Leave it to the normal
+// translation path rather than treating the quotation as a written command.
+fn has_ambiguous_quoted_sky_context(
+    chars: &[char],
+    tokens: std::ops::Range<usize>,
+    syntax: QuoteSyntax<'_>,
+    verb: usize,
+) -> bool {
+    let Some(current) = syntax.tokens.get(verb) else {
+        return false;
+    };
+    let Some(previous_sentence) = current.sentence.checked_sub(1) else {
+        return false;
+    };
+    let surface = |i: usize| {
+        let token = syntax.tokens.get(i)?;
+        chars.get(token.span.start_char..token.span.end_char)
+    };
+    if !tokens
+        .clone()
+        .filter(|&i| {
+            syntax.tokens.get(i).is_some_and(|token| {
+                token.sentence == current.sentence && token.span.end_char <= current.span.start_char
+            })
+        })
+        .all(|i| {
+            surface(i).is_some_and(|word| {
+                word == ['明', '日']
+                    || word == ['今', '日']
+                    || word == ['今', '夜']
+                    || word == ['は']
+                    || word == ['も']
+            })
+        })
+    {
+        return false;
+    }
+    if tokens.clone().any(|i| {
+        syntax.tokens.get(i).is_some_and(|token| {
+            token.sentence == previous_sentence
+                && matches!(token.upos, Some(Upos::Verb | Upos::Aux))
+        })
+    }) {
+        return false;
+    }
+    tokens.clone().any(|i| {
+        let Some(subject) = syntax.tokens.get(i) else {
+            return false;
+        };
+        if subject.sentence != previous_sentence || surface(i) != Some(&['空'][..]) {
+            return false;
+        }
+        let Some(edge) = syntax.edge(i).filter(|edge| edge.deprel == "nsubj") else {
+            return false;
+        };
+        let Some(head) = edge.head.filter(|head| tokens.contains(head)) else {
+            return false;
+        };
+        let Some(predicate) = syntax.tokens.get(head) else {
+            return false;
+        };
+        if predicate.sentence != previous_sentence
+            || !syntax.edge(head).is_some_and(|edge| edge.deprel == "root")
+            || !(predicate.lemma.as_deref() == Some("暗い")
+                || surface(head) == Some(&['暗', 'い'][..]))
+        {
+            return false;
+        }
+        chars
+            .get(subject.span.start_char..current.span.start_char)
+            .is_some_and(|between| {
+                !between
+                    .iter()
+                    .any(|ch| matches!(ch, '「' | '」' | '『' | '』' | '“' | '”' | '"'))
+            })
+    })
 }
 
 /// An inflected word or a noun phrase can be the inscription. A quoted

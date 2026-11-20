@@ -12102,7 +12102,7 @@ fn translate_clause_bunsetsus(
     if target == TargetVariant::ZhHant
         && !verb_core.is_empty()
         && has_prohibitive_ending(core_non_punct(source))
-        && !follows_dark_sky_weather(source, doc, ctx)
+        && !has_ambiguous_sky_context(source, doc, ctx)
     {
         pre_verb_mods.insert(0, "不要".to_owned());
     }
@@ -21050,9 +21050,16 @@ mod clock_rule_tests {
             "この棚は重みで倒れるな。",
             "この布は日に当たると縮むな。",
             "海は今朝荒れるな。",
+            "雨は明日も降るな。",
             "係員は客に「このドアは自動で開くな」と言いました。",
             "空が暗い。明日は降るな。",
             "今日は朝だ。空が暗い。明日は降るな。",
+            "男は「電車に乗る」と言った。空が暗い。明日は降るな。",
+            "男は電車に乗ると言った。空が暗い。明日は降るな。",
+            "男は電車に乗ると書いた。空が暗い。明日は降るな。",
+            "今日は山に登る。空が暗い。明日は降るな。",
+            "今日は電車に乗る。空が暗い。明日は降るな。",
+            "男は「敵は降伏を迫った」と言った。空が暗い。明日は降るな。",
             "紙に「このドアは自動で開くな」と書きました。",
         ] {
             let actual = public_translate(source, &glossary).target_text;
@@ -21066,11 +21073,17 @@ mod clock_rule_tests {
             "ドアを自動で開くな。",
             "棚を手で倒すな。",
             "次の駅で電車から降りるな。",
+            "明日は飛行機を降りるな。",
+            "山を下るな。",
+            "雨よ、明日は降るな。",
+            "空が暗い。雨よ、明日は降るな。",
+            "「空が暗い。雨よ、明日は降るな。」",
+            "敵に降るな。",
             "空が暗い。君は窓を閉めるな。",
             "空が暗い。「窓を閉めるな」と先生が言いました。",
-            "空が暗いから、今日は山から降りろ。明日は降るな。",
-            "今日は山に登る。空が暗い。明日は降るな。",
-            "今日は電車に乗る。空が暗い。明日は降るな。",
+            "先生は「空が暗い」と言った。「雨よ、明日は降るな」と母が言った。",
+            "紙に「空が暗い」と書きました。「雨よ、明日は降るな」と書きました。",
+            "今日は飛行機に乗る。空が暗い。明日は降りるな。",
             "別のドアを自動で開いたら、このドアは開くな。",
             "このドアが自動で開いたら、窓を開くな。",
             "紙に「このドアが自動で開いたら、窓を開くな」と書きました。",
@@ -21084,6 +21097,65 @@ mod clock_rule_tests {
         let command_writing =
             public_translate("紙に「窓を閉めるな」と書きました。", &glossary).target_text;
         assert!(command_writing.contains("窓を閉めるな"));
+        let separated =
+            public_translate("君は電車を降りるな。空が暗い。明日は降るな。", &glossary).target_text;
+        assert_eq!(separated.matches("不要").count(), 1, "{separated}");
+        // These do not establish the omitted subject. Preserve the baseline
+        // without claiming that the quote is a command or a weather report.
+        for (source, baseline) in [
+            (
+                "先生は「空が暗い。明日は降るな」と言いました。",
+                "老師「天空很昏暗。明天下」說了。",
+            ),
+            ("「空が暗い。明日は降るな。」", "「天空很昏暗。明天下。」"),
+            (
+                "紙に「空が暗い。明日は降るな」と書きました。",
+                "給紙「天空很昏暗。明天下」寫了。",
+            ),
+            (
+                "看板には「空が暗い。明日は降るな」とあります。",
+                "給看板「天空很昏暗。明天下」有。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                baseline,
+                "{source}"
+            );
+        }
+        for source in [
+            "紙に「空が暗い。明日は降るな」とそのまま書きました。",
+            "紙に「空が暗い。明日は降るな」をそのまま写しました。",
+            "紙に「雨よ、明日は降るな」と書きました。",
+            "紙に「空が暗い。雨よ、明日は降るな」と書きました。",
+        ] {
+            let quote = source
+                .rsplit('「')
+                .next()
+                .unwrap()
+                .split('」')
+                .next()
+                .unwrap();
+            let written = public_translate(source, &glossary).target_text;
+            assert!(written.contains(quote), "{source}: {written}");
+        }
+        for source in [
+            "空が暗い。先生は明日は降るなと言った。",
+            "空が暗い。先生は明日は降るなと言いました。",
+        ] {
+            let reported = public_translate(source, &glossary).target_text;
+            assert!(reported.contains("老師"), "{source}: {reported}");
+        }
+        for source in [
+            "空が暗い。先生は学生に走るなと言った。",
+            "空が暗い。先生は明日は飛行機を降りるなと言った。",
+        ] {
+            let reported = public_translate(source, &glossary).target_text;
+            assert!(
+                reported.contains("老師") && reported.contains("不要"),
+                "{source}: {reported}"
+            );
+        }
     }
 
     #[test]
@@ -24840,11 +24912,13 @@ pub(crate) fn is_explicit_second_person(surface: &str) -> bool {
     )
 }
 
-// Resolve an omitted rain subject only from the adjacent, unquoted sky event.
-fn follows_dark_sky_weather(source: &[Atom], doc: &Document, ctx: &ClauseDiscourseCtx<'_>) -> bool {
-    if ctx.inside_quote {
-        return false;
-    }
+// Keep the existing output when an adjacent sky statement leaves the omitted
+// subject ambiguous. This does not resolve an unstated speaker or event.
+fn has_ambiguous_sky_context(
+    source: &[Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx<'_>,
+) -> bool {
     let core = core_non_punct(source);
     let [prefix @ .., verb, marker] = core else {
         return false;
@@ -24871,41 +24945,28 @@ fn follows_dark_sky_weather(source: &[Atom], doc: &Document, ctx: &ClauseDiscour
     let Some(previous_idx) = sentence_idx.checked_sub(1) else {
         return false;
     };
-    let previous = &doc.segmentation.sentences[previous_idx];
-    let current = &doc.segmentation.sentences[sentence_idx];
-    let prior_route_event = doc.syntax.iter().any(|edge| {
-        if edge.sentence >= previous_idx
-            || doc.segmentation.sentences[edge.sentence].paragraph != previous.paragraph
-            || edge.deprel != "obl"
-        {
-            return false;
-        }
-        let Some(location) = doc.tokens.get(edge.token) else {
-            return false;
-        };
-        let Some(action) = edge.head.and_then(|head| doc.tokens.get(head)) else {
-            return false;
-        };
-        let location: String = ctx.source_chars[location.span.start_char..location.span.end_char]
-            .iter()
-            .collect();
-        let action: String = ctx.source_chars[action.span.start_char..action.span.end_char]
-            .iter()
-            .collect();
-        matches!(
-            location.as_str(),
-            "山" | "坂" | "階段" | "電車" | "バス" | "列車"
-        ) && matches!(
-            action.as_str(),
-            "登る" | "登っ" | "上る" | "上っ" | "乗る" | "乗っ"
-        )
-    });
-    if previous.paragraph != current.paragraph
-        || prior_route_event
-        || ctx.source_chars[previous.span.start_char..current.span.end_char]
-            .iter()
-            .any(|ch| matches!(ch, '「' | '」' | '『' | '』' | '“' | '”' | '"'))
-    {
+    let Some(previous) = doc.segmentation.sentences.get(previous_idx) else {
+        return false;
+    };
+    let Some(current) = doc.segmentation.sentences.get(sentence_idx) else {
+        return false;
+    };
+    if previous.paragraph != current.paragraph {
+        return false;
+    }
+    // The caller can split a vocative into an earlier clause in this same
+    // sentence. Do not lose that explicit addressee at the clause boundary.
+    if doc.syntax.iter().any(|edge| {
+        edge.sentence == sentence_idx
+            && edge.deprel == "discourse"
+            && doc.tokens.get(edge.token).is_some_and(|token| {
+                token.span.end_char <= verb.span.start_char
+                    && ctx
+                        .source_chars
+                        .get(token.span.start_char..token.span.end_char)
+                        == Some(&['よ'][..])
+            })
+    }) {
         return false;
     }
     doc.syntax.iter().any(|edge| {
@@ -24918,7 +24979,28 @@ fn follows_dark_sky_weather(source: &[Atom], doc: &Document, ctx: &ClauseDiscour
         let Some(predicate) = edge.head.and_then(|head| doc.tokens.get(head)) else {
             return false;
         };
-        ctx.source_chars[subject.span.start_char..subject.span.end_char] == ['空']
+        let Some(subject_chars) = ctx
+            .source_chars
+            .get(subject.span.start_char..subject.span.end_char)
+        else {
+            return false;
+        };
+        let Some(predicate_chars) = ctx
+            .source_chars
+            .get(predicate.span.start_char..predicate.span.end_char)
+        else {
+            return false;
+        };
+        let Some(between) = ctx
+            .source_chars
+            .get(predicate.span.end_char..verb.span.start_char)
+        else {
+            return false;
+        };
+        subject_chars == ['空']
+            && !between
+                .iter()
+                .any(|ch| matches!(ch, '「' | '」' | '『' | '』' | '“' | '”' | '"'))
             && edge.head.is_some_and(|head| {
                 doc.syntax.iter().any(|predicate_edge| {
                     predicate_edge.token == head
@@ -24929,9 +25011,7 @@ fn follows_dark_sky_weather(source: &[Atom], doc: &Document, ctx: &ClauseDiscour
             && !doc.tokens.iter().any(|token| {
                 token.sentence == previous_idx && matches!(token.upos, Some(Upos::Verb | Upos::Aux))
             })
-            && (predicate.lemma.as_deref() == Some("暗い")
-                || ctx.source_chars[predicate.span.start_char..predicate.span.end_char]
-                    == ['暗', 'い'])
+            && (predicate.lemma.as_deref() == Some("暗い") || predicate_chars == ['暗', 'い'])
     })
 }
 

@@ -758,20 +758,28 @@ fn names_source_reading(before: &[char], after: &[char]) -> bool {
     if let Some(attribute) = relation.strip_prefix(&['の']).map(skip_space) {
         // 読み方 can also mean how to read a book or a newspaper.
         let is_reading = explicit_word
-            && ["読み方", "よみかた"]
+            && ["読み方", "よみかた", "読み", "よみ"]
                 .iter()
                 .any(|name| strip_prefix(attribute, name).is_some_and(noun_boundary));
         return is_reading
-            || ["発音", "発音記号", "ふりがな", "振り仮名", "振りがな"]
-                .iter()
-                .any(|name| strip_prefix(attribute, name).is_some_and(noun_boundary));
+            || [
+                "音読み",
+                "訓読み",
+                "発音",
+                "発音記号",
+                "ふりがな",
+                "振り仮名",
+                "振りがな",
+            ]
+            .iter()
+            .any(|name| strip_prefix(attribute, name).is_some_and(noun_boundary));
     }
-    let Some((&particle, tail)) = relation.split_first() else {
+    let Some(tail) = ["って", "は", "を", "も"]
+        .iter()
+        .find_map(|marker| strip_prefix(relation, marker))
+    else {
         return false;
     };
-    if !matches!(particle, 'は' | 'を' | 'も') {
-        return false;
-    }
     let tail = after_clause_comma(tail);
     let question = strip_prefix(tail, "日本語で").map_or(tail, skip_space);
     let pronounce = strip_prefix(question, "どう").map(skip_space);
@@ -1591,6 +1599,8 @@ mod tests {
                 &[][..],
             ),
             ("「駅」は何と読みますか。", &["「駅」"], &[]),
+            ("「駅」って何て読むの？", &["「駅」"], &[]),
+            ("「駅」の音読みと訓読みを教えてください。", &["「駅」"], &[]),
             ("「ドイツ」をどう発音しますか。", &["「ドイツ」"], &[]),
             (
                 "「ありがとう」、「駅」という漢字の読み方を調べました。",

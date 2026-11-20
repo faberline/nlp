@@ -745,9 +745,15 @@ fn names_source_reading(before: &[char], after: &[char]) -> bool {
             .map(skip_space)
     });
     let explicit_word = named_word.is_some()
-        || labels
-            .clone()
-            .any(|word| strip_suffix(trim_space_end(before), word).is_some());
+        || labels.clone().any(|word| {
+            strip_suffix(trim_space_end(before), word).is_some_and(|prefix| {
+                // 語 can also end a genre name such as 物語 or 落語 before a title.
+                *word != "語"
+                    || prefix.last().is_none_or(|&ch| {
+                        is_horizontal_space(ch) || "はがのをにで、：".contains(ch)
+                    })
+            })
+        });
     let relation = named_word.unwrap_or(after);
     if let Some(attribute) = relation.strip_prefix(&['の']).map(skip_space) {
         // 読み方 can also mean how to read a book or a newspaper.
@@ -1613,6 +1619,7 @@ mod tests {
             ),
             ("「写真」という語の意味を教えてください。", &[], &["照片"]),
             ("「新聞」の読み方を教えてください。", &[], &["報紙"]),
+            ("物語「新聞」の読み方を教えてください。", &[], &["報紙"]),
             (
                 "「写真」と言ってから「駅」という語のよみかたを聞きました。",
                 &["「駅」"],

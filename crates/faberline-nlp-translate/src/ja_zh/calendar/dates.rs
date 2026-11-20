@@ -241,6 +241,54 @@ struct TopicClock {
     question_end: usize,
 }
 
+// Separate は markers introduce separate topics even if an omitted verb
+// makes the parser assign both dates and both destinations to one predicate.
+fn has_parallel_day_topics(
+    atoms: &[Atom],
+    owner: usize,
+    chars: &[char],
+    doc: &Document,
+) -> Option<bool> {
+    let mut previous = None;
+    let mut parallel = false;
+    for wa in atoms
+        .iter()
+        .filter(|a| !a.is_locked && a.surface == "は" && a.deprel == "case")
+    {
+        let Some(day) = doc.syntax.iter().find(|n| {
+            Some(n.token) == wa.head
+                && n.head == Some(owner)
+                && n.deprel == "nsubj"
+                && n.span.end_char == wa.span.start_char
+        }) else {
+            continue;
+        };
+        let mut start = day.span.start_char;
+        if chars.get(start..day.span.end_char) == Some(&['日'])
+            && let Some(number) = day.token.checked_sub(1).and_then(|i| doc.tokens.get(i))
+            && number.upos == Some(Upos::Num)
+            && number.span.end_char == start
+        {
+            start = number.span.start_char;
+        }
+        if spelled_report_day(&chars[start..day.span.end_char].iter().collect::<String>()).is_none()
+        {
+            continue;
+        }
+        if let Some(last) = previous {
+            if !chars[last..start]
+                .iter()
+                .any(|c| matches!(c, '、' | '，' | ','))
+            {
+                return None;
+            }
+            parallel = true;
+        }
+        previous = Some(wa.span.end_char);
+    }
+    Some(parallel)
+}
+
 // A は-marked day and a separately marked clock can describe the same event.
 // Their shared predicate licenses both arguments.
 fn topic_clock(
@@ -315,6 +363,7 @@ fn topic_clock(
         }
         let mut pause = None;
         if i < start {
+            let parallel = has_parallel_day_topics(atoms, owner, chars, doc)?;
             for (offset, word) in atoms.get(after_case..start)?.iter().enumerate() {
                 if word.upos == Some(Upos::Verb) {
                     return None;
@@ -330,7 +379,11 @@ fn topic_clock(
                     {
                         return None;
                     }
-                    pause = Some(after_case + offset);
+                    // Keep the commas that distinguish day–argument
+                    // pairs when this clock introduces several topics.
+                    if !parallel {
+                        pause = Some(after_case + offset);
+                    }
                 }
             }
         }

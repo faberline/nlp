@@ -6,6 +6,7 @@ Reads:
   - tools/lexicon_build/data/first_party_mit_ja_zh.tsv
   - tools/lexicon_build/data/a4_first_party_mit_ja_zh.tsv
   - tools/lexicon_build/data/cldr_territory_ja_zh_hant.tsv
+  - tools/lexicon_build/data/reviewed_345_ja_zh.tsv
 
 Strict A2 rules:
   1. Preserve ja.tsv UTF-8 byte row ordering `(c[0].encode("utf-8"), c[1].encode("utf-8"))`
@@ -13,7 +14,9 @@ Strict A2 rules:
   2. Never modify `cost` or any column other than `counterpart` (col 6) and `meta` (col 7)
      on existing rows; fill unglossed (`cols[6] == '-'`) rows. Reviewed exceptions
      replace the `午後` identity gloss and four A4 glosses with first-party
-     source glosses after matching the previously shipped rows.
+     source glosses after matching the previously shipped rows. Four audited
+     mixed-POS corrections are applied after the existing overlays, matching
+     each previously shipped row exactly.
   3. Only insert missing rows (<= 35 total) for the explicit closed paradigms and
      approved everyday nouns:
      (a) Step 4 Keigo verbs (`拝見する`)
@@ -33,6 +36,7 @@ JA_TSV = REPO_ROOT / "crates" / "faberline-nlp" / "lexicon" / "data" / "ja.tsv"
 GLOSS_TSV = Path(__file__).resolve().parent / "data" / "first_party_mit_ja_zh.tsv"
 A4_GLOSS_TSV = Path(__file__).resolve().parent / "data" / "a4_first_party_mit_ja_zh.tsv"
 CLDR_TERRITORY_TSV = Path(__file__).resolve().parent / "data" / "cldr_territory_ja_zh_hant.tsv"
+REVIEWED_345_TSV = Path(__file__).resolve().parent / "data" / "reviewed_345_ja_zh.tsv"
 
 # Match every field of the previously shipped A4 rows before replacing their glosses.
 REVIEWED_A4_GLOSS_REPLACEMENTS = {
@@ -106,6 +110,39 @@ def apply_cldr_territory_glosses(by_surface: dict[str, list[list[str]]]) -> int:
             row[6] = counterpart
             row[7] = tagged
             updated += 1
+    return updated
+
+
+def apply_reviewed_345(by_surface: dict[str, list[list[str]]]) -> int:
+    """Apply four audited corrections after the existing gloss overlays."""
+    updated = 0
+    seen: set[str] = set()
+    with REVIEWED_345_TSV.open(encoding="utf-8") as table:
+        for line_no, line in enumerate(table, 1):
+            raw = line.rstrip("\n")
+            if not raw or raw.startswith("#"):
+                continue
+            fields = raw.split("\t")
+            if len(fields) != 9:
+                raise ValueError(f"{REVIEWED_345_TSV}:{line_no}: expected 9 columns")
+            old, new = fields[:8], fields[8]
+            surface = old[0]
+            if surface in seen:
+                raise ValueError(f"duplicate reviewed surface: {surface}")
+            seen.add(surface)
+            matches = by_surface.get(surface, [])
+            if len(matches) != 1:
+                raise ValueError(f"expected one row for {surface}")
+            row = matches[0]
+            corrected = old[:6] + [new, merge_meta(old[7], "-")]
+            if row == corrected:
+                continue
+            if row != old:
+                raise ValueError(f"unexpected row for {surface}: {row!r}")
+            row[:] = corrected
+            updated += 1
+    if seen != {"供応", "敷衍", "パンチ", "気絶"}:
+        raise ValueError("reviewed corrections must contain exactly the four audited surfaces")
     return updated
 
 
@@ -205,6 +242,7 @@ def main() -> int:
         updated_count += a4_updated
 
     updated_count += apply_cldr_territory_glosses(by_surface)
+    updated_count += apply_reviewed_345(by_surface)
 
     # Preserve exact UTF-8 byte row order matching apply_a1_lexemes.py / build_ja.py.
     rows.sort(key=lambda c: (c[0].encode("utf-8"), c[1].encode("utf-8")))

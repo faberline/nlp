@@ -26718,7 +26718,7 @@
 パンタグラフ	ja	533	NOUN	NOUN	-	-	-
 パンタロン	ja	533	NOUN	NOUN	-	-	-
 パンダ	ja	530	NOUN	NOUN	-	-	-
-パンチ	ja	501	-	NOUN|VERB	-	拳擊	src=first_party_mit
+パンチ	ja	501	-	NOUN|VERB	-	一拳	src=first_party_mit
 パンチボール	ja	539	PROPN	PROPN	-	-	-
 パンチャ	ja	533	NOUN	NOUN	-	-	-
 パンチャー	ja	533	NOUN	NOUN	-	-	-
@@ -36613,7 +36613,7 @@
 供与	ja	762	-	NOUN|VERB	-	-	-
 供出	ja	763	-	NOUN|VERB	-	-	-
 供奉	ja	763	-	NOUN|VERB	-	供奉	-
-供応	ja	763	-	NOUN|VERB	-	供應	-
+供応	ja	763	-	NOUN|VERB	-	宴請	src=first_party_mit
 供用	ja	804	-	NOUN|VERB	-	-	-
 供給	ja	736	-	NOUN|VERB	-	供給	-
 供花	ja	1035	NOUN	NOUN	-	-	-
@@ -51549,7 +51549,7 @@
 敷ける	ja	1162	VERB	VERB	-	-	infl=ichidan
 敷つめる	ja	1162	VERB	VERB	-	-	infl=ichidan
 敷地	ja	976	NOUN	NOUN	-	-	-
-敷衍	ja	763	-	NOUN|VERB	-	敷衍	-
+敷衍	ja	763	-	NOUN|VERB	-	詳細說明	src=first_party_mit
 敷設	ja	763	-	NOUN|VERB	-	敷設	-
 敷詰める	ja	1162	VERB	VERB	-	-	infl=ichidan
 斃死	ja	756	-	NOUN|VERB	-	-	-
@@ -54528,7 +54528,7 @@
 気疲れ	ja	763	-	NOUN|VERB	-	-	-
 気短	ja	812	ADJ	ADJ	-	氣短	-
 気管	ja	955	NOUN	NOUN	-	氣管	-
-気絶	ja	763	-	NOUN|VERB	-	氣絕	-
+気絶	ja	763	-	NOUN|VERB	-	昏厥	src=first_party_mit
 気色	ja	1023	NOUN	NOUN	-	氣色	-
 気色ばむ	ja	1162	VERB	VERB	-	-	infl=godan_ma
 気苦労	ja	761	-	NOUN|VERB	-	-	-

@@ -21052,6 +21052,7 @@ mod clock_rule_tests {
             "海は今朝荒れるな。",
             "係員は客に「このドアは自動で開くな」と言いました。",
             "空が暗い。明日は降るな。",
+            "今日は朝だ。空が暗い。明日は降るな。",
             "紙に「このドアは自動で開くな」と書きました。",
         ] {
             let actual = public_translate(source, &glossary).target_text;
@@ -21069,6 +21070,7 @@ mod clock_rule_tests {
             "空が暗い。「窓を閉めるな」と先生が言いました。",
             "空が暗いから、今日は山から降りろ。明日は降るな。",
             "今日は山に登る。空が暗い。明日は降るな。",
+            "今日は電車に乗る。空が暗い。明日は降るな。",
             "別のドアを自動で開いたら、このドアは開くな。",
             "このドアが自動で開いたら、窓を開くな。",
             "紙に「このドアが自動で開いたら、窓を開くな」と書きました。",
@@ -24871,10 +24873,35 @@ fn follows_dark_sky_weather(source: &[Atom], doc: &Document, ctx: &ClauseDiscour
     };
     let previous = &doc.segmentation.sentences[previous_idx];
     let current = &doc.segmentation.sentences[sentence_idx];
+    let prior_route_event = doc.syntax.iter().any(|edge| {
+        if edge.sentence >= previous_idx
+            || doc.segmentation.sentences[edge.sentence].paragraph != previous.paragraph
+            || edge.deprel != "obl"
+        {
+            return false;
+        }
+        let Some(location) = doc.tokens.get(edge.token) else {
+            return false;
+        };
+        let Some(action) = edge.head.and_then(|head| doc.tokens.get(head)) else {
+            return false;
+        };
+        let location: String = ctx.source_chars[location.span.start_char..location.span.end_char]
+            .iter()
+            .collect();
+        let action: String = ctx.source_chars[action.span.start_char..action.span.end_char]
+            .iter()
+            .collect();
+        matches!(
+            location.as_str(),
+            "山" | "坂" | "階段" | "電車" | "バス" | "列車"
+        ) && matches!(
+            action.as_str(),
+            "登る" | "登っ" | "上る" | "上っ" | "乗る" | "乗っ"
+        )
+    });
     if previous.paragraph != current.paragraph
-        || previous_idx.checked_sub(1).is_some_and(|earlier| {
-            doc.segmentation.sentences[earlier].paragraph == previous.paragraph
-        })
+        || prior_route_event
         || ctx.source_chars[previous.span.start_char..current.span.end_char]
             .iter()
             .any(|ch| matches!(ch, '「' | '」' | '『' | '』' | '“' | '”' | '"'))

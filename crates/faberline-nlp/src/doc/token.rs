@@ -1084,13 +1084,27 @@ fn ja_tokens(
     if let Some(ac) = &matcher.ja_ko_extra {
         let mut at = 0;
         for m in ac.find_iter(run) {
-            ja_words(&run[at..m.start()], a + at, &matcher.ja_lexicon, false, out);
+            ja_words(
+                &run[at..m.start()],
+                a + at,
+                &matcher.ja_lexicon,
+                false,
+                "",
+                out,
+            );
             out.push((a + m.start(), a + m.end(), None));
             at = m.end();
         }
-        ja_words(&run[at..], a + at, &matcher.ja_lexicon, sentence_tail, out);
+        ja_words(
+            &run[at..],
+            a + at,
+            &matcher.ja_lexicon,
+            sentence_tail,
+            &s[b..],
+            out,
+        );
     } else {
-        ja_words(run, a, &matcher.ja_lexicon, sentence_tail, out);
+        ja_words(run, a, &matcher.ja_lexicon, sentence_tail, &s[b..], out);
     }
 }
 
@@ -1099,6 +1113,7 @@ fn ja_words(
     base: usize,
     extra_lexicon: &[String],
     sentence_tail: bool,
+    following_text: &str,
     out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
 ) {
     if stretch.is_empty() {
@@ -1111,8 +1126,13 @@ fn ja_words(
     }
     byte_offs.push(stretch.len());
 
-    for seg in crate::lexicon::ja::segment_ja_with_context(&chars, 0, extra_lexicon, sentence_tail)
-    {
+    for seg in crate::lexicon::ja::segment_ja_with_context(
+        &chars,
+        0,
+        extra_lexicon,
+        sentence_tail,
+        following_text,
+    ) {
         let start_b = base + byte_offs[seg.span.start_char];
         let end_b = base + byte_offs[seg.span.end_char];
         out.push((start_b, end_b, Some(seg)));

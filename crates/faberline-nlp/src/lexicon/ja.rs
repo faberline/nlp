@@ -259,22 +259,31 @@ fn follows_with_age_or_copula(suffix: &str) -> bool {
     })
 }
 
-fn contrasts_with_current_person(left: &str, suffix: &str) -> bool {
+fn contrasts_with_current_person(left: &str, suffix: &str, following_text: &str) -> bool {
     if !matches!(left, "昔" | "以前" | "かつて" | "当時") {
         return false;
     }
     let Some(tail) = strip_hagaki_copula(suffix) else {
         return false;
     };
-    let Some(current) = ["が", "けれども", "けれど", "けど"]
+    let Some(contrast) = ["が", "けれども", "けれど", "けど"]
         .into_iter()
         .find_map(|link| tail.strip_prefix(link))
-        .map(|clause| clause.trim_start_matches(['、', ',', ' ']))
-        .and_then(|clause| {
-            ["今は", "いまは", "現在は"]
-                .into_iter()
-                .find_map(|topic| clause.strip_prefix(topic))
-        })
+    else {
+        return false;
+    };
+    // Read across a comma or horizontal space, keeping sentence ends intact.
+    let context = if contrast.is_empty() {
+        following_text
+    } else {
+        contrast
+    };
+    let inline_space = [' ', '\t', '\u{3000}'];
+    let clause = context.trim_start_matches(inline_space);
+    let clause = clause.strip_prefix(['、', '，', ',']).unwrap_or(clause);
+    let Some(current) = ["今は", "いまは", "現在は"]
+        .into_iter()
+        .find_map(|topic| clause.trim_start_matches(inline_space).strip_prefix(topic))
     else {
         return false;
     };
@@ -316,6 +325,7 @@ fn resolve_hagaki_topic(
     text: &str,
     byte_offs: &[usize],
     custom_terms: &[(&str, usize)],
+    following_text: &str,
 ) {
     let mut index = 1;
     while index < path.len() {
@@ -349,7 +359,7 @@ fn resolve_hagaki_topic(
         let (noun_end, lemma) = if let Some(compound) = compound {
             compound
         } else if (explicit_person && follows_with_age_or_copula(suffix))
-            || contrasts_with_current_person(left, suffix)
+            || contrasts_with_current_person(left, suffix, following_text)
         {
             (end, "ガキ".to_owned())
         } else {
@@ -495,7 +505,7 @@ pub fn segment_ja_with_lexicon(
     base_char: usize,
     extra_lexicon: &[String],
 ) -> Vec<JaSegment> {
-    segment_ja_with_context(chars, base_char, extra_lexicon, false)
+    segment_ja_with_context(chars, base_char, extra_lexicon, false, "")
 }
 
 fn lexicon_segment(span: Span, surface: &str) -> JaSegment {
@@ -547,6 +557,7 @@ pub(crate) fn segment_ja_with_context(
     base_char: usize,
     extra_lexicon: &[String],
     verified_sentence_tail: bool,
+    following_text: &str,
 ) -> Vec<JaSegment> {
     let n = chars.len();
     if n == 0 {
@@ -764,7 +775,7 @@ pub(crate) fn segment_ja_with_context(
     }
     path.reverse();
     if text.contains("はがき") {
-        resolve_hagaki_topic(&mut path, &text, &byte_offs, &custom_terms);
+        resolve_hagaki_topic(&mut path, &text, &byte_offs, &custom_terms, following_text);
     }
     resolve_noon_endpoint(
         &mut path,
@@ -1480,7 +1491,7 @@ mod hagaki_topic_segmentation_tests {
             ));
             start += len_chars;
         }
-        resolve_hagaki_topic(&mut path, &text, &byte_offs, custom_terms);
+        resolve_hagaki_topic(&mut path, &text, &byte_offs, custom_terms, "");
         path.into_iter().find_map(|(_, end, edge)| {
             if let EdgeKind::HagakiTopic(lemma) = edge.kind {
                 Some((lemma, end))
@@ -1523,6 +1534,31 @@ mod hagaki_topic_segmentation_tests {
 
     #[test]
     fn reads_a_human_topic_across_honorifics_reports_and_contrast() {
+        assert!(contrasts_with_current_person(
+            "昔",
+            "だったが",
+            " 今は父親だ。"
+        ));
+        assert!(!contrasts_with_current_person(
+            "昔",
+            "だったが",
+            "\n今は父親だ。"
+        ));
+        assert!(contrasts_with_current_person(
+            "昔",
+            "だったが",
+            "、今は父親だ。"
+        ));
+        assert!(!contrasts_with_current_person(
+            "昔",
+            "だったが",
+            "。今は父親だ。"
+        ));
+        assert!(!contrasts_with_current_person(
+            "昔",
+            "だったが",
+            "、今は封書だ。"
+        ));
         for (prefix, suffix) in [
             (&["伯母", "はがき"][..], "のころから港で働いた。"),
             (&["田中", "さん", "はがき"][..], "のころから泳いだ。"),

@@ -1,0 +1,202 @@
+{
+  "schema": "faberline.nlp.ja_zh.naide_clause_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source": "https://github.com/faberline/nlp/issues/355#issuecomment-7044435147",
+  "visibility": "development-visible",
+  "items": [
+    {
+      "id": "D01",
+      "level_approx": "N5",
+      "jp": "朝ご飯を食べないで、学校へ行きました。",
+      "zh_hant": "沒有吃早餐就去了學校。",
+      "semantic_checks": [
+        "沒吃早餐；去了學校；不是禁止。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示人物。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent 354_followup_examples",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "D02",
+      "level_approx": "N5",
+      "jp": "傘を持たないで、出かけました。",
+      "zh_hant": "沒帶傘就出門了。",
+      "semantic_checks": [
+        "沒帶傘；已出門；不是禁止。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示人物。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent 354_followup_examples",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "D03",
+      "level_approx": "N5",
+      "jp": "靴を脱がないで、家に入りました。",
+      "zh_hant": "沒有脫鞋就進了屋子。",
+      "semantic_checks": [
+        "未脫鞋便進屋；不是禁止。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示人物。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [
+        "穿著鞋子進了屋子。"
+      ],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent 354_followup_examples",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "D04",
+      "level_approx": "N5",
+      "jp": "ここで写真を撮らないでください。",
+      "zh_hant": "請不要在這裡拍照。",
+      "semantic_checks": [
+        "禮貌請勿在此拍照。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示人物。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent 354_followup_examples",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "D05",
+      "level_approx": "N5",
+      "jp": "ここでたばこを吸わないでください。",
+      "zh_hant": "請不要在這裡抽菸。",
+      "semantic_checks": [
+        "禮貌請勿在此抽菸。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示人物。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent 354_followup_examples",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "D06",
+      "level_approx": "N5",
+      "jp": "朝ご飯を食べて、学校へ行きました。",
+      "zh_hant": "吃了早餐，然後去了學校。",
+      "semantic_checks": [
+        "肯定吃早餐及去學校。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示人物。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent 354_followup_examples",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "D07",
+      "level_approx": "N5",
+      "jp": "窓を開けて、外を見ました。",
+      "zh_hant": "打開窗戶，往外看了。",
+      "semantic_checks": [
+        "肯定開窗及往外看，不推斷看見了什麼。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示人物。",
+        "原文未說明動作之間的時間間隔，也未說明看見了什麼。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent 354_followup_examples",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "D08",
+      "level_approx": "N5",
+      "jp": "朝ご飯は食べて、学校には行きませんでした。",
+      "zh_hant": "早餐有吃，但沒去學校。",
+      "semantic_checks": [
+        "早餐是肯定，去學校是否定；は和には呈現對比。"
+      ],
+      "semantic_unknowns": [
+        "原文未明示人物、原因或其他後續行動。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent 354_followup_examples",
+        "license": "MIT"
+      }
+    }
+  ],
+  "provenance": {
+    "author": "Codex subagent 354_followup_examples",
+    "license": "MIT",
+    "semantic_reviewer": "Luna",
+    "origin": "first_party_original"
+  },
+  "source_main": "2e37126335b649801c5ee6a7941e0ce1dc0a61ef",
+  "source_tree": "344c62ac0cd46ef991183f89d14aaf08d5e17b87",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  }
+}

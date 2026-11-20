@@ -579,8 +579,10 @@ fn quotes_exact_writing(
     let Some((predicate, verb)) = syntax.first_predicate(first, scope.end_char) else {
         return false;
     };
-    let copies = verb.lemma.as_deref() == Some("写す");
-    if !(copies || verb.lemma.as_deref() == Some("書く"))
+    let surface = &chars[verb.span.start_char..verb.span.end_char];
+    let copies = verb.lemma.as_deref() == Some("写す") || surface == ['写', 'す'];
+    let writes = verb.lemma.as_deref() == Some("書く") || surface == ['書', 'く'];
+    if !(copies || writes)
         || chars[start..verb.span.start_char].iter().any(|c| {
             matches!(
                 c,
@@ -654,14 +656,57 @@ fn quotes_exact_writing(
             && contents
                 .iter()
                 .all(|t| matches!(t.upos, Some(Upos::Noun | Upos::Propn))));
-    let instruction = syntax
+    unchanged
+        || (particle == 'と' && word && is_writing_instruction(chars, scope, syntax, predicate))
+}
+
+fn is_writing_instruction(
+    chars: &[char],
+    scope: Span,
+    syntax: QuoteSyntax<'_>,
+    predicate: usize,
+) -> bool {
+    let verb = &syntax.tokens[predicate];
+    let phrase = &chars[verb.span.start_char..scope.end_char];
+    if ["書きなさい", "書くな", "書け", "書いて", "書かないで"]
+        .iter()
+        .filter_map(|ending| strip_prefix(phrase, ending))
+        .any(|tail| {
+            let tail = skip_space(tail);
+            let tail = tail
+                .strip_prefix(&['よ'])
+                .or_else(|| tail.strip_prefix(&['ね']))
+                .unwrap_or(tail);
+            match tail.first() {
+                None | Some('。' | '！' | '？' | '!' | '?') => true,
+                Some('と') => {
+                    let start = scope.end_char - tail.len();
+                    syntax
+                        .tokens
+                        .binary_search_by_key(&start, |t| t.span.start_char)
+                        .is_ok_and(|index| {
+                            let particle = &syntax.tokens[index];
+                            particle.span.end_char == start + 1 && particle.upos == Some(Upos::Adp)
+                        })
+                }
+                _ => false,
+            }
+        })
+    {
+        return true;
+    }
+    let Some(head) = syntax
         .head(predicate)
         .and_then(|i| syntax.tokens.get(i))
-        .is_some_and(|head| {
-            head.span.end_char <= scope.end_char
-                && matches!(head.lemma.as_deref(), Some("くださる" | "下さる"))
-        });
-    unchanged || (particle == 'と' && word && instruction)
+        .filter(|head| head.span.end_char <= scope.end_char)
+    else {
+        return false;
+    };
+    matches!(head.lemma.as_deref(), Some("くださる" | "下さる"))
+        || (["書くように", "書かないように"]
+            .iter()
+            .any(|form| strip_prefix(phrase, form).is_some())
+            && matches!(head.lemma.as_deref(), Some("頼む" | "言う" | "命じる")))
 }
 
 fn is_writing_surface(chars: &[char], start: usize, end: usize, syntax: QuoteSyntax<'_>) -> bool {
@@ -1644,6 +1689,14 @@ mod tests {
                 &["「写真」", "『ドイツ』"],
             ),
             ("「写真」と書かないでください。", &["「写真」"]),
+            ("紙に「写真」と書きなさい。", &["「写真」"]),
+            ("紙に「写真」と書け。", &["「写真」"]),
+            ("先生は紙に「写真」と書くなと言いました。", &["「写真」"]),
+            ("紙に「写真」と書くように言われました。", &["「写真」"]),
+            ("紙に「写真」と書けます。", &["相片"]),
+            ("紙に「写真」と書けばいい。", &["相片"]),
+            ("「写真」と書いたように見えます。", &["相片"]),
+            ("「写真」と書いてよかったです。", &["相片"]),
             ("日本語で「写真」と書いてください。", &["「写真」"]),
             ("「写真」と黒板に書いて下さい。", &["「写真」"]),
             ("説明書の「写真」をそのまま写しました。", &["「写真」"]),

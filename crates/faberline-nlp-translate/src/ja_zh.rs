@@ -18,6 +18,7 @@ mod handover;
 mod homework_desire;
 mod homework_relative;
 mod nominal_possession;
+mod order_noun;
 mod payment_potential;
 mod reception;
 mod return_endpoint;
@@ -6489,6 +6490,7 @@ fn translate_clause_atoms(
     if target == TargetVariant::ZhHant {
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
         daytime::bind(&mut norm_atoms, body, doc);
+        order_noun::bind(&mut norm_atoms, body, ctx.source_chars);
     }
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
@@ -25197,6 +25199,9 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
 }
 
 fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upos>) -> String {
+    if surface == "注文" && lemma == Some(order_noun::CONFIRMED_ORDER) {
+        return order_noun::CONFIRMED_ORDER.to_owned();
+    }
     if surface == "受付"
         && let Some(reading @ (reception::COUNTER | reception::SERVICE)) = lemma
     {

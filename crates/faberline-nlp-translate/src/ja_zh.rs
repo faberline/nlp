@@ -20203,6 +20203,73 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn fronted_clock_and_date_topic_bind_to_the_same_question() {
+        let glossary = TranslationGlossary::new();
+        let translate = |jp: &str| public_translate(jp, &glossary).target_text;
+        for (jp, expected) in [
+            ("何時に、三月三日は家に帰りますか。", "三月三日幾點回到家？"),
+            (
+                "何時までに、三月三日は家に帰りますか。",
+                "三月三日最晚幾點回到家？",
+            ),
+            (
+                "午後何時に、三月三日は家に帰りますか。",
+                "三月三日下午幾點回到家？",
+            ),
+            (
+                "何時に、三月三日か五月五日は家に帰る？",
+                "三月三日或五月五日幾點回家？",
+            ),
+        ] {
+            assert_eq!(translate(jp), expected, "{jp}");
+        }
+        assert_eq!(
+            translate("母は「何時に、五月四日は家に帰りますか」と聞きました。"),
+            translate("母は「五月四日は何時に家に帰りますか」と聞きました。")
+        );
+        let obj = translate("何時に、五月四日は「青葉」を送りますか。");
+        assert!(
+            obj.contains("五月四日")
+                && obj.contains("幾點")
+                && obj.contains("「青葉」")
+                && !obj.contains("嗎"),
+            "{obj}"
+        );
+        let other = translate("何時に、三月三日は母が「家に帰る？」と聞きました。");
+        assert!(!other.contains("三月三日幾點") && !other.contains("「幾點"));
+        assert!(!translate("何時にだって、三月三日は帰れますか。").contains("幾點"));
+    }
+
+    #[test]
+    fn a_fronted_clock_keeps_the_arguments_of_each_date_topic() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "何時までに、五月四日は大阪へ、五月五日は京都へ戻りますか。",
+                "最晚幾點，五月四日往大阪，五月五日回到京都？",
+            ),
+            (
+                "何時に、六月一日は息子が、六月二日は娘が来ますか。",
+                "幾點，六月一日兒子，六月二日女兒來？",
+            ),
+            (
+                "何時までに、五月四日は大阪へ、同じ五月四日は京都へ戻りますか。",
+                "最晚幾點，五月四日往大阪，同樣的五月四日回到京都？",
+            ),
+            (
+                "何時までに、五月四日か五月五日は京都へ戻りますか。",
+                "五月四日或五月五日最晚幾點回到京都？",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn a_date_topic_and_an_open_clock_keep_their_shared_event() {
         let glossary = TranslationGlossary::new();
         for (jp, expected) in [

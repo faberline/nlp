@@ -10,6 +10,7 @@ pub(crate) use dates::DateContext;
 pub(super) use quantities::bind_relative_contrast;
 
 const DATE: &str = "__ja_calendar_day";
+const FRONTED_CLOCK_KA: &str = "__ja_fronted_clock_ka";
 const DAY_DURATION: &str = "__ja_day_duration";
 
 // The new destination rebind must not reach into a quotation that started in
@@ -558,6 +559,9 @@ pub(super) fn question(atom: &Atom) -> Option<&str> {
 }
 
 pub(super) fn asks_event_argument(groups: &[super::Bunsetsu], source: &[Atom], ka: &Atom) -> bool {
+    if ka.lemma.as_deref() == Some(FRONTED_CLOCK_KA) {
+        return true;
+    }
     groups
         .iter()
         .flat_map(|group| &group.atoms)

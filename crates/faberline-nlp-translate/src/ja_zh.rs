@@ -5367,11 +5367,15 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
     let reaches_first = |head: Option<usize>| {
         head == Some(action_id)
             || head == terminal.doc_tok_idx
-            || first.iter().any(|part| {
+            || first.iter().enumerate().any(|(index, part)| {
                 part.doc_tok_idx == head
-                    && part.upos == Some(Upos::Adj)
-                    && part.deprel == "advcl"
-                    && part.head == Some(action_id)
+                    && ((part.upos == Some(Upos::Adj)
+                        && part.deprel == "advcl"
+                        && part.head == Some(action_id))
+                        || first.get(index + 1..index + 3).is_some_and(|argument| {
+                            argument[0].head == Some(action_id)
+                                && minute_before_argument(part, argument, first)
+                        }))
             })
             || reaches_root(head)
     };
@@ -17912,6 +17916,13 @@ mod clock_rule_tests {
                 "{text}"
             );
         }
+        let reversed = public_translate("私は三十分宿題をして、先生と二時間話しました。", &terms);
+        let (homework, talk) = reversed.target_text.split_once('，').expect("two events");
+        assert!(
+            homework.contains('做') && homework.contains("作業") && homework.contains("三十分鐘"),
+            "{homework}"
+        );
+        assert_eq!(talk, "跟老師說了兩個小時。");
     }
 
     #[test]

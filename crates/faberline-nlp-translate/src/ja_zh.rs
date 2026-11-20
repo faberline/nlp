@@ -18,6 +18,7 @@ mod homework_desire;
 mod homework_relative;
 mod nominal_possession;
 mod payment_potential;
+mod reception;
 mod return_endpoint;
 
 use faberline_nlp::Span;
@@ -223,6 +224,7 @@ pub(crate) fn translate_ja_sentence(
         join_sequential_connector(&mut atoms);
         daytime::bind_form_time(&mut atoms, chars, doc);
         application_form::normalize(&mut atoms, chars, doc);
+        reception::normalize(&mut atoms);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
         calendar::bind_day_arguments(&mut atoms, doc, || {
             direct_quote.is_some()
@@ -9673,7 +9675,15 @@ fn is_floor_facility(atom: &Atom, doc: &Document) -> bool {
         || is_place_location_bunsetsu(std::slice::from_ref(atom))
         || matches!(
             source,
-            "事務所" | "受付" | "食堂" | "台所" | "トイレ" | "玄関" | "売り場" | "店舗"
+            "事務所"
+                | "受付"
+                | reception::COUNTER
+                | "食堂"
+                | "台所"
+                | "トイレ"
+                | "玄関"
+                | "売り場"
+                | "店舗"
         )
         || (source.ends_with(['室', '館', '棟', '店']) && !matches!(source, "王室" | "皇室"))
         || source.ends_with("薬局")
@@ -12199,7 +12209,7 @@ fn translate_clause_bunsetsus(
             .to_owned();
         let participant = subj_entries.remove(0);
         pre_verb_mods.retain(|m| m != "不" && m != "沒有");
-        if participant.had_ga {
+        if participant.had_ga && !reception::subject_before_counter(source) {
             subjects.push(location);
             objs.push(participant.text);
             verb_core = if negative { "沒有" } else { "有" }.to_owned();
@@ -25160,6 +25170,11 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
 }
 
 fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upos>) -> String {
+    if surface == "受付"
+        && let Some(reading @ (reception::COUNTER | reception::SERVICE)) = lemma
+    {
+        return reading.to_owned();
+    }
     if lemma == Some(application_form::PROTECTED_VERB) {
         return surface.to_owned();
     }
@@ -25551,7 +25566,7 @@ mod payment_instrument_tests {
             ("店でカードで支払います。", "在商店用卡片結帳。"),
             ("会社のカードで払います。", "用公司的卡片付錢。"),
             ("私は小銭で払いました。", "我用小錢付錢了。"),
-            ("受付で電子マネーで支払います。", "在受付用電子マネー結帳。"),
+            ("受付で電子マネーで支払います。", "在櫃檯用電子マネー結帳。"),
             ("私は小 銭で払いました。", "我在小錢付錢了。"),
             ("電子マネーの窓口で払います。", "在電子マネー的窓口付錢。"),
             ("電子マネーで困っています。", "在電子マネー正在傷腦筋。"),
@@ -25695,7 +25710,7 @@ mod existence_rule_tests {
     #[test]
     fn building_floor_uses_facility_subjects_and_spatial_roles() {
         for (source, expected) in [
-            ("受付は二階です。", "受付在二樓。"),
+            ("受付は二階です。", "櫃檯在二樓。"),
             ("保健室は二階です。", "保健室在二樓。"),
             ("学校の図書館は二階です。", "學校的圖書館在二樓。"),
             ("私は三階から二階に行きます。", "我從三樓去二樓。"),

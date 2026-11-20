@@ -343,6 +343,25 @@ fn ko_eojeol_pos_lemma_and_morpheme_spans() {
 }
 
 #[test]
+fn service_staff_has_its_own_noun_boundary() {
+    let opts = Options {
+        enrich_morphology: true,
+        ..Options::default()
+    };
+    let text = "受付の係員が来ました。";
+    let doc = analyze_document(text, &opts);
+    assert_eq!(find_token(&doc, text, "係員").upos, Some(Upos::Noun));
+    assert_eq!(
+        lexicon::ja::lookup_ja_gloss("係員", Some(Upos::Noun)),
+        Some("工作人員")
+    );
+    let text = "関係員が来ました。";
+    let doc = analyze_document(text, &opts);
+    assert_eq!(slice(text, doc.tokens[0].span), "関係");
+    assert_eq!(slice(text, doc.tokens[1].span), "員");
+}
+
+#[test]
 fn ja_colloquial_inflections_and_gloss_lookup() {
     let opts = Options {
         enrich_morphology: true,

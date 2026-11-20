@@ -20292,7 +20292,7 @@ mod clock_rule_tests {
             query.contains("「在五月二日上午九點")
                 && query.contains("銀行")
                 && query.contains("沒有去")
-                && query.contains("係員"),
+                && query.contains("工作人員"),
             "{query}"
         );
         let unrelated = public_translate("仕事をするには時間が必要です。", &glossary).target_text;
@@ -20592,7 +20592,7 @@ mod clock_rule_tests {
             ),
             (
                 "係員は六月二日と三日に一人ずつ学生が来たと答えました。",
-                "係員回答，在六月二日和三日各來了一位學生。",
+                "工作人員回答，在六月二日和三日各來了一位學生。",
             ),
             (
                 "六月二日と三日に一人ずつ学生が来たと店員が四日に母に答えました。",
@@ -21364,7 +21364,10 @@ mod motion_endpoint_tests {
     #[test]
     fn daylight_stays_with_its_activity_and_preserves_the_recipient() {
         for (source, expected) in [
-            ("係員は日中に机の上を片付けました。", "係員白天收拾了桌面。"),
+            (
+                "係員は日中に机の上を片付けました。",
+                "工作人員白天收拾了桌面。",
+            ),
             ("父は日中には本を読みました。", "父親白天讀了書。"),
             ("母は日中にも働きます。", "母親白天也工作。"),
             ("日中に会議を開きました。", "白天召開了會議。"),

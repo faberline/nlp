@@ -452,7 +452,7 @@ fn source_translation_predicate(
     let first = syntax
         .tokens
         .partition_point(|t| t.span.start_char < quote.start_char);
-    syntax
+    let direct = syntax
         .tokens
         .iter()
         .enumerate()
@@ -461,7 +461,29 @@ fn source_translation_predicate(
         .filter_map(|(index, _)| syntax.head(index))
         .find(|&index| {
             source_translation_verb(chars, relation_start, scope.end_char, syntax, index)
-        })
+        });
+    direct.or_else(|| translation_after_quoted_operand(chars, scope, relation_start, syntax))
+}
+
+// A sentence-final mark inside the quotation can end the analyzer's sentence.
+// Then its content has no dependency into the outer sentence. The adjacent
+// operand marker still belongs to the first predicate in the outer clause.
+fn translation_after_quoted_operand(
+    chars: &[char],
+    scope: Span,
+    relation_start: usize,
+    syntax: QuoteSyntax<'_>,
+) -> Option<usize> {
+    let first = syntax
+        .tokens
+        .partition_point(|t| t.span.start_char <= relation_start);
+    let (index, verb) = syntax.first_predicate(first, scope.end_char)?;
+    let across_boundary = chars[relation_start..verb.span.start_char]
+        .iter()
+        .any(|ch| matches!(ch, '。' | '！' | '？' | '!' | '?' | '「' | '『' | '\n'));
+    (!across_boundary
+        && source_translation_verb(chars, relation_start, scope.end_char, syntax, index))
+    .then_some(index)
 }
 
 fn quote_governs_translation(quote: Span, predicate: usize, syntax: QuoteSyntax<'_>) -> bool {
@@ -501,7 +523,7 @@ fn source_translation_verb(
                     && suffix.lemma.as_deref() == Some("する")
             })
         }
-        "する" => index.checked_sub(1).is_some_and(|prev| {
+        "する" | "できる" | "出来る" => index.checked_sub(1).is_some_and(|prev| {
             let noun = &syntax.tokens[prev];
             noun.span.start_char > after
                 && noun.span.end_char == verb.span.start_char
@@ -1409,6 +1431,19 @@ mod tests {
     #[test]
     fn protects_the_source_operand_of_translation() {
         for (source, kept) in [
+            (
+                "「ドイツへ行きますか？」を英語に翻訳できますか。ドイツへ行きます。",
+                true,
+            ),
+            (
+                "「ドイツ」という語をイタリア語に翻訳できますか。ドイツへ行きます。",
+                true,
+            ),
+            (
+                "「ドイツ」を英語ではなくフランス語に訳しました。ドイツへ行きます。",
+                true,
+            ),
+            ("「ドイツへ行きますか？」を見て英語に訳しました。", false),
             (
                 "「ドイツ」だけを英語に訳してください。ドイツへ行きます。",
                 true,

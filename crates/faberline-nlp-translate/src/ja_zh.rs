@@ -5323,9 +5323,16 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
             if head == Some(root_id) {
                 return true;
             }
-            let Some(part) = next.iter().find(|a| a.doc_tok_idx == head) else {
+            let Some(index) = next.iter().position(|a| a.doc_tok_idx == head) else {
                 return false;
             };
+            let part = &next[index];
+            if let Some(argument) = next.get(index + 1..index + 3)
+                && argument[0].head == Some(root_id)
+                && minute_before_argument(part, argument, next)
+            {
+                return true;
+            }
             if part.deprel != "advcl"
                 || !(part.upos == Some(Upos::Adj) || part.doc_tok_idx == sahen)
             {
@@ -10143,10 +10150,10 @@ fn elapsed_partner(noun: &Atom, marker: &Atom, context: &[Atom]) -> bool {
         && noun.span.end_char == marker.span.start_char
 }
 
-// In 四十分友達と, the parser can treat 十分 as an adjective of 友達.
-// Keep it in the quantity when a complete number precedes the と participant.
-fn minute_before_partner(modifier: &Bunsetsu, next: &Bunsetsu, source: &[Atom]) -> bool {
-    let ([unit], [noun, marker]) = (modifier.atoms.as_slice(), next.atoms.as_slice()) else {
+// The parser can attach 十分 to a companion or an object as an adjective.
+// Confirm the complete quantity and case argument against the same event.
+fn minute_before_argument(unit: &Atom, argument: &[Atom], source: &[Atom]) -> bool {
+    let [noun, _case] = argument else {
         return false;
     };
     !unit.is_locked
@@ -10154,13 +10161,13 @@ fn minute_before_partner(modifier: &Bunsetsu, next: &Bunsetsu, source: &[Atom]) 
         && unit.deprel == "amod"
         && unit.head == noun.doc_tok_idx
         && unit.span.end_char == noun.span.start_char
-        && elapsed_partner(noun, marker, source)
         && source.iter().any(|a| {
             !a.is_locked && a.upos == Some(Upos::Num) && a.span.end_char == unit.span.start_char
         })
-        && noun
-            .head
-            .is_some_and(|id| elapsed_attached_before(source, id, Some(noun.span.start_char)))
+        && noun.head.is_some_and(|id| {
+            elapsed_interposed_argument(argument, id)
+                && elapsed_attached_before(source, id, Some(noun.span.start_char))
+        })
 }
 
 fn partner_before_elapsed(partner: &Bunsetsu, next: &Bunsetsu, source: &[Atom]) -> bool {
@@ -10249,12 +10256,12 @@ fn elapsed_argument_ends(
         {
             continue;
         }
-        let partner = (case.surface == "と").then_some(case.head).flatten();
+        let argument = case.head;
         for start in (0..boundary).rev() {
             if elapsed_interposed_argument(&source[start..boundary], owner)
-                && !ends.contains(&(start, partner))
+                && !ends.contains(&(start, argument))
             {
-                ends.push((start, partner));
+                ends.push((start, argument));
             }
         }
     }
@@ -10395,7 +10402,7 @@ fn take_elapsed_duration(
         {
             continue;
         }
-        for (end, partner_id) in elapsed_argument_ends(source, action_index, action_id) {
+        for (end, argument_id) in elapsed_argument_ends(source, action_index, action_id) {
             for start in 0..end {
                 if starts_inside_elapsed_number(source, start) {
                     continue;
@@ -10415,13 +10422,13 @@ fn take_elapsed_duration(
                         .last()
                         .is_some_and(|a| a.span.end_char != action.span.start_char)
                     || !slice.iter().any(|a| {
-                        a.head == Some(action_id) || partner_id.is_some() && a.head == partner_id
+                        a.head == Some(action_id) || argument_id.is_some() && a.head == argument_id
                     })
                     || slice.iter().any(|a| {
                         !slice.iter().any(|b| b.doc_tok_idx == a.head)
                             && a.head != Some(action_id)
                             && a.head != action.head
-                            && !(partner_id.is_some() && a.head == partner_id)
+                            && !(argument_id.is_some() && a.head == argument_id)
                     })
                 {
                     continue;
@@ -10479,7 +10486,7 @@ fn take_elapsed_duration(
                     // A minute token such as 十分 can be classified as a verb.
                     // Once it is removed, と marks the remaining noun's case.
                     if let [.., noun, marker] = group.atoms.as_slice()
-                        && let Some(id) = partner_id
+                        && let Some(id) = argument_id
                         && noun.doc_tok_idx == Some(id)
                         && elapsed_partner(noun, marker, source)
                     {
@@ -14887,7 +14894,7 @@ fn elapsed_attached_before(source: &[Atom], owner: usize, before: Option<usize>)
     };
     elapsed_argument_ends(source, action_index, owner)
         .into_iter()
-        .any(|(end, partner_id)| {
+        .any(|(end, argument_id)| {
             if before.is_some_and(|at| at != source[end].span.start_char) {
                 return false;
             }
@@ -14898,7 +14905,7 @@ fn elapsed_attached_before(source: &[Atom], owner: usize, before: Option<usize>)
                 let amount = &source[start..end];
                 let next = &source[end];
                 let attached = |a: &Atom| {
-                    a.head == Some(owner) || (partner_id.is_some() && a.head == partner_id)
+                    a.head == Some(owner) || (argument_id.is_some() && a.head == argument_id)
                 };
                 if amount
                     .iter()
@@ -15763,7 +15770,7 @@ fn merge_adnominal_bunsetsus(
                 if let Some(pred_b) = res.pop_if(|prev| {
                     is_prenominal_pred(prev)
                         && !(target == TargetVariant::ZhHant
-                            && minute_before_partner(prev, &b, source))
+                            && matches!(prev.atoms.as_slice(), [unit] if minute_before_argument(unit, &b.atoms, source)))
                         || target == TargetVariant::ZhHant
                             && (homework_relative::attached_predicate(prev, &b, source)
                                 || finite_adjective::voiced_past_modifier(prev, &b, source)
@@ -17893,6 +17900,18 @@ mod clock_rule_tests {
         let (reading, writing) = copied.target_text.split_once('，').expect("two events");
         assert_eq!(reading, "跟莫里田讀工程藍圖兩個小時");
         assert!(writing.contains("『設計図』") && !writing.contains("小時"));
+        for source in [
+            "先生と二時間話して、三十分宿題をしました。",
+            "先生と二時間話して、私は三十分宿題をしました。",
+        ] {
+            let text = public_translate(source, &terms).target_text;
+            let (talk, homework) = text.split_once('，').expect("two events");
+            assert_eq!(talk, "跟老師說兩個小時");
+            assert!(
+                homework.contains("作業") && homework.contains("三十分鐘"),
+                "{text}"
+            );
+        }
     }
 
     #[test]

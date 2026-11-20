@@ -956,8 +956,7 @@ pub(super) fn tokenize_with_matcher(
             span.start_char,
             ja_context,
             matcher,
-            false,
-            "",
+            None,
             &mut out,
         );
         if let Some(kind) = kind {
@@ -992,8 +991,7 @@ pub(super) fn tokenize_with_matcher(
         sentence.end_char,
         ja_context,
         matcher,
-        true,
-        &next_sentence,
+        Some(&next_sentence),
         &mut out,
     );
     out
@@ -1005,8 +1003,7 @@ fn text_pieces(
     end: usize,
     ja_context: bool,
     matcher: &TokenMatcher,
-    is_last_piece: bool,
-    next_sentence: &str,
+    next_sentence: Option<&str>,
     out: &mut Vec<Piece>,
 ) {
     if start >= end {
@@ -1027,7 +1024,7 @@ fn text_pieces(
     for (a, b, kind) in runs(&s, ja_context) {
         match kind {
             RunKind::Ja => {
-                let sentence_tail = is_last_piece
+                let sentence_tail = next_sentence.is_some()
                     && s[b..].chars().all(|ch| {
                         ch.is_whitespace() || matches!(ch, '。' | '！' | '？' | '!' | '?')
                     });
@@ -1037,7 +1034,7 @@ fn text_pieces(
                     b,
                     matcher,
                     sentence_tail,
-                    next_sentence,
+                    next_sentence.unwrap_or(""),
                     &mut ja_ranges,
                 )
             }

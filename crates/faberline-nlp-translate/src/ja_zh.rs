@@ -1094,7 +1094,7 @@ const OPAQUE_EVENT_OBLIQUE: &str = "__ja_opaque_event_oblique";
 fn is_clock_atom(atom: &Atom) -> bool {
     matches!(
         atom.lemma.as_deref(),
-        Some(CLOCK_ATOM | OPAQUE_PERIOD_CLOCK)
+        Some(CLOCK_ATOM | OPAQUE_PERIOD_CLOCK | calendar::CLOCK_QUESTION)
     )
 }
 
@@ -18599,6 +18599,144 @@ mod clock_rule_tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn calendar_and_clock_share_the_case_of_their_own_event() {
+        let glossary = TranslationGlossary::new();
+        for (jp, expected) in [
+            (
+                "六月七日の午後三時までに、駅で切符を買います。",
+                "最晚在六月七日下午三點在車站買車票。",
+            ),
+            (
+                "六月七日の午後三時に、駅で切符を買います。",
+                "在六月七日下午三點在車站買車票。",
+            ),
+            (
+                "６月７日の午後３時に、駅で切符を買いました。",
+                "在6月7日下午三點在車站買了車票。",
+            ),
+            (
+                "五月五日の午後三時から六月七日の午後四時まで待ちます。",
+                "從五月五日下午三點等待到六月七日下午四點。",
+            ),
+            (
+                "六月七日の午後何時までに駅で切符を買いますか。",
+                "最晚六月七日下午幾點在車站買車票？",
+            ),
+            (
+                "六月七日の午後三時までに切符を買いますか。",
+                "最晚在六月七日下午三點買車票嗎？",
+            ),
+            (
+                "六月七日の午後三時までに読む本を午後四時に渡します。",
+                "在下午四點遞給最晚在六月七日下午三點讀的書。",
+            ),
+            (
+                "学生は六月七日の午後三時までに先生に宿題を出します。",
+                "學生最晚在六月七日下午三點把作業交給老師。",
+            ),
+            (
+                "六月七日に買った切符を午後三時に見せました。",
+                "在下午三點給看了在六月七日買的車票。",
+            ),
+            (
+                "五月二日の午後三時に、母は私が来ないと言いました。",
+                "母親在五月二日下午三點說，我不來。",
+            ),
+            (
+                "母は私が五月二日の午後三時に来ないと言いました。",
+                "母親說，我在五月二日下午三點不來。",
+            ),
+            (
+                "私が来ないと母は五月二日の午後三時に言いました。",
+                "母親在五月二日下午三點說，我不來。",
+            ),
+            (
+                "六月七日の午後五時までに、先生は学生が来ないと答えました。",
+                "老師最晚在六月七日下午五點回答，學生不來。",
+            ),
+            (
+                "八月九日の切符を、八月八日の午後三時に買いました。",
+                "在八月八日下午三點買了八月九日的車票。",
+            ),
+            (
+                "九日間の切符を八月八日の午後三時に買いました。",
+                "在八月八日下午三點買了九天的車票。",
+            ),
+            (
+                "八月九日の午後三時の切符を買いました。",
+                "買了八月九日下午三點的車票。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(jp, &glossary).target_text,
+                expected,
+                "{jp}"
+            );
+        }
+    }
+
+    #[test]
+    fn forced_parts_of_a_dated_clock_keep_their_source_position() {
+        let jp = "六月七日の午後三時までに、駅で切符を買います。";
+        for (key, time) in [
+            ("六月", "指定字詞七日下午三點"),
+            ("七日", "六月指定字詞下午三點"),
+            ("午後", "六月七日指定字詞三點"),
+            ("三時", "六月七日下午指定字詞"),
+            ("六月七日の午後三時", "指定字詞"),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: key.to_owned(),
+                surfaces: vec![key.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "指定字詞".to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            assert_eq!(
+                public_translate(jp, &glossary).target_text,
+                format!("最晚在{time}在車站買車票。"),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn topical_dated_clocks_keep_the_instant_and_the_deadline_distinct() {
+        let glossary = TranslationGlossary::new();
+        for time in [
+            "五月二日の午前九時",
+            "六月七日の午後三時",
+            "１２月２５日の午後４時半",
+        ] {
+            for event in ["銀行へ行きませんでした。", "銀行へ行きます。"] {
+                let translate = |case: &str| {
+                    public_translate(&format!("{time}{case}{event}"), &glossary).target_text
+                };
+                assert_eq!(translate("には"), translate("に"), "{time}{event}");
+                assert_eq!(translate("までには"), translate("までに"), "{time}{event}");
+                assert_ne!(translate("には"), translate("までには"), "{time}{event}");
+            }
+        }
+        let query = public_translate(
+            "「五月二日の午前九時には銀行へ行きませんでした」と係員が言いました。",
+            &glossary,
+        )
+        .target_text;
+        assert!(
+            query.contains("「在五月二日上午九點")
+                && query.contains("銀行")
+                && query.contains("沒有去")
+                && query.contains("係員"),
+            "{query}"
+        );
+        let unrelated = public_translate("仕事をするには時間が必要です。", &glossary).target_text;
+        assert!(
+            !unrelated.contains("最晚") && !unrelated.contains("點"),
+            "{unrelated}"
+        );
     }
 
     #[test]

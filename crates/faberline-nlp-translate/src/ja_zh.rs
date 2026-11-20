@@ -213,6 +213,11 @@ pub(crate) fn translate_ja_sentence(
         normalize_drawer_extraction(&mut atoms, doc);
         application_form::normalize(&mut atoms, chars, doc);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
+        calendar::bind_day_arguments(&mut atoms, doc, || {
+            direct_quote.is_some()
+                || written_form_continuation.is_some()
+                || calendar::protects_negative_goal_quote(chars, doc, sentence_idx)
+        });
         daytime::join_recipient_pauses(&mut atoms);
         nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target, chars);
     }
@@ -10038,6 +10043,14 @@ fn localize_sufficiency(atoms: &mut Vec<Atom>) {
 }
 
 fn elapsed_duration_surface(text: &str) -> Option<String> {
+    if let Some(days) = text.strip_suffix("日間") {
+        let count = if elapsed_number(days)? == 2 {
+            "兩".to_owned()
+        } else {
+            normalize_decimal_digits(days)
+        };
+        return Some(format!("{count}天"));
+    }
     if text == "何時間" {
         return Some("幾個小時".to_owned());
     }
@@ -10566,6 +10579,16 @@ fn take_elapsed_duration(
         {
             continue;
         }
+        // A normalized bare 日間 amount carries its original unit's governor.
+        // Case-marked deadlines, frequency and limits keep their own groups.
+        if let Some(index) = groups.iter().position(|g| {
+            matches!(g.atoms.as_slice(), [a] if calendar::is_day_duration(a)
+                && a.head == Some(action_id) && a.deprel == "obl"
+                && !source.iter().any(|m| m.head == a.doc_tok_idx && matches!(m.deprel.as_str(), "case" | "discourse")))
+        }) {
+            let day = groups.remove(index).atoms.remove(0);
+            return Some((day.surface, false, action_id));
+        }
         for (end, argument_id) in elapsed_argument_ends(source, action_index, action_id) {
             for start in 0..end {
                 if starts_inside_elapsed_number(source, start) {
@@ -10634,9 +10657,16 @@ fn take_elapsed_duration(
                 if overlapping.is_empty()
                     || overlapping.first()?.span.start_char != first
                     || overlapping.last()?.span.end_char != end
-                    || overlapping
-                        .iter()
-                        .any(|a| a.is_locked || a.span.start_char < first || a.span.end_char > end)
+                    || overlapping.iter().any(|a| {
+                        a.span.start_char < first
+                            || a.span.end_char > end
+                            || a.is_locked
+                                && !(calendar::is_day_duration(a)
+                                    && a.span.start_char == first
+                                    && a.span.end_char == end
+                                    && a.doc_tok_idx
+                                        == slice.last().and_then(|unit| unit.doc_tok_idx))
+                    })
                     || overlapping
                         .windows(2)
                         .any(|w| w[0].span.end_char != w[1].span.start_char)
@@ -10680,8 +10710,16 @@ fn translate_clause_bunsetsus(
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> (String, bool) {
+    let focused_days = if target == TargetVariant::ZhHant {
+        calendar::take_focused_days(&mut bunsetsus, source)
+    } else {
+        None
+    };
+    let focus = focused_days.as_ref().map(|(_, _, shika)| *shika);
     let elapsed = if target == TargetVariant::ZhHant {
-        take_elapsed_duration(&mut bunsetsus, source, ctx.parallel_elapsed_te, doc)
+        focused_days
+            .map(|(amount, owner, _)| (amount, false, owner))
+            .or_else(|| take_elapsed_duration(&mut bunsetsus, source, ctx.parallel_elapsed_te, doc))
     } else {
         None
     };
@@ -10727,6 +10765,9 @@ fn translate_clause_bunsetsus(
             return false;
         };
         question.head == modal.doc_tok_idx || question.head == modal.head
+    });
+    let held_for_days = elapsed.as_ref().is_some_and(|(amount, _, owner)| {
+        amount.ends_with('天') && calendar::is_held_event(source, *owner)
     });
     let mut elapsed_duration = elapsed.map(|(text, _, _)| text);
 
@@ -11456,7 +11497,18 @@ fn translate_clause_bunsetsus(
                     && ((!is_place_location_bunsetsu(&b.atoms)
                         && is_instrument_bunsetsu(&b.atoms))
                         || is_payment_instrument(&b.atoms, &candidates));
-                let s = render_bunsetsu_obl(&b, target, is_inst);
+                let s = if target == TargetVariant::ZhHant
+                    && let [day, case] = b.atoms.as_slice()
+                    && calendar::is_day_duration(day)
+                    && !case.is_locked
+                    && case.surface == "で"
+                    && case.deprel == "case"
+                    && case.head == day.doc_tok_idx
+                {
+                    format!("在{}內", day.surface)
+                } else {
+                    render_bunsetsu_obl(&b, target, is_inst)
+                };
                 if !s.is_empty() {
                     obliques.push(PlacedArg {
                         text: s,
@@ -11673,6 +11725,24 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if let Some(shika) = focus {
+        if shika {
+            pre_verb_mods.retain(|m| m != "不" && m != "沒有");
+            if predicates.iter().flat_map(|g| &g.atoms).any(|a| {
+                a.upos == Some(Upos::Aux) && a.lemma.as_deref().unwrap_or(&a.surface) == "た"
+            }) && !post_verb_mods.iter().any(|m| m == "了")
+            {
+                post_verb_mods.push("了".to_owned());
+            }
+        }
+        if !(held_for_days
+            || pre_verb_mods
+                .iter()
+                .any(|m| matches!(m.as_str(), "不" | "沒有")))
+        {
+            pre_verb_mods.push("只".to_owned());
+        }
+    }
     if let Some((office, shared)) = filing_office {
         verb_core = if shared {
             format!("{verb_core}給{office}")
@@ -12822,6 +12892,17 @@ fn translate_clause_bunsetsus(
     if !counted_companion {
         parts.extend(joint_participants.take());
     }
+    // A span of days before a negation measures how long the action did
+    // not occur. It does not imply that an event of that length took place.
+    if predicate_is_negative
+        && let Some(days) = elapsed_duration.take_if(|amount| amount.ends_with('天'))
+    {
+        parts.push(if focus.is_some() {
+            format!("只有{days}")
+        } else {
+            days
+        });
+    }
     parts.extend(inner_pre_mods);
     // 遊べる and 飲める already carry ability in their Chinese lexical gloss.
     // Keep 不能 together, then put the shared activity before the action.
@@ -12861,6 +12942,21 @@ fn translate_clause_bunsetsus(
     let keep_go = has_spatial_made && preserve_go && verb_core == "去";
     if has_spatial_made && verb_core == "去" && !preserve_go {
         verb_core.clear();
+    }
+    // The event held is the object of 開催. Its duration belongs with that object.
+    if let [event] = objs.as_mut_slice()
+        && purpose.is_none()
+        && let Some(days) = elapsed_duration.take_if(|amount| amount.ends_with('天'))
+    {
+        if held_for_days {
+            let only = if focus.is_some() { "僅" } else { "" };
+            *event = format!("為期{only}{days}的{event}");
+        } else if post_verb_mods.iter().any(|m| m == "了") {
+            parts.push(format!("花了{days}"));
+            post_verb_mods.retain(|m| m != "了");
+        } else {
+            parts.push(format!("花{days}"));
+        }
     }
     // The repeated verb makes the elapsed reading natural without claiming
     // that the whole object was read. Restrict this to an ordinary past read.
@@ -15657,6 +15753,7 @@ fn take_adnominal_arguments(
                 .or_else(|| calendar::share_governor(&arg.atoms, doc))
                 .or_else(|| match arg.atoms.as_slice() {
                     [a] if calendar::is_interval(a)
+                        || calendar::is_day_duration(a)
                         || calendar::count_modifier(a).is_some()
                         || calendar::individual_arrivals(a) =>
                     {
@@ -18380,6 +18477,140 @@ mod clock_rule_tests {
             rendered.target_text.starts_with("跟老師說兩個小時，"),
             "{}",
             rendered.target_text
+        );
+    }
+
+    #[test]
+    fn day_duration_belongs_to_the_activity_that_lasts() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("展示会を三日間開催します。", "舉辦為期三天的展示會。"),
+            ("会議を五日間開催しました。", "舉辦了為期五天的會議。"),
+            ("展示会は三日間続きます。", "展示會持續三天。"),
+            ("学生は二日間休みました。", "學生休息了兩天。"),
+            ("展示会を三月三日に開催します。", "在三月三日舉辦展示會。"),
+            (
+                "市は音楽祭を六日間開催する予定です。",
+                "市預計舉辦為期六天的音樂祭。",
+            ),
+            (
+                "三日間働いた人は五日間休みました。",
+                "工作了三天的人休息了五天。",
+            ),
+            (
+                "先生は三日間本を読み、学生は二日間手紙を書きました。",
+                "老師花三天讀書，學生花了兩天寫信。",
+            ),
+            (
+                "市は三日間、音楽祭を開催しませんでした。",
+                "市三天沒有舉辦音樂祭。",
+            ),
+            ("父は、二日間、家で休みました。", "父親在家休息了兩天。"),
+            ("父は二日間だけ休みました。", "父親只休息了兩天。"),
+            ("父は二日間だけ休みませんでした。", "父親只有兩天沒有休息。"),
+            ("文化祭は三日間しか続きませんでした。", "校慶只持續了三天。"),
+            ("展示会を三日間だけ開催します。", "舉辦為期僅三天的展示會。"),
+            (
+                "文化祭の会場を二日間で準備しました。",
+                "在兩天內準備了校慶的會場。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "三日間".to_owned(),
+            surfaces: vec!["三日間".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "指定期間".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let translation = public_translate("展示会を三日間開催します。", &glossary);
+        assert_eq!(translation.glossary_hits.len(), 1);
+        assert_eq!(translation.target_text.matches("指定期間").count(), 1);
+        assert!(!translation.target_text.contains("為期"));
+    }
+
+    #[test]
+    fn negative_day_duration_belongs_to_motion_not_its_destination() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        let before = translate("父は三日間家に帰りませんでした。");
+        let after = translate("父は家に三日間帰りませんでした。");
+        assert_eq!(before, after);
+        let days = before.find("三天").expect(&before);
+        let negative = before.find("沒有").expect(&before);
+        let home = before.find('家').expect(&before);
+        assert!(
+            days < negative && negative < home && !before.contains("三日間"),
+            "{before}"
+        );
+
+        let school = translate("父は三日間学校に行きませんでした。");
+        assert!(
+            school.contains("三天")
+                && school.contains("沒有")
+                && school.contains("學校")
+                && !school.contains("三日間"),
+            "{school}"
+        );
+        let plain = translate("父は三日間家に帰らなかった。");
+        assert!(
+            plain.contains("三天")
+                && plain.contains("沒有")
+                && plain.contains('家')
+                && !plain.contains("三日間"),
+            "{plain}"
+        );
+    }
+
+    #[test]
+    fn negative_day_motion_does_not_cross_other_time_or_quote_scopes() {
+        let glossary = TranslationGlossary::new();
+        let translate = |s| public_translate(s, &glossary).target_text;
+        let recipient = translate("父は三日間先生に会いませんでした。");
+        assert!(
+            recipient.contains("老師") && !recipient.contains("到老師"),
+            "{recipient}"
+        );
+        let existence = translate("父は三日間家にいました。");
+        assert!(
+            existence.contains('在') && existence.contains('家') && !existence.contains('回'),
+            "{existence}"
+        );
+        let positive = translate("父は三日間家に帰りました。");
+        assert!(
+            positive.contains('回') && !positive.contains("沒有"),
+            "{positive}"
+        );
+        let quote = translate("先生は「父は三日間家に帰りませんでした」と言いました。");
+        assert!(
+            quote.contains("三日間") && quote.contains('「') && quote.contains('」'),
+            "{quote}"
+        );
+        let across = translate(
+            "先生は「休みました。父は三日間家に帰りませんでした。母は待ちました」と言いました。",
+        );
+        assert!(across.contains("父親沒有回到三日間家"), "{across}");
+        let closed =
+            translate("先生は「休みました」と言いました。父は三日間家に帰りませんでした。");
+        assert!(closed.contains("父親三天沒有回到家"), "{closed}");
+        let mut named = TranslationGlossary::new();
+        named.domain_terms.push(GlossaryEntry {
+            canonical: "北川".to_owned(),
+            surfaces: vec!["北川".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "指定人物".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let person = public_translate("北川は三日間家に帰りませんでした。", &named);
+        assert_eq!(
+            person.target_text.matches("指定人物").count(),
+            1,
+            "{}",
+            person.target_text
         );
     }
 

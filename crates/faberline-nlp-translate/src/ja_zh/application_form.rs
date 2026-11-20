@@ -296,7 +296,7 @@ fn physical_argument(
             });
         match case.surface.as_str() {
             "から" => !temporal && noun.upos != Some(Upos::Verb),
-            "に" if has_recipient && raw == "一緒" => false,
+            "に" if raw == "一緒" => false,
             "に" | "へ" => !temporal && !recipient(atoms, i + 1, verb, chars),
             _ => false,
         }

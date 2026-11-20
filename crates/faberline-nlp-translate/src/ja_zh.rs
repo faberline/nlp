@@ -5226,7 +5226,7 @@ struct ClauseDiscourseCtx<'a> {
 fn elapsed_te_before_following(first: &[Atom], following: &[Segment]) -> Option<usize> {
     let tail_after_object = |tail: &[Atom]| {
         tail.first()
-            .is_some_and(|case| !case.is_locked && case.surface == "を")
+            .is_some_and(|case| !case.is_locked && matches!(case.surface.as_str(), "を" | "と"))
     };
     match following {
         [
@@ -5235,26 +5235,32 @@ fn elapsed_te_before_following(first: &[Atom], following: &[Segment]) -> Option<
                 trailing_punct: None,
                 ..
             },
-            Segment::Quote { .. },
+            Segment::Quote { inner_atoms, .. },
             Segment::Clause { atoms: tail, .. },
             ..,
         ] if tail_after_object(tail) && !prefix.iter().any(|a| a.upos == Some(Upos::Verb)) => {
             let outside: Vec<_> = prefix.iter().chain(tail).cloned().collect();
-            parallel_elapsed_te(first, &outside)
+            parallel_elapsed_te(first, &outside, Some((inner_atoms, &tail[0])))
         }
         [
-            Segment::Quote { .. },
+            Segment::Quote { inner_atoms, .. },
             Segment::Clause { atoms: tail, .. },
             ..,
-        ] if tail_after_object(tail) => parallel_elapsed_te(first, tail),
-        [Segment::Clause { atoms, .. }, ..] => parallel_elapsed_te(first, atoms),
+        ] if tail_after_object(tail) => {
+            parallel_elapsed_te(first, tail, Some((inner_atoms, &tail[0])))
+        }
+        [Segment::Clause { atoms, .. }, ..] => parallel_elapsed_te(first, atoms, None),
         _ => None,
     }
 }
 
 // The segmenter has already separated the two clauses. Prove the terminal て
 // belongs to the first action and that action reaches the second lexical event.
-fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
+fn parallel_elapsed_te(
+    first: &[Atom],
+    next: &[Atom],
+    quoted_argument: Option<(&[Atom], &Atom)>,
+) -> Option<usize> {
     if first.iter().chain(next).any(|a| {
         a.doc_tok_idx.is_none()
             || a.is_locked
@@ -5312,7 +5318,19 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
     }
     let root = next
         .iter()
-        .find(|a| a.upos == Some(Upos::Verb) && a.deprel == "root")?;
+        .find(|a| a.upos == Some(Upos::Verb) && a.deprel == "root")
+        .or_else(|| match next {
+            [.., verb, mark]
+                if verb.upos == Some(Upos::Verb)
+                    && verb.deprel == "advcl"
+                    && matches!(mark.surface.as_str(), "て" | "で")
+                    && mark.deprel == "mark"
+                    && mark.head == verb.doc_tok_idx =>
+            {
+                Some(verb)
+            }
+            _ => None,
+        })?;
     let root_id = root.doc_tok_idx?;
     let other_verbs: Vec<_> = next
         .iter()
@@ -5333,6 +5351,16 @@ fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
     let reaches_root = |mut head: Option<usize>| {
         for _ in 0..next.len() {
             if head == Some(root_id) {
+                return true;
+            }
+            // The parser can link the first action to a word inside the
+            // quoted argument. Its outer particle connects it to this verb.
+            if quoted_argument.is_some_and(|(inner, particle)| {
+                particle.upos == Some(Upos::Adp)
+                    && particle.head == Some(root_id)
+                    && head.is_some()
+                    && inner.iter().any(|word| word.doc_tok_idx == head)
+            }) {
                 return true;
             }
             let Some(index) = next.iter().position(|a| a.doc_tok_idx == head) else {
@@ -18186,6 +18214,27 @@ mod clock_rule_tests {
                 public_translate(reading, &glossary).target_text
             );
         }
+    }
+
+    #[test]
+    fn talking_time_precedes_copied_words_and_sequential_actions() {
+        let terms = TranslationGlossary::new();
+        for marker in ["と", "を"] {
+            let source = format!("先生と二時間話して、紙に『十分な資料』{marker}書き写しました。");
+            let rendered = public_translate(&source, &terms);
+            let (talk, copy) = rendered.target_text.split_once('，').unwrap();
+            assert_eq!(talk, "跟老師說兩個小時");
+            assert!(
+                copy.contains("『十分な資料』") && copy.contains("抄寫"),
+                "{copy}"
+            );
+        }
+        let rendered = public_translate("先生と二時間話して、難しい本を読んで帰りました。", &terms);
+        assert!(
+            rendered.target_text.starts_with("跟老師說兩個小時，"),
+            "{}",
+            rendered.target_text
+        );
     }
 
     #[test]

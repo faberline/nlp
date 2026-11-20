@@ -1092,7 +1092,10 @@ pub(crate) fn translate_ja_sentence(
                         end_char: tgt_end,
                     },
                 ));
-                if emitted_clause_comma.is_some()
+                // Only the first clause can establish a sequence without
+                // crossing a preceding condition, deadline or setting.
+                if seg_idx == 0
+                    && emitted_clause_comma.is_some()
                     && let Some(MeasuredActivity::Preparation { following, text }) =
                         measured_activity
                 {
@@ -4120,7 +4123,7 @@ fn following_measured_action(atoms: &[Atom], owner: usize) -> Option<usize> {
     if !has_temporal_te_kara_tail(atoms) {
         return None;
     }
-    let [.., verb, te, kara] = core_non_punct(atoms) else {
+    let [body @ .., verb, te, kara] = core_non_punct(atoms) else {
         return None;
     };
     let tail = verb.doc_tok_idx?;
@@ -4139,6 +4142,46 @@ fn following_measured_action(atoms: &[Atom], owner: usize) -> Option<usize> {
                     && atom.span.end_char == verb.span.start_char
             }))
     {
+        return None;
+    }
+    let (subject, topic) = match body {
+        [actor, topic, ..] if actor.deprel == "nsubj" => (actor, topic),
+        [name, actor, topic, ..]
+            if name.deprel == "compound"
+                && name.head == actor.doc_tok_idx
+                && name.span.end_char == actor.span.start_char
+                && actor.deprel == "nsubj" =>
+        {
+            (actor, topic)
+        }
+        _ => return None,
+    };
+    let subject_id = subject.doc_tok_idx?;
+    if !matches!(subject.head, Some(head) if head == owner || head == tail)
+        || !matches!(topic.surface.as_str(), "は" | "が")
+        || topic.deprel != "case"
+        || topic.head != Some(subject_id)
+        || topic.is_locked
+        || subject.span.end_char != topic.span.start_char
+    {
+        return None;
+    }
+    // A context marker inside the first segment can still govern both
+    // actions. Only join an ordinary preparation with its own actor.
+    if body.iter().any(|atom| match atom.deprel.as_str() {
+        "nsubj" => atom.doc_tok_idx != Some(subject_id),
+        "case" => match atom.surface.as_str() {
+            "は" | "が" => atom.head != Some(subject_id),
+            "を" | "の" => false,
+            _ => true,
+        },
+        "advmod" => {
+            !matches!(atom.head, Some(head) if head == owner || head == tail)
+                || matches!(atom.surface.as_str(), "もし" | "たとえ")
+        }
+        "mark" => true,
+        _ => atom.upos == Some(Upos::Verb) && atom.doc_tok_idx != Some(owner),
+    }) {
         return None;
     }
     verb.head
@@ -13781,6 +13824,7 @@ fn translate_clause_bunsetsus(
                 && made_endpoints.is_empty()
                 && result_value.is_none()
                 && sfp_suffix.is_none()
+                && !parts.iter().any(|part| part == "先に")
                 && let Some(following) =
                     activity_period_owner.and_then(|owner| following_measured_action(source, owner))
             {
@@ -13888,9 +13932,16 @@ fn translate_clause_bunsetsus(
         && let Some(activity) = ctx.measured_activity
     {
         let mut preparation = parts.clone();
-        // Keep earlier modifiers before 先 and replace the temporal 後
-        // with the duration of this first action.
-        preparation[duration_index] = "先".to_owned();
+        // Reuse an order marker already present, and move the duration
+        // after its own action in place of the temporal 後.
+        if preparation[..duration_index]
+            .iter()
+            .any(|part| matches!(part.as_str(), "先" | "首先" | "最先" | "一開始"))
+        {
+            preparation.remove(duration_index);
+        } else {
+            preparation[duration_index] = "先".to_owned();
+        }
         preparation.pop();
         preparation.push(days);
         activity.set(Some(MeasuredActivity::Preparation {
@@ -18739,6 +18790,29 @@ mod measured_activity_tests {
             translate("山田は資料を三日間整理してから、係員は四日間予約の記録を確認しました。")
                 .target_text,
             "山田花三天整理資料後，工作人員確認預約的記錄，這一階段歷時四天。"
+        );
+    }
+
+    #[test]
+    fn sequential_periods_preserve_a_shared_context_and_existing_order() {
+        assert_eq!(
+            translate(
+                "月曜日までに、山田は資料を二日間整理してから、五日間予約の記録を確認しました。"
+            )
+            .target_text,
+            "最晚在星期一，山田花兩天整理資料後，確認預約的記錄，這一階段歷時五天。"
+        );
+        assert_eq!(
+            translate(
+                "必要な場合は山田は資料を二日間整理してから、五日間予約の記録を確認しました。"
+            )
+            .target_text,
+            "必要的場合山田花兩天整理資料後，確認預約的記錄，這一階段歷時五天。"
+        );
+        assert_eq!(
+            translate("山田はまず資料を二日間整理してから、五日間予約の記録を確認しました。")
+                .target_text,
+            "山田首先整理資料兩天。接著確認預約紀錄，歷時五天。"
         );
     }
 }

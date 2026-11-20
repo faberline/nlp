@@ -8,7 +8,8 @@ pub(super) const OFFICE: &str = "__ja_application_recipient";
 pub(super) const SHARED_FORM_RECIPIENT: &str = "__ja_shared_form_recipient";
 pub(super) const TIME_QUESTION: &str = "__ja_application_time_question";
 pub(super) const CONTRAST: &str = "__ja_application_contrast";
-pub(super) const LOCKED_MANNER: &str = "__ja_application_locked_manner";
+pub(super) const LOCKED_ADJUNCT: &str = "__ja_application_locked_adjunct";
+pub(super) const EXTRACTION_MANNER: &str = "__ja_application_extraction_manner";
 const PRESENT_RECIPIENT: &str = "__ja_located_application_recipient";
 pub(super) const PURPOSE: &str = "__ja_application_purpose";
 pub(super) const RENT: &str = "__ja_rent_home";
@@ -179,10 +180,20 @@ fn recipient(atoms: &[Atom], case: usize, verb: usize, chars: &[char]) -> bool {
         .iter()
         .collect();
     is_person(noun, chars)
+        || (first < i && super::is_honorific_suffix(&noun.surface))
         || matches!(
             raw.as_str(),
             "受付" | "窓口" | "事務局" | "事務室" | "管理会社" | "担当者" | "係員"
         )
+}
+
+// Read the noun that bears the case. A landlord can receive a document
+// or accompany its bearer. In 大家のかばん the case belongs to the bag.
+fn filing_person(noun: &Atom) -> bool {
+    super::is_companion_person(noun)
+        || (noun.upos == Some(Upos::Noun)
+            && faberline_nlp::lexicon::ja::lookup_ja_gloss(&noun.surface, noun.upos)
+                == Some("房東"))
 }
 
 fn is_person(noun: &Atom, chars: &[char]) -> bool {
@@ -193,7 +204,7 @@ fn is_person(noun: &Atom, chars: &[char]) -> bool {
         return true;
     }
     if !noun.is_locked {
-        return super::is_companion_person(noun);
+        return filing_person(noun);
     }
     let mut original = noun.clone();
     original.upos = Some(Upos::Noun);
@@ -214,7 +225,23 @@ fn is_person(noun: &Atom, chars: &[char]) -> bool {
     .max_by_key(|(prefix, _)| prefix.len())
     .map_or(raw.as_str(), |(_, head)| head);
     original.surface = name.to_owned();
-    matches!(name, "担当者" | "係員") || super::is_companion_person(&original)
+    matches!(name, "担当者" | "係員") || filing_person(&original)
+}
+
+fn container_source(raw: &str) -> bool {
+    raw.strip_suffix("から").is_some_and(|name| {
+        [
+            "かばん",
+            "鞄",
+            "バッグ",
+            "箱",
+            "封筒",
+            "引き出し",
+            "ポケット",
+        ]
+        .iter()
+        .any(|end| name.ends_with(end))
+    })
 }
 
 fn physical_argument(
@@ -232,19 +259,7 @@ fn physical_argument(
                     && a.head
                         .and_then(|h| doc.syntax.iter().find(|s| s.token == h))
                         .is_some_and(|s| s.head == Some(verb))))
-            && spelling(a, chars).strip_suffix("から").is_some_and(|name| {
-                [
-                    "かばん",
-                    "鞄",
-                    "バッグ",
-                    "箱",
-                    "封筒",
-                    "引き出し",
-                    "ポケット",
-                ]
-                .iter()
-                .any(|end| name.ends_with(end))
-            })
+            && container_source(&spelling(a, chars))
     }) {
         return true;
     }
@@ -903,7 +918,11 @@ pub(super) fn together(atoms: &[Atom], verb: usize) -> Option<(usize, Option<(us
             && to.span.end_char == atoms[i].span.start_char)
             .then_some((
                 noun.doc_tok_idx?,
-                super::is_companion_person(noun)
+                filing_person(noun)
+                    || (super::is_honorific_suffix(&noun.surface)
+                        && start.checked_sub(1).is_some_and(|n| {
+                            atoms[n].head == noun.doc_tok_idx && atoms[n].deprel == "compound"
+                        }))
                     || matches!(
                         noun.lemma.as_deref(),
                         Some(super::LOCKED_RESIDENT_ATOM | PRESENT_RECIPIENT)
@@ -911,6 +930,31 @@ pub(super) fn together(atoms: &[Atom], verb: usize) -> Option<(usize, Option<(us
             ))
     });
     Some((atoms[i].doc_tok_idx?, companion))
+}
+
+pub(super) fn counted_recipient(source: &[Atom], end: &Atom, chars: &[char]) -> Option<String> {
+    source.iter().enumerate().find_map(|(i, unit)| {
+        if unit.head != end.doc_tok_idx
+            || unit.deprel != "nmod"
+            || unit.span.end_char > chars.len()
+            || !matches!(spelling(unit, chars).as_str(), "人" | "名")
+        {
+            return None;
+        }
+        let (first, last, label) = recipient_description(source, i, chars);
+        let extra_modifier = source.iter().enumerate().any(|(j, a)| {
+            !(first..=last).contains(&j)
+                && matches!(
+                    a.deprel.as_str(),
+                    "nmod" | "acl" | "amod" | "compound" | "det"
+                )
+                && source[first..=last]
+                    .iter()
+                    .any(|part| part.doc_tok_idx == a.head)
+        });
+        (first < i && source[last].doc_tok_idx == end.doc_tok_idx && !extra_modifier)
+            .then_some(label)
+    })
 }
 
 pub(super) fn companion_label(
@@ -1040,9 +1084,9 @@ fn mark_form_contrasts(atoms: &mut [Atom], chars: &[char]) {
     }
 }
 
-// A glossary can put Nと一緒に in one token. The parser may attach it
-// as a relative verb to the recipient, or use it as the new subject.
-fn bind_locked_manner(atoms: &mut [Atom], action: usize, chars: &[char]) {
+// A complete glossary phrase can be tagged as a relative verb on the
+// application, its recipient, or the container it is taken from.
+fn bind_locked_adjunct(atoms: &mut [Atom], action: usize, form: usize, chars: &[char]) {
     for i in 0..atoms.len() {
         let manner = &atoms[i];
         if !manner.is_locked || !manner.surface.starts_with("[[PH") {
@@ -1050,9 +1094,11 @@ fn bind_locked_manner(atoms: &mut [Atom], action: usize, chars: &[char]) {
         }
         let raw = spelling(manner, chars);
         let source = raw.strip_suffix('は').unwrap_or(&raw);
-        if !source
-            .strip_suffix("と一緒に")
-            .is_some_and(|s| !s.is_empty())
+        let from_container = container_source(source);
+        if !from_container
+            && !source
+                .strip_suffix("と一緒に")
+                .is_some_and(|s| !s.is_empty())
         {
             continue;
         }
@@ -1069,11 +1115,19 @@ fn bind_locked_manner(atoms: &mut [Atom], action: usize, chars: &[char]) {
         let Some(next) = (i + 1..atoms.len()).find(|&k| atoms[k].doc_tok_idx == Some(v)) else {
             continue;
         };
-        let Some(office) = filing_recipient(atoms, v, chars) else {
-            continue;
-        };
+        let office = filing_recipient(atoms, v, chars);
+        let form_argument = action == next
+            && recipient.is_some_and(|r| {
+                r == form
+                    || atoms.get(r + 1).is_some_and(|case| {
+                        case.surface == "から" && dasu_case_link(&atoms[r], case)
+                    })
+            });
         if filing_reading(&atoms[next], atoms).is_none()
-            || (manner.deprel == "acl" && Some(office) != recipient)
+            || (manner.deprel == "acl"
+                && (office.is_none() || office != recipient)
+                && !form_argument)
+            || (action != next && (from_container || office.is_none()))
             || atoms[action.min(i)..next].iter().any(super::is_quote_mark)
         {
             continue;
@@ -1099,7 +1153,7 @@ fn bind_locked_manner(atoms: &mut [Atom], action: usize, chars: &[char]) {
         atoms[i].head = Some(v);
         atoms[i].deprel = "advmod".to_owned();
         atoms[i].upos = Some(Upos::Adv);
-        atoms[i].lemma = Some(LOCKED_MANNER.to_owned());
+        atoms[i].lemma = Some(LOCKED_ADJUNCT.to_owned());
     }
 }
 
@@ -1222,7 +1276,7 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
                 .is_some_and(|wo| wo.surface == "を" && dasu_case_link(form, wo))
             && let Some(v) = atoms.iter().position(|a| a.doc_tok_idx == form.head)
         {
-            bind_locked_manner(atoms, v, chars);
+            bind_locked_adjunct(atoms, v, end, chars);
             filing = mark_shared_form(atoms, end, v, chars, doc).is_some();
             if let Some(reading) = filing_reading(&atoms[v], atoms)
                 && let Some(verb) = atoms[v].doc_tok_idx
@@ -1238,6 +1292,10 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>, chars: &[char], doc: &Document) {
                     if let Some(i) = office {
                         mark_recipient(atoms, i, OFFICE);
                     }
+                } else if let Some((manner, _)) = together(atoms, verb)
+                    && let Some(word) = atoms.iter_mut().find(|a| a.doc_tok_idx == Some(manner))
+                {
+                    word.lemma = Some(EXTRACTION_MANNER.to_owned());
                 }
             }
         }

@@ -6226,7 +6226,7 @@ fn translate_clause_atoms(
         if group
             .atoms
             .iter()
-            .any(|a| a.lemma.as_deref() == Some(application_form::LOCKED_MANNER))
+            .any(|a| a.lemma.as_deref() == Some(application_form::LOCKED_ADJUNCT))
         {
             group.role = BunsetsuRole::Adv;
         }
@@ -10581,7 +10581,25 @@ fn translate_clause_bunsetsus(
         .and_then(|a| a.doc_tok_idx);
     let mut filing_office = None;
     let mut focused_filing_manner = None;
-    let filing_together = filing_verb.and_then(|verb| application_form::together(source, verb));
+    let form_manner_verb = filing_verb.or_else(|| {
+        source
+            .iter()
+            .filter(|a| {
+                matches!(
+                    a.lemma.as_deref(),
+                    Some(application_form::EXTRACTION_MANNER | application_form::LOCKED_ADJUNCT)
+                )
+            })
+            .filter_map(|a| a.head)
+            .find(|id| {
+                candidates
+                    .iter()
+                    .flat_map(|b| &b.atoms)
+                    .any(|v| v.doc_tok_idx == Some(*id))
+            })
+    });
+    let filing_together =
+        form_manner_verb.and_then(|verb| application_form::together(source, verb));
     let mut affected_object = None;
     let mut result_value = None;
     let mut setting_origin = None;
@@ -10592,7 +10610,8 @@ fn translate_clause_bunsetsus(
         .collect();
     for (idx, b) in bunsetsus.drain(..).enumerate() {
         let protected_manner = b.atoms.iter().find(|a| {
-            a.lemma.as_deref() == Some(application_form::LOCKED_MANNER) && a.head == filing_verb
+            a.lemma.as_deref() == Some(application_form::LOCKED_ADJUNCT)
+                && a.head == form_manner_verb
         });
         let focused_manner = |id: Option<usize>| {
             source
@@ -10672,7 +10691,9 @@ fn translate_clause_bunsetsus(
         {
             let shared =
                 recipient.lemma.as_deref() == Some(application_form::SHARED_FORM_RECIPIENT);
-            filing_office = Some((render_bunsetsu_np(&b, target), shared));
+            let name = application_form::counted_recipient(source, recipient, ctx.source_chars)
+                .unwrap_or_else(|| render_bunsetsu_np(&b, target));
+            filing_office = Some((name, shared));
             continue;
         }
         if arrival_head.is_some()
@@ -18406,6 +18427,34 @@ mod clock_rule_tests {
         let glossary = TranslationGlossary::new();
         for (jp, zh) in [
             (
+                "姉は大家に入居申込書を出しました。",
+                "姊姊向房東交了入住申請表。",
+            ),
+            (
+                "姉はかばんから入居申込書を出しましたが、大家には出しませんでした。",
+                "姊姊從包包拿出了入住申請表，但是沒有交給房東。",
+            ),
+            (
+                "私は大家と一緒に入居申込書を窓口に出しました。",
+                "我和房東一起向窗口交了入住申請表。",
+            ),
+            (
+                "私は大家のかばんと一緒に窓口に入居申込書を出しました。",
+                "我連同房東的包包向窗口交了入住申請表。",
+            ),
+            (
+                "私は大家のかばんから入居申込書を出しました。",
+                "我從房東的包包拿出了入住申請表。",
+            ),
+            (
+                "私は昨日受付にいた大家に入居申込書を出しました。",
+                "我向昨天在櫃檯的房東交了入住申請表。",
+            ),
+            (
+                "私は二人の大家に入居申込書を出しました。",
+                "我向兩位房東交了入住申請表。",
+            ),
+            (
                 "学生は何時に講座の申込書を窓口に出しますか。",
                 "學生幾點向窗口交課程報名表？",
             ),
@@ -18442,6 +18491,21 @@ mod clock_rule_tests {
     #[test]
     fn protected_application_names_still_have_a_source_and_destination() {
         for (jp, key, expected) in [
+            (
+                "私は大家と一緒にかばんから入居申込書を出しました。",
+                "大家と一緒に",
+                "我從包包指定值拿出了入住申請表。",
+            ),
+            (
+                "私は大家のかばんから入居申込書を出しました。",
+                "大家のかばんから",
+                "我指定值拿出了入住申請表。",
+            ),
+            (
+                "姉はかばんから入居申込書を出して、大家には出しませんでした。",
+                "大家",
+                "姊姊從包包拿出入住申請表，沒有交給指定值。",
+            ),
             ("講座の申込書を出す。", "講座の申込書", "交指定值。"),
             (
                 "姉は入居申込書をかばんから出し、今日は母と一緒に窓口に出しました。",

@@ -377,6 +377,19 @@ fn ja_colloquial_inflections_and_gloss_lookup() {
 }
 
 #[test]
+fn postcard_spellings_are_whole_nouns_after_the_particle_to() {
+    for spelling in ["はがき", "葉書", "ハガキ"] {
+        let text = format!("姉に写真と{spelling}を送りました。");
+        let doc = analyze_document(&text, &Options::default());
+        assert_eq!(find_token(&doc, &text, spelling).upos, Some(Upos::Noun));
+        assert_eq!(
+            lexicon::ja::lookup_ja_gloss(spelling, Some(Upos::Noun)),
+            Some("明信片")
+        );
+    }
+}
+
+#[test]
 fn ja_and_zh_adult_colloquial_and_custom_lexicon() {
     let st = lexicon::stats();
     assert!(st.ja >= 70_500, "ja={}", st.ja);

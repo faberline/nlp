@@ -329,9 +329,11 @@ pub(crate) fn translate_ja_sentence(
     // Track only a comma actually emitted from the immediately preceding
     // clause, so a later verified event can adjust its own reading pause.
     let mut emitted_clause_comma: Option<(usize, Span, usize, usize)> = None;
+    let mut emitted_preparation: Option<(usize, usize, String)> = None;
 
     for (seg_idx, seg) in segments.iter().enumerate() {
         let previous_clause_comma = emitted_clause_comma.take();
+        let previous_preparation = emitted_preparation.take();
         if direct_quote_prefix_segments > 0 {
             direct_quote_prefix_segments -= 1;
             continue;
@@ -845,6 +847,21 @@ pub(crate) fn translate_ja_sentence(
                 let inside_quote =
                     ends_continued_quote(segments.get(seg_idx + 1), doc, sentence_idx, chars);
                 let meeting_evidence = std::rc::Rc::new(std::cell::Cell::new(None));
+                let measured_activity = std::cell::Cell::new(None);
+                let previous_preparation = previous_preparation.filter(|_| {
+                    !inside_quote
+                        && previous_clause_comma.is_some_and(
+                            |(previous_index, previous_span, byte_end, char_end)| {
+                                previous_index.checked_add(1) == Some(seg_idx)
+                                    && out.len() == byte_end
+                                    && tgt_start == char_end
+                                    && out.ends_with('，')
+                                    && seg_target_spans.last().is_some_and(|(source, target)| {
+                                        *source == previous_span && target.end_char == char_end
+                                    })
+                            },
+                        )
+                });
                 let ctx = ClauseDiscourseCtx {
                     adjective: finite_adjective::Context::at(&segments, seg_idx, doc),
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
@@ -856,6 +873,10 @@ pub(crate) fn translate_ja_sentence(
                             if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
                         _ => &[],
                     },
+                    measured_activity: Some(&measured_activity),
+                    prepared_for_predicate: previous_preparation
+                        .as_ref()
+                        .map(|(_, predicate, _)| *predicate),
                     return_trip: None,
                     parallel_elapsed_te: if target == TargetVariant::ZhHant
                         && !prev_was_quote
@@ -991,6 +1012,19 @@ pub(crate) fn translate_ja_sentence(
                     aligned_target.end_char -= 1;
                     tgt_start -= 1;
                 }
+                let measured_activity = measured_activity.into_inner();
+                if matches!(measured_activity, Some(MeasuredActivity::Continuation))
+                    && let Some((byte_start, _, preparation)) = previous_preparation
+                    && let Some((_, aligned_target)) = seg_target_spans.last_mut()
+                {
+                    out.truncate(byte_start);
+                    out.push_str(&preparation);
+                    out.push('。');
+                    tgt_start = out.chars().count();
+                    aligned_target.end_char = tgt_start;
+                    rendered.insert_str(0, "接著");
+                }
+                let byte_start = out.len();
                 out.push_str(&rendered);
                 let next_quote_framed = match (segments.get(seg_idx + 1), segments.get(seg_idx + 2))
                 {
@@ -1058,6 +1092,15 @@ pub(crate) fn translate_ja_sentence(
                         end_char: tgt_end,
                     },
                 ));
+                // Only the first clause can establish a sequence without
+                // crossing a preceding condition, deadline or setting.
+                if seg_idx == 0
+                    && emitted_clause_comma.is_some()
+                    && let Some(MeasuredActivity::Preparation { following, text }) =
+                        measured_activity
+                {
+                    emitted_preparation = Some((byte_start, following, text));
+                }
             }
             Segment::Punct(p, span) => {
                 prev_was_quote = false;
@@ -4076,6 +4119,100 @@ fn has_temporal_te_kara_tail(atoms: &[Atom]) -> bool {
         && atoms[i - 2].upos == Some(Upos::Verb)
 }
 
+fn following_measured_action(atoms: &[Atom], owner: usize) -> Option<usize> {
+    if !has_temporal_te_kara_tail(atoms) {
+        return None;
+    }
+    let [body @ .., verb, te, kara] = core_non_punct(atoms) else {
+        return None;
+    };
+    let tail = verb.doc_tok_idx?;
+    if te.deprel != "mark"
+        || kara.deprel != "case"
+        || te.head != Some(tail)
+        || kara.head != Some(tail)
+        || verb.span.end_char != te.span.start_char
+        || te.span.end_char != kara.span.start_char
+        || (tail != owner
+            && !atoms.iter().any(|atom| {
+                atom.doc_tok_idx == Some(owner)
+                    && atom.head == Some(tail)
+                    && !atom.is_locked
+                    && verb.lemma.as_deref() == Some("する")
+                    && atom.span.end_char == verb.span.start_char
+            }))
+    {
+        return None;
+    }
+    let (subject, topic) = match body {
+        [actor, topic, ..] if actor.deprel == "nsubj" => (actor, topic),
+        [name, actor, topic, ..]
+            if name.deprel == "compound"
+                && name.head == actor.doc_tok_idx
+                && name.span.end_char == actor.span.start_char
+                && actor.deprel == "nsubj" =>
+        {
+            (actor, topic)
+        }
+        _ => return None,
+    };
+    let subject_id = subject.doc_tok_idx?;
+    if !matches!(subject.head, Some(head) if head == owner || head == tail)
+        || !matches!(topic.surface.as_str(), "は" | "が")
+        || topic.deprel != "case"
+        || topic.head != Some(subject_id)
+        || topic.is_locked
+        || subject.span.end_char != topic.span.start_char
+    {
+        return None;
+    }
+    // A context marker inside the first segment can still govern both
+    // actions. Only join an ordinary preparation with its own actor.
+    if body.iter().any(|atom| match atom.deprel.as_str() {
+        "nsubj" => atom.doc_tok_idx != Some(subject_id),
+        "case" => match atom.surface.as_str() {
+            "は" | "が" => atom.head != Some(subject_id),
+            "を" | "の" => false,
+            _ => true,
+        },
+        "advmod" => {
+            !matches!(atom.head, Some(head) if head == owner || head == tail)
+                || matches!(atom.surface.as_str(), "もし" | "たとえ")
+        }
+        "mark" => true,
+        _ => atom.upos == Some(Upos::Verb) && atom.doc_tok_idx != Some(owner),
+    }) {
+        return None;
+    }
+    verb.head
+}
+
+fn reservation_record_object(atoms: &[Atom], owner: usize) -> bool {
+    atoms.windows(4).any(|group| {
+        let [reservation, genitive, record, accusative] = group else {
+            return false;
+        };
+        group
+            .iter()
+            .all(|atom| !atom.is_locked && atom.doc_tok_idx.is_some())
+            && group
+                .windows(2)
+                .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+            && reservation.surface == "予約"
+            && reservation.deprel == "nmod"
+            && reservation.head == record.doc_tok_idx
+            && genitive.surface == "の"
+            && genitive.deprel == "case"
+            && genitive.head == reservation.doc_tok_idx
+            && record.surface == "記録"
+            && record.deprel == "obj"
+            && record.head == Some(owner)
+            && accusative.surface == "を"
+            && accusative.deprel == "case"
+            && accusative.head == record.doc_tok_idx
+    })
+}
+
 // Japanese can write a full stop after the question particle. Only replace
 // the stop belonging to this clause. A quoted or embedded か cannot change
 // the punctuation of a later clause.
@@ -5352,6 +5489,11 @@ pub(crate) fn direct_quote_end(
     }
 }
 
+enum MeasuredActivity {
+    Preparation { following: usize, text: String },
+    Continuation,
+}
+
 #[derive(Clone, Default)]
 struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
@@ -5359,6 +5501,8 @@ struct ClauseDiscourseCtx<'a> {
     source_chars: &'a [char],
     following: &'a [Segment],
     preceding_activity: &'a [Atom],
+    measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
+    prepared_for_predicate: Option<usize>,
     return_trip: Option<ReturnTrip>,
     parallel_elapsed_te: Option<usize>,
     inside_quote: bool,
@@ -13592,6 +13736,7 @@ fn translate_clause_bunsetsus(
         verb_core.clear();
     }
     let mut activity_period_tail = None;
+    let mut measured_preparation = None;
     // The event held is the object of 開催. Its duration belongs with that object.
     if let [event] = objs.as_mut_slice()
         && purpose.is_none()
@@ -13632,17 +13777,59 @@ fn translate_clause_bunsetsus(
                         })
                 })
             {
-                let period = if has_temporal_te_kara_tail(ctx.preceding_activity) {
-                    "這一階段"
-                } else {
-                    "這個過程"
-                };
-                activity_period_tail = Some(format!("，{period}歷時{days}"));
+                let follows_preparation = has_temporal_te_kara_tail(ctx.preceding_activity);
+                // A sentence boundary is safe only before a terminal main
+                // assertion by the actor already named in the preparation.
+                let paired = ctx.prepared_for_predicate == Some(owner)
+                    && follows_preparation
+                    && implicit_subject
+                    && sconj_prefix.is_none()
+                    && sconj_suffix.is_none()
+                    && ctx.following.is_empty()
+                    && source.iter().any(|atom| {
+                        atom.doc_tok_idx == Some(owner)
+                            && atom.deprel == "root"
+                            && atom.head.is_none()
+                    });
+                activity_period_tail = Some(
+                    if !ctx.inside_quote
+                        && (!follows_preparation || paired)
+                        && event == "預約的記錄"
+                        && reservation_record_object(source, owner)
+                    {
+                        *event = "預約紀錄".to_owned();
+                        if paired && let Some(activity) = ctx.measured_activity {
+                            activity.set(Some(MeasuredActivity::Continuation));
+                        }
+                        format!("，歷時{days}")
+                    } else if follows_preparation {
+                        format!("，這一階段歷時{days}")
+                    } else {
+                        format!("，這個過程歷時{days}")
+                    },
+                );
             } else {
                 parts.push(format!("花了{days}"));
             }
             post_verb_mods.retain(|m| m != "了");
         } else {
+            if ctx.measured_activity.is_some()
+                && !ctx.inside_quote
+                && !implicit_subject
+                && !has_front_modal
+                && sconj_prefix.is_none()
+                && sconj_suffix == Some("後")
+                && !verb_core.is_empty()
+                && goal_tails.is_empty()
+                && made_endpoints.is_empty()
+                && result_value.is_none()
+                && sfp_suffix.is_none()
+                && !parts.iter().any(|part| part == "先に")
+                && let Some(following) =
+                    activity_period_owner.and_then(|owner| following_measured_action(source, owner))
+            {
+                measured_preparation = Some((parts.len(), following, days.clone()));
+            }
             parts.push(format!("花{days}"));
         }
     }
@@ -13741,6 +13928,27 @@ fn translate_clause_bunsetsus(
         parts.push(ss.to_owned());
     }
 
+    if let Some((duration_index, following, days)) = measured_preparation
+        && let Some(activity) = ctx.measured_activity
+    {
+        let mut preparation = parts.clone();
+        // Reuse an order marker already present, and move the duration
+        // after its own action in place of the temporal 後.
+        if preparation[..duration_index]
+            .iter()
+            .any(|part| matches!(part.as_str(), "先" | "首先" | "最先" | "一開始"))
+        {
+            preparation.remove(duration_index);
+        } else {
+            preparation[duration_index] = "先".to_owned();
+        }
+        preparation.pop();
+        preparation.push(days);
+        activity.set(Some(MeasuredActivity::Preparation {
+            following,
+            text: join_zh_parts(&preparation),
+        }));
+    }
     (join_zh_parts(&parts), had_overt_subj_no_pred)
 }
 
@@ -18529,6 +18737,84 @@ fn predicates_has_passive(predicates: &[Bunsetsu]) -> bool {
                     || a.surface.ends_with("された"))
         })
     })
+}
+
+#[cfg(test)]
+mod measured_activity_tests {
+    use faberline_nlp::doc::model::Backend;
+
+    use crate::{
+        TargetVariant, TranslateOptions, TranslatedDocument, TranslationGlossary,
+        analyze_and_translate,
+    };
+
+    fn translate(text: &str) -> TranslatedDocument {
+        analyze_and_translate(
+            text,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .expect("translate Japanese without a model")
+    }
+
+    #[test]
+    fn bare_day_period_describes_the_affirmative_activity() {
+        assert_eq!(
+            translate("山田は三日間、予約の記録を確認しました。").target_text,
+            "山田確認預約紀錄，歷時三天。"
+        );
+        assert_eq!(
+            translate("山田は三日間、予約の記録を確認しませんでした。").target_text,
+            "山田三天沒有確認預約的記錄。"
+        );
+    }
+
+    #[test]
+    fn sequential_periods_stay_with_their_own_actions() {
+        let translated =
+            translate("山田は資料を三日間整理してから、四日間予約の記録を確認しました。");
+        let first = "山田先整理資料三天。";
+        let second = "接著確認預約紀錄，歷時四天。";
+        assert_eq!(translated.target_text, format!("{first}{second}"));
+        let [preparation, checking] = translated.clause_alignments.as_slice() else {
+            panic!("expected an alignment for each action");
+        };
+        assert_eq!(preparation.target_span.end_char, first.chars().count());
+        assert_eq!(
+            checking.target_span.start_char,
+            preparation.target_span.end_char
+        );
+        assert_eq!(
+            translate("山田は資料を三日間整理してから、係員は四日間予約の記録を確認しました。")
+                .target_text,
+            "山田花三天整理資料後，工作人員確認預約的記錄，這一階段歷時四天。"
+        );
+    }
+
+    #[test]
+    fn sequential_periods_preserve_a_shared_context_and_existing_order() {
+        assert_eq!(
+            translate(
+                "月曜日までに、山田は資料を二日間整理してから、五日間予約の記録を確認しました。"
+            )
+            .target_text,
+            "最晚在星期一，山田花兩天整理資料後，確認預約的記錄，這一階段歷時五天。"
+        );
+        assert_eq!(
+            translate(
+                "必要な場合は山田は資料を二日間整理してから、五日間予約の記録を確認しました。"
+            )
+            .target_text,
+            "必要的場合山田花兩天整理資料後，確認預約的記錄，這一階段歷時五天。"
+        );
+        assert_eq!(
+            translate("山田はまず資料を二日間整理してから、五日間予約の記録を確認しました。")
+                .target_text,
+            "山田首先整理資料兩天。接著確認預約紀錄，歷時五天。"
+        );
+    }
 }
 
 #[cfg(test)]

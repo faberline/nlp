@@ -655,7 +655,10 @@ fn quotes_exact_writing(
                 true,
             )
         });
-        return unchanged && (written_source || writing_surface);
+        // と introduces what is transcribed onto the page. With を, both a
+        // written source and a destination distinguish transcription from a photo.
+        return (writing_surface && (particle == 'と' || written_source))
+            || (unchanged && (written_source || writing_surface));
     }
 
     unchanged
@@ -1841,6 +1844,17 @@ mod tests {
             ("黒板に「走る」と書いた。", &["「走る」"]),
             ("「赤い」とノートに書きます。", &["「赤い」"]),
             ("紙に「食べない」と書きました。", &["「食べない」"]),
+            (
+                "妹は十分間本を読んでから、ノートに「写真」と写しました。",
+                &["十分鐘", "「写真」"],
+            ),
+            ("私は「駅」と紙に写しませんでした。", &["「駅」", "沒有"]),
+            ("教科書の「走る」をノートに写しました。", &["「走る」"]),
+            ("妹はカメラでノートの「写真」を写しました。", &["照片"]),
+            (
+                "ノートに「写真」と言った後で、別の写真を写しました。",
+                &["「照片」"],
+            ),
             ("母への手紙に「帰った」と書きました。", &["回去"]),
             ("母への手紙に「帰る」と書きました。", &["回去"]),
             (

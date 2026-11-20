@@ -235,7 +235,14 @@ fn protect_sibling_forms(
             })
         {
             first_for_writing = index;
-            if join.is_none() {
+            // 「A」の文字と「B」の文字 repeats the character label on each
+            // operand. の意味 or の位置 instead names another object.
+            if join.is_none()
+                && between
+                    .and_then(|gap| after_possessive_character_name(skip_space(gap)))
+                    .and_then(quote_join)
+                    .is_none()
+            {
                 first_for_counted_form = index;
             }
         }
@@ -281,7 +288,7 @@ fn protect_sibling_forms(
         let match_form = written_operand(*quote);
         let counted = matches!(
             match_form,
-            FormMatch::CountedLiteral | FormMatch::TranslatedReading
+            FormMatch::CountedLiteral | FormMatch::TranslatedForm
         );
         let exact_writing = matches!(match_form, FormMatch::Literal | FormMatch::CountedLiteral);
         if counted || exact_writing {
@@ -312,7 +319,7 @@ fn protect_sibling_forms(
                 }
             }
         }
-        if match_form == FormMatch::TranslatedReading {
+        if match_form == FormMatch::TranslatedForm {
             // The explicit target overrides local 字 or を一文字ずつ labels.
             continue;
         }
@@ -773,7 +780,7 @@ enum FormMatch {
     Unspecified,
     Literal,
     CountedLiteral,
-    TranslatedReading,
+    TranslatedForm,
 }
 
 impl FormMatch {
@@ -792,6 +799,11 @@ fn after_word_or_character_name(chars: &[char]) -> Option<&[char]> {
         .or_else(|| strip_prefix(chars, "字"))
 }
 
+fn after_possessive_character_name(chars: &[char]) -> Option<&[char]> {
+    let noun = without_count(strip_prefix(chars, "の")?);
+    strip_prefix(noun, "文字").or_else(|| strip_prefix(noun, "字"))
+}
+
 /// A plain writing verb can report a message. Keep the original spelling when
 /// the writer requests a particular word or explicitly copies it unchanged.
 fn quotes_exact_writing(
@@ -803,7 +815,7 @@ fn quotes_exact_writing(
     shared_writing_object: bool,
 ) -> FormMatch {
     let after = skip_space(&chars[last.end_char + 1..scope.end_char]);
-    let Some((&particle @ ('と' | 'を'), tail)) = after.split_first() else {
+    let Some((&particle @ ('と' | 'を' | 'の'), tail)) = after.split_first() else {
         return FormMatch::Unspecified;
     };
     let start = scope.end_char - tail.len();
@@ -812,7 +824,12 @@ fn quotes_exact_writing(
         return FormMatch::Unspecified;
     };
     // という can name the word being written, or just describe its meaning.
-    let named_form = strip_prefix(after, "という").and_then(after_word_or_character_name);
+    let named_form = strip_prefix(after, "という")
+        .and_then(after_word_or_character_name)
+        .or_else(|| after_possessive_character_name(after));
+    if particle == 'の' && named_form.is_none() {
+        return FormMatch::Unspecified;
+    }
     let names_written_word = named_form
         .is_some_and(|rest| matches!(rest.first(), Some('を' | 'が' | 'と' | 'は' | 'も')));
     if (marker.span.start_char + 1 != start || marker.span.end_char != start) && !names_written_word
@@ -836,9 +853,28 @@ fn quotes_exact_writing(
             object_of_verb(i) && syntax.tokens[i].span.end_char == scope.end_char - rest.len()
         })
     });
+    // In 「A」、「B」の文字を the shared 文字 must be the object of this
+    // predicate. A further modifier such as の意味 names a different object.
+    if particle == 'の' && named_object.is_none() {
+        return FormMatch::Unspecified;
+    }
     // In 声に出して読む the analyser attaches the object to 出す and the
     // character count to 声. Both belong to 読む through the explicit て clause.
-    let voice = if verb.lemma.as_deref() == Some("出す") {
+    let voice_verb_start = match verb.lemma.as_deref() {
+        Some("出す") => Some(verb.span.start_char),
+        // A glossary that names 出 separately can split 出し into 出 + し.
+        Some("する") => predicate.checked_sub(1).and_then(|i| {
+            let stem = &syntax.tokens[i];
+            (stem.span.end_char == verb.span.start_char
+                && chars[stem.span.start_char..stem.span.end_char] == ['出']
+                && syntax
+                    .edge(i)
+                    .is_some_and(|edge| edge.deprel == "compound" && edge.head == Some(predicate)))
+            .then_some(stem.span.start_char)
+        }),
+        _ => None,
+    };
+    let voice = if let Some(start) = voice_verb_start {
         syntax
             .head(predicate)
             .filter(|&reader| {
@@ -852,7 +888,8 @@ fn quotes_exact_writing(
                 (first..predicate).find(|&i| {
                     let token = &syntax.tokens[i];
                     syntax.head(i) == Some(predicate)
-                        && chars[token.span.start_char..verb.span.start_char] == ['声', 'に']
+                        && token.span.start_char < start
+                        && chars[token.span.start_char..start] == ['声', 'に']
                 })
             })
     } else {
@@ -863,7 +900,7 @@ fn quotes_exact_writing(
         && (named_object.is_some() || particle == 'を');
     // In 「X」と同じ意味の語を…書く the following 語 is the object. In
     // 「X」という語を the word name identifies X as that object.
-    if ((writes && particle == 'と') || reads_word)
+    if ((writes && particle != 'を') || reads_word)
         && (first..predicate).any(|i| object_of_verb(i) && Some(i) != named_object)
     {
         return FormMatch::Unspecified;
@@ -937,22 +974,30 @@ fn quotes_exact_writing(
                 && case.sentence == verb.sentence
                 && case.upos == Some(Upos::Adp)
         });
-    if !split_operand && !(first_in_quote..end_of_quote).any(attached) {
+    if !split_operand
+        && !(first_in_quote..end_of_quote).any(|i| {
+            attached(i)
+                || (particle == 'の'
+                    && syntax
+                        .head(i)
+                        .is_some_and(|head| Some(head) == named_object))
+        })
+    {
         return FormMatch::Unspecified;
     }
 
-    let reads_in_another_form = || {
-        if reads_word
+    let in_another_form = |target| {
+        if (reads_word || (particle == 'の' && (writes || copies)))
             && has_character_step(
                 chars,
                 scope,
                 first_in_quote..end_of_quote,
                 predicate,
-                voice,
+                [voice, target],
                 syntax,
             )
         {
-            FormMatch::TranslatedReading
+            FormMatch::TranslatedForm
         } else {
             FormMatch::Unspecified
         }
@@ -1000,7 +1045,7 @@ fn quotes_exact_writing(
                     && !language_of_previous_action(chars, i, noun, first_in_quote, syntax)
             })
         {
-            return reads_in_another_form();
+            return in_another_form(syntax.head(i));
         }
         if !(attached(i) || via_quote) {
             continue;
@@ -1044,7 +1089,7 @@ fn quotes_exact_writing(
         {
             // A target language requests translation. An instrument with 写す
             // can take a picture of what the quotation denotes.
-            return reads_in_another_form();
+            return in_another_form(Some(i));
         }
         if attached(i) && token.upos == Some(Upos::Adv) && word == ['そ', 'の', 'ま', 'ま'] {
             unchanged = true;
@@ -1068,6 +1113,7 @@ fn quotes_exact_writing(
         || (copies && unchanged)
         || (writes
             && (writes_in_japanese
+                || (particle == 'の' && named_object.is_some())
                 || (particle == 'と' && (writing_surface || directly_counted))
                 || (particle == 'を' && surface_after_operand)
                 || (shared_writing_object && (directly_counted || writing_surface))))
@@ -1077,7 +1123,7 @@ fn quotes_exact_writing(
             scope,
             first_in_quote..end_of_quote,
             predicate,
-            voice,
+            [voice, None],
             syntax,
         );
         if reads_word || letter_by_letter {
@@ -1147,7 +1193,7 @@ fn has_character_step(
     scope: Span,
     quoted: std::ops::Range<usize>,
     predicate: usize,
-    voice: Option<usize>,
+    modifiers: [Option<usize>; 2],
     syntax: QuoteSyntax<'_>,
 ) -> bool {
     let opening = &syntax.tokens[quoted.start];
@@ -1163,8 +1209,11 @@ fn has_character_step(
         let until = end - tail.len();
         let last = syntax.tokens.partition_point(|t| t.span.end_char <= until);
         (i..last).any(|j| {
-            syntax.head(j) == Some(predicate)
-                || voice.is_some_and(|index| syntax.head(j) == Some(index))
+            // The count can modify the voice in 声に出す or the target script
+            // in 一字ずつ英語で. Both modifiers already belong to this act.
+            syntax
+                .head(j)
+                .is_some_and(|head| head == predicate || modifiers.contains(&Some(head)))
                 || (chars
                     .get(until..opening.span.start_char.saturating_sub(1))
                     .is_some_and(|gap| trim_space_end(gap).is_empty())
@@ -2391,6 +2440,77 @@ mod tests {
             assert_eq!(result.target_text.contains("「ドイツ」"), kept, "{source}");
             assert_eq!(result.glossary_hits.is_empty(), kept, "{source}");
         }
+    }
+
+    #[test]
+    fn possessive_character_labels_follow_the_counted_operation() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        for (source, kept) in [
+            ("紙に「ドイツ」、「出口」の文字を一字ずつ書きました。", true),
+            (
+                "先生は「ドイツ」、「出口」の文字を一字ずつ声に出して読みました。",
+                true,
+            ),
+            (
+                "「ドイツ」の文字と「出口」の文字を一文字ずつ読み上げました。",
+                true,
+            ),
+            (
+                "紙に「ドイツ」の意味と「出口」の文字を一字ずつ書きました。",
+                false,
+            ),
+            (
+                "「ドイツ」の横にある「出口」の文字を一字ずつ声に出して読みました。",
+                false,
+            ),
+            (
+                "紙に「出口」、「ドイツ」の文字をローマ字で一字ずつ書きました。",
+                false,
+            ),
+            (
+                "「ドイツ」の文字と「出口」の文字を英語で一文字ずつ読み上げました。",
+                false,
+            ),
+            (
+                "「ドイツ」、「出口」の二文字を紙に一字ずつ書きました。",
+                true,
+            ),
+            (
+                "「ドイツ」の字と「出口」の字を一文字ずつひらがなで読み上げました。",
+                false,
+            ),
+        ] {
+            let result =
+                analyze_and_translate(source, &options, &glossary(), None, Backend::Onnx).unwrap();
+            assert_eq!(result.target_text.contains("「ドイツ」"), kept, "{source}");
+            assert_eq!(result.glossary_hits.is_empty(), kept, "{source}");
+        }
+    }
+
+    #[test]
+    fn a_glossary_split_in_the_reading_verb_keeps_only_its_operands_literal() {
+        let source = "先生は「ドイツ」、「出」の文字を一字ずつ声に出して読みました。";
+        let mut terms = glossary();
+        terms.domain_terms.push(GlossaryEntry {
+            canonical: "出".to_owned(),
+            surfaces: vec!["出".to_owned()],
+            targets: [(TargetVariant::ZhHant, "指定字".to_owned())].into(),
+            pronoun_class: Default::default(),
+            speech_register: Default::default(),
+        });
+        let result = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &terms,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert!(result.target_text.contains("「ドイツ」"));
+        assert!(result.target_text.contains("「出」"));
+        assert_eq!(result.glossary_hits.len(), 1);
+        let verb_start = source.split_once("出して").unwrap().0.chars().count();
+        assert_eq!(result.glossary_hits[0].source_span.start_char, verb_start);
     }
 
     #[test]

@@ -10221,20 +10221,28 @@ fn localize_sufficiency(atoms: &mut Vec<Atom>) {
             && marker.deprel == "case"
             && matches!(word.deprel.as_str(), "advcl" | "amod" | "advmod")
         {
-            let Some(verb) = atoms.iter().find(|atom| {
-                !atom.is_locked && atom.upos == Some(Upos::Verb) && atom.deprel == "root"
-            }) else {
+            let Some(verb) = atoms
+                .iter()
+                .find(|atom| {
+                    !atom.is_locked
+                        && atom.upos == Some(Upos::Verb)
+                        && atom.doc_tok_idx == word.head
+                        && (atom.deprel == "root" || has_temporal_te_kara_tail(atoms))
+                })
+                .or_else(|| {
+                    let object = atoms
+                        .iter()
+                        .find(|atom| atom.doc_tok_idx == word.head && atom.deprel == "obj")?;
+                    atoms.iter().find(|atom| {
+                        !atom.is_locked
+                            && atom.upos == Some(Upos::Verb)
+                            && atom.deprel == "root"
+                            && atom.doc_tok_idx == object.head
+                    })
+                })
+            else {
                 continue;
             };
-            if word.head != verb.doc_tok_idx
-                && !atoms.iter().any(|arg| {
-                    arg.doc_tok_idx == word.head
-                        && arg.deprel == "obj"
-                        && arg.head == verb.doc_tok_idx
-                })
-            {
-                continue;
-            }
             let mut adverb = word.clone();
             adverb.surface = "充分".to_owned();
             adverb.lemma = None;
@@ -18712,6 +18720,25 @@ mod clock_rule_tests {
                 text.contains("充分") && !text.contains("分鐘") && !text.contains("充分在"),
                 "{text}"
             );
+        }
+    }
+
+    #[test]
+    fn sufficiency_stays_with_the_action_before_temporal_kara() {
+        let terms = TranslationGlossary::new();
+        for (source, expected) in [
+            ("十分に休んでから家に帰りました。", "充分休息後，回到家了。"),
+            (
+                "資料を十分に読んでから帰りました。",
+                "充分讀資料後，回去了。",
+            ),
+            (
+                "十分に休んでからゆっくり歩きました。",
+                "充分休息後，慢慢地走了。",
+            ),
+            ("十分間休んでから歩きました。", "休息十分鐘後，走了。"),
+        ] {
+            assert_eq!(public_translate(source, &terms).target_text, expected);
         }
     }
 

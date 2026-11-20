@@ -212,15 +212,45 @@ fn protect_sibling_forms(
 ) {
     let mut first_in_list = 0;
     let mut first_for_comparison = 0;
+    let mut first_for_writing = 0;
+    let mut first_for_counted_form = 0;
     let mut labelled = false;
     for (index, quote) in quotes.iter().enumerate() {
         let opening = quote.start_char - 1;
         let before = &chars[scope.start_char..opening];
         let after = skip_space(&chars[quote.end_char + 1..scope.end_char]);
-        let join = index.checked_sub(1).and_then(|prev| {
+        let between = index.checked_sub(1).map(|prev| {
             let after_close = quotes[prev].end_char + 1;
-            quote_join(&chars[after_close..opening])
+            &chars[after_close..opening]
         });
+        let join = between.and_then(quote_join);
+        let after_named_operand = between.and_then(|gap| {
+            strip_prefix(skip_space(gap), "という").and_then(after_word_or_character_name)
+        });
+        // 「A」という言葉と「B」を names A and B as the two operands.
+        // 「A」という言葉の意味と「B」を names the meaning of A instead.
+        if !matches!(join, Some(QuoteJoin::Conjunction(_)))
+            && !matches!(
+                after_named_operand.and_then(quote_join),
+                Some(QuoteJoin::Conjunction(_))
+            )
+        {
+            first_for_writing = index;
+            // 「A」の文字と「B」の文字 repeats the character label on each
+            // operand. や can join the operands of a counted act too. の意味
+            // or の位置 instead names another object.
+            if join.is_none()
+                && !after_named_operand.is_some_and(is_example_quote_join)
+                && !between.is_some_and(|gap| {
+                    is_example_quote_join(gap)
+                        || after_possessive_character_name(skip_space(gap)).is_some_and(|rest| {
+                            quote_join(rest).is_some() || is_example_quote_join(rest)
+                        })
+                })
+            {
+                first_for_counted_form = index;
+            }
+        }
         if let Some(QuoteJoin::Conjunction(right_labelled)) = join {
             labelled &= right_labelled;
         } else {
@@ -257,7 +287,48 @@ fn protect_sibling_forms(
         let shared_copy_object = index > first_in_list && after.starts_with(&['を']);
         let copies_form =
             copies_written_form(chars, after, scope.end_char, syntax, shared_copy_object);
-        let exact_writing = quotes_exact_writing(chars, scope, *quote, *quote, syntax);
+        let shared_writing_object = index > first_for_counted_form && after.starts_with(&['を']);
+        let written_operand =
+            |word| quotes_exact_writing(chars, scope, *quote, word, syntax, shared_writing_object);
+        let match_form = written_operand(*quote);
+        let counted = matches!(
+            match_form,
+            FormMatch::CountedLiteral | FormMatch::TranslatedForm
+        );
+        let exact_writing = matches!(match_form, FormMatch::Literal | FormMatch::CountedLiteral);
+        if counted || exact_writing {
+            let first = if counted {
+                first_for_counted_form
+            } else {
+                first_for_writing
+            };
+            let mut next_is_operand = true;
+            for i in (first..index).rev() {
+                let word = quotes[i];
+                let next = quotes[i + 1];
+                let gap = &chars[word.end_char + 1..next.start_char - 1];
+                // In 「A」、「B」を or 「A」や「B」を the analyser can attach A to B instead of
+                // the predicate. Follow this link only for a proven counted act.
+                let via_next = counted
+                    && next_is_operand
+                    && (quote_join(gap) == Some(QuoteJoin::Enumeration)
+                        || is_example_quote_join(gap))
+                    && quote_attaches_to_form(word, next, syntax);
+                next_is_operand = via_next || written_operand(word) == match_form;
+                if next_is_operand {
+                    let span = protection_span(word, nested);
+                    if exact_writing {
+                        protected.push(span);
+                    } else {
+                        protected.retain(|candidate| *candidate != span);
+                    }
+                }
+            }
+        }
+        if match_form == FormMatch::TranslatedForm {
+            // The explicit target overrides local 字 or を一文字ずつ labels.
+            continue;
+        }
         let translation = source_translation_predicate(chars, scope, *quote, syntax);
         if measures_form
             || reads_word
@@ -268,14 +339,6 @@ fn protect_sibling_forms(
             || acts_on_written_form(before, after)
         {
             protected.push(protection_span(*quote, nested));
-        }
-        if exact_writing {
-            protected.extend(
-                quotes[first_for_comparison..index]
-                    .iter()
-                    .filter(|&&word| quotes_exact_writing(chars, scope, *quote, word, syntax))
-                    .map(|&word| protection_span(word, nested)),
-            );
         }
         if let Some(predicate) = translation {
             protected.extend(
@@ -314,6 +377,22 @@ fn protect_sibling_forms(
     }
 }
 
+fn quote_attaches_to_form(word: Span, next: Span, syntax: QuoteSyntax<'_>) -> bool {
+    let first = syntax
+        .tokens
+        .partition_point(|t| t.span.start_char < word.start_char);
+    (first..syntax.tokens.len())
+        .take_while(|&i| syntax.tokens[i].span.end_char <= word.end_char)
+        .filter(|&i| syntax.tokens[i].upos != Some(Upos::Punct))
+        .filter_map(|i| syntax.head(i))
+        .any(|head| {
+            let target = &syntax.tokens[head];
+            next.start_char <= target.span.start_char
+                && target.span.end_char <= next.end_char
+                && target.upos != Some(Upos::Punct)
+        })
+}
+
 fn names_character_count(chars: &[char]) -> bool {
     let chars = skip_space(chars);
     let chars = ["合計の", "総計の", "総", "全体の", "それぞれの", "各々の"]
@@ -347,6 +426,12 @@ fn quote_join(between: &[char]) -> Option<QuoteJoin> {
             .any(|label| strip_prefix(rest, label).is_some_and(|tail| skip_space(tail).is_empty()))
             .then_some(QuoteJoin::Conjunction(true))
     }
+}
+
+fn is_example_quote_join(between: &[char]) -> bool {
+    skip_space(between)
+        .strip_prefix(&['や'])
+        .is_some_and(|tail| after_clause_comma(tail).is_empty())
 }
 
 fn compares_apposed_forms(before: &[char], after: &[char], count: usize, labelled: bool) -> bool {
@@ -589,23 +674,26 @@ fn describes_written_form(after: &[char]) -> bool {
             .any(|form| strip_prefix(nominal, form).is_some_and(noun_boundary))
 }
 
+fn after_character_step(amount: &[char]) -> Option<&[char]> {
+    after_character_count(amount)
+        .and_then(|tail| {
+            ["ずつ", "ごとに"]
+                .iter()
+                .find_map(|marker| strip_prefix(tail, marker))
+        })
+        .or_else(|| {
+            ["一字一字", "一文字一文字"]
+                .iter()
+                .find_map(|marker| strip_prefix(amount, marker))
+        })
+}
+
 fn acts_on_written_form(before: &[char], after: &[char]) -> bool {
     let Some(object) = after.strip_prefix(&['を']) else {
         return false;
     };
     let amount = after_clause_comma(object);
-    let counted = after_character_count(amount);
-    let step = counted.and_then(|tail| {
-        ["ずつ", "ごとに"]
-            .iter()
-            .find_map(|marker| strip_prefix(tail, marker))
-    });
-    let step = step.or_else(|| {
-        ["一字一字", "一文字一文字"]
-            .iter()
-            .find_map(|marker| strip_prefix(amount, marker))
-    });
-    if step.is_some_and(|tail| {
+    if after_character_step(amount).is_some_and(|tail| {
         ["読", "書", "写", "数", "なぞ"]
             .iter()
             .any(|verb| strip_prefix(after_clause_comma(tail), verb).is_some())
@@ -613,7 +701,7 @@ fn acts_on_written_form(before: &[char], after: &[char]) -> bool {
         return true;
     }
     let writing_particles = ["では", "でも", "で"];
-    if counted
+    if after_character_count(amount)
         .and_then(|tail| {
             writing_particles
                 .iter()
@@ -699,6 +787,35 @@ fn copies_written_form(
         || copy_with_local_dependencies(chars, destination_start, scope_end, syntax)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FormMatch {
+    Unspecified,
+    Literal,
+    CountedLiteral,
+    TranslatedForm,
+}
+
+impl FormMatch {
+    fn when(literal: bool) -> Self {
+        if literal {
+            Self::Literal
+        } else {
+            Self::Unspecified
+        }
+    }
+}
+
+fn after_word_or_character_name(chars: &[char]) -> Option<&[char]> {
+    after_word_name(chars)
+        .or_else(|| strip_prefix(chars, "文字"))
+        .or_else(|| strip_prefix(chars, "字"))
+}
+
+fn after_possessive_character_name(chars: &[char]) -> Option<&[char]> {
+    let noun = without_count(strip_prefix(chars, "の")?);
+    strip_prefix(noun, "文字").or_else(|| strip_prefix(noun, "字"))
+}
+
 /// A plain writing verb can report a message. Keep the original spelling when
 /// the writer requests a particular word or explicitly copies it unchanged.
 fn quotes_exact_writing(
@@ -707,32 +824,101 @@ fn quotes_exact_writing(
     last: Span,
     quote: Span,
     syntax: QuoteSyntax<'_>,
-) -> bool {
+    shared_writing_object: bool,
+) -> FormMatch {
     let after = skip_space(&chars[last.end_char + 1..scope.end_char]);
-    let Some((&particle @ ('と' | 'を'), tail)) = after.split_first() else {
-        return false;
+    let Some((&particle @ ('と' | 'を' | 'の'), tail)) = after.split_first() else {
+        return FormMatch::Unspecified;
     };
     let start = scope.end_char - tail.len();
     let first = syntax.tokens.partition_point(|t| t.span.start_char < start);
     let Some(marker) = first.checked_sub(1).and_then(|i| syntax.tokens.get(i)) else {
-        return false;
+        return FormMatch::Unspecified;
     };
     // という can name the word being written, or just describe its meaning.
-    let names_written_word = strip_prefix(after, "という")
-        .and_then(after_word_name)
+    let named_form = strip_prefix(after, "という")
+        .and_then(after_word_or_character_name)
+        .or_else(|| after_possessive_character_name(after));
+    if particle == 'の' && named_form.is_none() {
+        return FormMatch::Unspecified;
+    }
+    let names_written_word = named_form
         .is_some_and(|rest| matches!(rest.first(), Some('を' | 'が' | 'と' | 'は' | 'も')));
     if (marker.span.start_char + 1 != start || marker.span.end_char != start) && !names_written_word
     {
-        return false;
+        return FormMatch::Unspecified;
     }
     let Some((predicate, verb)) = syntax.first_predicate(first, scope.end_char) else {
-        return false;
+        return FormMatch::Unspecified;
     };
     let surface = &chars[verb.span.start_char..verb.span.end_char];
     let copies = verb.lemma.as_deref() == Some("写す") || surface == ['写', 'す'];
     let writes = verb.lemma.as_deref() == Some("書く") || surface == ['書', 'く'];
+    let object_of_verb = |i| {
+        syntax
+            .edge(i)
+            .is_some_and(|e| e.deprel == "obj" && e.head == Some(predicate))
+    };
+    let named_object = named_form.and_then(|rest| {
+        rest.strip_prefix(&['を'])?;
+        (first..predicate).find(|&i| {
+            object_of_verb(i) && syntax.tokens[i].span.end_char == scope.end_char - rest.len()
+        })
+    });
+    // In 「A」、「B」の文字を the shared 文字 must be the object of this
+    // predicate. A further modifier such as の意味 names a different object.
+    if particle == 'の' && named_object.is_none() {
+        return FormMatch::Unspecified;
+    }
+    // In 声に出して読む the analyser attaches the object to 出す and the
+    // character count to 声. Both belong to 読む through the explicit て clause.
+    let voice_verb_start = match verb.lemma.as_deref() {
+        Some("出す") => Some(verb.span.start_char),
+        // A glossary that names 出 separately can split 出し into 出 + し.
+        Some("する") => predicate.checked_sub(1).and_then(|i| {
+            let stem = &syntax.tokens[i];
+            (stem.span.end_char == verb.span.start_char
+                && chars[stem.span.start_char..stem.span.end_char] == ['出']
+                && syntax
+                    .edge(i)
+                    .is_some_and(|edge| edge.deprel == "compound" && edge.head == Some(predicate)))
+            .then_some(stem.span.start_char)
+        }),
+        _ => None,
+    };
+    let voice = if let Some(start) = voice_verb_start {
+        syntax
+            .head(predicate)
+            .filter(|&reader| {
+                let read = &syntax.tokens[reader];
+                reader > predicate
+                    && read.sentence == verb.sentence
+                    && matches!(read.lemma.as_deref(), Some("読む" | "読み上げる"))
+                    && chars[verb.span.end_char..read.span.start_char] == ['て']
+            })
+            .and_then(|_| {
+                (first..predicate).find(|&i| {
+                    let token = &syntax.tokens[i];
+                    syntax.head(i) == Some(predicate)
+                        && token.span.start_char < start
+                        && chars[token.span.start_char..start] == ['声', 'に']
+                })
+            })
+    } else {
+        None
+    };
+    let reads_word = (voice.is_some()
+        || matches!(verb.lemma.as_deref(), Some("読む" | "読み上げる")))
+        && (named_object.is_some() || particle == 'を');
+    // In 「X」と同じ意味の語を…書く the following 語 is the object. In
+    // 「X」という語を the word name identifies X as that object.
+    if ((writes && particle != 'を') || reads_word)
+        && (first..predicate).any(|i| object_of_verb(i) && Some(i) != named_object)
+    {
+        return FormMatch::Unspecified;
+    }
     let states_inscription = particle == 'と' && verb.lemma.as_deref() == Some("ある");
-    if !(copies || writes || states_inscription)
+    if !(copies || writes || states_inscription || reads_word)
         || chars[start..verb.span.start_char].iter().any(|c| {
             matches!(
                 c,
@@ -740,7 +926,7 @@ fn quotes_exact_writing(
             )
         })
     {
-        return false;
+        return FormMatch::Unspecified;
     }
 
     let first_in_quote = syntax
@@ -749,10 +935,42 @@ fn quotes_exact_writing(
     let end_of_quote = syntax
         .tokens
         .partition_point(|t| t.span.start_char < quote.end_char);
-    let attached = |i| syntax.head(i) == Some(predicate);
+    let japanese_contrast = (first..predicate).find_map(|japanese| {
+        let target = &syntax.tokens[japanese];
+        if syntax.head(japanese) != Some(predicate)
+            || chars[target.span.start_char..target.span.end_char] != ['日', '本', '語']
+            || inscription_language_case(&chars[target.span.end_char..verb.span.start_char])
+                != Some('で')
+        {
+            return None;
+        }
+        // The analyser may attach the quote to なく in 英文ではなく、日本語で.
+        let neg = (first..japanese)
+            .rev()
+            .find(|&i| syntax.tokens[i].upos != Some(Upos::Punct))?;
+        let token = &syntax.tokens[neg];
+        (chars[token.span.start_char..token.span.end_char] == ['な', 'く']
+            && syntax
+                .head(neg)
+                .is_some_and(|head| head == japanese || head == predicate)
+            && (first..neg).any(|i| {
+                syntax.head(i) == Some(neg)
+                    && is_foreign_inscription_language(inscription_term(chars, i, syntax))
+                    && matches!(
+                        &chars[syntax.tokens[i].span.end_char..token.span.start_char],
+                        ['で'] | ['で', 'は']
+                    )
+            }))
+        .then_some(neg)
+    });
+    let attached = |i| {
+        syntax
+            .head(i)
+            .is_some_and(|head| head == predicate || japanese_contrast == Some(head))
+    };
     let words = &syntax.tokens[first_in_quote..end_of_quote];
     let Some(opening_word) = words.first() else {
-        return false;
+        return FormMatch::Unspecified;
     };
     // Punctuation inside a quote can end the analysis sentence before と or
     // を. The adjacent case particle then begins the outer clause, whose first
@@ -768,12 +986,38 @@ fn quotes_exact_writing(
                 && case.sentence == verb.sentence
                 && case.upos == Some(Upos::Adp)
         });
-    if !split_operand && !(first_in_quote..end_of_quote).any(attached) {
-        return false;
+    if !split_operand
+        && !(first_in_quote..end_of_quote).any(|i| {
+            attached(i)
+                || (particle == 'の'
+                    && syntax
+                        .head(i)
+                        .is_some_and(|head| Some(head) == named_object))
+        })
+    {
+        return FormMatch::Unspecified;
     }
 
+    let in_another_form = |target| {
+        if (reads_word || (particle == 'の' && (writes || copies)))
+            && has_character_step(
+                chars,
+                scope,
+                first_in_quote..end_of_quote,
+                predicate,
+                [voice, target],
+                syntax,
+            )
+        {
+            FormMatch::TranslatedForm
+        } else {
+            FormMatch::Unspecified
+        }
+    };
     let mut unchanged = false;
     let mut writing_surface = false;
+    let mut surface_after_operand = false;
+    let mut count_destination = None;
     let mut surface_has_foreign_text = false;
     let mut writes_in_japanese = false;
     for (i, token) in syntax.tokens[..predicate]
@@ -795,32 +1039,141 @@ fn quotes_exact_writing(
             && syntax
                 .head(i)
                 .is_some_and(|head| (first_in_quote..end_of_quote).contains(&head));
+        // ひらがな may be split into several tokens. The instrumental で
+        // still marks the requested script for this writing action.
+        if token.upos == Some(Upos::Adp)
+            && word == ['で']
+            && !case.starts_with(&['は', 'な', 'く'])
+            && syntax.head(i).is_some_and(|noun| {
+                attached(noun)
+                    && ["ひらがな", "平仮名", "カタカナ", "片仮名"]
+                        .iter()
+                        .any(|script| {
+                            strip_suffix(&chars[scope.start_char..token.span.start_char], script)
+                                .is_some_and(|prefix| {
+                                    scope.start_char + prefix.len()
+                                        <= syntax.tokens[noun].span.start_char
+                                })
+                        })
+                    && !language_of_previous_action(chars, i, noun, first_in_quote, syntax)
+            })
+        {
+            return in_another_form(syntax.head(i));
+        }
         if !(attached(i) || via_quote) {
             continue;
         }
         let surface = case.starts_with(&['に'])
             && is_writing_surface(chars, scope.start_char, token.span.end_char, syntax, copies);
         writing_surface |= surface;
-        if surface && !copies {
-            surface_has_foreign_text |=
-                has_foreign_surface_inscription(chars, scope, quote, syntax, i);
+        surface_after_operand |= surface && token.span.start_char >= start;
+        if surface {
+            if copies || (writes && attached(i)) {
+                count_destination.get_or_insert(i);
+            }
+            if !copies {
+                surface_has_foreign_text |=
+                    has_foreign_surface_inscription(chars, scope, quote, syntax, i);
+            }
         }
         let language_case = inscription_language_case(case);
-        let states_language = matches!(language_case, Some('で' | 'に'));
-        writes_in_japanese |= states_language && word == ['日', '本', '語'] && attached(i);
+        let states_language = matches!(language_case, Some('で' | 'に'))
+            && !japanese_contrast.is_some_and(|negative| syntax.head(i) == Some(negative))
+            && !language_of_previous_action(chars, i + 1, i, first_in_quote, syntax);
+        if states_language && language_case == Some('で') && attached(i) {
+            // In 日本語の文字で the instrumental belongs to 文字. Its modifier
+            // specifies Japanese for this writing, including a quoted を object.
+            let japanese_characters = word == ['文', '字']
+                && (0..i)
+                    .rev()
+                    .take_while(|&j| syntax.tokens[j].sentence == token.sentence)
+                    .any(|j| {
+                        let language = &syntax.tokens[j];
+                        syntax
+                            .edge(j)
+                            .is_some_and(|edge| edge.head == Some(i) && edge.deprel == "nmod")
+                            && chars[language.span.start_char..language.span.end_char]
+                                == ['日', '本', '語']
+                    });
+            writes_in_japanese |= japanese_characters || word == ['日', '本', '語'];
+        }
         let camera = ["カメラ", "スマホ", "スマートフォン", "携帯", "携帯電話"]
             .iter()
             .any(|name| word.iter().copied().eq(name.chars()));
-        if (is_foreign_inscription_language(word) && states_language)
+        if (states_language
+            && (specifies_foreign_writing(chars, i, syntax)
+                || (shared_writing_object && word == ['漢', '字'])))
             || (copies && camera && case.starts_with(&['で']))
         {
             // A target language requests translation. An instrument with 写す
             // can take a picture of what the quotation denotes.
-            return false;
+            return in_another_form(Some(i));
         }
         if attached(i) && token.upos == Some(Upos::Adv) && word == ['そ', 'の', 'ま', 'ま'] {
             unchanged = true;
         }
+    }
+    let phrase = &chars[verb.span.start_char..scope.end_char];
+    if surface_has_foreign_text
+        && !writes_in_japanese
+        && !unchanged
+        && (states_inscription
+            || ["書いてあ", "書いてな", "書かれ"]
+                .iter()
+                .any(|prefix| strip_prefix(phrase, prefix).is_some()))
+    {
+        return FormMatch::Unspecified;
+    }
+    // An explicit quoted writing operand can also name the place of the act
+    // (入口に) without naming a material. A distinct object belongs to the verb.
+    let directly_counted = after_character_step(after_clause_comma(tail)).is_some();
+    // In を一字ずつ紙に書く or を一文字ずつノートに写す, the analyzer can
+    // attach the count to the destination of the same writing act.
+    let counted_copy =
+        copies && particle == 'を' && (directly_counted || count_destination.is_some());
+    if reads_word
+        || counted_copy
+        || (copies && unchanged)
+        || (writes
+            && (writes_in_japanese
+                || (particle == 'の' && named_object.is_some())
+                || (particle == 'と' && (writing_surface || directly_counted))
+                || (particle == 'を' && surface_after_operand)
+                || (shared_writing_object && (directly_counted || writing_surface))))
+    {
+        let letter_by_letter = has_character_step(
+            chars,
+            scope,
+            first_in_quote..end_of_quote,
+            predicate,
+            [voice, count_destination],
+            syntax,
+        );
+        if reads_word || letter_by_letter {
+            return if letter_by_letter {
+                FormMatch::CountedLiteral
+            } else {
+                FormMatch::Unspecified
+            };
+        }
+    }
+    // A surface before the quote is evidence for this reading of を only
+    // when the character count modifies the surface itself.
+    if writes
+        && particle == 'を'
+        && count_destination.is_some_and(|destination| {
+            syntax.tokens[destination].span.end_char < quote.start_char
+                && has_character_step(
+                    chars,
+                    scope,
+                    first_in_quote..end_of_quote,
+                    destination,
+                    [None, None],
+                    syntax,
+                )
+        })
+    {
+        return FormMatch::CountedLiteral;
     }
     if copies {
         let before = trim_space_end(&chars[scope.start_char..quote.start_char - 1]);
@@ -835,47 +1188,81 @@ fn quotes_exact_writing(
         });
         // と introduces what is transcribed onto the page. With を, both a
         // written source and a destination distinguish transcription from a photo.
-        return (writing_surface && (particle == 'と' || written_source))
-            || (unchanged && (written_source || writing_surface));
+        return FormMatch::when(
+            (writing_surface && (particle == 'と' || written_source))
+                || (unchanged && (written_source || writing_surface)),
+        );
     }
 
-    let phrase = &chars[verb.span.start_char..scope.end_char];
-    if surface_has_foreign_text
-        && !writes_in_japanese
-        && !unchanged
-        && (states_inscription
-            || ["書いてあ", "書いてな", "書かれ"]
-                .iter()
-                .any(|prefix| strip_prefix(phrase, prefix).is_some()))
-    {
-        return false;
-    }
     let label = particle == 'と' && is_written_phrase(chars, first_in_quote..end_of_quote, syntax);
     if states_inscription {
         // 「…」とある states an inscription when it has an explicit surface.
-        return label
-            && writing_surface
-            && matches_written_form(
-                phrase,
-                &[
-                    "ある",
-                    "あった",
-                    "あります",
-                    "ありました",
-                    "ありません",
-                    "ありませんでした",
-                ],
-                ends_inscription_statement,
-            );
+        return FormMatch::when(
+            label
+                && writing_surface
+                && matches_written_form(
+                    phrase,
+                    &[
+                        "ある",
+                        "あった",
+                        "あります",
+                        "ありました",
+                        "ありません",
+                        "ありませんでした",
+                    ],
+                    ends_inscription_statement,
+                ),
+        );
     }
 
-    unchanged
-        || (label
-            && (is_writing_instruction(chars, scope, syntax, predicate)
-                || describes_writing(phrase, |tail| {
-                    (writing_surface && ends_inscription_statement(tail))
-                        || modified_writing_surface(chars, scope, syntax, predicate, tail).is_some()
-                })))
+    FormMatch::when(
+        unchanged
+            || (label
+                && (is_writing_instruction(chars, scope, syntax, predicate)
+                    || describes_writing(phrase, |tail| {
+                        (writing_surface && ends_inscription_statement(tail))
+                            || modified_writing_surface(chars, scope, syntax, predicate, tail)
+                                .is_some()
+                    }))),
+    )
+}
+
+// A character count belongs to this reading or writing act only when it
+// modifies the same predicate or its directly adjacent quoted operand.
+fn has_character_step(
+    chars: &[char],
+    scope: Span,
+    quoted: std::ops::Range<usize>,
+    predicate: usize,
+    modifiers: [Option<usize>; 2],
+    syntax: QuoteSyntax<'_>,
+) -> bool {
+    let opening = &syntax.tokens[quoted.start];
+    let end = syntax.tokens[predicate].span.start_char;
+    let first = syntax
+        .tokens
+        .partition_point(|t| t.sentence < opening.sentence || t.span.start_char < scope.start_char);
+    (first..predicate).filter(|i| !quoted.contains(i)).any(|i| {
+        let from = syntax.tokens[i].span.start_char;
+        let Some(tail) = after_character_step(&chars[from..end]) else {
+            return false;
+        };
+        let until = end - tail.len();
+        let last = syntax.tokens.partition_point(|t| t.span.end_char <= until);
+        (i..last).any(|j| {
+            // The count can modify the voice in 声に出す or the target script
+            // in 一字ずつ英語で. Both modifiers already belong to this act.
+            syntax
+                .head(j)
+                .is_some_and(|head| head == predicate || modifiers.contains(&Some(head)))
+                || (chars
+                    .get(until..opening.span.start_char.saturating_sub(1))
+                    .is_some_and(|gap| trim_space_end(gap).is_empty())
+                    && syntax.head(j).is_some_and(|head| {
+                        quoted.contains(&head) && syntax.head(head) == Some(predicate)
+                    }))
+        })
+    })
 }
 
 /// An inflected word or a noun phrase can be the inscription. A quoted
@@ -1013,12 +1400,105 @@ fn inscription_language_case(tail: &[char]) -> Option<char> {
     skip_space(tail).first().copied()
 }
 
+// 答え in 英文で答えた can be tagged as a noun. Its own past auxiliary still
+// closes the action before 後 or the person described by the relative clause.
+fn language_of_previous_action(
+    chars: &[char],
+    case_marker: usize,
+    language: usize,
+    quote: usize,
+    syntax: QuoteSyntax<'_>,
+) -> bool {
+    let Some(words) = syntax.tokens.get(case_marker..quote) else {
+        return false;
+    };
+    let [case, _, past, after, ..] = words else {
+        return false;
+    };
+    case.upos == Some(Upos::Adp)
+        && syntax.head(case_marker) == Some(language)
+        && past.upos == Some(Upos::Aux)
+        && (past.lemma.as_deref() == Some("た")
+            || matches!(
+                &chars[past.span.start_char..past.span.end_char],
+                ['た'] | ['だ']
+            ))
+        && syntax.head(case_marker + 2) == Some(case_marker + 1)
+        && (matches!(
+            &chars[after.span.start_char..after.span.end_char],
+            ['後'] | ['あ', 'と']
+        ) || syntax.edge(case_marker + 1).is_some_and(|edge| {
+            edge.head == Some(case_marker + 3) && matches!(edge.deprel.as_str(), "acl" | "nmod")
+        }) && syntax
+            .edge(case_marker + 3)
+            .is_some_and(|edge| edge.deprel == "nsubj"))
+}
+
+fn inscription_term<'a>(chars: &'a [char], index: usize, syntax: QuoteSyntax<'_>) -> &'a [char] {
+    let token = &syntax.tokens[index];
+    let mut start = token.span.start_char;
+    if matches!(
+        &chars[start..token.span.end_char],
+        ['語'] | ['文'] | ['字'] | ['文', '字']
+    ) && index > 0
+        && syntax
+            .edge(index - 1)
+            .is_some_and(|e| e.deprel == "compound" && e.head == Some(index))
+        && syntax.tokens[index - 1].span.end_char == start
+    {
+        start = syntax.tokens[index - 1].span.start_char;
+    }
+    &chars[start..token.span.end_char]
+}
+
 fn is_foreign_inscription_language(word: &[char]) -> bool {
-    word.len() > 1
-        && word.ends_with(&['語'])
-        && !["日本語", "単語", "用語", "言語", "専門用語"]
-            .iter()
-            .any(|name| word.iter().copied().eq(name.chars()))
+    [
+        "英文",
+        "英字",
+        "英文字",
+        "点字",
+        "ローマ字",
+        "ラテン字",
+        "ラテン文字",
+        "アルファベット",
+    ]
+    .iter()
+    .any(|label| word.iter().copied().eq(label.chars()))
+        || word.len() > 1
+            && word.ends_with(&['語'])
+            && !["日本語", "単語", "用語", "言語", "専門用語"]
+                .iter()
+                .any(|name| word.iter().copied().eq(name.chars()))
+}
+
+fn specifies_foreign_writing(chars: &[char], index: usize, syntax: QuoteSyntax<'_>) -> bool {
+    let term = inscription_term(chars, index, syntax);
+    if is_foreign_inscription_language(term) {
+        return true;
+    }
+    // In ローマ字表記 and 英語のスペル, the spelling takes the case particle
+    // of the writing act. 英語の授業 names a class, not a writing system.
+    let is_spelling = [
+        "表記",
+        "文字",
+        "大文字",
+        "小文字",
+        "字",
+        "綴り",
+        "つづり",
+        "スペル",
+    ]
+    .iter()
+    .any(|label| term.iter().copied().eq(label.chars()));
+    is_spelling
+        && (0..index)
+            .rev()
+            .take_while(|&i| syntax.tokens[i].sentence == syntax.tokens[index].sentence)
+            .any(|i| {
+                syntax.edge(i).is_some_and(|e| {
+                    e.head == Some(index) && matches!(e.deprel.as_str(), "compound" | "nmod")
+                }) && is_foreign_inscription_language(inscription_term(chars, i, syntax))
+            })
 }
 
 fn has_foreign_surface_inscription(
@@ -1040,11 +1520,7 @@ fn has_foreign_surface_inscription(
             token.sentence == noun.sentence && token.span.start_char >= scope.start_char
         })
         .any(|(index, word)| {
-            if !outside_quote(word)
-                || !is_foreign_inscription_language(
-                    &chars[word.span.start_char..word.span.end_char],
-                )
-            {
+            if !outside_quote(word) || !specifies_foreign_writing(chars, index, syntax) {
                 return false;
             }
             let Some(edge) = syntax.edge(index) else {
@@ -1189,6 +1665,10 @@ fn is_writing_surface(
             "標示板",
             "標識",
             "ホワイトボード",
+            "ドア",
+            "扉",
+            "窓",
+            "ガラス",
         ]
         .iter()
         .filter_map(|noun| strip_suffix(source, noun))
@@ -1817,6 +2297,499 @@ mod tests {
             assert_eq!(translated.target_text.contains("ドイツ"), kept, "{source}");
             assert!(translated.target_text.contains("德國"), "{source}");
             assert_eq!(translated.glossary_hits.len(), 1, "{source}");
+        }
+    }
+
+    #[test]
+    fn the_written_language_and_script_belong_to_their_own_predicate() {
+        for (source, kept) in [
+            ("窓に「ドイツ」と点字で一字ずつ書きました。", false),
+            ("窓に「ドイツ」と同じ意味の英単語を書きました。", false),
+            (
+                "窓に「ドイツ」と同じ意味の英単語を一字ずつ書きました。",
+                false,
+            ),
+            (
+                "ドアに「ドイツ」とは別の英単語を一字ずつ書きました。",
+                false,
+            ),
+            ("窓に「ドイツ」という言葉を一字ずつ書きました。", true),
+            ("窓に「ドイツ」とローマ字表記で一字ずつ書きました。", false),
+            ("窓に「ドイツ」と英語のスペルで一字ずつ書きました。", false),
+            (
+                "窓に「ドイツ」とアルファベットの大文字で一字ずつ書きました。",
+                false,
+            ),
+            ("窓に「ドイツ」と英語の授業で一字ずつ書きました。", true),
+            ("「ドイツ」と日本語で一字ずつ書きました。", true),
+            (
+                "窓に英文で住所を書き、その下に「ドイツ」と日本語で一字ずつ書きました。",
+                true,
+            ),
+            (
+                "「ドイツ」と日本語で一字ずつ書きました。次の欄には英文を一字ずつ書きました。",
+                true,
+            ),
+            ("「ドイツ」と日本語で説明しました。", false),
+            ("「ドイツ」とローマ字で一字ずつ書きました。", false),
+            ("紙に「ドイツ」を日本語の文字で一文字ずつ書きました。", true),
+            ("紙に「ドイツ」を英語の文字で一文字ずつ書きました。", false),
+            ("紙に「ドイツ」とひらがなで一文字ずつ書きました。", false),
+            ("紙に「ドイツ」とカタカナで一文字ずつ書きました。", false),
+            (
+                "紙に「ドイツ」を日本語の文字について一文字ずつ書きました。",
+                false,
+            ),
+            ("窓に「ドイツ」と英文で一字ずつ書きました。", false),
+            ("窓にローマ字で「ドイツ」と一字ずつ書きました。", false),
+            (
+                "窓に「ドイツ」と一字ずつアルファベットで書きました。",
+                false,
+            ),
+            (
+                "窓に「ドイツ」と英文ではなく、日本語で一字ずつ書きました。",
+                true,
+            ),
+            (
+                "ローマ字で名前を書いた後、窓に「ドイツ」と一字ずつ書きました。",
+                true,
+            ),
+            ("入口に「ドイツ」と一字ずつ書く予定です。", true),
+            ("入口に「ドイツ」と英文で一字ずつ書く予定です。", false),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(
+                result.target_text.contains("「ドイツ」"),
+                kept,
+                "{source} → {}",
+                result.target_text
+            );
+            assert_eq!(result.glossary_hits.is_empty(), kept, "{source}");
+        }
+    }
+
+    #[test]
+    fn counted_reading_aloud_preserves_only_its_quoted_operands() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        for (source, literal) in [
+            (
+                "先生は「ドイツ」と「受付」という字を、それぞれ一字ずつ声に出して読みました。",
+                true,
+            ),
+            (
+                "先生は「ドイツ」と「受付」を一文字ずつ読み上げました。",
+                true,
+            ),
+            ("先生は「ドイツ」と「受付」を順に読み上げました。", false),
+            (
+                "先生は「ドイツ」と「受付」を英語で一文字ずつ読み上げました。",
+                false,
+            ),
+            (
+                "先生は「ドイツ」の横にある「受付」という字を一字ずつ声に出して読みました。",
+                false,
+            ),
+        ] {
+            let result =
+                analyze_and_translate(source, &options, &glossary(), None, Backend::Onnx).unwrap();
+            assert_eq!(
+                result.target_text.contains("「ドイツ」"),
+                literal,
+                "{source}"
+            );
+            assert_eq!(result.glossary_hits.is_empty(), literal, "{source}");
+        }
+    }
+
+    #[test]
+    fn counted_writing_preserves_each_shared_operand_and_only_the_copied_text() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        for (source, literal, glosses) in [
+            (
+                "紙に「ドイツ」と「受付」を一文字ずつ書きました。ドイツに行きました。",
+                true,
+                1,
+            ),
+            (
+                "紙に「ドイツ」と「受付」を英語の文字で一文字ずつ書きました。",
+                false,
+                1,
+            ),
+            (
+                "「受付」の下に「ドイツ」と一文字ずつそのまま写しました。",
+                true,
+                0,
+            ),
+            (
+                "「ドイツ」の下に「受付」と一文字ずつそのまま写しました。",
+                false,
+                1,
+            ),
+            (
+                "先生は「ドイツ」と言い、紙に「受付」と一文字ずつ書きました。",
+                false,
+                1,
+            ),
+        ] {
+            let result =
+                analyze_and_translate(source, &options, &glossary(), None, Backend::Onnx).unwrap();
+            assert_eq!(
+                result.target_text.contains("「ドイツ」"),
+                literal,
+                "{source}"
+            );
+            assert_eq!(result.glossary_hits.len(), glosses, "{source}");
+        }
+    }
+
+    #[test]
+    fn comma_separated_quotes_follow_their_shared_character_operation() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        for (source, kept) in [
+            ("「ドイツ」、「受付」を紙に一字ずつ書きました。", true),
+            (
+                "「ドイツ」、「受付」、「係員」を紙に一字ずつ書きました。",
+                true,
+            ),
+            (
+                "「ドイツ」と「受付」、「係員」を紙に一字ずつ書きました。",
+                true,
+            ),
+            (
+                "先生は「ドイツ」、「受付」という字をそれぞれ一字ずつ声に出して読みました。",
+                true,
+            ),
+            ("先生は「ドイツ」、「受付」と言いました。", false),
+            (
+                "「ドイツ」、「受付」とは違う英単語を紙に一字ずつ書きました。",
+                false,
+            ),
+            (
+                "「ドイツ」、「受付」を英語で一字ずつ読み上げました。",
+                false,
+            ),
+        ] {
+            let result =
+                analyze_and_translate(source, &options, &glossary(), None, Backend::Onnx).unwrap();
+            assert_eq!(result.target_text.contains("「ドイツ」"), kept, "{source}");
+            assert_eq!(result.glossary_hits.is_empty(), kept, "{source}");
+        }
+    }
+
+    #[test]
+    fn possessive_character_labels_follow_the_counted_operation() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        for (source, kept) in [
+            ("紙に「ドイツ」、「出口」の文字を一字ずつ書きました。", true),
+            (
+                "先生は「ドイツ」、「出口」の文字を一字ずつ声に出して読みました。",
+                true,
+            ),
+            (
+                "「ドイツ」の文字と「出口」の文字を一文字ずつ読み上げました。",
+                true,
+            ),
+            (
+                "紙に「ドイツ」の意味と「出口」の文字を一字ずつ書きました。",
+                false,
+            ),
+            (
+                "「ドイツ」の横にある「出口」の文字を一字ずつ声に出して読みました。",
+                false,
+            ),
+            (
+                "紙に「出口」、「ドイツ」の文字をローマ字で一字ずつ書きました。",
+                false,
+            ),
+            (
+                "「ドイツ」の文字と「出口」の文字を英語で一文字ずつ読み上げました。",
+                false,
+            ),
+            (
+                "「ドイツ」、「出口」の二文字を紙に一字ずつ書きました。",
+                true,
+            ),
+            (
+                "「ドイツ」の字と「出口」の字を一文字ずつひらがなで読み上げました。",
+                false,
+            ),
+        ] {
+            let result =
+                analyze_and_translate(source, &options, &glossary(), None, Backend::Onnx).unwrap();
+            assert_eq!(result.target_text.contains("「ドイツ」"), kept, "{source}");
+            assert_eq!(result.glossary_hits.is_empty(), kept, "{source}");
+        }
+    }
+
+    #[test]
+    fn counted_copying_retains_the_content_of_its_quoted_object() {
+        let mut glossary = glossary();
+        for (surface, target) in [("受付", "櫃檯"), ("入口", "入站口"), ("出口", "EXIT")]
+        {
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: surface.to_owned(),
+                surfaces: vec![surface.to_owned()],
+                targets: [(TargetVariant::ZhHant, target.to_owned())].into(),
+                pronoun_class: Default::default(),
+                speech_register: Default::default(),
+            });
+        }
+        for source_hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = source_hint;
+            for (source, literal, expected_hits) in [
+                (
+                    "「受付で待つ」を一文字ずつノートに写しました。受付を確認しました。",
+                    &["「受付で待つ」"][..],
+                    1,
+                ),
+                ("「入口」を一文字ずつノートに写しました。", &["「入口」"], 0),
+                (
+                    "「出口」を一文字ずつノートに写しませんでした。",
+                    &["「出口」"],
+                    0,
+                ),
+                (
+                    "「入口」や「出口」より先に、「受付」を一文字ずつノートに写しました。",
+                    &["「受付」"],
+                    2,
+                ),
+                ("「入口」や「出口」をカメラで一文字ずつ写しました。", &[], 2),
+                (
+                    "「入口」を一字ずつ読み上げ、次に「出口」をノートに写しました。",
+                    &["「入口」"],
+                    1,
+                ),
+            ] {
+                let result =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                for quote in literal {
+                    assert!(
+                        result.target_text.contains(quote),
+                        "{source}: {}",
+                        result.target_text
+                    );
+                }
+                assert_eq!(result.glossary_hits.len(), expected_hits, "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn ya_joins_only_the_operands_of_the_same_counted_act() {
+        let mut glossary = glossary();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "受付".to_owned(),
+            surfaces: vec!["受付".to_owned()],
+            targets: [(TargetVariant::ZhHant, "櫃檯".to_owned())].into(),
+            pronoun_class: Default::default(),
+            speech_register: Default::default(),
+        });
+        for source_hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = source_hint;
+            for (source, literal) in [
+                ("「ドイツ」や「受付」を紙に一字ずつ書きました。", true),
+                ("「ドイツ」や「受付」を一字ずつ紙に書きました。", true),
+                ("「ドイツ」や「受付」を一字ずつ紙に書きませんでした。", true),
+                ("「ドイツ」や「受付」を一字ずつ書きました。", true),
+                (
+                    "「ドイツ」や「受付」の文字を一字ずつ書きませんでした。",
+                    true,
+                ),
+                (
+                    "先生は「ドイツ」や「受付」の文字を一字ずつ声に出して読みました。",
+                    true,
+                ),
+                (
+                    "「ドイツ」の文字や「受付」の文字を一字ずつ読み上げました。",
+                    true,
+                ),
+                ("「ドイツ」や「受付」を一字ずつノートに写さなかった。", true),
+                ("「ドイツ」や「受付」と言いました。", false),
+                ("「ドイツ」や「受付」を紙に書きました。", false),
+                (
+                    "「ドイツ」や「受付」を一字ずつ紙に英語で書きました。",
+                    false,
+                ),
+                (
+                    "「ドイツ」や「受付」とは違う英単語を紙に一字ずつ書きました。",
+                    false,
+                ),
+                (
+                    "「ドイツ」や「受付」を英語で一字ずつ読み上げました。",
+                    false,
+                ),
+            ] {
+                let result =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                for raw in ["「ドイツ」", "「受付」"] {
+                    assert_eq!(
+                        result.target_text.contains(raw),
+                        literal,
+                        "{source}: {}",
+                        result.target_text
+                    );
+                }
+                let hit_count = if literal { 0 } else { 2 };
+                assert_eq!(result.glossary_hits.len(), hit_count, "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_character_step_can_modify_the_surface_of_the_same_writing_action() {
+        let glossary = glossary();
+        for source_hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = source_hint;
+            for (source, literal) in [
+                ("「ドイツ」を一字ずつ紙に書きました。", true),
+                ("「ドイツ」を紙に一字ずつ書きました。", true),
+                ("一字ずつ紙に「ドイツ」を書きました。", true),
+                ("「ドイツ」を一文字ずつ黒板に書きませんでした。", true),
+                (
+                    "「ドイツ」と比べて「出口」を一字ずつ紙に書きました。",
+                    false,
+                ),
+                (
+                    "「ドイツ」と言った後、一字ずつ紙に「出口」を書きました。",
+                    false,
+                ),
+            ] {
+                let result =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                assert_eq!(
+                    result.target_text.contains("「ドイツ」"),
+                    literal,
+                    "{source}: {}",
+                    result.target_text
+                );
+                assert_eq!(result.glossary_hits.is_empty(), literal, "{source}");
+                if !literal {
+                    assert!(result.target_text.contains("「出口」"), "{source}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_glossary_split_in_the_reading_verb_keeps_only_its_operands_literal() {
+        let source = "先生は「ドイツ」、「出」の文字を一字ずつ声に出して読みました。";
+        let mut terms = glossary();
+        terms.domain_terms.push(GlossaryEntry {
+            canonical: "出".to_owned(),
+            surfaces: vec!["出".to_owned()],
+            targets: [(TargetVariant::ZhHant, "指定字".to_owned())].into(),
+            pronoun_class: Default::default(),
+            speech_register: Default::default(),
+        });
+        let result = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &terms,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert!(result.target_text.contains("「ドイツ」"));
+        assert!(result.target_text.contains("「出」"));
+        assert_eq!(result.glossary_hits.len(), 1);
+        let verb_start = source.split_once("出して").unwrap().0.chars().count();
+        assert_eq!(result.glossary_hits[0].source_span.start_char, verb_start);
+    }
+
+    #[test]
+    fn separately_spoken_and_written_occurrences_follow_their_own_language() {
+        let opt = TranslateOptions::new(TargetVariant::ZhHant);
+        for preceding in [
+            "英文で答えた後",
+            "日本語で答えた後",
+            "英語で答えた先生が",
+            "ひらがなで答えた後",
+            "ひらがなで答えた先生が",
+        ] {
+            let source = format!("「ドイツ」と{preceding}、ドアに「ドイツ」と一字ずつ書きました。");
+            let result =
+                analyze_and_translate(&source, &opt, &glossary(), None, Backend::Onnx).unwrap();
+            assert_eq!(
+                result.target_text.matches("「ドイツ」").count(),
+                1,
+                "{source}"
+            );
+            assert_eq!(result.glossary_hits.len(), 1, "{source}");
+            assert_eq!(
+                result.glossary_hits[0].source_span.start_char, 1,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn protects_a_quoted_operand_written_or_read_character_by_character() {
+        let glossary = glossary();
+        for (source, spelling, keep) in [
+            ("ドアには「ドイツ」と一字ずつ書きました。", "ドイツ", true),
+            (
+                "ドアには一字ずつ「ドイツ」と書きませんでした。",
+                "ドイツ",
+                true,
+            ),
+            (
+                "「受付で待つ」と紙に一字ずつ書きました。",
+                "受付で待つ",
+                true,
+            ),
+            (
+                "窓ガラスに書かれた「ドイツ」という言葉を一文字ずつ読みませんでした。",
+                "ドイツ",
+                true,
+            ),
+            (
+                "ドアに「ドイツ」と中国語で一字ずつ書きました。",
+                "ドイツ",
+                false,
+            ),
+            (
+                "ドアの前で「ドイツ」と言って、紙に一字ずつ書きました。",
+                "ドイツ",
+                false,
+            ),
+            (
+                "「ドイツ」という言葉の意味を一字ずつ書きました。",
+                "ドイツ",
+                false,
+            ),
+            (
+                "英語だけで書かれている札には「ドイツ」と一字ずつ書かれていました。",
+                "ドイツ",
+                false,
+            ),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(
+                result.target_text.contains(&format!("「{spelling}」")),
+                keep,
+                "{source} → {}",
+                result.target_text
+            );
         }
     }
 

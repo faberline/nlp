@@ -720,7 +720,7 @@ fn quotes_exact_writing(
     // という can name the word being written, or just describe its meaning.
     let names_written_word = strip_prefix(after, "という")
         .and_then(after_word_name)
-        .is_some_and(|rest| matches!(rest.first(), Some('を' | 'が' | 'と')));
+        .is_some_and(|rest| matches!(rest.first(), Some('を' | 'が' | 'と' | 'は' | 'も')));
     if (marker.span.start_char + 1 != start || marker.span.end_char != start) && !names_written_word
     {
         return false;
@@ -874,7 +874,7 @@ fn quotes_exact_writing(
             && (is_writing_instruction(chars, scope, syntax, predicate)
                 || describes_writing(phrase, |tail| {
                     (writing_surface && ends_inscription_statement(tail))
-                        || modifies_written_surface(chars, scope, syntax, predicate, tail)
+                        || modified_writing_surface(chars, scope, syntax, predicate, tail).is_some()
                 })))
 }
 
@@ -1061,26 +1061,24 @@ fn has_foreign_surface_inscription(
             outside_quote(verb)
                 && verb.lemma.as_deref() == Some("書く")
                 && matches!(case, Some('で' | 'に'))
-                && syntax.edge(writer).is_some_and(|modifier| {
-                    modifier.head == Some(surface) && modifier.deprel == "acl"
+                && describes_writing(&chars[verb.span.start_char..scope.end_char], |tail| {
+                    modified_writing_surface(chars, scope, syntax, writer, tail) == Some(surface)
                 })
         })
 }
 
-fn modifies_written_surface(
+fn modified_writing_surface(
     chars: &[char],
     scope: Span,
     syntax: QuoteSyntax<'_>,
     predicate: usize,
     tail: &[char],
-) -> bool {
+) -> Option<usize> {
     let start = scope.end_char - tail.len();
-    let Ok(first) = syntax
+    let first = syntax
         .tokens
         .binary_search_by_key(&start, |t| t.span.start_char)
-    else {
-        return false;
-    };
+        .ok()?;
     let noun = syntax
         .edge(first)
         .filter(|edge| matches!(edge.deprel.as_str(), "compound" | "amod" | "det"))
@@ -1098,7 +1096,7 @@ fn modifies_written_surface(
             false,
         )
     {
-        return false;
+        return None;
     }
 
     (predicate..first).any(|index| {
@@ -1112,7 +1110,7 @@ fn modifies_written_surface(
                         && chars[syntax.tokens[index].span.start_char..syntax.tokens[index].span.end_char]
                             == ['あ', 'る']))
         })
-    })
+    }).then_some(noun)
 }
 
 fn is_writing_instruction(
@@ -2386,6 +2384,14 @@ mod tests {
                 "英語だけで書かれた札には「写真」と書いてあります。",
                 "「照片」",
             ),
+            (
+                "英語だけで書かれている札には「写真」と書いてあります。",
+                "「照片」",
+            ),
+            (
+                "英語だけで書いてある札には「写真」と書いてあります。",
+                "「照片」",
+            ),
             ("英語だけの案内板には「写真」とあります。", "「照片」"),
             (
                 "英語で書かれた札には、日本語で「写真」と書いてあります。",
@@ -2400,6 +2406,10 @@ mod tests {
                 "「照片」",
             ),
             ("紙に「写真」という言葉を書きました。", "「写真」"),
+            (
+                "紙に「写真」という言葉は書いてありませんでした。",
+                "「写真」",
+            ),
             ("看板に「写真を買いました」と書いてありました。", "照片"),
             ("看板の前で「写真」と言いました。", "「照片」"),
         ] {

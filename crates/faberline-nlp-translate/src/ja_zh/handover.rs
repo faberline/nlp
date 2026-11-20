@@ -6,7 +6,7 @@ use super::{
     Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM,
     LOCKED_RESIDENT_ATOM, Segment, SemanticClass, Span, TargetVariant, Upos, classroom_role,
     dasu_case_link, daytime, honorific, is_demonstrative_person_noun, is_time_or_place_bunsetsu,
-    purpose_stem_lemma, render_bunsetsu_np, return_endpoint,
+    purpose_stem_lemma, render_bunsetsu_np, return_endpoint, spatial_route_marker,
 };
 
 pub(super) struct Handover {
@@ -219,7 +219,24 @@ fn travel_place(place: &Atom, doc: &Document, source: &[char]) -> bool {
             || place.surface == "教室")
 }
 
-fn travel_past(past: &[Atom], go_id: usize, doc: &Document) -> bool {
+fn traversed_space(place: &Atom, doc: &Document, source: &[char]) -> bool {
+    let Some(token) = written_head(place, doc) else {
+        return false;
+    };
+    if token.upos != Some(Upos::Noun)
+        || token.span != place.span
+        || place.is_locked && !whole_glossary_atom(place, LOCKED_PLACE_ATOM, doc)
+    {
+        return false;
+    }
+    // A locked route hides the noun. Use its original surface so the same
+    // spatial vocabulary applies to locked and unlocked routes.
+    source
+        .get(token.span.start_char..token.span.end_char)
+        .is_some_and(|chars| spatial_route_marker(&chars.iter().collect::<String>()).is_some())
+}
+
+fn travel_past(past: &[Atom], motion_id: usize, doc: &Document) -> bool {
     let affirmative = match past {
         [ta] => ta.surface == "た",
         [mas, ta] => mas.surface == "まし" && ta.surface == "た",
@@ -228,7 +245,7 @@ fn travel_past(past: &[Atom], go_id: usize, doc: &Document) -> bool {
     affirmative
         && past.iter().all(|atom| {
             !atom.is_locked
-                && atom.head == Some(go_id)
+                && atom.head == Some(motion_id)
                 && atom.deprel == "aux"
                 && written_head(atom, doc)
                     .is_some_and(|token| token.span == atom.span && token.upos == Some(Upos::Aux))
@@ -267,29 +284,37 @@ pub(super) fn before_travel(
     else {
         return None;
     };
-    let [place, direction, go, past @ ..] = travel.as_slice() else {
+    let [place, case, motion, past @ ..] = travel.as_slice() else {
         return None;
     };
-    let go_id = go.doc_tok_idx?;
-    let go_source = written_head(go, doc)?;
-    if go.is_locked
-        || go.span != go_source.span
-        || go_source.upos != Some(Upos::Verb)
-        || go_source.lemma.as_deref() != Some("行く")
-        || go.deprel != "root"
-        || go.head.is_some()
-        || place.head != Some(go_id)
-        || place.deprel != "obl"
-        || !travel_place(place, doc, source)
-        || !matches!(direction.surface.as_str(), "へ" | "に")
-        || !dasu_case_link(place, direction)
-        || written_head(direction, doc).is_none()
+    let motion_id = motion.doc_tok_idx?;
+    let motion_source = written_head(motion, doc)?;
+    if motion.is_locked
+        || motion.span != motion_source.span
+        || motion_source.upos != Some(Upos::Verb)
+        || motion.deprel != "root"
+        || motion.head.is_some()
+        || place.head != Some(motion_id)
+        || !dasu_case_link(place, case)
+        || written_head(case, doc).is_none()
         || !matches!(trailing_punct.as_deref(), None | Some("。"))
-        || !travel_past(past, go_id, doc)
+        || !travel_past(past, motion_id, doc)
         || travel
             .windows(2)
             .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
     {
+        return None;
+    }
+    let path_is_proven = match (
+        motion_source.lemma.as_deref(),
+        place.deprel.as_str(),
+        case.surface.as_str(),
+    ) {
+        (Some("行く"), "obl", "へ" | "に") => travel_place(place, doc, source),
+        (Some("渡る"), "obj", "を") => traversed_space(place, doc, source),
+        _ => false,
+    };
+    if !path_is_proven {
         return None;
     }
     let hand_id = hand.doc_tok_idx?;
@@ -303,12 +328,12 @@ pub(super) fn before_travel(
             && hand.head == place.doc_tok_idx
             && purpose_stem_lemma(hand).as_deref() == Some("渡す") =>
         {
-            (go_id, hand.span.end_char)
+            (motion_id, hand.span.end_char)
         }
         [te] if hand_source.upos == Some(Upos::Verb)
             && hand_source.lemma.as_deref() == Some("渡す")
             && hand.deprel == "advcl"
-            && hand.head == Some(go_id)
+            && hand.head == Some(motion_id)
             && !te.is_locked
             && te.surface == "て"
             && te.deprel == "mark"
@@ -319,7 +344,7 @@ pub(super) fn before_travel(
         }
         _ => return None,
     };
-    let sentence = doc.segmentation.sentences.get(go_source.sentence)?.span;
+    let sentence = doc.segmentation.sentences.get(motion_source.sentence)?.span;
     if atoms[0].span.start_char != sentence.start_char
         || atoms
             .windows(2)
@@ -639,12 +664,32 @@ mod tests {
                     "老師把資料交給學生，往教室去了。",
                 ),
                 (
+                    "先生は生徒に資料を渡し、橋を渡りました。",
+                    "老師把資料交給學生，渡過了橋。",
+                ),
+                (
+                    "先生は資料を生徒に渡し、川を渡りました。",
+                    "老師把資料交給學生，渡過了川。",
+                ),
+                (
+                    "先生は生徒に資料を渡して、橋を渡りました。",
+                    "老師把資料交給學生，渡過了橋。",
+                ),
+                (
                     "先生は資料を渡し、教室へ行きました。",
                     "老師渡し資料，往教室去了。",
                 ),
                 (
                     "先生は生徒に資料を渡さず、教室へ行きました。",
                     "老師給生徒不遞給資料，往教室去了。",
+                ),
+                (
+                    "先生は生徒に資料を渡さず、橋を渡りました。",
+                    "老師給生徒不遞給資料，渡過了橋。",
+                ),
+                (
+                    "先生は生徒に資料を渡し、資料を渡りました。",
+                    "老師給生徒渡し資料，渡過了資料。",
                 ),
                 (
                     "先生は橋を渡って図書館へ行きました。",
@@ -682,6 +727,7 @@ mod tests {
         glossary.actors.push(entry("生徒", "學生乙"));
         glossary.objects.push(entry("資料", "指定資料"));
         glossary.places.push(entry("教室", "指定教室"));
+        glossary.places.push(entry("橋", "指定橋"));
         let slice = |text: &str, start, end| {
             text.chars()
                 .skip(start)
@@ -691,16 +737,38 @@ mod tests {
         for hint in [None, Some(TargetVariant::Ja)] {
             let mut options = TranslateOptions::new(TargetVariant::ZhHant);
             options.source_hint = hint;
-            for source in [
-                "先生は生徒に資料を渡し、教室へ行きました。",
-                "先生は資料を生徒に渡し、教室へ行きました。",
-                "先生は生徒に資料を渡して、教室へ行きました。",
+            for (source, movement, route, glossed_route) in [
+                (
+                    "先生は生徒に資料を渡し、教室へ行きました。",
+                    "往指定教室去了",
+                    "教室",
+                    "指定教室",
+                ),
+                (
+                    "先生は資料を生徒に渡し、教室へ行きました。",
+                    "往指定教室去了",
+                    "教室",
+                    "指定教室",
+                ),
+                (
+                    "先生は生徒に資料を渡して、教室へ行きました。",
+                    "往指定教室去了",
+                    "教室",
+                    "指定教室",
+                ),
+                (
+                    "先生は生徒に資料を渡し、橋を渡りました。",
+                    "渡過了指定橋",
+                    "橋",
+                    "指定橋",
+                ),
             ] {
                 let output =
                     analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
                         .unwrap();
                 assert_eq!(
-                    output.target_text, "教師甲把指定資料交給學生乙，往指定教室去了。",
+                    output.target_text,
+                    format!("教師甲把指定資料交給學生乙，{movement}。"),
                     "{source}"
                 );
                 let mut hits: Vec<_> = output
@@ -718,16 +786,14 @@ mod tests {
                     })
                     .collect();
                 hits.sort();
-                assert_eq!(
-                    hits,
-                    [
-                        ("先生".to_owned(), "教師甲".to_owned()),
-                        ("教室".to_owned(), "指定教室".to_owned()),
-                        ("生徒".to_owned(), "學生乙".to_owned()),
-                        ("資料".to_owned(), "指定資料".to_owned()),
-                    ],
-                    "{source}"
-                );
+                let mut expected = [
+                    ("先生".to_owned(), "教師甲".to_owned()),
+                    (route.to_owned(), glossed_route.to_owned()),
+                    ("生徒".to_owned(), "學生乙".to_owned()),
+                    ("資料".to_owned(), "指定資料".to_owned()),
+                ];
+                expected.sort();
+                assert_eq!(hits, expected, "{source}");
             }
         }
     }

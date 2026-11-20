@@ -23867,7 +23867,7 @@ fn route_marker(group: &Bunsetsu, source: &[Atom], motion: usize) -> Option<&'st
     {
         return None;
     }
-    if let Some(marker) = spatial_route_marker(place) {
+    if let Some(marker) = spatial_route_marker(&place.surface) {
         return Some(marker);
     }
     // 中 can also describe time. Verify the place in 公園の中 before moving
@@ -23893,15 +23893,15 @@ fn route_marker(group: &Bunsetsu, source: &[Atom], motion: usize) -> Option<&'st
                 && no.upos == Some(Upos::Adp)
                 && owner.span.end_char == no.span.start_char
                 && no.span.end_char == place.span.start_char
-                && (spatial_route_marker(owner).is_some()
+                && (spatial_route_marker(&owner.surface).is_some()
                     || is_existing_spatial_head(owner)
                     || matches!(owner.surface.as_str(), "庭" | "教室" | "建物" | "店"))
         })
         .then_some("在")
 }
 
-fn spatial_route_marker(place: &Atom) -> Option<&'static str> {
-    match place.surface.as_str() {
+fn spatial_route_marker(surface: &str) -> Option<&'static str> {
+    match surface {
         "道" | "道路" | "歩道" | "山道" | "坂道" | "車道" | "遊歩道" | "街道" | "小道" | "通路"
         | "廊下" | "路地" | "橋" | "海岸" | "河岸" | "川岸" | "国道" | "県道" | "林道" | "農道" => {
             Some("沿著")
@@ -23921,7 +23921,7 @@ fn governs_traversed_space(source: &[Atom], head: usize) -> bool {
             && place.deprel == "obj"
             && place.head == Some(head)
             && place.doc_tok_idx.is_some()
-            && (spatial_route_marker(place).is_some() || is_existing_spatial_head(place))
+            && (spatial_route_marker(&place.surface).is_some() || is_existing_spatial_head(place))
             && !wo.is_locked
             && wo.upos == Some(Upos::Adp)
             && wo.surface == "を"

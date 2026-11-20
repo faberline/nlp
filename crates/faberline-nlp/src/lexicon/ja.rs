@@ -121,6 +121,8 @@ fn is_ja_stem_char(c: char) -> bool {
 #[derive(Clone)]
 enum EdgeKind {
     Lexicon,
+    HagakiTopic(String),
+    MealSaury,
     Oov,
     Inflected {
         dict_lemma: String,
@@ -147,6 +149,462 @@ fn overlaps_custom_term(
         (start.saturating_sub(len.saturating_sub(1))..end)
             .any(|at| at + len < byte_offs.len() && text[byte_offs[at]..].starts_with(term))
     })
+}
+
+// にさん can win the lattice before a hiragana fish name. Repair that
+// boundary only for a meal's に and a distinct object of a cooking verb.
+fn resolve_meal_saury(
+    path: &mut Vec<(usize, usize, BackEdge)>,
+    text: &str,
+    byte_offs: &[usize],
+    custom_terms: &[(&str, usize)],
+) {
+    for first in (1..path.len()).rev() {
+        let start = path[first].0;
+        let end = start + 4;
+        if !text[byte_offs[start]..].starts_with("にさんまを") {
+            continue;
+        }
+        let meal = ["朝食", "昼食", "夕食", "朝ご飯", "昼ご飯", "晩ご飯"]
+            .into_iter()
+            .find_map(|meal| {
+                let begin = byte_offs[start].checked_sub(meal.len())?;
+                if text.get(begin..byte_offs[start]) != Some(meal) {
+                    return None;
+                }
+                (first.saturating_sub(3)..first).find(|&i| byte_offs[path[i].0] == begin)
+            });
+        let Some(meal) = meal else { continue };
+        if meal > 0 && &text[byte_offs[path[meal - 1].0]..byte_offs[path[meal].0]] == "の"
+            || overlaps_custom_term(path[meal].0, end + 1, text, byte_offs, custom_terms)
+        {
+            continue;
+        }
+        let Some(object_case) = (first..path.len()).find(|&i| path[i].0 >= end) else {
+            continue;
+        };
+        if path[object_case].0 != end || path[object_case].1 != end + 1 {
+            continue;
+        }
+        let Some((verb_begin, verb_end, verb)) = path.get(object_case + 1) else {
+            continue;
+        };
+        let verb = match &verb.kind {
+            EdgeKind::Inflected { dict_lemma, .. } => dict_lemma,
+            EdgeKind::Lexicon => &text[byte_offs[*verb_begin]..byte_offs[*verb_end]],
+            _ => continue,
+        };
+        if matches!(verb, "焼く" | "食べる" | "煮る") {
+            path.splice(
+                first..object_case,
+                [(
+                    start,
+                    end,
+                    BackEdge {
+                        len_chars: end - start,
+                        kind: EdgeKind::MealSaury,
+                    },
+                )],
+            );
+        }
+    }
+}
+
+fn has_human_topic(surface: &str) -> bool {
+    const PERSONAL_PRONOUNS: &[&str] = &[
+        "私",
+        "わたし",
+        "あたし",
+        "僕",
+        "ぼく",
+        "俺",
+        "おれ",
+        "彼",
+        "彼女",
+        "君",
+        "きみ",
+        "あなた",
+        "お前",
+        "私たち",
+        "僕たち",
+        "彼ら",
+        "彼女たち",
+    ];
+    // These kinship and social roles denote people even without a semantic tag.
+    const HUMAN_NOUNS: &[&str] = &[
+        "父",
+        "母",
+        "父親",
+        "母親",
+        "兄",
+        "姉",
+        "弟",
+        "妹",
+        "息子",
+        "娘",
+        "子供",
+        "子ども",
+        "祖父",
+        "祖母",
+        "孫",
+        "伯父",
+        "伯母",
+        "叔父",
+        "叔母",
+        "甥",
+        "姪",
+        "夫",
+        "妻",
+        "友達",
+        "学生",
+        "生徒",
+        "児童",
+        "教師",
+        "先生",
+        "男",
+        "女",
+        "男性",
+        "女性",
+        "大人",
+        "医師",
+        "医者",
+        "社員",
+        "記者",
+        "選手",
+    ];
+    let role_head = surface.strip_suffix('長');
+    let is_leadership_role = matches!(
+        role_head,
+        Some("店" | "社" | "部" | "課" | "校" | "学" | "院" | "局" | "会" | "隊" | "班" | "船")
+    );
+    lookup_ja(surface).is_some_and(|hit| {
+        hit.sem_class == Some(SemanticClass::Person)
+            || (hit.upos_candidates.contains(&Upos::Pron) && PERSONAL_PRONOUNS.contains(&surface))
+            || (hit.decided_upos == Some(Upos::Noun)
+                && (HUMAN_NOUNS.contains(&surface) || is_leadership_role))
+    })
+}
+
+fn strip_hagaki_copula(text: &str) -> Option<&str> {
+    if let Some(negative) = text
+        .strip_prefix("では")
+        .or_else(|| text.strip_prefix("じゃ"))
+    {
+        // The contracted and uncontracted forms take the same finite endings.
+        return [
+            "ありませんでした",
+            "なかったです",
+            "ありません",
+            "ないです",
+            "なかった",
+            "ない",
+        ]
+        .into_iter()
+        .find_map(|ending| negative.strip_prefix(ending));
+    }
+    ["だった", "でした", "です", "だ"]
+        .into_iter()
+        .find_map(|form| text.strip_prefix(form))
+}
+
+fn follows_with_age_or_copula(suffix: &str) -> bool {
+    let phrase = suffix
+        .split(['。', '、', '！', '？', '!', '?', ',', '」', '』'])
+        .next()
+        .unwrap_or(suffix);
+    if let Some(tail) = phrase.strip_prefix('の') {
+        return ["頃", "ころ", "時", "とき"]
+            .into_iter()
+            .filter_map(|time| tail.strip_prefix(time))
+            .any(|rest| {
+                rest.is_empty()
+                    || rest.starts_with(['に', 'は'])
+                    || ["から", "まで", "より"]
+                        .into_iter()
+                        .any(|case| rest.starts_with(case))
+            });
+    }
+    let Some(tail) = strip_hagaki_copula(phrase) else {
+        return false;
+    };
+    if matches!(tail, "" | "よね" | "かな" | "か" | "よ" | "ね" | "な") {
+        return true;
+    }
+    // Quoted predicates end before と; require an actual reporting expression.
+    tail.strip_prefix('と').is_some_and(|report| {
+        [
+            "言", "話", "語", "述べ", "答え", "伝え", "説明", "報告", "書", "聞", "思",
+        ]
+        .into_iter()
+        .any(|stem| report.starts_with(stem))
+    })
+}
+
+fn next_hagaki_clause<'a>(suffix: &'a str, following_text: &'a str) -> Option<&'a str> {
+    let tail = strip_hagaki_copula(suffix)?;
+    let context = if tail.is_empty() {
+        following_text.strip_prefix('。')?
+    } else {
+        let contrast = ["が", "けれども", "けれど", "けど"]
+            .into_iter()
+            .find_map(|link| tail.strip_prefix(link))?;
+        if contrast.is_empty() {
+            following_text
+        } else {
+            contrast
+        }
+    };
+    let inline_space = [' ', '\t', '\u{3000}'];
+    let clause = context.trim_start_matches(inline_space);
+    let clause = clause.strip_prefix(['、', '，', ',']).unwrap_or(clause);
+    clause
+        .trim_start_matches(inline_space)
+        .split(['。', '、', '！', '？', '!', '?', ',', '」', '』'])
+        .next()
+}
+
+fn occupation_stem(stem: &str) -> bool {
+    matches!(
+        stem,
+        "配達" | "郵便" | "駅" | "店" | "乗務" | "職" | "教" | "乗員"
+    )
+}
+
+fn actor_before_hagaki_time(leading: &str) -> Option<&str> {
+    let actor = leading.strip_suffix(['も', 'は', 'が'])?;
+    let noun = ["この", "その", "あの"]
+        .into_iter()
+        .find_map(|modifier| actor.strip_prefix(modifier))
+        .unwrap_or(actor);
+    (has_human_topic(noun)
+        || noun.strip_suffix('員').is_some_and(occupation_stem)
+        || noun == "同僚")
+        .then_some(actor)
+}
+
+fn same_actor_hagaki_predicate<'a>(clause: &'a str, actor: &str) -> &'a str {
+    clause
+        .strip_prefix(actor)
+        .and_then(|tail| tail.strip_prefix(['も', 'は', 'が']))
+        .unwrap_or(clause)
+}
+
+fn hagaki_age_predicate(clause: &str, age_nouns: &[&str], copulas: &[&str]) -> bool {
+    let Some(predicate) = copulas
+        .iter()
+        .copied()
+        .find_map(|form| clause.strip_suffix(form))
+    else {
+        return false;
+    };
+    let adjective = |word| lookup_ja(word).is_some_and(|hit| hit.decided_upos == Some(Upos::Adj));
+    age_nouns
+        .iter()
+        .copied()
+        .filter_map(|noun| predicate.strip_suffix(noun))
+        .any(|modifier| {
+            if modifier.is_empty() || adjective(modifier) {
+                return true;
+            }
+            if let Some(stem) = modifier.strip_suffix('な') {
+                return adjective(stem);
+            }
+            // A short bound Kanji stem can form an adjective compound, e.g. 礼儀正しい.
+            let mut chars = modifier.char_indices().peekable();
+            for _ in 0..2 {
+                if !chars
+                    .next()
+                    .is_some_and(|(_, ch)| matches!(ch, '\u{4e00}'..='\u{9fff}'))
+                {
+                    break;
+                }
+                if chars
+                    .peek()
+                    .is_some_and(|(at, _)| adjective(&modifier[*at..]))
+                {
+                    return true;
+                }
+            }
+            false
+        })
+}
+
+fn contrasts_with_current_person(
+    leading: &str,
+    time: &str,
+    suffix: &str,
+    following_text: &str,
+) -> bool {
+    if !matches!(time, "昔" | "以前" | "かつて" | "当時") {
+        return false;
+    }
+    let actor = actor_before_hagaki_time(leading);
+    if !leading.is_empty() && actor.is_none() {
+        return false;
+    }
+    let Some(clause) = next_hagaki_clause(suffix, following_text) else {
+        return false;
+    };
+    if let Some(current) = ["今は", "いまは", "現在は"]
+        .into_iter()
+        .find_map(|topic| clause.strip_prefix(topic))
+    {
+        let current = current.trim_start_matches([' ', '\t', '\u{3000}']);
+        return match actor {
+            Some(actor) => hagaki_age_predicate(
+                same_actor_hagaki_predicate(current, actor),
+                &["大人", "成人"],
+                &["だ", "です"],
+            ),
+            None => ["だ", "です"]
+                .into_iter()
+                .filter_map(|form| current.strip_suffix(form))
+                .any(has_human_topic),
+        };
+    }
+    (suffix.starts_with("では") || suffix.starts_with("じゃ"))
+        && actor.is_some_and(|actor| {
+            let child = clause.strip_prefix("昔は").unwrap_or(clause);
+            hagaki_age_predicate(
+                same_actor_hagaki_predicate(child, actor),
+                &["子", "子供", "子ども"],
+                &["だった", "でした"],
+            )
+        })
+}
+
+fn has_linked_human_topic(
+    left: &str,
+    before: &[(usize, usize, BackEdge)],
+    text: &str,
+    byte_offs: &[usize],
+    boundary: usize,
+) -> bool {
+    let preceding = before
+        .last()
+        .filter(|(_, end, _)| *end == boundary)
+        .map(|(start, end, _)| &text[byte_offs[*start]..byte_offs[*end]]);
+    if left == "員" {
+        // Only a lexical occupation stem identifies a person; 員 also counts members.
+        return preceding.is_some_and(occupation_stem);
+    }
+    if left == "僚" {
+        return preceding == Some("同");
+    }
+    if left == "人" {
+        // 人 also counts people. Require a modifier that identifies a person.
+        return matches!(
+            preceding,
+            Some(
+                "の" | "この"
+                    | "その"
+                    | "あの"
+                    | "どの"
+                    | "隣"
+                    | "近所"
+                    | "知"
+                    | "友"
+                    | "通行"
+                    | "旅"
+            )
+        );
+    }
+    if let Some(stem) = left.strip_suffix('郎') {
+        let stem = if stem.is_empty() {
+            preceding.unwrap_or("")
+        } else {
+            stem
+        };
+        // A traditional given-name ending can be separated by the lattice.
+        return (1..=2).contains(&stem.chars().count())
+            && stem.chars().all(|c| matches!(c, '\u{4e00}'..='\u{9fff}'));
+    }
+    if let Some(stem) = left.strip_suffix('子') {
+        let stem = if stem.is_empty() {
+            preceding.unwrap_or("")
+        } else {
+            stem
+        };
+        let full = format!("{stem}子");
+        // Known common nouns keep their existing reading.
+        return (1..=2).contains(&stem.chars().count())
+            && stem.chars().all(|c| matches!(c, '\u{4e00}'..='\u{9fff}'))
+            && lookup_ja(&full).is_none();
+    }
+    const HONORIFICS: &[&str] = &["さん", "さま", "様", "君", "くん", "ちゃん", "氏"];
+    HONORIFICS.iter().any(|honorific| {
+        let Some(stem) = left.strip_suffix(*honorific) else {
+            return false;
+        };
+        if !stem.is_empty() {
+            return has_human_topic(stem);
+        }
+        preceding.is_some_and(has_human_topic)
+    })
+}
+
+fn resolve_hagaki_topic(
+    path: &mut Vec<(usize, usize, BackEdge)>,
+    text: &str,
+    byte_offs: &[usize],
+    custom_terms: &[(&str, usize)],
+    following_text: &str,
+) {
+    let mut index = 1;
+    while index < path.len() {
+        let (subject_start, subject_end, _) = &path[index - 1];
+        let (start, end, edge) = &path[index];
+        let (start, end) = (*start, *end);
+        if end - start != 3
+            || !matches!(edge.kind, EdgeKind::Lexicon)
+            || &text[byte_offs[start]..byte_offs[end]] != "はがき"
+            || *subject_end != start
+        {
+            index += 1;
+            continue;
+        }
+        let left = &text[byte_offs[*subject_start]..byte_offs[start]];
+        let suffix = &text[byte_offs[end]..];
+        let explicit_person = has_human_topic(left)
+            || has_linked_human_topic(left, &path[..index - 1], text, byte_offs, *subject_start);
+        let compound = path
+            .get(index + 1)
+            .filter(|(next_start, _, next)| {
+                explicit_person && *next_start == end && matches!(next.kind, EdgeKind::Lexicon)
+            })
+            .and_then(|(_, next_end, _)| {
+                let reading = format!("ガキ{}", &text[byte_offs[end]..byte_offs[*next_end]]);
+                lookup_ja(&reading)
+                    .filter(|hit| hit.decided_upos == Some(Upos::Noun))
+                    .map(|_| (*next_end, reading))
+            });
+        let (noun_end, lemma) = if let Some(compound) = compound {
+            compound
+        } else if (explicit_person && follows_with_age_or_copula(suffix))
+            || contrasts_with_current_person(
+                &text[..byte_offs[*subject_start]],
+                left,
+                suffix,
+                following_text,
+            )
+        {
+            (end, "ガキ".to_owned())
+        } else {
+            index += 1;
+            continue;
+        };
+        if !overlaps_custom_term(start, noun_end, text, byte_offs, custom_terms) {
+            path[index].1 = noun_end;
+            path[index].2 = BackEdge {
+                len_chars: noun_end - start,
+                kind: EdgeKind::HagakiTopic(lemma),
+            };
+            if noun_end != end {
+                path.remove(index + 1);
+            }
+        }
+        index += 1;
+    }
 }
 
 fn resolve_noon_endpoint(
@@ -274,7 +732,51 @@ pub fn segment_ja_with_lexicon(
     base_char: usize,
     extra_lexicon: &[String],
 ) -> Vec<JaSegment> {
-    segment_ja_with_context(chars, base_char, extra_lexicon, false)
+    segment_ja_with_context(chars, base_char, extra_lexicon, false, "")
+}
+
+fn lexicon_segment(span: Span, surface: &str) -> JaSegment {
+    if let Some(hit) = lookup_ja(surface) {
+        JaSegment {
+            span,
+            decided_upos: hit.decided_upos,
+            upos_mask: hit.upos_mask,
+            upos_candidates: hit.upos_candidates,
+            lemma: hit.lemma,
+            sem_class: hit.sem_class,
+        }
+    } else {
+        JaSegment {
+            span,
+            decided_upos: None,
+            upos_mask: 0,
+            upos_candidates: Vec::new(),
+            lemma: None,
+            sem_class: None,
+        }
+    }
+}
+
+fn hagaki_topic_segments(start: usize, end: usize, lemma: &str) -> [JaSegment; 2] {
+    let boundary = start + 1;
+    let mut noun = lexicon_segment(
+        Span {
+            start_char: boundary,
+            end_char: end,
+        },
+        lemma,
+    );
+    noun.lemma.get_or_insert_with(|| lemma.to_owned());
+    [
+        lexicon_segment(
+            Span {
+                start_char: start,
+                end_char: boundary,
+            },
+            "は",
+        ),
+        noun,
+    ]
 }
 
 pub(crate) fn segment_ja_with_context(
@@ -282,6 +784,7 @@ pub(crate) fn segment_ja_with_context(
     base_char: usize,
     extra_lexicon: &[String],
     verified_sentence_tail: bool,
+    following_text: &str,
 ) -> Vec<JaSegment> {
     let n = chars.len();
     if n == 0 {
@@ -498,6 +1001,9 @@ pub(crate) fn segment_ja_with_context(
         pos = start;
     }
     path.reverse();
+    if text.contains("はがき") {
+        resolve_hagaki_topic(&mut path, &text, &byte_offs, &custom_terms, following_text);
+    }
     resolve_noon_endpoint(
         &mut path,
         chars,
@@ -592,6 +1098,9 @@ pub(crate) fn segment_ja_with_context(
         index += 1;
     }
 
+    if text.contains("にさんまを") {
+        resolve_meal_saury(&mut path, &text, &byte_offs, &custom_terms);
+    }
     let mut out = Vec::with_capacity(path.len());
     for (start, end, edge) in path {
         if chars[start..end].iter().all(|c| c.is_whitespace()) {
@@ -599,32 +1108,39 @@ pub(crate) fn segment_ja_with_context(
         }
         match edge.kind {
             EdgeKind::Lexicon => {
-                let surf = &text[byte_offs[start]..byte_offs[end]];
-                if let Some(hit) = lookup_ja(surf) {
-                    out.push(JaSegment {
-                        span: Span {
-                            start_char: base_char + start,
-                            end_char: base_char + end,
-                        },
-                        decided_upos: hit.decided_upos,
-                        upos_mask: hit.upos_mask,
-                        upos_candidates: hit.upos_candidates,
-                        lemma: hit.lemma,
-                        sem_class: hit.sem_class,
-                    });
-                } else {
-                    out.push(JaSegment {
-                        span: Span {
-                            start_char: base_char + start,
-                            end_char: base_char + end,
-                        },
-                        decided_upos: None,
-                        upos_mask: 0,
-                        upos_candidates: Vec::new(),
-                        lemma: None,
-                        sem_class: None,
-                    });
-                }
+                out.push(lexicon_segment(
+                    Span {
+                        start_char: base_char + start,
+                        end_char: base_char + end,
+                    },
+                    &text[byte_offs[start]..byte_offs[end]],
+                ));
+            }
+            EdgeKind::HagakiTopic(lemma) => {
+                out.extend(hagaki_topic_segments(
+                    base_char + start,
+                    base_char + end,
+                    &lemma,
+                ));
+            }
+            EdgeKind::MealSaury => {
+                let boundary = base_char + start + 1;
+                out.push(lexicon_segment(
+                    Span {
+                        start_char: base_char + start,
+                        end_char: boundary,
+                    },
+                    "に",
+                ));
+                let mut noun = lexicon_segment(
+                    Span {
+                        start_char: boundary,
+                        end_char: base_char + end,
+                    },
+                    "サンマ",
+                );
+                noun.lemma.get_or_insert_with(|| "サンマ".to_owned());
+                out.push(noun);
             }
             EdgeKind::Oov => {
                 out.push(JaSegment {
@@ -1046,6 +1562,48 @@ pub fn map_ja_shinjitai(s: &str) -> String {
 }
 
 #[cfg(test)]
+mod meal_saury_segmentation_tests {
+    use super::*;
+
+    #[test]
+    fn meal_and_cooking_recover_only_the_ambiguous_fish_boundary() {
+        for sentence in [
+            "夕食にさんまを焼きました。",
+            "昼ご飯にさんまを食べました。",
+            "朝食にさんまを煮ました。",
+        ] {
+            let chars: Vec<_> = sentence.chars().collect();
+            let segments = segment_ja(&chars, 11);
+            let fish = segments
+                .iter()
+                .position(|s| s.lemma.as_deref() == Some("サンマ"));
+            let index = fish.expect(sentence);
+            assert_eq!(segments[index].decided_upos, Some(Upos::Noun));
+            let surface = |segment: &JaSegment| {
+                chars[segment.span.start_char - 11..segment.span.end_char - 11]
+                    .iter()
+                    .collect::<String>()
+            };
+            assert_eq!(surface(&segments[index - 1]), "に");
+            assert_eq!(surface(&segments[index]), "さんま");
+            assert_eq!(surface(&segments[index + 1]), "を");
+        }
+        for sentence in [
+            "明石家さんまがテレビに出ました。",
+            "夕食にさんまを見せました。",
+            "魚を買って夕食に焼きました。",
+        ] {
+            let chars: Vec<_> = sentence.chars().collect();
+            assert!(
+                !segment_ja(&chars, 0)
+                    .iter()
+                    .any(|s| s.lemma.as_deref() == Some("サンマ"))
+            );
+        }
+    }
+}
+
+#[cfg(test)]
 mod noon_endpoint_segmentation_tests {
     use super::*;
 
@@ -1192,5 +1750,290 @@ mod finite_polite_segmentation_tests {
         let two_sentences: Vec<_> = "始めます。続けます。".chars().collect();
         let segments = segment_ja(&two_sentences, 0);
         assert_eq!(segments[0].decided_upos, Some(Upos::Verb));
+    }
+}
+
+#[cfg(test)]
+mod hagaki_topic_segmentation_tests {
+    use super::*;
+
+    fn select_hagaki_topic(
+        parts: &[&str],
+        suffix: &str,
+        custom_terms: &[(&str, usize)],
+    ) -> Option<(String, usize)> {
+        select_hagaki_topic_with_context(parts, suffix, custom_terms, "")
+    }
+
+    fn select_hagaki_topic_with_context(
+        parts: &[&str],
+        suffix: &str,
+        custom_terms: &[(&str, usize)],
+        following_text: &str,
+    ) -> Option<(String, usize)> {
+        let text = parts.concat() + suffix;
+        let byte_offs: Vec<_> = text
+            .char_indices()
+            .map(|(byte, _)| byte)
+            .chain(std::iter::once(text.len()))
+            .collect();
+        let mut start = 0;
+        let mut path = Vec::new();
+        for part in parts {
+            let len_chars = part.chars().count();
+            path.push((
+                start,
+                start + len_chars,
+                BackEdge {
+                    len_chars,
+                    kind: EdgeKind::Lexicon,
+                },
+            ));
+            start += len_chars;
+        }
+        resolve_hagaki_topic(&mut path, &text, &byte_offs, custom_terms, following_text);
+        path.into_iter().find_map(|(_, end, edge)| {
+            if let EdgeKind::HagakiTopic(lemma) = edge.kind {
+                Some((lemma, end))
+            } else {
+                None
+            }
+        })
+    }
+
+    #[test]
+    fn human_topic_keeps_its_particle_before_childhood_and_copulas() {
+        for (person, suffix) in [
+            ("彼", "の頃から走っていた。"),
+            ("私", "のころからここに住んでいます。"),
+            ("僕", "の時に泳ぎを覚えた。"),
+            ("中村", "のときに絵を習った。"),
+            ("彼女", "だった。"),
+            ("彼", "じゃないよ。"),
+            ("彼女", "ではないよね。"),
+            ("僕", "じゃなかったか。"),
+            ("兄", "のころ、雨でも外で遊んだ。"),
+            ("祖母", "の頃に川で泳いだ。"),
+            ("娘", "ではないよ。"),
+            ("友達", "じゃないよ。"),
+            ("学生", "のときにサッカーを始めた。"),
+        ] {
+            assert!(
+                select_hagaki_topic(&[person, "はがき"], suffix, &[]).is_some(),
+                "{person}はがき{suffix}"
+            );
+        }
+
+        let [topic, noun] = hagaki_topic_segments(12, 15, "ガキ");
+        assert_eq!((topic.span.start_char, topic.span.end_char), (12, 13));
+        assert_eq!(topic.decided_upos, Some(Upos::Adp));
+        assert_eq!((noun.span.start_char, noun.span.end_char), (13, 15));
+        assert_eq!(noun.decided_upos, Some(Upos::Noun));
+        assert_eq!(noun.lemma.as_deref(), Some("ガキ"));
+    }
+
+    #[test]
+    fn reads_a_human_topic_across_honorifics_reports_and_contrast() {
+        assert!(contrasts_with_current_person(
+            "",
+            "昔",
+            "だった",
+            "。今は大人です。"
+        ));
+        assert!(!contrasts_with_current_person(
+            "",
+            "昔",
+            "だった",
+            "。今は封書です。"
+        ));
+        assert!(!contrasts_with_current_person(
+            "",
+            "昔",
+            "だった",
+            "。\n今は大人です。"
+        ));
+        assert!(contrasts_with_current_person(
+            "",
+            "昔",
+            "だったが",
+            " 今は父親だ。"
+        ));
+        assert!(!contrasts_with_current_person(
+            "",
+            "昔",
+            "だったが",
+            "\n今は父親だ。"
+        ));
+        assert!(contrasts_with_current_person(
+            "",
+            "昔",
+            "だったが",
+            "、今は父親だ。"
+        ));
+        assert!(!contrasts_with_current_person(
+            "",
+            "昔",
+            "だったが",
+            "。今は父親だ。"
+        ));
+        assert!(!contrasts_with_current_person(
+            "",
+            "昔",
+            "だったが",
+            "、今は封書だ。"
+        ));
+        for (prefix, suffix) in [
+            (&["伯母", "はがき"][..], "のころから港で働いた。"),
+            (&["田中", "さん", "はがき"][..], "のころから泳いだ。"),
+            (&["叔父", "はがき"][..], "ではなかった。"),
+            (&["彼女", "はがき"][..], "だったと話した。"),
+            (&["昔", "はがき"][..], "だったが、今は父親だ。"),
+            (&["その", "生徒", "はがき"][..], "のころ、自転車に乗った。"),
+            (&["その", "男", "はがき"][..], "ではありません。"),
+            (&["太", "郎", "はがき"][..], "のころ、川で泳いだ。"),
+            (&["一", "郎", "はがき"][..], "の頃に本を読み始めた。"),
+            (&["店長", "はがき"][..], "のころから野球が好きでした。"),
+            (&["隣", "人", "はがき"][..], "じゃありません。"),
+            (&["彼", "はがき"][..], "ではありませんでした。"),
+            (&["彼女", "はがき"][..], "じゃないです。"),
+            (&["配達", "員", "はがき"][..], "の頃からここに住んだ。"),
+            (&["優", "子", "はがき"][..], "のころ、泳いだ。"),
+            (&["同", "僚", "はがき"][..], "のころ、自転車に乗った。"),
+        ] {
+            let end = prefix.iter().map(|part| part.chars().count()).sum();
+            assert_eq!(
+                select_hagaki_topic(prefix, suffix, &[]),
+                Some(("ガキ".into(), end)),
+                "{prefix:?}{suffix}"
+            );
+        }
+        assert_eq!(
+            select_hagaki_topic(&["弟", "はがき", "大将"], "だったそうです。", &[]),
+            Some(("ガキ大将".into(), 6))
+        );
+        assert_eq!(
+            select_hagaki_topic(
+                &["弟", "はがき", "大将"],
+                "だったそうです。",
+                &[("がき大将", 4)]
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn later_age_predicate_resolves_only_compatible_childhood_topic() {
+        for (parts, suffix, next, expected) in [
+            (
+                &["叔母", "も", "昔", "はがき"][..],
+                "だった",
+                "。今は叔母も大人です",
+                true,
+            ),
+            (
+                &["兄", "は", "かつて", "はがき"][..],
+                "でした",
+                "。現在は兄が立派な大人です",
+                true,
+            ),
+            (
+                &["あの", "店員", "も", "昔", "はがき"][..],
+                "ではありませんでした",
+                "。礼儀正しい子でした",
+                true,
+            ),
+            (
+                &["駅員", "も", "昔", "はがき"][..],
+                "じゃなかった",
+                "。駅員はおとなしい子でした",
+                true,
+            ),
+            (
+                &["父", "も", "昔", "はがき"][..],
+                "だった",
+                "。今は母も立派な大人です",
+                false,
+            ),
+            (
+                &["私", "も", "昔", "はがき"][..],
+                "でした",
+                "。今は先生です",
+                false,
+            ),
+            (
+                &["母", "も", "昔", "はがき"][..],
+                "を買っていた",
+                "。今は母も大人です",
+                false,
+            ),
+            (
+                &["母", "も", "昔", "はがき"][..],
+                "ではなかった",
+                "。妹もおとなしい子でした",
+                false,
+            ),
+            (
+                &["母", "も", "昔", "はがき"][..],
+                "だった",
+                "。\n今は母も大人です",
+                false,
+            ),
+            (
+                &["それ", "は", "昔", "はがき"][..],
+                "だった",
+                "。今は大人です",
+                false,
+            ),
+        ] {
+            assert_eq!(
+                select_hagaki_topic_with_context(parts, suffix, &[], next).is_some(),
+                expected,
+                "{parts:?} {suffix} {next}",
+            );
+        }
+        assert_eq!(
+            select_hagaki_topic_with_context(
+                &["叔母", "も", "昔", "はがき"],
+                "だった",
+                &[("はがき", 3)],
+                "。今は叔母も大人です",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn postcard_and_ambiguous_readings_keep_the_selected_word() {
+        for (previous, suffix) in [
+            ("と", "を送りました。"),
+            ("、", "を送った。"),
+            ("は", "の表に住所を書いた。"),
+            ("新しい", "の束を買いました。"),
+            ("これ", "ですか。"),
+            ("これ", "ではないよ。"),
+            ("これ", "ではありません。"),
+            ("返答", "じゃありませんでした。"),
+            ("身長", "のころに記録を書きました。"),
+            ("昔", "だった。"),
+            ("昔", "だったが、今は封書だ。"),
+            ("それ", "だったと説明しました。"),
+            ("彼", "の表を見た。"),
+            ("兄", "の表に住所を書いた。"),
+        ] {
+            assert!(
+                select_hagaki_topic(&[previous, "はがき"], suffix, &[]).is_none(),
+                "{previous}はがき{suffix}"
+            );
+        }
+        for term in [("はがき", 3), ("彼はがき", 4), ("がきの", 3)] {
+            assert!(
+                select_hagaki_topic(&["彼", "はがき"], "の頃に絵を習った。", &[term]).is_none(),
+                "{term:?}"
+            );
+        }
+        assert_eq!(
+            select_hagaki_topic(&["二", "人", "はがき"], "でした。", &[]),
+            None
+        );
     }
 }

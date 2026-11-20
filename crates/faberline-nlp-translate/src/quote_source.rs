@@ -81,11 +81,15 @@ impl<'a> QuoteSyntax<'a> {
     }
 
     fn head(self, token: usize) -> Option<usize> {
+        self.edge(token)?.head
+    }
+
+    fn edge(self, token: usize) -> Option<&'a SyntaxToken> {
         let i = self
             .dependencies
             .binary_search_by_key(&token, |edge| edge.token)
             .ok()?;
-        self.dependencies[i].head
+        self.dependencies.get(i)
     }
 }
 
@@ -710,13 +714,25 @@ fn quotes_exact_writing(
     };
     let start = scope.end_char - tail.len();
     let first = syntax.tokens.partition_point(|t| t.span.start_char < start);
+    let Some(marker) = first.checked_sub(1).and_then(|i| syntax.tokens.get(i)) else {
+        return false;
+    };
+    // という can name the word being written, or just describe its meaning.
+    let names_written_word = strip_prefix(after, "という")
+        .and_then(after_word_name)
+        .is_some_and(|rest| matches!(rest.first(), Some('を' | 'が' | 'と' | 'は' | 'も')));
+    if (marker.span.start_char + 1 != start || marker.span.end_char != start) && !names_written_word
+    {
+        return false;
+    }
     let Some((predicate, verb)) = syntax.first_predicate(first, scope.end_char) else {
         return false;
     };
     let surface = &chars[verb.span.start_char..verb.span.end_char];
     let copies = verb.lemma.as_deref() == Some("写す") || surface == ['写', 'す'];
     let writes = verb.lemma.as_deref() == Some("書く") || surface == ['書', 'く'];
-    if !(copies || writes)
+    let states_inscription = particle == 'と' && verb.lemma.as_deref() == Some("ある");
+    if !(copies || writes || states_inscription)
         || chars[start..verb.span.start_char].iter().any(|c| {
             matches!(
                 c,
@@ -758,6 +774,8 @@ fn quotes_exact_writing(
 
     let mut unchanged = false;
     let mut writing_surface = false;
+    let mut surface_has_foreign_text = false;
+    let mut writes_in_japanese = false;
     for (i, token) in syntax.tokens[..predicate]
         .iter()
         .enumerate()
@@ -783,11 +801,17 @@ fn quotes_exact_writing(
         let surface = case.starts_with(&['に'])
             && is_writing_surface(chars, scope.start_char, token.span.end_char, syntax, copies);
         writing_surface |= surface;
-        let other_language = word.ends_with(&['語']) && word != ['日', '本', '語'];
+        if surface && !copies {
+            surface_has_foreign_text |=
+                has_foreign_surface_inscription(chars, scope, quote, syntax, i);
+        }
+        let language_case = inscription_language_case(case);
+        let states_language = matches!(language_case, Some('で' | 'に'));
+        writes_in_japanese |= states_language && word == ['日', '本', '語'] && attached(i);
         let camera = ["カメラ", "スマホ", "スマートフォン", "携帯", "携帯電話"]
             .iter()
             .any(|name| word.iter().copied().eq(name.chars()));
-        if (other_language && matches!(case.first(), Some('で' | 'に')))
+        if (is_foreign_inscription_language(word) && states_language)
             || (copies && camera && case.starts_with(&['で']))
         {
             // A target language requests translation. An instrument with 写す
@@ -815,12 +839,43 @@ fn quotes_exact_writing(
             || (unchanged && (written_source || writing_surface));
     }
 
+    let phrase = &chars[verb.span.start_char..scope.end_char];
+    if surface_has_foreign_text
+        && !writes_in_japanese
+        && !unchanged
+        && (states_inscription
+            || ["書いてあ", "書いてな", "書かれ"]
+                .iter()
+                .any(|prefix| strip_prefix(phrase, prefix).is_some()))
+    {
+        return false;
+    }
+    let label = particle == 'と' && is_written_phrase(chars, first_in_quote..end_of_quote, syntax);
+    if states_inscription {
+        // 「…」とある states an inscription when it has an explicit surface.
+        return label
+            && writing_surface
+            && matches_written_form(
+                phrase,
+                &[
+                    "ある",
+                    "あった",
+                    "あります",
+                    "ありました",
+                    "ありません",
+                    "ありませんでした",
+                ],
+                ends_inscription_statement,
+            );
+    }
+
     unchanged
-        || (particle == 'と'
-            && is_written_phrase(chars, first_in_quote..end_of_quote, syntax)
+        || (label
             && (is_writing_instruction(chars, scope, syntax, predicate)
-                || (writing_surface
-                    && describes_writing(chars, verb.span.start_char, scope.end_char))))
+                || describes_writing(phrase, |tail| {
+                    (writing_surface && ends_inscription_statement(tail))
+                        || modified_writing_surface(chars, scope, syntax, predicate, tail).is_some()
+                })))
 }
 
 /// An inflected word or a noun phrase can be the inscription. A quoted
@@ -865,9 +920,10 @@ fn is_written_phrase(
     roots == 1
 }
 
-fn describes_writing(chars: &[char], start: usize, end: usize) -> bool {
-    let phrase = &chars[start..end];
-    let (stem, forms): (_, &[&str]) = if let Some(aspect) = strip_prefix(phrase, "書いてい") {
+fn describes_writing(phrase: &[char], accepts_tail: impl Fn(&[char]) -> bool) -> bool {
+    let (stem, forms): (_, &[&str]) = if let Some(aspect) =
+        strip_prefix(phrase, "書いてい").or_else(|| strip_prefix(phrase, "書かれてい"))
+    {
         // いる carries the tense and negation of an ongoing inscription.
         (
             aspect,
@@ -882,6 +938,21 @@ fn describes_writing(chars: &[char], start: usize, end: usize) -> bool {
                 "ませんでした",
             ],
         )
+    } else if let Some(aspect) = strip_prefix(phrase, "書いて") {
+        (
+            aspect,
+            &[
+                "",
+                "ある",
+                "あった",
+                "ない",
+                "なかった",
+                "あります",
+                "ありました",
+                "ありません",
+                "ありませんでした",
+            ],
+        )
     } else {
         (
             phrase,
@@ -894,25 +965,152 @@ fn describes_writing(chars: &[char], start: usize, end: usize) -> bool {
                 "書きました",
                 "書きません",
                 "書きませんでした",
-                "書いて",
                 "書き",
                 "書かずに",
                 "書かないで",
+                "書かれる",
+                "書かれた",
+                "書かれない",
+                "書かれなかった",
+                "書かれます",
+                "書かれました",
+                "書かれません",
+                "書かれませんでした",
             ],
         )
     };
+    matches_written_form(stem, forms, accepts_tail)
+}
+
+fn matches_written_form(
+    phrase: &[char],
+    forms: &[&str],
+    accepts_tail: impl Fn(&[char]) -> bool,
+) -> bool {
     forms
         .iter()
-        .filter_map(|form| strip_prefix(stem, form))
-        .any(|tail| {
-            let tail = skip_space(tail);
-            matches!(
-                tail.first(),
-                None | Some('。' | '？' | '！' | '?' | '!' | '、' | 'と' | 'が')
-            ) || ["後", "あと", "前", "から", "ので", "けれど"]
-                .iter()
-                .any(|link| strip_prefix(tail, link).is_some())
+        .filter_map(|form| strip_prefix(phrase, form))
+        .any(|tail| accepts_tail(skip_space(tail)))
+}
+
+fn ends_inscription_statement(tail: &[char]) -> bool {
+    let sentence_end = ["か", "よ", "ね"].iter().fold(tail, |text, particle| {
+        strip_prefix(text, particle).unwrap_or(text)
+    });
+    matches!(
+        sentence_end.first(),
+        None | Some('。' | '？' | '！' | '?' | '!' | '、' | 'と' | 'が')
+    ) || ["かどうか", "後", "あと", "前", "から", "ので", "けれど"]
+        .iter()
+        .any(|link| strip_prefix(tail, link).is_some())
+}
+
+fn inscription_language_case(tail: &[char]) -> Option<char> {
+    let tail = skip_space(tail);
+    let tail = strip_prefix(tail, "だけ")
+        .or_else(|| strip_prefix(tail, "のみ"))
+        .unwrap_or(tail);
+    skip_space(tail).first().copied()
+}
+
+fn is_foreign_inscription_language(word: &[char]) -> bool {
+    word.len() > 1
+        && word.ends_with(&['語'])
+        && !["日本語", "単語", "用語", "言語", "専門用語"]
+            .iter()
+            .any(|name| word.iter().copied().eq(name.chars()))
+}
+
+fn has_foreign_surface_inscription(
+    chars: &[char],
+    scope: Span,
+    quote: Span,
+    syntax: QuoteSyntax<'_>,
+    surface: usize,
+) -> bool {
+    let noun = &syntax.tokens[surface];
+    let outside_quote = |token: &Token| {
+        token.span.end_char <= quote.start_char || token.span.start_char >= quote.end_char
+    };
+    syntax.tokens[..surface]
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(_, token)| {
+            token.sentence == noun.sentence && token.span.start_char >= scope.start_char
         })
+        .any(|(index, word)| {
+            if !outside_quote(word)
+                || !is_foreign_inscription_language(
+                    &chars[word.span.start_char..word.span.end_char],
+                )
+            {
+                return false;
+            }
+            let Some(edge) = syntax.edge(index) else {
+                return false;
+            };
+            let case = inscription_language_case(&chars[word.span.end_char..noun.span.start_char]);
+            if edge.head == Some(surface) {
+                return edge.deprel == "nmod" && case == Some('の');
+            }
+            let Some(writer) = edge.head.filter(|&head| index < head && head < surface) else {
+                return false;
+            };
+            let verb = &syntax.tokens[writer];
+            outside_quote(verb)
+                && verb.lemma.as_deref() == Some("書く")
+                && matches!(case, Some('で' | 'に'))
+                && describes_writing(&chars[verb.span.start_char..scope.end_char], |tail| {
+                    modified_writing_surface(chars, scope, syntax, writer, tail) == Some(surface)
+                })
+        })
+}
+
+fn modified_writing_surface(
+    chars: &[char],
+    scope: Span,
+    syntax: QuoteSyntax<'_>,
+    predicate: usize,
+    tail: &[char],
+) -> Option<usize> {
+    let start = scope.end_char - tail.len();
+    let first = syntax
+        .tokens
+        .binary_search_by_key(&start, |t| t.span.start_char)
+        .ok()?;
+    let noun = syntax
+        .edge(first)
+        .filter(|edge| matches!(edge.deprel.as_str(), "compound" | "amod" | "det"))
+        .and_then(|edge| edge.head.filter(|&head| head > first))
+        .unwrap_or(first);
+    let surface = &syntax.tokens[noun];
+    if surface.sentence != syntax.tokens[predicate].sentence
+        || surface.span.end_char > scope.end_char
+        || !matches!(surface.upos, Some(Upos::Noun | Upos::Propn))
+        || !is_writing_surface(
+            chars,
+            scope.start_char,
+            surface.span.end_char,
+            syntax,
+            false,
+        )
+    {
+        return None;
+    }
+
+    (predicate..first).any(|index| {
+        syntax.edge(index).is_some_and(|edge| {
+            edge.head == Some(noun)
+                && ((edge.deprel == "acl"
+                    && (index == predicate || syntax.head(predicate) == Some(index)))
+                    // Before a noun, the analyzer can tag the resultant ある as a determiner.
+                    || (index + 1 == first
+                        && edge.deprel == "det"
+                        && chars[syntax.tokens[index].span.start_char..syntax.tokens[index].span.end_char]
+                            == ['あ', 'る']))
+        })
+    }).then_some(noun)
 }
 
 fn is_writing_instruction(
@@ -983,8 +1181,13 @@ fn is_writing_surface(
             "手帳",
             "申込書",
             "名札",
+            "札",
             "ラベル",
             "看板",
+            "案内板",
+            "掲示板",
+            "標示板",
+            "標識",
             "ホワイトボード",
         ]
         .iter()
@@ -2155,6 +2358,74 @@ mod tests {
                     result.target_text
                 );
             }
+        }
+    }
+
+    #[test]
+    fn written_signs_distinguish_labels_from_quoted_messages() {
+        for (source, quoted) in [
+            ("看板に「写真」と書いてあります。", "「写真」"),
+            ("名札に「写真」と書いてありました。", "「写真」"),
+            ("この札には「写真」と書いてありますか。", "「写真」"),
+            ("看板には「写真」と書かれていましたか。", "「写真」"),
+            ("札に「写真」と書いてあるかどうか確かめました。", "「写真」"),
+            ("看板には「写真」とは書いてありませんでした。", "「写真」"),
+            ("札に「写真」と書かれていました。", "「写真」"),
+            ("案内板には「写真」とあります。", "「写真」"),
+            ("案内板には「写真」とありますか？", "「写真」"),
+            ("「写真」と書いてある札を母に渡しました。", "「写真」"),
+            ("「写真」と書いてある古い札を母に渡しました。", "「写真」"),
+            ("「写真」と書いた札を母に渡しました。", "「写真」"),
+            ("私は「写真」と書かれた案内板を見ました。", "「写真」"),
+            ("「写真」と言ってから、看板を見ました。", "「照片」"),
+            ("「写真」と書いてから、札を渡しました。", "「照片」"),
+            ("看板に「写真」と英語で書いてあります。", "「照片」"),
+            (
+                "英語だけで書かれた札には「写真」と書いてあります。",
+                "「照片」",
+            ),
+            (
+                "英語だけで書かれている札には「写真」と書いてあります。",
+                "「照片」",
+            ),
+            (
+                "英語だけで書いてある札には「写真」と書いてあります。",
+                "「照片」",
+            ),
+            ("英語だけの案内板には「写真」とあります。", "「照片」"),
+            (
+                "英語で書かれた札には、日本語で「写真」と書いてあります。",
+                "「写真」",
+            ),
+            (
+                "英語で書かれた札を閉じ、看板には「写真」と書いてあります。",
+                "「写真」",
+            ),
+            (
+                "「写真」という意味の英語だけで書かれた札を見ました。",
+                "「照片」",
+            ),
+            ("紙に「写真」という言葉を書きました。", "「写真」"),
+            (
+                "紙に「写真」という言葉は書いてありませんでした。",
+                "「写真」",
+            ),
+            ("看板に「写真を買いました」と書いてありました。", "照片"),
+            ("看板の前で「写真」と言いました。", "「照片」"),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert!(
+                result.target_text.contains(quoted),
+                "{source}: {}",
+                result.target_text
+            );
         }
     }
 

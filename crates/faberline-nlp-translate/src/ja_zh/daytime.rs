@@ -3,6 +3,7 @@ use super::{Atom, Upos, is_daypart_surface, selects_time_value, source_time_head
 const GLOSSARY_DAYTIME: &str = "__ja_glossary_daytime";
 const GLOSSARY_TIME_PHRASE: &str = "__ja_glossary_daytime_phrase";
 const DAYTIME: &str = "__ja_activity_daytime";
+const COURSE_TIME: &str = "__ja_course_time";
 
 pub(super) fn glossary_role(chars: &[char]) -> Option<&'static str> {
     match chars {
@@ -13,7 +14,7 @@ pub(super) fn glossary_role(chars: &[char]) -> Option<&'static str> {
 }
 
 pub(super) fn is_modifier(atom: &Atom) -> bool {
-    atom.is_locked && atom.lemma.as_deref() == Some(DAYTIME)
+    atom.is_locked && matches!(atom.lemma.as_deref(), Some(DAYTIME | COURSE_TIME))
 }
 
 // A glossary entry covering 日中に can be analyzed as a verb. Recover
@@ -61,6 +62,74 @@ pub(super) fn restore_glossary_attachment(atoms: &mut [Atom]) {
     }
 }
 
+#[cfg(test)]
+mod course_time_tests {
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    fn translate(source: &str, hint: Option<TargetVariant>) -> String {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = hint;
+        analyze_and_translate(
+            source,
+            &options,
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap()
+        .target_text
+    }
+
+    #[test]
+    fn course_time_follows_the_action_on_either_side_of_a_known_event() {
+        for hint in [None, Some(TargetVariant::Ja)] {
+            for (source, expected) in [
+                ("先生は授業前に資料を読みました。", "老師上課前讀了資料。"),
+                ("先生は授業後に資料を読みました。", "老師下課後讀了資料。"),
+                ("先生は会議前に資料を読みました。", "老師會議前讀了資料。"),
+                ("先生は会議後に資料を読みました。", "老師會議後讀了資料。"),
+            ] {
+                assert_eq!(translate(source, hint), expected, "{source}");
+            }
+            let two_actions = translate(
+                "先生は授業後に佐藤さんへ連絡し、田中さんに資料を渡しました。",
+                hint,
+            );
+            let (first, second) = two_actions.split_once('，').unwrap();
+            assert!(
+                first.contains("下課後") && first.contains("佐藤"),
+                "{two_actions}"
+            );
+            assert!(
+                second.contains("田中") && !second.contains("下課後"),
+                "{two_actions}"
+            );
+        }
+    }
+
+    #[test]
+    fn course_time_preserves_spatial_and_written_uses() {
+        for hint in [None, Some(TargetVariant::Ja)] {
+            for (source, expected) in [
+                (
+                    "先生は教室の前で資料を読みました。",
+                    "老師在教室前面讀了資料。",
+                ),
+                (
+                    "先生は学校前に資料を読みました。",
+                    "老師在學校前面讀了資料。",
+                ),
+            ] {
+                assert_eq!(translate(source, hint), expected, "{source}");
+            }
+            let written = "紙に「授業後に資料を読んだ」と一字ずつそのまま写しました。";
+            let target = translate(written, hint);
+            assert!(target.contains("「授業後に資料を読んだ」"), "{target}");
+        }
+    }
+}
+
 // A 会 meeting may be tokenized as 説明 + 会. Only the object of this
 // particular verb establishes its event reading of 開く.
 fn meeting_object<'a>(source: &'a [Atom], verb: &Atom) -> Option<&'a str> {
@@ -74,6 +143,9 @@ fn meeting_object<'a>(source: &'a [Atom], verb: &Atom) -> Option<&'a str> {
 }
 
 pub(super) fn meeting_verb(source: &[Atom], day: &Atom) -> Option<(super::Span, &'static str)> {
+    if day.lemma.as_deref() != Some(DAYTIME) {
+        return None;
+    }
     let verb = source
         .iter()
         .find(|a| !a.is_locked && a.doc_tok_idx == day.head)?;
@@ -300,7 +372,107 @@ fn form(a: &Atom, next: &Atom, following: Option<&Atom>) -> Option<(usize, usize
     ))
 }
 
+// 前に can describe a place even when the noun and case have the same
+// dependencies as a time phrase. Resolve only established event nouns.
+fn course_time_labels(noun: &Atom) -> Option<(&'static str, &'static str)> {
+    if noun.is_locked || noun.upos != Some(Upos::Noun) || noun.doc_tok_idx.is_none() {
+        return None;
+    }
+    match noun.surface.as_str() {
+        "授業" => Some(("上課前", "下課後")),
+        "会議" => Some(("會議前", "會議後")),
+        _ => None,
+    }
+}
+
+fn course_time<'a>(
+    noun: &Atom,
+    tail: &'a [Atom],
+    source: &[Atom],
+) -> Option<(&'a Atom, usize, &'static str)> {
+    let (before, after) = course_time_labels(noun)?;
+    let [marker, rest @ ..] = tail else {
+        return None;
+    };
+    if marker.is_locked
+        || marker.doc_tok_idx.is_none()
+        || noun.span.end_char != marker.span.start_char
+        || source.iter().any(|a| {
+            a.head == noun.doc_tok_idx && matches!(a.deprel.as_str(), "amod" | "nmod" | "compound")
+        })
+    {
+        return None;
+    }
+
+    let owner = marker.head?;
+    let (last, label) = match marker.surface.as_str() {
+        "後に" if marker.deprel == "advmod" && noun.deprel == "obl" && noun.head == Some(owner) => {
+            (marker, after)
+        }
+        "前" if matches!(marker.deprel.as_str(), "obl" | "iobj")
+            && noun.deprel == "compound"
+            && noun.head == marker.doc_tok_idx =>
+        {
+            let case = rest.first().filter(|case| {
+                !case.is_locked
+                    && case.surface == "に"
+                    && case.upos == Some(Upos::Adp)
+                    && case.deprel == "case"
+                    && case.head == marker.doc_tok_idx
+                    && marker.span.end_char == case.span.start_char
+            })?;
+            (case, before)
+        }
+        _ => return None,
+    };
+    if source.iter().any(|a| {
+        a.span.start_char == last.span.end_char
+            && a.deprel == "case"
+            && (a.head == noun.doc_tok_idx || a.head == marker.doc_tok_idx)
+    }) {
+        return None;
+    }
+    source
+        .iter()
+        .any(|verb| {
+            !verb.is_locked
+                && verb.doc_tok_idx == Some(owner)
+                && verb.upos == Some(Upos::Verb)
+                && last.span.end_char <= verb.span.start_char
+        })
+        .then_some((last, owner, label))
+}
+
+fn bind_course_time(atoms: &mut Vec<Atom>, source: &[Atom]) {
+    for (i, noun) in source.iter().enumerate().rev() {
+        let Some((last, owner, label)) = course_time(noun, &source[i + 1..], source) else {
+            continue;
+        };
+        let Some(start) = atoms
+            .iter()
+            .position(|a| a.span.start_char == noun.span.start_char)
+        else {
+            continue;
+        };
+        let Some(end) = atoms[start..]
+            .iter()
+            .position(|a| a.span.end_char == last.span.end_char)
+        else {
+            continue;
+        };
+        let range = start..=start + end;
+        if atoms[range.clone()].iter().any(|a| a.is_locked) {
+            continue;
+        }
+        let mut time = time_modifier(noun, last.span.end_char, owner, false);
+        time.surface = label.to_owned();
+        time.lemma = Some(COURSE_TIME.to_owned());
+        atoms.splice(range, [time]);
+    }
+}
+
 pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom], doc: &super::Document) {
+    bind_course_time(atoms, source);
     for (idx, word) in source.iter().enumerate().rev() {
         let Some((end, owner, also)) = source
             .get(idx + 1)

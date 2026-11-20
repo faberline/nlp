@@ -6041,6 +6041,7 @@ fn translate_clause_atoms(
 
     if target == TargetVariant::ZhHant
         && let Some(body) = finite_adjective::concessive(core_non_punct(atoms), ctx)
+            .or_else(|| bounded_past_concessive(core_non_punct(atoms), doc, ctx))
     {
         let (mut text, _) = translate_clause_atoms(
             &body,
@@ -10479,6 +10480,8 @@ fn translate_clause_bunsetsus(
     let mut residence_additive = false;
     let mut additional_residences = Vec::new();
     let mut past_until = false;
+    let mut open_past_endpoint = false;
+    let mut bounded_state = None;
     let mut residence_duration = String::new();
     let mut residence_manners = Vec::new();
     let mut adverbs: Vec<String> = Vec::new();
@@ -11158,9 +11161,27 @@ fn translate_clause_bunsetsus(
                     render_bunsetsu_obl(&b, target, is_inst)
                 };
                 if !s.is_empty() {
-                    let until = temporal_made_time(&b);
-                    if until.is_some() && target == TargetVariant::ZhHant {
-                        past_until |= past_progressive_at_endpoint(&b, source, doc);
+                    let mut until = temporal_made_time(&b);
+                    if target == TargetVariant::ZhHant
+                        && b.case_particle.as_deref() == Some("まで")
+                        && let [time, case] = b.atoms.as_slice()
+                        && !case.is_locked
+                        && case.surface == "まで"
+                        && time.span.end_char == case.span.start_char
+                        && past_progressive_at_endpoint(case, source, doc)
+                    {
+                        if let Some(question) = deadline_time_question(time) {
+                            until = Some(question.to_owned());
+                            open_past_endpoint = true;
+                        }
+                        if until.is_some() {
+                            past_until = true;
+                            let owner = time_case_governor(case, doc);
+                            bounded_state = source
+                                .iter()
+                                .find(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == owner)
+                                .and_then(|a| bounded_wearing_or_open_state(a, source));
+                        }
                     }
                     obliques.push(PlacedArg {
                         text: s,
@@ -11282,7 +11303,7 @@ fn translate_clause_bunsetsus(
         }
     }
 
-    if elapsed_wh && sfp_suffix == Some("嗎") {
+    if (elapsed_wh || open_past_endpoint) && sfp_suffix == Some("嗎") {
         sfp_suffix = None;
     }
     if saw_to_sconj && (raw_clause.ends_with("とすぐ") || raw_clause.ends_with("とすぐに")) {
@@ -11377,6 +11398,10 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, past_until, target, transfer);
+    if let Some(state) = bounded_state {
+        verb_core = state.to_owned();
+        post_verb_mods.retain(|m| m != "著");
+    }
     if past_until && adverbs.iter().any(|adv| adv == "一直") {
         pre_verb_mods.retain(|modifier| modifier != "一直");
     }
@@ -22392,12 +22417,8 @@ fn merge_temporal_made_anchor(b: &mut Bunsetsu, modifier: &[Atom]) -> bool {
 
 // In V-て/で いる, the time belongs to V. The final past auxiliary
 // belongs to いる. A separate past predicate cannot license this reading.
-fn past_progressive_at_endpoint(group: &Bunsetsu, source: &[Atom], doc: &Document) -> bool {
-    let Some(owner) = group
-        .atoms
-        .last()
-        .and_then(|case| time_case_governor(case, doc))
-    else {
+fn past_progressive_at_endpoint(case: &Atom, source: &[Atom], doc: &Document) -> bool {
+    let Some(owner) = time_case_governor(case, doc) else {
         return false;
     };
     let Some(index) = source.iter().position(|a| a.doc_tok_idx == Some(owner)) else {
@@ -22432,6 +22453,69 @@ fn past_progressive_at_endpoint(group: &Bunsetsu, source: &[Atom], doc: &Documen
             .iter()
             .take_while(|a| a.span.start_char <= past.span.start_char)
             .all(|a| !a.is_locked)
+}
+
+fn bounded_past_concessive(
+    source: &[Atom],
+    doc: &Document,
+    ctx: &ClauseDiscourseCtx,
+) -> Option<Vec<Atom>> {
+    let (link, body) = source.split_last()?;
+    if !ctx.adjective.before_comma
+        || link.is_locked
+        || !matches!(link.surface.as_str(), "が" | "けれど" | "けれども" | "けど")
+    {
+        return None;
+    }
+    let past = body.last()?;
+    if past.is_locked
+        || past.upos != Some(Upos::Aux)
+        || past.surface != "た"
+        || past.head != link.head
+        || past.span.end_char != link.span.start_char
+    {
+        return None;
+    }
+    let mut clause = body.to_vec();
+    let root = clause.iter_mut().find(|a| {
+        a.doc_tok_idx.is_some() && a.doc_tok_idx == past.head && a.lemma.as_deref() == Some("いる")
+    })?;
+    root.deprel = "root".to_owned();
+    root.head = None;
+    clause
+        .windows(2)
+        .any(|pair| {
+            let time = &pair[0];
+            let case = &pair[1];
+            !case.is_locked
+                && case.surface == "まで"
+                && case.upos == Some(Upos::Adp)
+                && time.span.end_char == case.span.start_char
+                && (render_temporal_made_atom(time).is_some()
+                    || deadline_time_question(time).is_some())
+                && past_progressive_at_endpoint(case, &clause, doc)
+        })
+        .then_some(clause)
+}
+
+// A result can last through the endpoint even though the initial action
+// (putting on glasses or opening a window) is already complete.
+fn bounded_wearing_or_open_state(action: &Atom, source: &[Atom]) -> Option<&'static str> {
+    let object = source
+        .iter()
+        .find(|a| a.head == action.doc_tok_idx && a.deprel == "obj");
+    let noun = object.map(|a| a.lemma.as_deref().unwrap_or(&a.surface));
+    match (action.lemma.as_deref()?, noun) {
+        ("かける" | "掛ける", Some("眼鏡" | "めがね" | "メガネ" | "サングラス")) => {
+            Some("戴著")
+        }
+        ("かける" | "掛ける", Some("電話")) => Some("打"),
+        ("かぶる" | "被る", Some("帽子" | "ヘルメット")) => Some("戴著"),
+        ("着る" | "履く", Some(_)) => Some("穿著"),
+        ("開く", None) => Some("開著"),
+        ("閉まる", None) => Some("關著"),
+        _ => None,
+    }
 }
 
 // Only a typed time with adjacent, bare まで licenses the continuation

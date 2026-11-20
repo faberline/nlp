@@ -52,6 +52,7 @@ fn has_clerk_confirmation(source: &[Atom], index: usize, chars: &[char]) -> bool
                 && !atom.is_locked
                 && atom.upos == Some(Upos::Verb)
                 && atom.lemma.as_deref() == Some("確認する")
+                && outside_relative_clause(source, atom)
         })
         && source.windows(2).enumerate().any(|(subject_index, pair)| {
             let [subject, case] = pair else {
@@ -63,6 +64,24 @@ fn has_clerk_confirmation(source: &[Atom], index: usize, chars: &[char]) -> bool
                 && dasu_case_link(subject, case)
                 && is_clerk(source, subject_index, chars)
         })
+}
+
+fn outside_relative_clause<'a>(source: &'a [Atom], mut predicate: &'a Atom) -> bool {
+    for _ in source {
+        // With 確認している客, the analyzer may attach the apparent
+        // subject to 確認し while いる carries the adnominal attachment.
+        if matches!(predicate.deprel.as_str(), "acl" | "acl:relcl") {
+            return false;
+        }
+        let Some(head) = predicate.head else {
+            return true;
+        };
+        let Some(parent) = source.iter().find(|atom| atom.doc_tok_idx == Some(head)) else {
+            return true;
+        };
+        predicate = parent;
+    }
+    false
 }
 
 fn is_clerk(source: &[Atom], index: usize, chars: &[char]) -> bool {
@@ -94,6 +113,7 @@ mod tests {
         for (source, expected) in [
             ("店員は注文を確認しましたか。", "店員確認了訂單嗎？"),
             ("店員は注文を確認しませんでした。", "店員沒有確認訂單。"),
+            ("店員は注文を確認している。", "店員正在確認訂單。"),
             ("店員は本の注文を確認しました。", "店員確認了書的訂單。"),
             (
                 "店員は注文した料理を確認しました。",
@@ -102,6 +122,14 @@ mod tests {
             (
                 "店員は修理方法についての注文を確認しました。",
                 "店員確認了修理方法的訂購。",
+            ),
+            (
+                "店員は注文を確認している客を見ました。",
+                "店員正在確認看訂購客。",
+            ),
+            (
+                "店員は注文を確認した客を見ました。",
+                "店員看了確認了訂購的客。",
             ),
         ] {
             let result = analyze_and_translate(

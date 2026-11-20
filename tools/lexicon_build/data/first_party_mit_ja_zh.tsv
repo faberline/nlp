@@ -22,6 +22,10 @@
 係員	NOUN	工作人員	947	-
 # General application form; cost follows the existing form noun 願書 (1035).
 申込書	NOUN	申請表	1035	-
+# The hiragana spelling takes the existing 葉書 cost. Keep both existing row costs.
+はがき	NOUN	明信片	998	-
+葉書	NOUN	明信片	998	-
+ハガキ	NOUN	明信片	487	-
 # Cost follows the existing ja.tsv management title 部長 (956).
 店長	NOUN	店長	956	-
 部下	NOUN	部下	650	-

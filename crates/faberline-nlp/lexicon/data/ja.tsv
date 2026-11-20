@@ -7313,6 +7313,7 @@
 はかりこむ	ja	1439	VERB	VERB	-	-	infl=godan_ma
 はかる	ja	1422	VERB	VERB	-	測量	infl=godan_ra;src=first_party_mit
 はかれる	ja	1433	VERB	VERB	-	-	infl=ichidan
+はがき	ja	998	NOUN	NOUN	-	明信片	src=first_party_mit
 はがす	ja	1431	VERB	VERB	-	-	infl=godan_sa
 はがせる	ja	1439	VERB	VERB	-	-	infl=ichidan
 はがゆい	ja	1018	ADJ	ADJ	-	-	infl=adj_i
@@ -25587,7 +25588,7 @@
 ハカ	ja	508	NOUN	NOUN	-	-	-
 ハカセ碆	ja	541	PROPN	PROPN	-	-	-
 ハカリ	ja	532	NOUN	NOUN	-	-	-
-ハガキ	ja	487	NOUN	NOUN	-	-	-
+ハガキ	ja	487	NOUN	NOUN	-	明信片	src=first_party_mit
 ハガネ	ja	547	NOUN	NOUN	-	-	-
 ハキハキ	ja	637	ADV	ADV	-	-	-
 ハギ	ja	533	-	NOUN|PROPN	-	-	-
@@ -62932,7 +62933,7 @@
 落魄	ja	763	-	NOUN|VERB	-	落魄	-
 落魄れる	ja	1162	VERB	VERB	-	-	infl=ichidan
 葉	ja	1068	NOUN	NOUN	-	-	-
-葉書	ja	998	NOUN	NOUN	-	-	-
+葉書	ja	998	NOUN	NOUN	-	明信片	src=first_party_mit
 葉色	ja	1036	NOUN	NOUN	-	-	-
 葎	ja	1044	NOUN	NOUN	-	-	-
 著い	ja	784	ADJ	ADJ	-	-	infl=adj_i

@@ -370,20 +370,78 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom], doc: &super::Document
         {
             direction.surface = "に".to_owned();
         }
-        let mut day = word.clone();
-        if !day.is_locked {
-            day.surface = "白天".to_owned();
+        atoms.splice(range, [time_modifier(word, end, owner, also)]);
+    }
+}
+
+fn time_modifier(word: &Atom, end: usize, owner: usize, also: bool) -> Atom {
+    let mut day = word.clone();
+    if !day.is_locked {
+        day.surface = "白天".to_owned();
+    }
+    if also {
+        day.surface.push('也');
+    }
+    day.lemma = Some(DAYTIME.to_owned());
+    day.span.end_char = end;
+    day.head = Some(owner);
+    day.deprel = "advmod".to_owned();
+    day.upos = Some(Upos::Adv);
+    day.is_locked = true;
+    day
+}
+
+// Identify the time before selecting the filing or extraction sense of 出す.
+// A comma in a series of actions can depend on the final verb. The time and
+// the form must instead share the actual action's own dependency node.
+pub(super) fn bind_form_time(atoms: &mut Vec<Atom>, chars: &[char]) {
+    for i in (0..atoms.len().saturating_sub(1)).rev() {
+        let Some(word) = atoms.get(i) else { continue };
+        let Some((end, owner, also)) = atoms
+            .get(i + 1)
+            .and_then(|case| form(word, case, atoms.get(i + 2)))
+        else {
+            continue;
+        };
+        if i.checked_sub(1).is_some_and(|idx| {
+            let a = &atoms[idx];
+            a.span.end_char == word.span.start_char && (a.upos == Some(Upos::Num) || a.is_locked)
+        }) {
+            continue;
         }
-        if also {
-            day.surface.push('也');
+        let Some(action) = atoms.iter().position(|a| a.doc_tok_idx == Some(owner)) else {
+            continue;
+        };
+        if action <= i || !super::application_form::has_form_role(atoms, &atoms[action], chars) {
+            continue;
         }
-        day.lemma = Some(DAYTIME.to_owned());
-        day.span.end_char = end;
-        day.head = Some(owner);
-        day.deprel = "advmod".to_owned();
-        day.upos = Some(Upos::Adv);
-        day.is_locked = true;
-        atoms.splice(range, [day]);
+        let Some(last) = (i..action).find(|&j| atoms[j].span.end_char == end) else {
+            continue;
+        };
+        let pause = atoms.get(last + 1).is_some_and(|a| {
+            !a.is_locked
+                && a.deprel == "punct"
+                && a.span.start_char == end
+                && matches!(a.surface.as_str(), "、" | "，" | ",")
+        });
+        let tail = last + usize::from(pause);
+        if atoms[tail + 1..action]
+            .iter()
+            .any(|a| super::is_punct_atom(a) || a.upos == Some(Upos::Verb))
+            || also
+                && atoms.windows(3).any(|p| {
+                    p[0].head == Some(owner)
+                        && p[0].doc_tok_idx != word.doc_tok_idx
+                        && p[1].surface == "に"
+                        && p[1].head == p[0].doc_tok_idx
+                        && p[2].surface == "も"
+                        && p[2].head == p[0].doc_tok_idx
+                })
+        {
+            continue;
+        }
+        let day = time_modifier(word, end, owner, also);
+        atoms.splice(i..=tail, [day]);
     }
 }
 

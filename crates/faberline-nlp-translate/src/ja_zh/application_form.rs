@@ -228,20 +228,50 @@ fn is_person(noun: &Atom, chars: &[char]) -> bool {
     matches!(name, "担当者" | "係員") || filing_person(&original)
 }
 
+fn is_container(name: &str) -> bool {
+    [
+        "かばん",
+        "鞄",
+        "バッグ",
+        "箱",
+        "封筒",
+        "引き出し",
+        "ポケット",
+    ]
+    .iter()
+    .any(|end| name.ends_with(end))
+}
+
 fn container_source(raw: &str) -> bool {
-    raw.strip_suffix("から").is_some_and(|name| {
-        [
-            "かばん",
-            "鞄",
-            "バッグ",
-            "箱",
-            "封筒",
-            "引き出し",
-            "ポケット",
-        ]
-        .iter()
-        .any(|end| name.ends_with(end))
-    })
+    raw.strip_suffix("から").is_some_and(is_container)
+}
+
+// A second recipient, a named companion or a physical container establishes
+// what role belongs to the form's own 出す. A later sending verb cannot supply it.
+pub(super) fn has_form_role(atoms: &[Atom], verb: &Atom, chars: &[char]) -> bool {
+    let Some(id) = verb.doc_tok_idx else {
+        return false;
+    };
+    if filing_reading(verb, atoms).is_none()
+        || !atoms.windows(2).enumerate().any(|(i, p)| {
+            p[0].deprel == "obj"
+                && p[0].head == Some(id)
+                && p[1].surface == "を"
+                && dasu_case_link(&p[0], &p[1])
+                && (form_start(atoms, i, chars).is_some() || covered_purpose(&p[0], chars))
+        })
+    {
+        return false;
+    }
+    filing_recipient(atoms, id, chars).is_some()
+        || matches!(together(atoms, id), Some((_, Some((_, true)))))
+        || atoms.windows(2).any(|p| {
+            p[0].head == Some(id)
+                && !p[1].is_locked
+                && p[1].surface == "から"
+                && dasu_case_link(&p[0], &p[1])
+                && is_container(&spelling(&p[0], chars))
+        })
 }
 
 fn physical_argument(

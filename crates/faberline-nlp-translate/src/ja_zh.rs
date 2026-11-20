@@ -5363,6 +5363,19 @@ fn parallel_elapsed_te(
             {
                 Some(verb)
             }
+            [.., verb, mark, kara]
+                if has_temporal_te_kara_tail(next)
+                    && matches!(verb.deprel.as_str(), "obl" | "advcl")
+                    && verb.head.is_some()
+                    && mark.deprel == "mark"
+                    && kara.deprel == "case"
+                    && mark.head == verb.doc_tok_idx
+                    && kara.head == verb.doc_tok_idx
+                    && verb.span.end_char == mark.span.start_char
+                    && mark.span.end_char == kara.span.start_char =>
+            {
+                Some(verb)
+            }
             [.., verb, mark]
                 if verb.upos == Some(Upos::Verb)
                     && verb.deprel == "advcl"
@@ -10540,12 +10553,7 @@ fn take_elapsed_duration(
         // A separately assembled てから clause has its own predicate and
         // places 後 after that predicate. Other connective scopes stay intact.
         let temporal_after = predicate.sconj_tail.as_deref() == Some("てから")
-            && has_temporal_te_kara_tail(&predicate.atoms)
-            && groups
-                .iter()
-                .filter(|g| g.role == BunsetsuRole::Predicate)
-                .count()
-                == 1;
+            && has_temporal_te_kara_tail(&predicate.atoms);
         let progressive_relative = progressive_acl_action(predicate)
             .is_some_and(|(verb, _)| verb.doc_tok_idx == Some(action_id));
         let progressive_negative = progressive_relative && progressive_acl_is_negative(predicate);
@@ -10585,7 +10593,9 @@ fn take_elapsed_duration(
             matches!(g.atoms.as_slice(), [a] if calendar::is_day_duration(a)
                 && a.head == Some(action_id) && a.deprel == "obl"
                 && !source.iter().any(|m| m.head == a.doc_tok_idx && matches!(m.deprel.as_str(), "case" | "discourse")))
-        }) {
+        }) && (!temporal_after
+            || groups.iter().filter(|g| g.role == BunsetsuRole::Predicate).count() == 1)
+        {
             let day = groups.remove(index).atoms.remove(0);
             return Some((day.surface, false, action_id));
         }
@@ -10626,7 +10636,9 @@ fn take_elapsed_duration(
                 };
                 let first = slice.first()?.span.start_char;
                 let end = slice.last()?.span.end_char;
-                if (progressive_relative || past_negative || separate_te)
+                // 十分 can form an adjective predicate inside a measured
+                // duration. An unrelated predicate still has its own scope.
+                if (temporal_after || progressive_relative || past_negative || separate_te)
                     && groups
                         .iter()
                         .filter(|g| g.role == BunsetsuRole::Predicate)
@@ -18478,6 +18490,40 @@ mod clock_rule_tests {
             "{}",
             rendered.target_text
         );
+    }
+
+    #[test]
+    fn elapsed_actions_preceding_te_kara_keep_both_durations() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "先生と二時間話して、資料を十分間読んでから帰りました。",
+                "跟老師說兩個小時，讀資料十分鐘後，回去了。",
+            ),
+            (
+                "二時間先生と話して、資料を三十分読んでから、家に帰りました。",
+                "跟老師說兩個小時，讀資料三十分鐘後，回到家了。",
+            ),
+            (
+                "資料を十分間読んでから帰りました。",
+                "讀資料十分鐘後，回去了。",
+            ),
+            (
+                "十分な資料を読んでから帰りました。",
+                "讀足夠的資料後，回去了。",
+            ),
+            ("資料を読んだから帰りました。", "因為讀了資料，回去了。"),
+            (
+                "「十分間読んでから帰る」と紙に書き写しました。",
+                "「十分間読んでから帰る」給紙抄寫了。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
     }
 
     #[test]

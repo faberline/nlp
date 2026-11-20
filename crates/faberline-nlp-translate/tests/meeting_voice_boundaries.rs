@@ -185,9 +185,19 @@ fn assert_meeting_with_counterpart(case_id: &str, text: &str, label: &str, perso
             .find("星潮中心")
             .or_else(|| before_action.find("會館"))
             .unwrap_or_else(|| panic!("{label}: missing meeting location: {text}"));
+        let counterpart = before_action
+            .find("森川")
+            .unwrap_or_else(|| panic!("{label}: missing meeting counterpart: {text}"));
+        let location_marker = before_action
+            .find('在')
+            .unwrap_or_else(|| panic!("{label}: missing location marker: {text}"));
         assert!(
-            subject < negative && negative < place && place < connector,
-            "{label}: meeting location must follow negation and precede the counterpart: {text}"
+            subject < negative
+                && negative < connector
+                && connector < counterpart
+                && counterpart < location_marker
+                && location_marker < place,
+            "{label}: meeting location must follow the negated counterpart: {text}"
         );
     }
 }

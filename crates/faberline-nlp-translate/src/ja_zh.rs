@@ -13504,11 +13504,11 @@ fn translate_clause_bunsetsus(
         });
     }
     parts.extend(inner_pre_mods);
-    if let Some((_, place)) = meeting_place {
-        parts.push(place);
-    }
     if let Some(partner) = meeting_partner {
         parts.push(format!("和{partner}"));
+    }
+    if let Some((_, place)) = meeting_place {
+        parts.push(place);
     }
     // 遊べる and 飲める already carry ability in their Chinese lexical gloss.
     // Keep 不能 together, then put the shared activity before the action.

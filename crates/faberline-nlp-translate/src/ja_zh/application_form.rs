@@ -228,20 +228,106 @@ fn is_person(noun: &Atom, chars: &[char]) -> bool {
     matches!(name, "担当者" | "係員") || filing_person(&original)
 }
 
+fn is_container(name: &str) -> bool {
+    [
+        "かばん",
+        "鞄",
+        "バッグ",
+        "箱",
+        "封筒",
+        "引き出し",
+        "ポケット",
+    ]
+    .iter()
+    .any(|end| name.ends_with(end))
+}
+
 fn container_source(raw: &str) -> bool {
-    raw.strip_suffix("から").is_some_and(|name| {
-        [
-            "かばん",
-            "鞄",
-            "バッグ",
-            "箱",
-            "封筒",
-            "引き出し",
-            "ポケット",
-        ]
-        .iter()
-        .any(|end| name.ends_with(end))
-    })
+    raw.strip_suffix("から").is_some_and(is_container)
+}
+
+// A second recipient, a named companion or a physical container establishes
+// what role belongs to the form's own 出す. A later sending verb cannot supply it.
+pub(super) fn has_form_object(atoms: &[Atom], verb: &Atom, chars: &[char]) -> bool {
+    let Some(id) = verb.doc_tok_idx else {
+        return false;
+    };
+    filing_reading(verb, atoms).is_some()
+        && atoms.windows(2).enumerate().any(|(i, p)| {
+            p[0].deprel == "obj"
+                && p[0].head == Some(id)
+                && p[1].surface == "を"
+                && dasu_case_link(&p[0], &p[1])
+                && (form_start(atoms, i, chars).is_some() || covered_purpose(&p[0], chars))
+        })
+}
+
+pub(super) fn has_form_role(atoms: &[Atom], id: usize, chars: &[char]) -> bool {
+    filing_recipient(atoms, id, chars).is_some()
+        || matches!(together(atoms, id), Some((_, Some((_, true)))))
+        || atoms.windows(2).any(|p| {
+            p[0].head == Some(id)
+                && !p[1].is_locked
+                && p[1].surface == "から"
+                && dasu_case_link(&p[0], &p[1])
+                && is_container(&spelling(&p[0], chars))
+        })
+}
+
+// Coordinate place names only with an overt second にも and a common action.
+// Preserve an external name's original placeholder within the resulting phrase.
+pub(super) fn paired_recipients(
+    atoms: &mut Vec<Atom>,
+    start: usize,
+    day_end: usize,
+    id: usize,
+    doc: &Document,
+) -> bool {
+    let Some([other, case, also]) = atoms.get(day_end + 1..day_end + 4) else {
+        return false;
+    };
+    if atoms[day_end].span.end_char != other.span.start_char
+        || other.head != Some(id)
+        || !other
+            .doc_tok_idx
+            .and_then(|t| doc.tokens.get(t))
+            .is_some_and(|t| {
+                t.upos == Some(Upos::Propn)
+                    && t.sem_class == Some(faberline_nlp::doc::SemanticClass::Location)
+            })
+        || other.is_locked && other.lemma.as_deref() != Some(super::LOCKED_PLACE_ATOM)
+        || case.is_locked
+        || case.surface != "に"
+        || !dasu_case_link(other, case)
+        || also.is_locked
+        || also.surface != "も"
+        || also.deprel != "case"
+        || also.head != other.doc_tok_idx
+        || also.span.start_char != case.span.end_char
+    {
+        return false;
+    }
+    let first = &atoms[start];
+    let left = if first.is_locked {
+        &first.surface
+    } else {
+        "日中"
+    };
+    let right = if other.is_locked {
+        other.surface.clone()
+    } else {
+        super::translate_single_ja_term(&other.surface, other.lemma.as_deref(), other.upos)
+    };
+    let mut noun = other.clone();
+    noun.span.start_char = first.span.start_char;
+    noun.surface = format!("{left}和{right}");
+    noun.lemma = Some(PRESENT_RECIPIENT.to_owned());
+    noun.deprel = "obl".to_owned();
+    noun.is_locked = true;
+    let mut particle = case.clone();
+    particle.span.end_char = also.span.end_char;
+    atoms.splice(start..day_end + 4, [noun, particle]);
+    true
 }
 
 fn physical_argument(

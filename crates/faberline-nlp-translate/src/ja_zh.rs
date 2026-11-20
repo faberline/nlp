@@ -5379,10 +5379,8 @@ fn parallel_elapsed_te(
     if first.iter().chain(next).any(|a| {
         a.doc_tok_idx.is_none()
             || a.is_locked
-                && !matches!(
-                    a.lemma.as_deref(),
-                    Some(LOCKED_RESIDENT_ATOM | LOCKED_OBJECT_ATOM)
-                )
+                && !honorific::is_bound_person(a)
+                && a.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM)
     }) || next.first().is_some_and(|a| a.surface == "から")
     {
         return None;

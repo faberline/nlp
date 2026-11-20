@@ -206,10 +206,12 @@ fn protect_sibling_forms(
                 .any(|label| strip_suffix(before, label).is_some());
         }
         let measures_form = measures_written_form(after);
+        let reads_word = names_source_reading(after);
         let shared_copy_object = index > first_in_list && after.starts_with(&['を']);
         let copies_form =
             copies_written_form(chars, after, scope.end_char, syntax, shared_copy_object);
         if measures_form
+            || reads_word
             || copies_form
             || describes_written_form(after)
             || acts_on_written_form(before, after)
@@ -219,21 +221,22 @@ fn protect_sibling_forms(
 
         // The final operand can carry the count phrase or the copying predicate for the
         // list. Terminal marks inside the quotes do not end the list.
-        let first =
-            if index > first_in_list && (measures_form || (shared_copy_object && copies_form)) {
-                first_in_list
-            } else if index > first_for_comparison {
-                let before = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
-                let count = index - first_for_comparison + 1;
-                if !compares_written_forms(after)
-                    && !compares_apposed_forms(before, after, count, labelled)
-                {
-                    continue;
-                }
-                first_for_comparison
-            } else {
+        let first = if index > first_in_list
+            && (measures_form || reads_word || (shared_copy_object && copies_form))
+        {
+            first_in_list
+        } else if index > first_for_comparison {
+            let before = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
+            let count = index - first_for_comparison + 1;
+            if !compares_written_forms(after)
+                && !compares_apposed_forms(before, after, count, labelled)
+            {
                 continue;
-            };
+            }
+            first_for_comparison
+        } else {
+            continue;
+        };
         protected.extend(
             quotes[first..=index]
                 .iter()
@@ -701,6 +704,64 @@ fn after_word_name(nominal: &[char]) -> Option<&[char]> {
         .iter()
         .find_map(|word| strip_prefix(nominal, word))
         .map(skip_space)
+}
+
+fn names_source_reading(after: &[char]) -> bool {
+    let named_word = strip_prefix(after, "という").and_then(|nominal| {
+        let nominal = skip_space(nominal);
+        let rest = without_count(nominal);
+        let nominal = if rest.len() < nominal.len() {
+            FORM_COUNTERS
+                .iter()
+                .find_map(|label| strip_prefix(rest, label))?
+        } else {
+            nominal
+        };
+        after_word_name(nominal)
+    });
+    let relation = named_word.unwrap_or(after);
+    if let Some(attribute) = relation.strip_prefix(&['の']).map(skip_space) {
+        // 読み方 can also mean how to read a book or a newspaper.
+        let is_reading = named_word.is_some()
+            && ["読み方", "よみかた"]
+                .iter()
+                .any(|name| strip_prefix(attribute, name).is_some_and(noun_boundary));
+        return is_reading
+            || ["発音", "発音記号", "ふりがな", "振り仮名", "振りがな"]
+                .iter()
+                .any(|name| strip_prefix(attribute, name).is_some_and(noun_boundary));
+    }
+    let Some((&particle, tail)) = relation.split_first() else {
+        return false;
+    };
+    if !matches!(particle, 'は' | 'を' | 'も') {
+        return false;
+    }
+    let question = after_clause_comma(tail);
+    let verb = ["何と", "なんと", "何て", "なんて"]
+        .iter()
+        .find_map(|word| strip_prefix(question, word))
+        .or_else(|| named_word.and_then(|_| strip_prefix(question, "どう")));
+    verb.is_some_and(|verb| {
+        let verb = skip_space(verb);
+        ["読む", "読みます", "発音する", "発音します"]
+            .iter()
+            .filter_map(|form| strip_prefix(verb, form))
+            .any(|end| {
+                let end = skip_space(end);
+                matches!(
+                    end.first(),
+                    None | Some('。' | '？' | '?' | '」' | '』' | 'か')
+                ) || strip_prefix(end, "のですか").is_some()
+                    || strip_prefix(end, "のか").is_some()
+                    || end.strip_prefix(&['の']).is_some_and(|end| {
+                        matches!(
+                            skip_space(end).first(),
+                            None | Some('？' | '?' | '」' | '』')
+                        )
+                    })
+            })
+    })
 }
 
 fn measures_written_form(after: &[char]) -> bool {
@@ -1470,6 +1531,63 @@ mod tests {
                     .iter()
                     .any(|item| { item.kind == TranslateUnknownKind::PlaceholderRepaired }),
                 "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_word_reading_preserves_only_the_forms_being_pronounced() {
+        let glossary = glossary();
+        for (source, keep, translate) in [
+            (
+                "「写真」という語の読み方を教えてください。",
+                &["「写真」"][..],
+                &[][..],
+            ),
+            ("「駅」は何と読みますか。", &["「駅」"], &[]),
+            (
+                "「写真」と「ドイツ」という二つの単語の読み方を調べました。",
+                &["「写真」", "「ドイツ」"],
+                &[],
+            ),
+            (
+                "先生は『「写真」という言葉の発音を聞いてください』と言いました。",
+                &["「写真」"],
+                &["老師"],
+            ),
+            (
+                "ドイツで「ドイツ」という語の読み方を聞きました。",
+                &["「ドイツ」"],
+                &["德國"],
+            ),
+            ("「写真」という語の意味を教えてください。", &[], &["照片"]),
+            ("「新聞」の読み方を教えてください。", &[], &["報紙"]),
+            (
+                "「写真」と言ってから「駅」という語のよみかたを聞きました。",
+                &["「駅」"],
+                &["照片"],
+            ),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            for expected in keep.iter().chain(translate) {
+                assert_eq!(
+                    result.target_text.matches(expected).count(),
+                    1,
+                    "{source}: {}",
+                    result.target_text
+                );
+            }
+            assert_eq!(
+                result.glossary_hits.len(),
+                usize::from(translate.contains(&"德國")),
+                "{source}"
             );
         }
     }

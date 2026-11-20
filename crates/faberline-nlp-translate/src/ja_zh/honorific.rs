@@ -10,7 +10,7 @@ use crate::{TranslateUnknown, TranslateUnknownKind};
 use faberline_nlp::doc::{EntityKind, SemanticClass};
 
 const HONORIFIC_NAME: &str = "__ja_honorific_name";
-pub(super) const PERSON_WITH_SUFFIX: &str = "__ja_person_with_suffix";
+const PERSON_WITH_SUFFIX: &str = "__ja_person_with_suffix";
 pub(super) const DEFINED_ALIAS: &str = "__ja_defined_alias";
 
 pub(super) fn has_name_suffix(atom: &Atom) -> bool {
@@ -18,6 +18,14 @@ pub(super) fn has_name_suffix(atom: &Atom) -> bool {
         atom.lemma.as_deref(),
         Some(PERSON_WITH_SUFFIX | HONORIFIC_NAME)
     )
+}
+
+pub(super) fn is_bound_person(atom: &Atom) -> bool {
+    atom.is_locked
+        && matches!(
+            atom.lemma.as_deref(),
+            Some(super::LOCKED_RESIDENT_ATOM | PERSON_WITH_SUFFIX)
+        )
 }
 
 #[derive(Default)]

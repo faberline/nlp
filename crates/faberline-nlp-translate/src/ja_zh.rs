@@ -10386,7 +10386,7 @@ fn elapsed_partner(noun: &Atom, marker: &Atom, context: &[Atom]) -> bool {
                 && name.head == noun.doc_tok_idx
                 && name.span.end_char == noun.span.start_char
         });
-    (!noun.is_locked || noun.lemma.as_deref() == Some(LOCKED_RESIDENT_ATOM))
+    (!noun.is_locked || honorific::is_bound_person(noun))
         && !marker.is_locked
         && matches!(noun.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
         && !is_time_or_place_bunsetsu(std::slice::from_ref(noun))
@@ -10553,18 +10553,16 @@ fn elapsed_interposed_argument(atoms: &[Atom], action: usize) -> bool {
     {
         return false;
     }
-    // A complete, typed glossary noun keeps its source case and its own
-    // translated text. Other opaque spans cannot supply attachment evidence.
-    let permitted_lock = if case.surface == "と" {
-        LOCKED_RESIDENT_ATOM
-    } else {
-        LOCKED_OBJECT_ATOM
+    // A bound person or a glossary object keeps its source case and its own
+    // translated text. Other opaque spans cannot establish attachment.
+    let permitted_lock = |a: &Atom| match case.surface.as_str() {
+        "と" => honorific::is_bound_person(a),
+        _ => a.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM),
     };
     if atoms.iter().any(|a| {
         a.doc_tok_idx.is_none()
             || is_punct_atom(a)
-            || a.is_locked
-                && (a.doc_tok_idx != case.head || a.lemma.as_deref() != Some(permitted_lock))
+            || a.is_locked && (a.doc_tok_idx != case.head || !permitted_lock(a))
     }) || atoms
         .windows(2)
         .any(|w| w[0].span.end_char != w[1].span.start_char)

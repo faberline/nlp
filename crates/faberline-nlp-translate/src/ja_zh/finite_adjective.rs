@@ -5,7 +5,7 @@ use super::*;
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Context {
     question_mark: bool,
-    before_comma: bool,
+    pub(super) before_comma: bool,
     time_head: Option<usize>,
     preceding_until: Option<usize>,
     reported_predicate: Option<usize>,

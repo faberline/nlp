@@ -397,6 +397,165 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom], doc: &super::Document
         }
         atoms.splice(range, [time_modifier(word, end, owner, also)]);
     }
+    bind_saury_meal(atoms, source);
+}
+
+fn case_for(noun: &Atom, case: &Atom, particle: &str) -> bool {
+    !noun.is_locked
+        && !case.is_locked
+        && noun.doc_tok_idx.is_some()
+        && case.head == noun.doc_tok_idx
+        && case.deprel == "case"
+        && case.surface == particle
+        && noun.span.end_char == case.span.start_char
+}
+
+fn meal_name<'a>(previous: Option<&'a Atom>, meal: &'a Atom) -> Option<(&'a Atom, &'static str)> {
+    match meal.surface.as_str() {
+        "朝食" | "朝ご飯" => Some((meal, "早餐")),
+        "昼食" | "昼ご飯" => Some((meal, "午餐")),
+        "夕食" | "晩ご飯" => Some((meal, "晚餐")),
+        "ご飯" => {
+            let part = previous.filter(|part| {
+                !part.is_locked
+                    && (part.deprel == "compound" && part.head == meal.doc_tok_idx
+                        || part.deprel == "advmod" && part.head == meal.head)
+                    && part.span.end_char == meal.span.start_char
+            })?;
+            match part.surface.as_str() {
+                "朝" => Some((part, "早餐")),
+                "昼" => Some((part, "午餐")),
+                "晩" => Some((part, "晚餐")),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+// The meal and the fish must both belong to this one cooking action. An
+// object belonging to a nearby verb cannot disambiguate the meal's に.
+fn bind_saury_meal(atoms: &mut Vec<Atom>, source: &[Atom]) {
+    for (idx, pair) in source.windows(2).enumerate().rev() {
+        let [meal, case] = pair else { continue };
+        if meal.upos != Some(Upos::Noun) || meal.deprel != "obl" || !case_for(meal, case, "に") {
+            continue;
+        }
+        let Some((first, label)) = meal_name(idx.checked_sub(1).map(|i| &source[i]), meal) else {
+            continue;
+        };
+        let Some(owner) = meal.head else { continue };
+        let end = case.span.end_char;
+        if source.iter().any(|a| {
+            a.head == meal.doc_tok_idx
+                && (matches!(a.deprel.as_str(), "nmod" | "amod")
+                    || a.deprel == "case" && a.span.start_char == end)
+        }) || passive_or_causative(source, owner)
+        {
+            continue;
+        }
+        let Some(verb) = source
+            .iter()
+            .find(|a| !a.is_locked && a.doc_tok_idx == Some(owner) && a.upos == Some(Upos::Verb))
+        else {
+            continue;
+        };
+        let verb_label = match verb.lemma.as_deref().unwrap_or(&verb.surface) {
+            "焼く" => Some("烤"),
+            "煮る" => Some("煮"),
+            "食べる" => None,
+            _ => continue,
+        };
+        let Some(fish) = source.windows(2).find_map(|pair| {
+            let [fish, case] = pair else { return None };
+            (fish.upos == Some(Upos::Noun)
+                && fish.deprel == "obj"
+                && fish.head == Some(owner)
+                && fish.lemma.as_deref().unwrap_or(&fish.surface) == "サンマ"
+                && fish.span.start_char >= end
+                && case.span.end_char <= verb.span.start_char
+                && case_for(fish, case, "を"))
+            .then_some(fish)
+        }) else {
+            continue;
+        };
+        let Some(start) = atoms
+            .iter()
+            .position(|a| a.span.start_char == first.span.start_char)
+        else {
+            continue;
+        };
+        let Some(last) = atoms[start..].iter().position(|a| a.span.end_char == end) else {
+            continue;
+        };
+        let range = start..=start + last;
+        let Some(fish) = atoms
+            .iter()
+            .position(|a| !a.is_locked && a.span == fish.span)
+        else {
+            continue;
+        };
+        let Some(verb) = atoms
+            .iter()
+            .position(|a| !a.is_locked && a.span == verb.span)
+        else {
+            continue;
+        };
+        if atoms[range.clone()].iter().any(|a| a.is_locked) {
+            continue;
+        }
+        atoms[fish].surface = "秋刀魚".to_owned();
+        atoms[fish].is_locked = true;
+        if let Some(label) = verb_label {
+            atoms[verb].surface = label.to_owned();
+            atoms[verb].is_locked = true;
+        }
+        let mut modifier = time_modifier(meal, end, owner, false);
+        modifier.span.start_char = first.span.start_char;
+        modifier.surface = label.to_owned();
+        atoms.splice(range, [modifier]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    #[test]
+    fn a_meal_and_its_fish_object_follow_the_same_cooking_action() {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        let translate = |source| {
+            analyze_and_translate(
+                source,
+                &options,
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap()
+            .target_text
+        };
+        for (source, expected) in [
+            ("夕食にさんまを焼きました。", "晚餐烤了秋刀魚。"),
+            ("昼ご飯にさんまを食べました。", "午餐吃了秋刀魚。"),
+            ("朝食にさんまを煮ました。", "早餐煮了秋刀魚。"),
+            ("夕食にさんまを焼きませんでした。", "晚餐沒有烤秋刀魚。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        assert!(
+            translate("紙に「夕食にさんまを焼きました」と一字ずつそのまま写しました。")
+                .contains("「夕食にさんまを焼きました」")
+        );
+        for source in [
+            "明石家さんまがテレビに出ました。",
+            "夕食に魚を買い、台所でさんまを焼きました。",
+        ] {
+            assert!(!translate(source).contains("秋刀魚"), "{source}");
+        }
+    }
 }
 
 fn time_modifier(word: &Atom, end: usize, owner: usize, also: bool) -> Atom {

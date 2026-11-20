@@ -20241,6 +20241,35 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn a_fronted_clock_keeps_the_arguments_of_each_date_topic() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "何時までに、五月四日は大阪へ、五月五日は京都へ戻りますか。",
+                "最晚幾點，五月四日往大阪，五月五日回到京都？",
+            ),
+            (
+                "何時に、六月一日は息子が、六月二日は娘が来ますか。",
+                "幾點，六月一日兒子，六月二日女兒來？",
+            ),
+            (
+                "何時までに、五月四日は大阪へ、同じ五月四日は京都へ戻りますか。",
+                "最晚幾點，五月四日往大阪，同樣的五月四日回到京都？",
+            ),
+            (
+                "何時までに、五月四日か五月五日は京都へ戻りますか。",
+                "五月四日或五月五日最晚幾點回到京都？",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn a_date_topic_and_an_open_clock_keep_their_shared_event() {
         let glossary = TranslationGlossary::new();
         for (jp, expected) in [

@@ -271,12 +271,16 @@ fn has_parallel_day_topics(
         {
             start = number.span.start_char;
         }
-        if spelled_report_day(&chars[start..day.span.end_char].iter().collect::<String>()).is_none()
-        {
+        let surface = chars
+            .get(start..day.span.end_char)?
+            .iter()
+            .collect::<String>();
+        if spelled_report_day(&surface).is_none() {
             continue;
         }
         if let Some(last) = previous {
-            if !chars[last..start]
+            if !chars
+                .get(last..start)?
                 .iter()
                 .any(|c| matches!(c, '、' | '，' | ','))
             {

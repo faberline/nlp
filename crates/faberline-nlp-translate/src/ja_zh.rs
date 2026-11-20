@@ -16179,14 +16179,15 @@ fn prohibitive_until_speech_recipient(groups: &[Bunsetsu], source: &[Atom]) -> O
             && !case.is_locked
             && person.doc_tok_idx.is_some()
             && is_person_like_atom(person)
-            && !is_time_or_place_bunsetsu(pair)
-            && !source_time_head(person)
-            && !lookup_ja(&person.surface).is_some_and(|hit| {
-                matches!(
-                    hit.sem_class,
-                    Some(SemanticClass::Time | SemanticClass::Location)
-                )
-            })
+            && (person.is_locked
+                || (!is_time_or_place_bunsetsu(pair)
+                    && !source_time_head(person)
+                    && !lookup_ja(&person.surface).is_some_and(|hit| {
+                        matches!(
+                            hit.sem_class,
+                            Some(SemanticClass::Time | SemanticClass::Location)
+                        )
+                    })))
             && matches!(person.deprel.as_str(), "obl" | "iobj")
             && person.head == action.doc_tok_idx
             && case.surface == "に"
@@ -16234,6 +16235,8 @@ fn prohibitive_until_speech_time(
             && matches!(time.deprel.as_str(), "obl" | "iobj")
             && !case.is_locked
             && case.surface == "に"
+            && case.upos == Some(Upos::Adp)
+            && case.deprel == "case"
             && case.head == Some(id)
             && time.span.end_char == case.span.start_char
             && (date || source_time_head(time)))
@@ -21765,6 +21768,42 @@ mod clock_rule_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn until_recipient_actor_target_can_match_a_time_word() {
+        let source = "先生が来るまで学生に話すな。";
+        let mut glossary = TranslationGlossary::new();
+        glossary.actors.push(GlossaryEntry {
+            canonical: "学生".to_owned(),
+            surfaces: vec!["学生".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "今日".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let result = public_translate(source, &glossary);
+        assert!(
+            result.target_text.contains("不要對今日說"),
+            "{}",
+            result.target_text
+        );
+        let hit = &result.glossary_hits[0];
+        assert_eq!(
+            source
+                .chars()
+                .skip(hit.source_span.start_char)
+                .take(hit.source_span.end_char - hit.source_span.start_char)
+                .collect::<String>(),
+            "学生"
+        );
+        assert_eq!(
+            result
+                .target_text
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect::<String>(),
+            "今日"
+        );
     }
 
     #[test]

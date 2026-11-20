@@ -235,6 +235,64 @@ fn protected_date(atoms: &[Atom], start: usize, chars: &[char]) -> Option<(usize
     None
 }
 
+struct TopicClock {
+    index: usize,
+    pause: Option<usize>,
+    question_end: usize,
+}
+
+// Separate は markers introduce separate topics even if an omitted verb
+// makes the parser assign both dates and both destinations to one predicate.
+fn has_parallel_day_topics(
+    atoms: &[Atom],
+    owner: usize,
+    chars: &[char],
+    doc: &Document,
+) -> Option<bool> {
+    let mut previous = None;
+    let mut parallel = false;
+    for wa in atoms
+        .iter()
+        .filter(|a| !a.is_locked && a.surface == "は" && a.deprel == "case")
+    {
+        let Some(day) = doc.syntax.iter().find(|n| {
+            Some(n.token) == wa.head
+                && n.head == Some(owner)
+                && n.deprel == "nsubj"
+                && n.span.end_char == wa.span.start_char
+        }) else {
+            continue;
+        };
+        let mut start = day.span.start_char;
+        if chars.get(start..day.span.end_char) == Some(&['日'])
+            && let Some(number) = day.token.checked_sub(1).and_then(|i| doc.tokens.get(i))
+            && number.upos == Some(Upos::Num)
+            && number.span.end_char == start
+        {
+            start = number.span.start_char;
+        }
+        let surface = chars
+            .get(start..day.span.end_char)?
+            .iter()
+            .collect::<String>();
+        if spelled_report_day(&surface).is_none() {
+            continue;
+        }
+        if let Some(last) = previous {
+            if !chars
+                .get(last..start)?
+                .iter()
+                .any(|c| matches!(c, '、' | '，' | ','))
+            {
+                return None;
+            }
+            parallel = true;
+        }
+        previous = Some(wa.span.end_char);
+    }
+    Some(parallel)
+}
+
 // A は-marked day and a separately marked clock can describe the same event.
 // Their shared predicate licenses both arguments.
 fn topic_clock(
@@ -243,7 +301,7 @@ fn topic_clock(
     day_end: usize,
     chars: &[char],
     doc: &Document,
-) -> Option<usize> {
+) -> Option<TopicClock> {
     let wa = atoms.get(day_end + 1)?;
     if wa.is_locked || wa.surface != "は" || wa.deprel != "case" {
         return None;
@@ -277,38 +335,70 @@ fn topic_clock(
     if doc.tokens.get(owner)?.upos != Some(Upos::Verb) {
         return None;
     }
-    let clock = (day_end + 2..atoms.len()).find(|&i| {
+    let (clock, pause) = (day_end + 2..atoms.len()).chain(0..start).find_map(|i| {
         let time = &atoms[i];
-        chars.get(time.span.start_char..time.span.end_char) == Some(&['何', '時'])
-            && doc.syntax.iter().any(|node| {
+        if chars.get(time.span.start_char..time.span.end_char) != Some(&['何', '時'])
+            || !doc.syntax.iter().any(|node| {
                 node.span == time.span
                     && node.head == Some(owner)
                     && matches!(node.deprel.as_str(), "obl" | "iobj")
             })
-            && atoms.get(i + 1).is_some_and(|case| {
-                let last_case = if linked_case(case, time, time, "に") {
-                    i + 1
-                } else if linked_case(case, time, time, "まで")
-                    && atoms
-                        .get(i + 2)
-                        .is_some_and(|ni| linked_case(ni, time, case, "に"))
-                {
-                    i + 2
-                } else {
-                    return false;
-                };
-                // Any further particle attached to 何時 qualifies this clock.
-                // For example, 何時にだって asks about availability at any hour.
-                !atoms[last_case + 1..].iter().any(|a| {
-                    a.head == time.doc_tok_idx
-                        && matches!(a.upos, Some(Upos::Adp | Upos::Part | Upos::Sconj))
-                })
-            })
+        {
+            return None;
+        }
+        let case = atoms.get(i + 1)?;
+        let after_case = if linked_case(case, time, time, "に") {
+            i + 2
+        } else if linked_case(case, time, time, "まで")
+            && atoms
+                .get(i + 2)
+                .is_some_and(|ni| linked_case(ni, time, case, "に"))
+        {
+            i + 3
+        } else {
+            return None;
+        };
+        // Further particles attached to 何時 can express unrestricted hours.
+        if atoms[after_case..].iter().any(|a| {
+            a.head == time.doc_tok_idx
+                && matches!(a.upos, Some(Upos::Adp | Upos::Part | Upos::Sconj))
+        }) {
+            return None;
+        }
+        let mut pause = None;
+        if i < start {
+            let parallel = has_parallel_day_topics(atoms, owner, chars, doc)?;
+            for (offset, word) in atoms.get(after_case..start)?.iter().enumerate() {
+                if word.upos == Some(Upos::Verb) {
+                    return None;
+                }
+                if word.upos == Some(Upos::Punct) {
+                    // A pause inside direct speech can attach to the reporting
+                    // verb. The date, clock, and final question must still
+                    // belong to the same event inside or outside the quote.
+                    if pause.is_some()
+                        || word.is_locked
+                        || !matches!(word.surface.as_str(), "、" | "，" | ",")
+                        || word.deprel != "punct"
+                    {
+                        return None;
+                    }
+                    // Keep the commas that distinguish day–argument
+                    // pairs when this clock introduces several topics.
+                    if !parallel {
+                        pause = Some(after_case + offset);
+                    }
+                }
+            }
+        }
+        Some((i, pause))
     })?;
     // Use the question's source syntax even when the final punctuation was
     // taken out of the translation atoms. A bare ？ still belongs to its verb.
     let end = doc.syntax.iter().find(|node| {
-        if node.head != Some(owner) || node.span.start_char < atoms[clock].span.end_char {
+        if node.head != Some(owner)
+            || node.span.start_char < atoms[clock].span.end_char.max(wa.span.end_char)
+        {
             return false;
         }
         match chars.get(node.span.start_char..node.span.end_char) {
@@ -326,7 +416,13 @@ fn topic_clock(
             _ => false,
         }
     })?;
-    let object_quotes: Vec<_> = atoms[day_end + 2..clock]
+    let fronted = clock < start;
+    let object_words = if fronted {
+        &atoms[day_end + 2..]
+    } else {
+        &atoms[day_end + 2..clock]
+    };
+    let object_quotes: Vec<_> = object_words
         .windows(4)
         .filter_map(|words| {
             let [open, name, close, wo] = words else {
@@ -342,7 +438,7 @@ fn topic_clock(
             .then_some((open.span.start_char, close.span.start_char))
         })
         .collect();
-    if (wa.span.end_char..end.span.start_char).any(|at| {
+    if (wa.span.end_char.min(atoms[clock].span.start_char)..end.span.start_char).any(|at| {
         let c = chars[at];
         crate::ja_zh::is_quote_terminal(c)
             || matches!(c, '「' | '」' | '『' | '』' | '“' | '”' | '"')
@@ -352,7 +448,11 @@ fn topic_clock(
     }) {
         return None;
     }
-    Some(clock)
+    Some(TopicClock {
+        index: clock,
+        pause,
+        question_end: end.token,
+    })
 }
 
 // Alternatives share は at the end of the last date. Read each complete
@@ -418,16 +518,28 @@ fn bind_detached_dates(
                 continue;
             };
         let (topic_end, topic_text) = date_alternatives(atoms, end, &text);
-        if let Some(clock) = topic_clock(atoms, start, topic_end, chars, doc) {
+        if let Some(found) = topic_clock(atoms, start, topic_end, chars, doc) {
+            let clock = found.index;
+            if clock < start
+                && let Some(ka) = atoms.iter_mut().find(|a| {
+                    a.doc_tok_idx == Some(found.question_end) && !a.is_locked && a.surface == "か"
+                })
+            {
+                // A quoted object after the date can split a single event
+                // into rendered segments. Keep its verified question open.
+                ka.lemma = Some(super::FRONTED_CLOCK_KA.to_owned());
+            }
             let mut time = atoms[clock].clone();
             if !time.is_locked {
                 time.surface = "幾點".to_owned();
             }
             time.is_locked = true;
             time.lemma = Some(super::CLOCK_QUESTION.to_owned());
-            let period = &atoms[clock - 1];
-            let period_index = if period.span.end_char == time.span.start_char
-                && (period.head == time.head || period.head == time.doc_tok_idx)
+            let period_index = if let Some(period) = clock.checked_sub(1).and_then(|i| atoms.get(i))
+                && period.span.end_char == time.span.start_char
+                && (period.head == time.head
+                    || period.head == time.doc_tok_idx
+                    || clock < start && period.head == atoms[start].doc_tok_idx)
                 && let Some(name) = match chars.get(period.span.start_char..period.span.end_char) {
                     Some(['午', '前']) => Some("上午"),
                     Some(['午', '後']) => Some("下午"),
@@ -447,7 +559,15 @@ fn bind_detached_dates(
                 clock
             };
             atoms.splice(period_index..=clock, [time]);
-            bind(atoms, start, topic_end, topic_text, DATE);
+            let shift = if clock < start {
+                clock - period_index
+            } else {
+                0
+            };
+            bind(atoms, start - shift, topic_end - shift, topic_text, DATE);
+            if let Some(comma) = found.pause {
+                atoms.remove(comma - shift);
+            }
             continue;
         }
         let day = &atoms[end];

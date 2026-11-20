@@ -13592,7 +13592,9 @@ fn translate_clause_bunsetsus(
                     parts.push(if focus.is_some() {
                         format!("只有{days}在")
                     } else {
-                        format!("在{days}的時間裡持續")
+                        // A bare interval gives the extent of the activity.
+                        // It does not say whether the action had interruptions.
+                        format!("有{days}的時間在")
                     });
                 }
                 post_verb_mods.retain(|modifier| modifier != "了");
@@ -19231,7 +19233,7 @@ mod clock_rule_tests {
         for (source, expected) in [
             (
                 "管理人は四日間、入口を見張りました。",
-                "管理人在四天的時間裡持續監視入口。",
+                "管理人有四天的時間在監視入口。",
             ),
             (
                 "管理人は四日間、入口を閉鎖しました。",
@@ -19304,7 +19306,7 @@ mod clock_rule_tests {
             ..GlossaryEntry::default()
         });
         let measured = public_translate("私は五日間、予約記録を確認しました。", &glossary);
-        assert_eq!(measured.target_text, "我在五天的時間裡持續確認登記記錄。");
+        assert_eq!(measured.target_text, "我有五天的時間在確認登記記錄。");
         let [hit] = measured.glossary_hits.as_slice() else {
             panic!("expected one glossary hit inside the object");
         };
@@ -19318,8 +19320,8 @@ mod clock_rule_tests {
         assert_eq!(
             hit.target_span,
             Span {
-                start_char: 12,
-                end_char: 14
+                start_char: 10,
+                end_char: 12
             }
         );
 
@@ -19340,11 +19342,11 @@ mod clock_rule_tests {
         for (source, expected) in [
             (
                 "私は資料を送り、その後、五日間予約記録を確認しました。",
-                "我寄送資料，然後，在五天的時間裡持續確認預約記錄。",
+                "我寄送資料，然後，有五天的時間在確認預約記錄。",
             ),
             (
                 "私は五日間予約記録を確認し、その後、資料を送りました。",
-                "我在五天的時間裡持續確認預約記錄，然後，寄送了資料。",
+                "我有五天的時間在確認預約記錄，然後，寄送了資料。",
             ),
             (
                 "私は五日間だけ予約記録を確認し、その後、資料を送りました。",
@@ -19356,7 +19358,7 @@ mod clock_rule_tests {
             ),
             (
                 "係員は二日間装置を点検し、その後、三日間温度を記録しました。",
-                "工作人員在兩天的時間裡持續檢查裝置，然後，在三天的時間裡持續記錄溫度。",
+                "工作人員有兩天的時間在檢查裝置，然後，有三天的時間在記錄溫度。",
             ),
             (
                 "係員は三日間毎日装置を点検しました。",
@@ -19376,7 +19378,7 @@ mod clock_rule_tests {
             ),
             (
                 "私は資料を送り五日間予約記録を確認しました。",
-                "我寄送資料，在五天的時間裡持續確認預約記錄。",
+                "我寄送資料，有五天的時間在確認預約記錄。",
             ),
             (
                 "係員は毎日出社した三日間を記録しました。",
@@ -19384,7 +19386,7 @@ mod clock_rule_tests {
             ),
             (
                 "私は昨日から五日間予約記録を確認します。",
-                "我從昨天起，在五天的時間裡持續確認預約記錄。",
+                "我從昨天起，有五天的時間在確認預約記錄。",
             ),
         ] {
             assert_eq!(

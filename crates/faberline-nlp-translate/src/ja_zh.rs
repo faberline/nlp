@@ -20218,7 +20218,7 @@ mod clock_rule_tests {
             ),
             (
                 "何時に、三月三日か五月五日は家に帰る？",
-                "三月三日或五月五日幾點回到家？",
+                "三月三日或五月五日幾點回家？",
             ),
         ] {
             assert_eq!(translate(jp), expected, "{jp}");

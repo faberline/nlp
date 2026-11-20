@@ -5240,20 +5240,43 @@ fn elapsed_te_before_following(
                 ..
             },
             Segment::Quote { span, .. },
-            Segment::Clause { atoms: tail, .. },
+            Segment::Clause {
+                atoms: tail,
+                trailing_punct,
+                ..
+            },
             ..,
         ] if tail_after_object(tail) && !prefix.iter().any(|a| a.upos == Some(Upos::Verb)) => {
             let outside: Vec<_> = prefix.iter().chain(tail).cloned().collect();
-            parallel_elapsed_te(first, &outside, Some((*span, &tail[0], doc)))
+            parallel_elapsed_te(
+                first,
+                &outside,
+                trailing_punct.as_deref(),
+                Some((*span, &tail[0], doc)),
+            )
         }
         [
             Segment::Quote { span, .. },
-            Segment::Clause { atoms: tail, .. },
+            Segment::Clause {
+                atoms: tail,
+                trailing_punct,
+                ..
+            },
             ..,
-        ] if tail_after_object(tail) => {
-            parallel_elapsed_te(first, tail, Some((*span, &tail[0], doc)))
-        }
-        [Segment::Clause { atoms, .. }, ..] => parallel_elapsed_te(first, atoms, None),
+        ] if tail_after_object(tail) => parallel_elapsed_te(
+            first,
+            tail,
+            trailing_punct.as_deref(),
+            Some((*span, &tail[0], doc)),
+        ),
+        [
+            Segment::Clause {
+                atoms,
+                trailing_punct,
+                ..
+            },
+            ..,
+        ] => parallel_elapsed_te(first, atoms, trailing_punct.as_deref(), None),
         _ => None,
     }
 }
@@ -5263,6 +5286,7 @@ fn elapsed_te_before_following(
 fn parallel_elapsed_te(
     first: &[Atom],
     next: &[Atom],
+    trailing_punct: Option<&str>,
     quoted_argument: Option<(Span, &Atom, &Document)>,
 ) -> Option<usize> {
     if first.iter().chain(next).any(|a| {
@@ -5324,6 +5348,16 @@ fn parallel_elapsed_te(
         .iter()
         .find(|a| a.upos == Some(Upos::Verb) && a.deprel == "root")
         .or_else(|| match next {
+            // A continuative verb can end its own clause at a comma,
+            // before the next action supplies the sentence's finite root.
+            [.., verb]
+                if verb.upos == Some(Upos::Verb)
+                    && verb.deprel == "advcl"
+                    && verb.head.is_some()
+                    && matches!(trailing_punct, Some("、" | "，" | ",")) =>
+            {
+                Some(verb)
+            }
             [.., verb, mark]
                 if verb.upos == Some(Upos::Verb)
                     && verb.deprel == "advcl"
@@ -18318,6 +18352,19 @@ mod clock_rule_tests {
     #[test]
     fn talking_time_precedes_copied_words_and_sequential_actions() {
         let terms = TranslationGlossary::new();
+        for source in [
+            "先生と二時間話して、資料を読み、家に帰りました。",
+            "二時間先生と話して、本を読み、家に帰りました。",
+            "先生と二時間話して、資料を十分間読み、それから帰りました。",
+        ] {
+            let text = public_translate(source, &terms).target_text;
+            assert!(
+                text.starts_with("跟老師說兩個小時，")
+                    && text.contains('讀')
+                    && text.contains('回'),
+                "{text}"
+            );
+        }
         for marker in ["と", "を"] {
             let source = format!("先生と二時間話して、紙に『十分な資料』{marker}書き写しました。");
             let rendered = public_translate(&source, &terms);

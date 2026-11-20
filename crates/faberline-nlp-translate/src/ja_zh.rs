@@ -18,6 +18,7 @@ mod finite_adjective;
 mod handover;
 mod homework_desire;
 mod homework_relative;
+mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
 mod payment_potential;
@@ -11392,7 +11393,24 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
+    let meeting_group = if target == TargetVariant::ZhHant && !ctx.inside_quote {
+        meeting_voice::counterpart(&bunsetsus, source, doc, ctx.source_chars)
+            .and_then(|index| meeting_voice::expand_name(&bunsetsus, index, doc))
+            .and_then(|(range, group)| {
+                let name = render_bunsetsu_np(&group, target);
+                (!name.is_empty()).then_some((range, name))
+            })
+    } else {
+        None
+    };
+    let meeting_partner = meeting_group.as_ref().map(|(_, name)| name.clone());
     for (idx, b) in bunsetsus.drain(..).enumerate() {
+        if meeting_group
+            .as_ref()
+            .is_some_and(|(range, _)| range.contains(&idx))
+        {
+            continue;
+        }
         if handover
             .as_ref()
             .is_some_and(|event| idx == event.object_group || idx == event.recipient_group)
@@ -11983,7 +12001,7 @@ fn translate_clause_bunsetsus(
 
     let had_overt_subj_no_pred = !subj_entries.is_empty() && predicates.is_empty();
     let pred_is_imperative = predicates.iter().any(predicate_is_imperative);
-    let pred_looks_passive = predicates_has_passive(&predicates);
+    let pred_looks_passive = meeting_partner.is_none() && predicates_has_passive(&predicates);
 
     // Layer 6 Pro-Drop resolution: if no overt subject and narrative/coref resolved pro-drop,
     // inject pronoun when appropriate (skip when passive clause has a promotable patient in `objs`).
@@ -12051,8 +12069,11 @@ fn translate_clause_bunsetsus(
     });
 
     // Synthesize predicate complex.
-    let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
+    let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, mut passive_agent_needed) =
         synthesize_predicate_complex(&predicates, past_until, target, transfer);
+    if meeting_partner.is_some() {
+        passive_agent_needed = false;
+    }
     if let Some(state) = bounded_state {
         verb_core = state.to_owned();
         post_verb_mods.retain(|m| m != "著");
@@ -12755,6 +12776,9 @@ fn translate_clause_bunsetsus(
     let mut goal_tails: Vec<String> = Vec::new();
     let mut cause_prefixes: Vec<String> = Vec::new();
     let mut pre_iobjs: Vec<String> = Vec::new();
+    if let Some(partner) = meeting_partner {
+        pre_iobjs.push(format!("和{partner}"));
+    }
 
     if is_goal_verb {
         let mut kept_obls = Vec::new();

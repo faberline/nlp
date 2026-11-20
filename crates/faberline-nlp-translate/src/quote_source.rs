@@ -1,5 +1,5 @@
 use faberline_nlp::Span;
-use faberline_nlp::doc::{Document, SyntaxToken, Token, Upos};
+use faberline_nlp::doc::{Document, Opaque, SyntaxToken, Token, Upos};
 
 const FORM_NAMES: &[&str] = &[
     "文字数",
@@ -63,6 +63,7 @@ pub(crate) struct WrittenForm {
 struct QuoteSyntax<'a> {
     tokens: &'a [Token],
     dependencies: &'a [SyntaxToken],
+    opaque: &'a [Opaque],
 }
 
 impl<'a> QuoteSyntax<'a> {
@@ -100,6 +101,7 @@ pub(crate) fn plan_written_form_quotes(chars: &[char], doc: &Document) -> Vec<Ve
     let syntax = QuoteSyntax {
         tokens: &doc.tokens,
         dependencies: &doc.syntax,
+        opaque: &segmentation.opaque,
     };
     let mut by_sentence = vec![Vec::new(); segmentation.sentences.len()];
     let sentences = &segmentation.sentences;
@@ -1149,6 +1151,22 @@ fn has_ambiguous_quoted_sky_context(
             return false;
         };
         if token.sentence == current.sentence && token.span.end_char <= current.span.start_char {
+            let opaque_index = syntax
+                .opaque
+                .partition_point(|opaque| opaque.span.end_char <= token.span.start_char);
+            if let Some(opaque) = syntax.opaque.get(opaque_index)
+                && opaque.span.start_char < token.span.end_char
+                && token.span.start_char < opaque.span.end_char
+            {
+                if opaque.span.start_char <= token.span.start_char
+                    && token.span.start_char < token.span.end_char
+                    && token.span.end_char <= opaque.span.end_char
+                {
+                    continue;
+                }
+                // Never hide a token that is only partly opaque.
+                return false;
+            }
             prefix_indices.push(i);
             prefix_positions.push(token.span.start_char);
         }
@@ -1158,6 +1176,7 @@ fn has_ambiguous_quoted_sky_context(
         quote_start,
         &prefix_positions,
         current.span.start_char,
+        syntax.opaque,
     ) else {
         return false;
     };
@@ -1228,6 +1247,7 @@ fn has_ambiguous_quoted_sky_context(
             quote_start,
             predicate.span.end_char,
             current.span.start_char,
+            syntax.opaque,
         ) == Some(true)
     })
 }
@@ -1253,15 +1273,16 @@ fn has_quoted_weather_forecast(
         let token = syntax.tokens.get(i)?;
         chars.get(token.span.start_char..token.span.end_char)
     };
-    if tokens.clone().filter(|&i| i < verb).any(|i| {
+    let mut address_positions = Vec::new();
+    for i in tokens.clone().filter(|&i| i < verb) {
         let Some(token) = syntax.tokens.get(i) else {
-            return true;
+            return false;
         };
         if token.sentence != action.sentence {
-            return false;
+            continue;
         }
         let Some(word) = surface(i) else {
-            return true;
+            return false;
         };
         let is_second_person =
             crate::ja_zh::is_explicit_second_person(&word.iter().collect::<String>());
@@ -1273,50 +1294,52 @@ fn has_quoted_weather_forecast(
                         .filter(|head| tokens.contains(head))
                         .is_some_and(|head| {
                             syntax.tokens.get(head).is_some_and(|subject| {
-                                subject.upos == Some(Upos::Noun) || subject.upos == Some(Upos::Pron)
-                            })
+                                matches!(subject.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+                            }) && syntax
+                                .edge(head)
+                                .is_some_and(|subject_edge| subject_edge.deprel == "nmod")
                         })
             });
         if !is_second_person && !is_vocative {
-            return false;
+            continue;
         }
-        match crate::ja_zh::quote_scope_relation_from(
-            chars,
-            quote_start,
-            token.span.start_char,
-            action.span.start_char,
-        ) {
-            Some(false) => false,
-            None | Some(true) => true,
-        }
-    }) {
+        address_positions.push(token.span.start_char);
+    }
+    let Some(address_scopes) = crate::ja_zh::quote_scope_relations_from(
+        chars,
+        quote_start,
+        &address_positions,
+        action.span.start_char,
+        syntax.opaque,
+    ) else {
+        return false;
+    };
+    if address_scopes.len() != address_positions.len()
+        || address_scopes.into_iter().any(|same| same)
+    {
         return false;
     }
-    tokens.clone().any(|i| {
+    let mut forecast_positions = Vec::new();
+    for i in tokens.clone() {
         let Some(forecast) = i.checked_add(1).filter(|index| tokens.contains(index)) else {
-            return false;
+            continue;
         };
         let Some(particle) = i.checked_add(2).filter(|index| tokens.contains(index)) else {
-            return false;
+            continue;
         };
         let Some(topic) = i.checked_add(3).filter(|index| tokens.contains(index)) else {
+            continue;
+        };
+        let Some(forecast_token) = syntax.tokens.get(forecast) else {
             return false;
         };
-        i < verb
+        if i < verb
             && topic < verb
             && surface(i) == Some(&['天', '気'][..])
             && surface(forecast) == Some(&['予', '報'][..])
             && surface(particle) == Some(&['で'][..])
             && surface(topic) == Some(&['は'][..])
-            && syntax.tokens.get(forecast).is_some_and(|token| {
-                token.sentence == action.sentence
-                    && crate::ja_zh::quote_scope_relation_from(
-                        chars,
-                        quote_start,
-                        token.span.start_char,
-                        action.span.start_char,
-                    ) == Some(true)
-            })
+            && forecast_token.sentence == action.sentence
             && syntax
                 .edge(i)
                 .is_some_and(|edge| edge.deprel == "compound" && edge.head == Some(forecast))
@@ -1330,7 +1353,24 @@ fn has_quoted_weather_forecast(
             && syntax
                 .edge(topic)
                 .is_some_and(|edge| edge.deprel == "case" && edge.head == Some(forecast))
-    })
+        {
+            forecast_positions.push(forecast_token.span.start_char);
+        }
+    }
+    if forecast_positions.is_empty() {
+        return false;
+    }
+    let Some(forecast_scopes) = crate::ja_zh::quote_scope_relations_from(
+        chars,
+        quote_start,
+        &forecast_positions,
+        action.span.start_char,
+        syntax.opaque,
+    ) else {
+        return false;
+    };
+    forecast_scopes.len() == forecast_positions.len()
+        && forecast_scopes.into_iter().any(|same| same)
 }
 
 /// An inflected word or a noun phrase can be the inscription. A quoted

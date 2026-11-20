@@ -21129,6 +21129,8 @@ mod clock_rule_tests {
             "コードは`x`です。\n\n空が暗い。明日は降るな。",
             "コードは`x`です。空が暗い。明日は降るな。",
             "John’s book。空が暗い。明日は降るな。",
+            "空が暗い`補足`。明日は降るな。",
+            "保存先は C:\\tmp。空が暗い。明日は降るな。",
             "男は「電車に乗る」と言った。空が暗い。明日は降るな。",
             "男は電車に乗ると言った。空が暗い。明日は降るな。",
             "男は電車に乗ると書いた。空が暗い。明日は降るな。",
@@ -21215,6 +21217,14 @@ mod clock_rule_tests {
                 "紙に「天気予報では明日も降るな」と書きました。",
                 "給紙，「明天在天氣予報也下」寫了。",
             ),
+            (
+                "紙に「空が暗い。`note`、明日は降るな」と書きました。",
+                "給紙「天空很昏暗。`note`，明天下」寫了。",
+            ),
+            (
+                "「空が暗い。‘John’s 雨よ’、明日は降るな。」",
+                "「天空很昏暗。John’s雨喔，明天下。」",
+            ),
         ] {
             assert_eq!(
                 public_translate(source, &glossary).target_text,
@@ -21227,6 +21237,7 @@ mod clock_rule_tests {
             "紙に「空が暗い。明日は降るな」をそのまま写しました。",
             "紙に「雨よ、明日は降るな」と書きました。",
             "紙に「空が暗い。雨よ、明日は降るな」と書きました。",
+            "紙に「天気予報では田中さんよ、明日は降るな」と書きました。",
         ] {
             let quote = source
                 .rsplit('「')
@@ -25017,8 +25028,11 @@ pub(crate) fn quote_scope_relation_from(
     start: usize,
     left: usize,
     right: usize,
+    opaque: &[faberline_nlp::doc::Opaque],
 ) -> Option<bool> {
-    quote_scope_relation_inner(chars, start, left, right, |_| false)
+    quote_scope_relation_inner(chars, start, left, right, |index| {
+        opaque_contains(opaque, index)
+    })
 }
 
 pub(crate) fn quote_scope_relations_from(
@@ -25026,24 +25040,82 @@ pub(crate) fn quote_scope_relations_from(
     start: usize,
     positions: &[usize],
     right: usize,
+    opaque: &[faberline_nlp::doc::Opaque],
 ) -> Option<Vec<bool>> {
-    quote_scope_relations_inner(chars, start, positions, right, |_| false)
+    quote_scope_relations_inner(chars, start, positions, right, |index| {
+        opaque_contains(opaque, index)
+    })
+}
+
+fn opaque_contains(opaque: &[faberline_nlp::doc::Opaque], index: usize) -> bool {
+    let next = opaque.partition_point(|span| span.span.end_char <= index);
+    opaque
+        .get(next)
+        .is_some_and(|span| span.span.start_char <= index && index < span.span.end_char)
 }
 
 fn document_quote_scope(doc: &Document, chars: &[char], left: usize, right: usize) -> bool {
-    let Some(paragraph) =
-        doc.segmentation.paragraphs.iter().find(|paragraph| {
-            paragraph.span.start_char <= left && right <= paragraph.span.end_char
-        })
-    else {
+    let paragraphs = &doc.segmentation.paragraphs;
+    let index = paragraphs.partition_point(|paragraph| paragraph.span.end_char <= left);
+    if !paragraphs.get(index).is_some_and(|paragraph| {
+        paragraph.span.start_char <= left && right <= paragraph.span.end_char
+    }) {
         return false;
-    };
-    quote_scope_relation_inner(chars, paragraph.span.start_char, left, right, |index| {
-        doc.segmentation
-            .opaque
-            .iter()
-            .any(|opaque| opaque.span.start_char <= index && index < opaque.span.end_char)
-    }) == Some(true)
+    }
+    relative_document_quote_scope(chars, left, right, |index| {
+        opaque_contains(&doc.segmentation.opaque, index)
+    })
+}
+
+// Only scan between the two events. A closing mark without an opening mark
+// in this interval leaves the current outer quotation, so the scopes differ.
+fn relative_document_quote_scope(
+    chars: &[char],
+    left: usize,
+    right: usize,
+    is_opaque: impl Fn(usize) -> bool,
+) -> bool {
+    if left > right || right > chars.len() || is_opaque(right) {
+        return false;
+    }
+    let mut stack = Vec::new();
+    for (index, &ch) in chars.iter().enumerate().take(right).skip(left) {
+        if is_opaque(index) {
+            continue;
+        }
+        if ch == '’' && is_word_apostrophe(chars, index) {
+            continue;
+        }
+        match ch {
+            '「' | '『' | '“' | '‘' => stack.push(ch),
+            '’' if stack.last() != Some(&'‘') => return false,
+            '」' | '』' | '”' | '’' => {
+                let expected = match ch {
+                    '」' => '「',
+                    '』' => '『',
+                    '”' => '“',
+                    _ => '‘',
+                };
+                if stack.pop() != Some(expected) {
+                    return false;
+                }
+            }
+            // An ASCII quote can open or close an outer quotation.
+            '"' | '`' | '\\' => return false,
+            _ => {}
+        }
+    }
+    stack.is_empty()
+}
+
+fn is_word_apostrophe(chars: &[char], index: usize) -> bool {
+    index
+        .checked_sub(1)
+        .and_then(|previous| chars.get(previous))
+        .is_some_and(|ch| ch.is_ascii_alphanumeric())
+        && chars
+            .get(index + 1)
+            .is_some_and(|ch| ch.is_ascii_alphanumeric())
 }
 
 fn quote_scope_relation_inner(
@@ -25086,9 +25158,12 @@ fn quote_scope_relations_inner(
         if is_opaque(index) {
             continue;
         }
+        if ch == '’' && is_word_apostrophe(chars, index) {
+            continue;
+        }
         match ch {
             '「' | '『' | '“' | '‘' => stack.push((ch, index)),
-            '’' if stack.last().is_none_or(|(open, _)| *open != '‘') => {}
+            '’' if stack.last().is_none_or(|(open, _)| *open != '‘') => return None,
             '」' | '』' | '”' | '’' => {
                 let expected = match ch {
                     '」' => '「',
@@ -25136,31 +25211,55 @@ fn has_prior_vocative(doc: &Document, ctx: &ClauseDiscourseCtx<'_>, verb: &Atom)
     else {
         return false;
     };
-    doc.syntax.iter().any(|edge| {
-        edge.sentence == sentence_idx
-            && edge.deprel == "discourse"
-            && doc.tokens.get(edge.token).is_some_and(|token| {
-                token.span.end_char <= verb.span.start_char
-                    && ctx
-                        .source_chars
-                        .get(token.span.start_char..token.span.end_char)
-                        == Some(&['よ'][..])
-                    && document_quote_scope(
-                        doc,
-                        ctx.source_chars,
-                        token.span.start_char,
-                        verb.span.start_char,
-                    )
-                    && edge.head.is_some_and(|head| {
-                        doc.tokens.get(head).is_some_and(|word| {
-                            matches!(word.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
-                        }) && doc
-                            .syntax
-                            .iter()
-                            .any(|head_edge| head_edge.token == head && head_edge.deprel == "nmod")
-                    })
-            })
-    })
+    let edges = syntax_for_sentence(doc, sentence_idx);
+    let positions: Vec<usize> = edges
+        .iter()
+        .filter(|edge| edge.deprel == "discourse")
+        .filter_map(|edge| {
+            let token = doc.tokens.get(edge.token)?;
+            let head = edge.head?;
+            let word = doc.tokens.get(head)?;
+            let head_edge = edges.binary_search_by_key(&head, |item| item.token).ok()?;
+            (token.span.end_char <= verb.span.start_char
+                && ctx
+                    .source_chars
+                    .get(token.span.start_char..token.span.end_char)
+                    == Some(&['よ'][..])
+                && matches!(word.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+                && edges[head_edge].deprel == "nmod")
+                .then_some(token.span.start_char)
+        })
+        .collect();
+    if positions.is_empty() {
+        return false;
+    }
+    let Some(sentence) = doc.segmentation.sentences.get(sentence_idx) else {
+        return false;
+    };
+    quote_scope_relations_inner(
+        ctx.source_chars,
+        sentence.span.start_char,
+        &positions,
+        verb.span.start_char,
+        |index| opaque_contains(&doc.segmentation.opaque, index),
+    )
+    .is_some_and(|same_scopes| same_scopes.into_iter().any(|same| same))
+}
+
+fn syntax_for_sentence(doc: &Document, sentence: usize) -> &[faberline_nlp::doc::SyntaxToken] {
+    let first = doc.syntax.partition_point(|edge| edge.sentence < sentence);
+    let end = doc.syntax.partition_point(|edge| edge.sentence <= sentence);
+    &doc.syntax[first..end]
+}
+
+fn tokens_for_sentence(doc: &Document, sentence: usize) -> &[Token] {
+    let first = doc
+        .tokens
+        .partition_point(|token| token.sentence < sentence);
+    let end = doc
+        .tokens
+        .partition_point(|token| token.sentence <= sentence);
+    &doc.tokens[first..end]
 }
 
 fn has_weather_forecast(source: &[Atom], doc: &Document, ctx: &ClauseDiscourseCtx<'_>) -> bool {
@@ -25170,22 +25269,10 @@ fn has_weather_forecast(source: &[Atom], doc: &Document, ctx: &ClauseDiscourseCt
     let [prefix @ .., verb, marker] = core_non_punct(source) else {
         return false;
     };
-    if verb.surface != "降る"
-        || marker.surface != "な"
-        || !document_quote_scope(
-            doc,
-            ctx.source_chars,
-            verb.span.start_char,
-            verb.span.start_char,
-        )
-        || has_prior_vocative(doc, ctx, verb)
-        || prefix
-            .iter()
-            .any(|atom| !atom.is_locked && is_explicit_second_person(&atom.surface))
-    {
+    if verb.surface != "降る" || marker.surface != "な" {
         return false;
     }
-    prefix.windows(4).any(|words| {
+    let forecast = prefix.windows(4).any(|words| {
         let [weather, forecast, case, topic] = words else {
             return false;
         };
@@ -25198,7 +25285,18 @@ fn has_weather_forecast(source: &[Atom], doc: &Document, ctx: &ClauseDiscourseCt
             && forecast.head == verb.doc_tok_idx
             && case.head == forecast.doc_tok_idx
             && topic.head == forecast.doc_tok_idx
-    })
+    });
+    forecast
+        && !prefix
+            .iter()
+            .any(|atom| !atom.is_locked && is_explicit_second_person(&atom.surface))
+        && document_quote_scope(
+            doc,
+            ctx.source_chars,
+            verb.span.start_char,
+            verb.span.start_char,
+        )
+        && !has_prior_vocative(doc, ctx, verb)
 }
 
 // Keep the existing output when an adjacent sky statement leaves the omitted
@@ -25248,8 +25346,9 @@ fn has_ambiguous_sky_context(
     if has_prior_vocative(doc, ctx, verb) {
         return false;
     }
-    doc.syntax.iter().any(|edge| {
-        if edge.sentence != previous_idx || edge.deprel != "nsubj" {
+    let previous_edges = syntax_for_sentence(doc, previous_idx);
+    previous_edges.iter().any(|edge| {
+        if edge.deprel != "nsubj" {
             return false;
         }
         let Some(subject) = doc.tokens.get(edge.token) else {
@@ -25278,15 +25377,15 @@ fn has_ambiguous_sky_context(
                 verb.span.start_char,
             )
             && edge.head.is_some_and(|head| {
-                doc.syntax.iter().any(|predicate_edge| {
+                previous_edges.iter().any(|predicate_edge| {
                     predicate_edge.token == head
                         && predicate_edge.sentence == previous_idx
                         && predicate_edge.deprel == "root"
                 })
             })
-            && !doc.tokens.iter().any(|token| {
-                token.sentence == previous_idx && matches!(token.upos, Some(Upos::Verb | Upos::Aux))
-            })
+            && !tokens_for_sentence(doc, previous_idx)
+                .iter()
+                .any(|token| matches!(token.upos, Some(Upos::Verb | Upos::Aux)))
             && (predicate.lemma.as_deref() == Some("暗い") || predicate_chars == ['暗', 'い'])
     })
 }

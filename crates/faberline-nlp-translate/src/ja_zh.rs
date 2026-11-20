@@ -19605,10 +19605,7 @@ mod motion_endpoint_tests {
     #[test]
     fn daylight_stays_with_its_activity_and_preserves_the_recipient() {
         for (source, expected) in [
-            (
-                "係員は日中に机の上を片付けました。",
-                "係員白天收拾了桌面。",
-            ),
+            ("係員は日中に机の上を片付けました。", "係員白天收拾了桌面。"),
             ("父は日中には本を読みました。", "父親白天讀了書。"),
             ("母は日中にも働きます。", "母親白天也工作。"),
             ("日中に会議を開きました。", "白天召開了會議。"),

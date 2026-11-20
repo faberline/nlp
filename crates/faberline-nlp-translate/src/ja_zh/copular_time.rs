@@ -171,7 +171,7 @@ fn subject(
     if !noun.is_locked
         && let Some(label) = match noun.surface.as_str() {
             "授業" => Some("課"),
-            "受付" => Some("受理"),
+            "受付" => Some(super::reception::SERVICE),
             "試験" => Some("考試"),
             _ => None,
         }

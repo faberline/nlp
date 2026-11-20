@@ -6206,7 +6206,7 @@ fn translate_clause_atoms(
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
-        daytime::bind(&mut norm_atoms, body);
+        daytime::bind(&mut norm_atoms, body, doc);
     }
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
@@ -19294,6 +19294,23 @@ mod motion_endpoint_tests {
             "政府は日中にも米国にも書簡を送りました。",
         ] {
             assert!(!translate(source).contains("白天"), "{source}");
+        }
+    }
+
+    #[test]
+    fn daytime_shipping_keeps_the_destination_and_the_personal_recipient() {
+        for (goal, expected) in [
+            ("ドイツへ", "往德國"),
+            ("郵便局へ", "往郵局"),
+            ("ドイツの友達に", "給德國的朋友"),
+            ("ドイツの友達へ", "給德國的朋友"),
+            ("友達の学校へ", "往朋友的學校"),
+        ] {
+            let source = format!("私は日中に、{goal}申込書を送りました。");
+            assert_eq!(
+                translate(&source),
+                format!("我白天{expected}寄送了申請表。")
+            );
         }
     }
 

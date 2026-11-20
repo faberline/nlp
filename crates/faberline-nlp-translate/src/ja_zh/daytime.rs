@@ -92,7 +92,12 @@ pub(super) fn meeting_verb(source: &[Atom], day: &Atom) -> Option<(super::Span, 
 
 // A separate destination or addressee for this verb leaves 日中 free to
 // modify the event. A participant of another predicate cannot do so.
-fn other_goal<'a>(source: &'a [Atom], day: &Atom, verb: &Atom, day_also: bool) -> Option<&'a Atom> {
+fn other_goal<'a>(
+    source: &'a [Atom],
+    day: &Atom,
+    verb: &Atom,
+    day_also: bool,
+) -> Option<(&'a Atom, &'a Atom)> {
     source.windows(2).find_map(|pair| {
         let noun = &pair[0];
         let case = &pair[1];
@@ -117,8 +122,29 @@ fn other_goal<'a>(source: &'a [Atom], day: &Atom, verb: &Atom, day_also: bool) -
             && case.deprel == "case"
             && case.head == noun.doc_tok_idx
             && matches!(case.surface.as_str(), "に" | "へ"))
-        .then_some(case)
+        .then_some((noun, case))
     })
+}
+
+// A second へ can name a shipping destination. Only prefer 給 when
+// its own head is a person, including a caller-designated actor.
+fn personal_addressee(noun: &Atom, source: &[Atom], doc: &super::Document) -> bool {
+    if noun.is_locked {
+        return noun.lemma.as_deref() == Some(super::LOCKED_RESIDENT_ATOM);
+    }
+    let is_person = |a: &Atom| {
+        a.doc_tok_idx
+            .and_then(|id| doc.tokens.get(id))
+            .is_some_and(|t| t.span == a.span && t.sem_class == Some(super::SemanticClass::Person))
+    };
+    is_person(noun)
+        || noun.upos != Some(Upos::Propn) && super::is_demonstrative_person_noun(noun)
+        || (super::is_honorific_suffix(&noun.surface) || noun.surface == "者")
+            && source.iter().any(|a| {
+                a.head == noun.doc_tok_idx
+                    && a.deprel == "compound"
+                    && (noun.surface == "者" || is_person(a))
+            })
 }
 
 // A date used as the topic supplies the day whose daytime is meant.
@@ -245,7 +271,7 @@ fn form(a: &Atom, next: &Atom, following: Option<&Atom>) -> Option<(usize, usize
     ))
 }
 
-pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
+pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom], doc: &super::Document) {
     for (idx, word) in source.iter().enumerate().rev() {
         let Some((end, owner, also)) = source
             .get(idx + 1)
@@ -335,7 +361,9 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom]) {
             continue;
         }
         if takes_participant
-            && let Some(case) = recipient.filter(|a| a.surface == "へ")
+            && let Some((_, case)) = recipient.filter(|(noun, case)| {
+                case.surface == "へ" && personal_addressee(noun, source, doc)
+            })
             && let Some(direction) = atoms
                 .iter_mut()
                 .find(|a| !a.is_locked && a.span == case.span)
@@ -406,7 +434,7 @@ pub(super) fn join_recipient_pauses(atoms: &mut Vec<Atom>) {
                         && (a.upos == Some(Upos::Num) || a.is_locked)
                 })
                 && (dated_distribution(atoms, idx, verb)
-                    || other_goal(atoms, day, verb, also).is_some_and(|case| {
+                    || other_goal(atoms, day, verb, also).is_some_and(|(_, case)| {
                         comma.span.end_char <= case.span.start_char
                             && case.span.end_char <= verb.span.start_char
                     }))

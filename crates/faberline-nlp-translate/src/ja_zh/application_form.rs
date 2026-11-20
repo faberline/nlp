@@ -1106,7 +1106,9 @@ fn bind_locked_adjunct(atoms: &mut [Atom], action: usize, form: usize, chars: &[
         let recipient = atoms
             .iter()
             .position(|a| a.doc_tok_idx.is_some() && a.doc_tok_idx == parent);
-        let verb = if manner.deprel == "acl" {
+        let on_argument =
+            manner.deprel == "acl" || (manner.deprel == "compound" && recipient == Some(form));
+        let verb = if on_argument {
             recipient.and_then(|r| atoms[r].head)
         } else {
             parent
@@ -1124,9 +1126,7 @@ fn bind_locked_adjunct(atoms: &mut [Atom], action: usize, form: usize, chars: &[
                     })
             });
         if filing_reading(&atoms[next], atoms).is_none()
-            || (manner.deprel == "acl"
-                && (office.is_none() || office != recipient)
-                && !form_argument)
+            || (on_argument && (office.is_none() || office != recipient) && !form_argument)
             || (action != next && (from_container || office.is_none()))
             || atoms[action.min(i)..next].iter().any(super::is_quote_mark)
         {

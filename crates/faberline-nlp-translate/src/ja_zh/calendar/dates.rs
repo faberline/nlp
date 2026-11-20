@@ -381,9 +381,18 @@ fn topic_clock(
         return None;
     }
     let day = doc.syntax.iter().find(|node| Some(node.token) == wa.head)?;
-    if !(day.deprel == "nsubj" || choice && matches!(day.deprel.as_str(), "obl" | "iobj"))
-        || day.span.end_char != wa.span.start_char
-    {
+    // In のいずれかに the final に belongs to the selector, across か.
+    // The selector itself attaches to the event as an adverb or oblique.
+    let ka = &atoms[day_end];
+    let bare_selector = choice
+        && wa.surface == "に"
+        && ka.surface == "か"
+        && ka.head == Some(day.token)
+        && ka.span.start_char == day.span.end_char
+        && matches!(day.deprel.as_str(), "advmod" | "obl" | "iobj");
+    let direct_date = day.span.end_char == wa.span.start_char
+        && (day.deprel == "nsubj" || choice && matches!(day.deprel.as_str(), "obl" | "iobj"));
+    if !direct_date && !bare_selector {
         return None;
     }
     let owner = day.head?;
@@ -530,6 +539,45 @@ fn topic_clock(
     })
 }
 
+// The case of an explicit day is on 日; in the shorter form it is on
+// いずれ or どちら, with the attached particle か between them.
+fn date_selection_case(tail: &[Atom]) -> Option<(usize, bool)> {
+    let [selector, ka, ..] = tail else {
+        return None;
+    };
+    if !matches!(selector.surface.as_str(), "いずれ" | "どちら")
+        || ka.surface != "か"
+        || ka.deprel != "discourse"
+        || selector.doc_tok_idx.is_none()
+        || ka.head != selector.doc_tok_idx
+    {
+        return None;
+    }
+    let i = tail.iter().take(5).position(|a| a.surface == "に")?;
+    if tail[..=i].iter().any(|a| a.is_locked) {
+        return None;
+    }
+    let ni = &tail[i];
+    match &tail[2..i] {
+        [] if linked_case(ni, selector, ka, "に") => Some((i, false)),
+        [no, day]
+            if day.surface == "日"
+                && linked_case(no, selector, ka, "の")
+                && selector.head == day.doc_tok_idx
+                && linked_case(ni, day, day, "に") =>
+        {
+            Some((i, true))
+        }
+        units => {
+            let last = units.last()?;
+            let text: String = units.iter().map(|a| a.surface.as_str()).collect();
+            (text.strip_suffix('日').and_then(calendar_number) == Some(1)
+                && linked_case(ni, last, last, "に"))
+            .then_some((i, true))
+        }
+    }
+}
+
 // Alternatives share は at the end of the last date. Read each complete
 // month and day before assigning the topic to the clock question.
 fn date_alternatives(
@@ -571,7 +619,7 @@ fn date_alternatives(
         let Some(join) = atoms.get(separator) else {
             break;
         };
-        // と normally adds dates. のいずれか一日 explicitly selects just one.
+        // と normally adds dates. Require an explicit selector after both.
         if join.surface == "と"
             && !join.is_locked
             && join.deprel == "case"
@@ -584,28 +632,16 @@ fn date_alternatives(
             && attached(no, &atoms[next])
         {
             let tail = &atoms[next + 2..];
-            if let Some(ni) = tail.iter().take(5).position(|a| a.surface == "に")
-                && ni > 0
-                && tail[..ni]
-                    .iter()
-                    .map(|a| a.surface.as_str())
-                    .collect::<String>()
-                    .strip_suffix('日')
-                    .and_then(|s| {
-                        s.strip_prefix("いずれか")
-                            .or_else(|| s.strip_prefix("どちらか"))
-                    })
-                    .and_then(calendar_number)
-                    == Some(1)
-                && tail[..=ni].iter().all(|a| !a.is_locked)
+            if let Some((ni, explicit_day)) = date_selection_case(tail)
                 && atoms[end..=next + 2 + ni]
                     .windows(2)
                     .all(|p| p[0].span.end_char == p[1].span.start_char)
-                && linked_case(&tail[ni], &tail[ni - 1], &tail[ni - 1], "に")
             {
                 label.push('或');
                 label.push_str(&text);
-                label.push_str("其中一天");
+                if explicit_day {
+                    label.push_str("其中一天");
+                }
                 return (next + 1 + ni, label);
             }
         }
@@ -681,6 +717,13 @@ fn bind_detached_dates(
             }
             let temporal_choice = choice && atoms[topic_end + 1].surface == "に";
             if temporal_choice {
+                if atoms[topic_end].surface == "か" {
+                    let selector = &atoms[topic_end - 1];
+                    let (token, event) = (selector.doc_tok_idx, selector.head);
+                    atoms[topic_end].doc_tok_idx = token;
+                    atoms[topic_end].head = event;
+                    atoms[topic_end].upos = Some(Upos::Noun);
+                }
                 atoms[topic_end + 1].surface = "は".to_owned();
                 atoms[topic_end].deprel = "nsubj".to_owned();
             }
@@ -1057,6 +1100,37 @@ mod dated_question_tests {
         assert!(spoken.contains("11月12日最晚應該幾點"), "{spoken}");
         let written = translate(&format!("「{question}」と一字ずつ紙に書きました。"));
         assert!(!written.contains("11月12日最晚應該幾點"), "{written}");
+    }
+
+    #[test]
+    fn either_date_can_share_one_arrival_without_an_explicit_day_unit() {
+        for (clock, dates, expected, time) in [
+            (
+                "何時までに",
+                "十一月二日と十一月五日のいずれかに",
+                "十一月二日或十一月五日",
+                "最晚幾點",
+            ),
+            (
+                "何時に",
+                "11月2日と11月5日のいずれかの日に",
+                "11月2日或11月5日其中一天",
+                "幾點",
+            ),
+        ] {
+            let out = translate(&format!("{clock}、{dates}会館に来ますか。"));
+            assert!(
+                out.starts_with(expected)
+                    && out.contains(time)
+                    && out.contains("會館")
+                    && out.ends_with('？')
+                    && !out.contains('嗎'),
+                "{out}"
+            );
+            assert_eq!(out.contains("最晚"), clock.contains("まで"), "{out}");
+        }
+        let both = translate("何時までに、十一月二日と十一月五日のいずれにも会館に来ませんか。");
+        assert!(!both.contains('或'), "{both}");
     }
 
     #[test]

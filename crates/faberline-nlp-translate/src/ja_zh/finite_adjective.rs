@@ -794,7 +794,8 @@ fn attributive_at(
     {
         return None;
     }
-    if aux == 0 && part.is_none() {
+    // A linked degree must stay inside the noun phrase, even without auxiliaries.
+    if aux == 0 && part.is_none() && description_start == i {
         return None;
     }
     if let Some(colour) = hue(lemma) {
@@ -1545,6 +1546,18 @@ mod tests {
         }
         let comparison = translate("白かった車より軽かった箱を運びました。");
         assert!(!comparison.contains("當時很輕的箱子"), "{comparison}");
+    }
+
+    #[test]
+    fn a_degree_stays_with_the_adjective_that_owns_it() {
+        assert_eq!(
+            translate("とても黒い猫がゆっくり歩きました。"),
+            "非常黑的貓慢慢地走了。"
+        );
+        assert_eq!(
+            translate("この犬はとても速く走ります。"),
+            "這狗非常快快地跑。"
+        );
     }
 
     #[test]

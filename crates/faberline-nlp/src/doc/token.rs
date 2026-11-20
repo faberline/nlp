@@ -956,7 +956,7 @@ pub(super) fn tokenize_with_matcher(
             span.start_char,
             ja_context,
             matcher,
-            false,
+            None,
             &mut out,
         );
         if let Some(kind) = kind {
@@ -968,13 +968,30 @@ pub(super) fn tokenize_with_matcher(
         }
         cursor = span.end_char;
     }
+    // Pass only the next sentence in the same paragraph. Opaque or suppressed
+    // spans interrupt this optional context and remain outside segmentation.
+    let next_end = (sentence.end_char..c.len())
+        .find(|&i| matches!(c[i], '。' | '！' | '？' | '!' | '?' | '\n' | '\r'))
+        .unwrap_or(c.len());
+    let next_is_visible = !inline
+        .iter()
+        .any(|(span, _)| span.start_char < next_end && sentence.end_char < span.end_char)
+        && !silent
+            .iter()
+            .any(|span| span.start_char < next_end && sentence.end_char < span.end_char);
+    let next_sentence: String =
+        if sentence.end_char > 0 && c[sentence.end_char - 1] == '。' && next_is_visible {
+            c[sentence.end_char..next_end].iter().collect()
+        } else {
+            String::new()
+        };
     text_pieces(
         c,
         cursor,
         sentence.end_char,
         ja_context,
         matcher,
-        true,
+        Some(&next_sentence),
         &mut out,
     );
     out
@@ -986,7 +1003,7 @@ fn text_pieces(
     end: usize,
     ja_context: bool,
     matcher: &TokenMatcher,
-    is_last_piece: bool,
+    next_sentence: Option<&str>,
     out: &mut Vec<Piece>,
 ) {
     if start >= end {
@@ -1007,11 +1024,19 @@ fn text_pieces(
     for (a, b, kind) in runs(&s, ja_context) {
         match kind {
             RunKind::Ja => {
-                let sentence_tail = is_last_piece
+                let sentence_tail = next_sentence.is_some()
                     && s[b..].chars().all(|ch| {
                         ch.is_whitespace() || matches!(ch, '。' | '！' | '？' | '!' | '?')
                     });
-                ja_tokens(&s, a, b, matcher, sentence_tail, &mut ja_ranges)
+                ja_tokens(
+                    &s,
+                    a,
+                    b,
+                    matcher,
+                    sentence_tail,
+                    next_sentence.unwrap_or(""),
+                    &mut ja_ranges,
+                )
             }
             RunKind::Zh => {
                 simple_ranges.clear();
@@ -1078,19 +1103,42 @@ fn ja_tokens(
     b: usize,
     matcher: &TokenMatcher,
     sentence_tail: bool,
+    next_sentence: &str,
     out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
 ) {
     let run = &s[a..b];
+    let following_text = format!("{}{next_sentence}", &s[b..]);
     if let Some(ac) = &matcher.ja_ko_extra {
         let mut at = 0;
         for m in ac.find_iter(run) {
-            ja_words(&run[at..m.start()], a + at, &matcher.ja_lexicon, false, out);
+            ja_words(
+                &run[at..m.start()],
+                a + at,
+                &matcher.ja_lexicon,
+                false,
+                "",
+                out,
+            );
             out.push((a + m.start(), a + m.end(), None));
             at = m.end();
         }
-        ja_words(&run[at..], a + at, &matcher.ja_lexicon, sentence_tail, out);
+        ja_words(
+            &run[at..],
+            a + at,
+            &matcher.ja_lexicon,
+            sentence_tail,
+            &following_text,
+            out,
+        );
     } else {
-        ja_words(run, a, &matcher.ja_lexicon, sentence_tail, out);
+        ja_words(
+            run,
+            a,
+            &matcher.ja_lexicon,
+            sentence_tail,
+            &following_text,
+            out,
+        );
     }
 }
 
@@ -1099,6 +1147,7 @@ fn ja_words(
     base: usize,
     extra_lexicon: &[String],
     sentence_tail: bool,
+    following_text: &str,
     out: &mut Vec<(usize, usize, Option<crate::lexicon::ja::JaSegment>)>,
 ) {
     if stretch.is_empty() {
@@ -1111,8 +1160,13 @@ fn ja_words(
     }
     byte_offs.push(stretch.len());
 
-    for seg in crate::lexicon::ja::segment_ja_with_context(&chars, 0, extra_lexicon, sentence_tail)
-    {
+    for seg in crate::lexicon::ja::segment_ja_with_context(
+        &chars,
+        0,
+        extra_lexicon,
+        sentence_tail,
+        following_text,
+    ) {
         let start_b = base + byte_offs[seg.span.start_char];
         let end_b = base + byte_offs[seg.span.end_char];
         out.push((start_b, end_b, Some(seg)));

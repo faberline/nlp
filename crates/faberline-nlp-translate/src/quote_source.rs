@@ -623,13 +623,12 @@ fn quotes_exact_writing(
             && syntax
                 .head(i)
                 .is_some_and(|head| (first_in_quote..end_of_quote).contains(&head));
-        let surface = (attached(i) || via_quote)
-            && case.starts_with(&['に'])
-            && is_writing_surface(chars, scope.start_char, token.span.end_char, syntax, copies);
-        writing_surface |= surface;
-        if !attached(i) {
+        if !(attached(i) || via_quote) {
             continue;
         }
+        let surface = case.starts_with(&['に'])
+            && is_writing_surface(chars, scope.start_char, token.span.end_char, syntax, copies);
+        writing_surface |= surface;
         let other_language = word.ends_with(&['語']) && word != ['日', '本', '語'];
         let camera = ["カメラ", "スマホ", "スマートフォン", "携帯", "携帯電話"]
             .iter()
@@ -641,7 +640,7 @@ fn quotes_exact_writing(
             // can take a picture of what the quotation denotes.
             return false;
         }
-        if token.upos == Some(Upos::Adv) && word == ['そ', 'の', 'ま', 'ま'] {
+        if attached(i) && token.upos == Some(Upos::Adv) && word == ['そ', 'の', 'ま', 'ま'] {
             unchanged = true;
         }
     }
@@ -1854,6 +1853,9 @@ mod tests {
             ("紙に「先生が写真を買いました」と書きました。", &["照片"]),
             ("紙を見て、「写真」と言いました。", &["照片"]),
             ("紙に「写真」と英語で書きました。", &["照片"]),
+            ("英語で紙に「赤い」と書きました。", &["紅"]),
+            ("紙に英語で「帰る」と書きました。", &["回去"]),
+            ("日本語で紙に「赤い」と書きました。", &["「赤い」"]),
             (
                 "ドイツは紙に「ドイツ」と書きました。",
                 &["「ドイツ」", "德國"],

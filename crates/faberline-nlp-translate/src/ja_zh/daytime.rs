@@ -224,6 +224,35 @@ fn selects_participant(stem: &str) -> bool {
     )
 }
 
+fn parallel_goals(source: &[Atom], day: &Atom, owner: usize) -> bool {
+    source.windows(3).any(|p| {
+        let (other, case, also) = (&p[0], &p[1], &p[2]);
+        other.head == Some(owner)
+            && other.doc_tok_idx != day.doc_tok_idx
+            && !source_time_head(other)
+            && !is_daypart_surface(&other.surface)
+            && !case.is_locked
+            && case.surface == "に"
+            && case.deprel == "case"
+            && case.head == other.doc_tok_idx
+            && !also.is_locked
+            && also.surface == "も"
+            && also.deprel == "case"
+            && also.head == other.doc_tok_idx
+    })
+}
+
+fn passive_or_causative(source: &[Atom], owner: usize) -> bool {
+    source.iter().any(|a| {
+        a.head == Some(owner)
+            && !a.is_locked
+            && matches!(
+                a.lemma.as_deref().unwrap_or(&a.surface),
+                "れる" | "られる" | "せる" | "させる"
+            )
+    })
+}
+
 // The analyzer can split 日中にも as 日 + 中にも. Keep both source tokens
 // in the marker's span without manufacturing syntax tokens for に and も.
 fn form(a: &Atom, next: &Atom, following: Option<&Atom>) -> Option<(usize, usize, bool)> {
@@ -299,14 +328,7 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom], doc: &super::Document
             continue;
         };
         // Passive agents and causees can occupy に even with a reading verb.
-        if source.iter().any(|a| {
-            a.head == Some(owner)
-                && !a.is_locked
-                && matches!(
-                    a.lemma.as_deref().unwrap_or(&a.surface),
-                    "れる" | "られる" | "せる" | "させる"
-                )
-        }) {
+        if passive_or_causative(source, owner) {
             continue;
         }
         // The parser sometimes assigns the matrix topic to a nested relative
@@ -340,6 +362,9 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom], doc: &super::Document
                     !n.is_locked && n.head == Some(owner) && selects_participant(&n.surface)
                 });
         if selects_time_value(lemma)
+            || also
+                && matches!(stem, "出す" | "提出" | super::application_form::SUBMIT)
+                && parallel_goals(source, word, owner)
             || takes_participant && recipient.is_none() && !dated_distribution(source, idx, verb)
         {
             continue;
@@ -373,20 +398,79 @@ pub(super) fn bind(atoms: &mut Vec<Atom>, source: &[Atom], doc: &super::Document
         {
             direction.surface = "に".to_owned();
         }
-        let mut day = word.clone();
-        if !day.is_locked {
-            day.surface = "白天".to_owned();
+        atoms.splice(range, [time_modifier(word, end, owner, also)]);
+    }
+}
+
+fn time_modifier(word: &Atom, end: usize, owner: usize, also: bool) -> Atom {
+    let mut day = word.clone();
+    if !day.is_locked {
+        day.surface = "白天".to_owned();
+    }
+    if also {
+        day.surface.push('也');
+    }
+    day.lemma = Some(DAYTIME.to_owned());
+    day.span.end_char = end;
+    day.head = Some(owner);
+    day.deprel = "advmod".to_owned();
+    day.upos = Some(Upos::Adv);
+    day.is_locked = true;
+    day
+}
+
+// Identify the time before selecting the filing or extraction sense of 出す.
+// A comma in a series of actions can depend on the final verb. The time and
+// the form must instead share the actual action's own dependency node.
+pub(super) fn bind_form_time(atoms: &mut Vec<Atom>, chars: &[char], doc: &super::Document) {
+    for i in (0..atoms.len().saturating_sub(1)).rev() {
+        let word = &atoms[i];
+        let Some((end, owner, also)) = atoms
+            .get(i + 1)
+            .and_then(|case| form(word, case, atoms.get(i + 2)))
+        else {
+            continue;
+        };
+        if i.checked_sub(1).is_some_and(|idx| {
+            let a = &atoms[idx];
+            a.span.end_char == word.span.start_char && (a.upos == Some(Upos::Num) || a.is_locked)
+        }) {
+            continue;
         }
-        if also {
-            day.surface.push('也');
+        let Some(action) = atoms.iter().position(|a| a.doc_tok_idx == Some(owner)) else {
+            continue;
+        };
+        if action <= i
+            || passive_or_causative(atoms, owner)
+            || !super::application_form::has_form_object(atoms, &atoms[action], chars)
+        {
+            continue;
         }
-        day.lemma = Some(DAYTIME.to_owned());
-        day.span.end_char = end;
-        day.head = Some(owner);
-        day.deprel = "advmod".to_owned();
-        day.upos = Some(Upos::Adv);
-        day.is_locked = true;
-        atoms.splice(range, [day]);
+        let Some(last) = (i..action).find(|&j| atoms[j].span.end_char == end) else {
+            continue;
+        };
+        if also && parallel_goals(atoms, word, owner) {
+            super::application_form::paired_recipients(atoms, i, last, owner, doc);
+            continue;
+        }
+        if !super::application_form::has_form_role(atoms, owner, chars) {
+            continue;
+        }
+        let pause = atoms.get(last + 1).is_some_and(|a| {
+            !a.is_locked
+                && a.deprel == "punct"
+                && a.span.start_char == end
+                && matches!(a.surface.as_str(), "、" | "，" | ",")
+        });
+        let tail = last + usize::from(pause);
+        if atoms[tail + 1..action]
+            .iter()
+            .any(|a| super::is_punct_atom(a) || a.upos == Some(Upos::Verb) || a.deprel == "nsubj")
+        {
+            continue;
+        }
+        let day = time_modifier(word, end, owner, also);
+        atoms.splice(i..=tail, [day]);
     }
 }
 

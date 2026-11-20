@@ -13591,16 +13591,17 @@ fn translate_clause_bunsetsus(
                 } else if focus.is_some() {
                     parts.push(format!("只有{days}在"));
                 } else {
-                    // The amount modifies the performed activity. Keep the
-                    // object separate so the days cannot describe the records.
+                    // Repeat the local verb to attach the duration to this
+                    // activity without suggesting that the object was finished.
                     let aspect = if post_verb_mods.iter().any(|modifier| modifier == "了") {
                         "了"
                     } else {
                         ""
                     };
-                    parts.push(format!("對{object}"));
-                    verb_core = format!("進行{aspect}{days}的{verb_core}");
-                    objs.clear();
+                    parts.push(verb_core.clone());
+                    parts.append(&mut objs);
+                    parts.push("，".to_owned());
+                    verb_core = format!("{verb_core}{aspect}{days}");
                 }
                 post_verb_mods.retain(|modifier| modifier != "了");
             }
@@ -19238,7 +19239,7 @@ mod clock_rule_tests {
         for (source, expected) in [
             (
                 "管理人は四日間、入口を見張りました。",
-                "管理人對入口進行了四天的監視。",
+                "管理人監視入口，監視了四天。",
             ),
             (
                 "管理人は四日間、入口を閉鎖しました。",
@@ -19311,7 +19312,7 @@ mod clock_rule_tests {
             ..GlossaryEntry::default()
         });
         let measured = public_translate("私は五日間、予約記録を確認しました。", &glossary);
-        assert_eq!(measured.target_text, "我對登記記錄進行了五天的確認。");
+        assert_eq!(measured.target_text, "我確認登記記錄，確認了五天。");
         let [hit] = measured.glossary_hits.as_slice() else {
             panic!("expected one glossary hit inside the object");
         };
@@ -19325,8 +19326,8 @@ mod clock_rule_tests {
         assert_eq!(
             hit.target_span,
             Span {
-                start_char: 2,
-                end_char: 4
+                start_char: 3,
+                end_char: 5
             }
         );
 
@@ -19347,11 +19348,11 @@ mod clock_rule_tests {
         for (source, expected) in [
             (
                 "私は資料を送り、その後、五日間予約記録を確認しました。",
-                "我寄送資料，然後，對預約記錄進行了五天的確認。",
+                "我寄送資料，然後，確認預約記錄，確認了五天。",
             ),
             (
                 "私は五日間予約記録を確認し、その後、資料を送りました。",
-                "我對預約記錄進行五天的確認，然後，寄送了資料。",
+                "我確認預約記錄，確認五天，然後，寄送了資料。",
             ),
             (
                 "私は五日間だけ予約記録を確認し、その後、資料を送りました。",
@@ -19363,7 +19364,7 @@ mod clock_rule_tests {
             ),
             (
                 "係員は二日間装置を点検し、その後、三日間温度を記録しました。",
-                "工作人員對裝置進行兩天的檢查，然後，對溫度進行了三天的記錄。",
+                "工作人員檢查裝置，檢查兩天，然後，記錄溫度，記錄了三天。",
             ),
             (
                 "係員は三日間毎日装置を点検しました。",
@@ -19383,7 +19384,7 @@ mod clock_rule_tests {
             ),
             (
                 "私は資料を送り五日間予約記録を確認しました。",
-                "我寄送資料，對預約記錄進行了五天的確認。",
+                "我寄送資料，確認預約記錄，確認了五天。",
             ),
             (
                 "係員は毎日出社した三日間を記録しました。",
@@ -19391,7 +19392,7 @@ mod clock_rule_tests {
             ),
             (
                 "私は昨日から五日間予約記録を確認します。",
-                "我從昨天起，對預約記錄進行五天的確認。",
+                "我從昨天起，確認預約記錄，確認五天。",
             ),
         ] {
             assert_eq!(

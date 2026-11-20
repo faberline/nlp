@@ -21160,6 +21160,9 @@ mod clock_rule_tests {
             "天気予報を聞いて、飛行機から降りるな。",
             "雨よ、明日は降るな。",
             "雨よ、天気予報では明日も降るな。",
+            "「そうだ。終わり」天気予報では雨よ明日は降るな。",
+            "天気予報では『雨よ』君よ明日は降るな。",
+            "天気予報では君よ『雨よ』明日は降るな。",
             "天気予報では君は明日は降るな。",
             "空が暗い。雨よ、明日は降るな。",
             "「空が暗い。雨よ、明日は降るな。」",
@@ -25233,17 +25236,61 @@ fn has_prior_vocative(doc: &Document, ctx: &ClauseDiscourseCtx<'_>, verb: &Atom)
     if positions.is_empty() {
         return false;
     }
-    let Some(sentence) = doc.segmentation.sentences.get(sentence_idx) else {
-        return false;
-    };
-    quote_scope_relations_inner(
+    has_same_scope_prior_position(
         ctx.source_chars,
-        sentence.span.start_char,
         &positions,
         verb.span.start_char,
-        |index| opaque_contains(&doc.segmentation.opaque, index),
+        &doc.segmentation.opaque,
     )
-    .is_some_and(|same_scopes| same_scopes.into_iter().any(|same| same))
+}
+
+// Scan backwards once. A complete inner quote is skipped; crossing the
+// opener of the current quote makes every earlier candidate out of scope.
+fn has_same_scope_prior_position(
+    chars: &[char],
+    positions: &[usize],
+    right: usize,
+    opaque: &[faberline_nlp::doc::Opaque],
+) -> bool {
+    if right > chars.len() || positions.is_empty() || positions.windows(2).any(|p| p[0] > p[1]) {
+        return false;
+    }
+    let mut next = positions.len();
+    let mut closers = Vec::new();
+    for index in (positions[0]..right).rev() {
+        if !opaque_contains(opaque, index) {
+            let ch = chars[index];
+            if ch != '’' || !is_word_apostrophe(chars, index) {
+                match ch {
+                    '」' => closers.push('「'),
+                    '』' => closers.push('『'),
+                    '”' => closers.push('“'),
+                    '’' => closers.push('‘'),
+                    '「' | '『' | '“' | '‘' => {
+                        if closers.pop() != Some(ch) {
+                            return false;
+                        }
+                    }
+                    '"' => {
+                        if closers.last() == Some(&'"') {
+                            closers.pop();
+                        } else {
+                            closers.push('"');
+                        }
+                    }
+                    '`' | '\\' => return false,
+                    _ => {}
+                }
+            }
+        }
+        while next > 0 && positions[next - 1] == index {
+            if closers.is_empty() {
+                return true;
+            }
+            next -= 1;
+        }
+    }
+    false
 }
 
 fn syntax_for_sentence(doc: &Document, sentence: usize) -> &[faberline_nlp::doc::SyntaxToken] {

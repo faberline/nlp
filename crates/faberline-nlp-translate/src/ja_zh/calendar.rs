@@ -299,6 +299,7 @@ pub(super) fn day_role(
     source: &[Atom],
     doc: &Document,
     focused: bool,
+    continuative: Option<usize>,
 ) -> Option<DayRole> {
     let result_marker = |atom: &Atom| {
         !atom.is_locked
@@ -357,6 +358,7 @@ pub(super) fn day_role(
     // does not specify whether the information was checked once or many times.
     let ongoing = is_day_activity_progressive(verb, source);
     let independent_activity = ongoing
+        || continuative.is_some_and(|terminal| owns(Some(terminal)))
         || matches!(verb.deprel.as_str(), "root" | "conj")
         || light_verb.is_some_and(|head| {
             source.iter().any(|atom| {
@@ -617,6 +619,7 @@ pub(super) fn normalize_day_limits(atoms: &mut Vec<Atom>, doc: &Document, source
 pub(super) fn take_focused_days(
     groups: &mut Vec<super::Bunsetsu>,
     source: &[Atom],
+    doc: &Document,
 ) -> Option<(ElapsedDuration, bool)> {
     for args in source.windows(2) {
         let [unit, marker] = args else {
@@ -637,9 +640,22 @@ pub(super) fn take_focused_days(
             _ => continue,
         };
         let governor = unit.head?;
-        let indirect_owner = source.iter().find_map(|noun| {
-            if noun.is_locked || noun.doc_tok_idx != Some(governor) || noun.deprel != "obj" {
+        let indirect_owner = source.iter().enumerate().find_map(|(index, noun)| {
+            if noun.doc_tok_idx != Some(governor) || noun.deprel != "obj" {
                 return None;
+            }
+            // The last token of a compound lock can still carry its object
+            // link. Prove that link with the original noun and visible を.
+            if noun.is_locked {
+                let original = doc.tokens.get(governor)?;
+                let marker = source.get(index + 1)?;
+                if !matches!(original.upos, Some(Upos::Noun | Upos::Propn))
+                    || original.span.start_char < noun.span.start_char
+                    || original.span.end_char != noun.span.end_char
+                    || !linked_case(marker, noun, noun, "を")
+                {
+                    return None;
+                }
             }
             let owner = noun.head?;
             source

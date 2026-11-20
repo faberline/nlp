@@ -5406,6 +5406,44 @@ fn elapsed_te_before_following(
     }
 }
 
+// A comma can separate a lexical continuative from the later event it
+// depends on. Use the rendered clause boundary as well as the syntax link.
+fn elapsed_continuative_before_following<'a>(
+    source: &'a [Atom],
+    ctx: &ClauseDiscourseCtx<'_>,
+) -> Option<&'a Atom> {
+    let verb = core_non_punct(source).last()?;
+    let head = verb.head?;
+    if ctx.inside_quote
+        || verb.is_locked
+        || verb.upos != Some(Upos::Verb)
+        || verb.deprel != "advcl"
+        || !matches!(
+            ctx.source_chars
+                .get(verb.span.end_char..)?
+                .iter()
+                .copied()
+                .find(|ch| !ch.is_whitespace()),
+            Some('、' | '，' | ',')
+        )
+    {
+        return None;
+    }
+    let next = ctx
+        .following
+        .iter()
+        .map_while(|segment| match segment {
+            Segment::Clause { atoms, .. } => Some(atoms),
+            _ => None,
+        })
+        .find(|atoms| atoms.iter().any(|atom| atom.upos == Some(Upos::Verb)))?;
+    next.iter()
+        .any(|atom| {
+            !atom.is_locked && atom.upos == Some(Upos::Verb) && atom.doc_tok_idx == Some(head)
+        })
+        .then_some(verb)
+}
+
 // The segmenter has already separated the two clauses. Prove the terminal て
 // belongs to the first action and that action reaches the second lexical event.
 fn parallel_elapsed_te(
@@ -10890,11 +10928,11 @@ fn take_elapsed_duration(
             let accepted = match groups[index].atoms.as_slice() {
                 [_] if !day_change => true,
                 [_] => matches!(
-                    calendar::day_role(&duration, groups, source, doc, false),
+                    calendar::day_role(&duration, groups, source, doc, false, None),
                     Some(calendar::DayRole::Change(_))
                 ),
                 _ => matches!(
-                    calendar::day_role(&duration, groups, source, doc, false),
+                    calendar::day_role(&duration, groups, source, doc, false, None),
                     Some(calendar::DayRole::NewLength(_))
                 ),
             };
@@ -11039,7 +11077,7 @@ fn translate_clause_bunsetsus(
     target: TargetVariant,
 ) -> (String, bool) {
     let focused_days = if target == TargetVariant::ZhHant {
-        calendar::take_focused_days(&mut bunsetsus, source)
+        calendar::take_focused_days(&mut bunsetsus, source, doc)
     } else {
         None
     };
@@ -11096,12 +11134,21 @@ fn translate_clause_bunsetsus(
         };
         question.head == modal.doc_tok_idx || question.head == modal.head
     });
-    let day_role = elapsed
+    let measured_days = elapsed
         .as_ref()
-        .filter(|duration| duration.amount.ends_with('天'))
-        .and_then(|duration| {
-            calendar::day_role(duration, &bunsetsus, source, doc, focus.is_some())
-        });
+        .filter(|duration| duration.amount.ends_with('天'));
+    let continuative =
+        measured_days.and_then(|_| elapsed_continuative_before_following(source, ctx));
+    let day_role = measured_days.and_then(|duration| {
+        calendar::day_role(
+            duration,
+            &bunsetsus,
+            source,
+            doc,
+            focus.is_some(),
+            continuative.and_then(|verb| verb.doc_tok_idx),
+        )
+    });
     let held_for_days = matches!(day_role, Some(calendar::DayRole::HeldEvent));
     let mut elapsed_duration = elapsed.map(|duration| duration.amount);
 
@@ -11668,6 +11715,15 @@ fn translate_clause_bunsetsus(
                 }
                 "けれど" | "けれども" | "けど" | "のに" => sconj_suffix = Some("，但是"),
                 "だけど" => sconj_suffix = Some("，不過"),
+                // The terminal し of a split activity verb is inflection.
+                "し" if matches!(day_role, Some(calendar::DayRole::Activity))
+                    && continuative.is_some_and(|verb| {
+                        verb.surface == "し"
+                            && verb.lemma.as_deref() == Some("する")
+                            && b.atoms
+                                .last()
+                                .is_some_and(|tail| tail.doc_tok_idx == verb.doc_tok_idx)
+                    }) => {}
                 "し" => sconj_suffix = Some("，而且"),
                 "たら" | "なら" | "ば" => sconj_prefix = Some("如果"),
                 "ながら" | "つつ" => sconj_prefix = Some("一邊"),
@@ -13427,19 +13483,15 @@ fn translate_clause_bunsetsus(
                 post_verb_mods.retain(|modifier| modifier != "了");
             }
             Some(calendar::DayRole::Activity) if !passive_agent_needed => {
-                // Put the past marker on the duration. The first phrase names
-                // the activity without claiming a separate completed event.
-                let aspect = if post_verb_mods.iter().any(|modifier| modifier == "了") {
-                    post_verb_mods.retain(|modifier| modifier != "了");
-                    "了"
+                // Keep the extent inside its own predicate. A trailing clause
+                // could also be read as the duration of an earlier action.
+                let extent = if focus.is_some() {
+                    format!("只有{days}在")
                 } else {
-                    ""
+                    format!("在{days}的時間裡持續")
                 };
-                let scope = if focus.is_some() { "只" } else { "前後" };
-                parts.push(verb_core.clone());
-                parts.append(&mut objs);
-                parts.push("，".to_owned());
-                verb_core = format!("{scope}持續{aspect}{days}");
+                parts.push(extent);
+                post_verb_mods.retain(|modifier| modifier != "了");
             }
             Some(calendar::DayRole::ResultState(action) | calendar::DayRole::Change(action)) => {
                 parts.push(format!("把{object}"));
@@ -19075,7 +19127,7 @@ mod clock_rule_tests {
         for (source, expected) in [
             (
                 "管理人は四日間、入口を見張りました。",
-                "管理人監視入口，前後持續了四天。",
+                "管理人在四天的時間裡持續監視入口。",
             ),
             (
                 "管理人は四日間、入口を閉鎖しました。",
@@ -19148,7 +19200,7 @@ mod clock_rule_tests {
             ..GlossaryEntry::default()
         });
         let measured = public_translate("私は五日間、予約記録を確認しました。", &glossary);
-        assert_eq!(measured.target_text, "我確認登記記錄，前後持續了五天。");
+        assert_eq!(measured.target_text, "我在五天的時間裡持續確認登記記錄。");
         let [hit] = measured.glossary_hits.as_slice() else {
             panic!("expected one glossary hit inside the object");
         };
@@ -19162,13 +19214,13 @@ mod clock_rule_tests {
         assert_eq!(
             hit.target_span,
             Span {
-                start_char: 3,
-                end_char: 5
+                start_char: 12,
+                end_char: 14
             }
         );
 
         let limited = public_translate("私は五日間だけ予約記録を確認しました。", &glossary);
-        assert_eq!(limited.target_text, "我確認登記記錄，只持續了五天。");
+        assert_eq!(limited.target_text, "我只有五天在確認登記記錄。");
         assert_eq!(limited.glossary_hits.len(), 1);
 
         let separated = public_translate("予約、記録を確認しました。", &glossary);
@@ -19176,6 +19228,71 @@ mod clock_rule_tests {
         let quoted = public_translate("ノートに「予約記録」とそのまま書きました。", &glossary);
         assert!(quoted.target_text.contains("「予約記録」"));
         assert!(quoted.glossary_hits.is_empty());
+    }
+
+    #[test]
+    fn day_activity_measure_does_not_reach_an_adjacent_action() {
+        let mut glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "私は資料を送り、その後、五日間予約記録を確認しました。",
+                "我寄送資料，然後，在五天的時間裡持續確認預約記錄。",
+            ),
+            (
+                "私は五日間予約記録を確認し、その後、資料を送りました。",
+                "我在五天的時間裡持續確認預約記錄，然後，寄送了資料。",
+            ),
+            (
+                "私は五日間だけ予約記録を確認し、その後、資料を送りました。",
+                "我只有五天在確認預約記錄，然後，寄送了資料。",
+            ),
+            (
+                "私は五日間で予約記録を確認し、その後、資料を送りました。",
+                "我在五天內確認預約記錄，然後，寄送了資料。",
+            ),
+            (
+                "係員は二日間装置を点検し、その後、三日間温度を記録しました。",
+                "工作人員在兩天的時間裡持續檢查裝置，然後，在三天的時間裡持續記錄溫度。",
+            ),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
+            );
+        }
+
+        glossary.objects.push(GlossaryEntry {
+            canonical: "予約記録".to_owned(),
+            surfaces: vec!["予約記録".to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, "預約紀錄".to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let locked = public_translate(
+            "私は五日間だけ予約記録を確認し、その後、資料を送りました。",
+            &glossary,
+        );
+        assert_eq!(
+            locked.target_text,
+            "我只有五天在確認預約紀錄，然後，寄送了資料。"
+        );
+        let [hit] = locked.glossary_hits.as_slice() else {
+            panic!("expected exactly one glossary hit");
+        };
+        assert_eq!(
+            hit.source_span,
+            Span {
+                start_char: 7,
+                end_char: 11,
+            }
+        );
+        assert_eq!(
+            hit.target_span,
+            Span {
+                start_char: 8,
+                end_char: 12,
+            }
+        );
     }
 
     #[test]

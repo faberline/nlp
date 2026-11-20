@@ -9,8 +9,16 @@ use super::{
 use crate::{TranslateUnknown, TranslateUnknownKind};
 use faberline_nlp::doc::{EntityKind, SemanticClass};
 
+const HONORIFIC_NAME: &str = "__ja_honorific_name";
 pub(super) const PERSON_WITH_SUFFIX: &str = "__ja_person_with_suffix";
 pub(super) const DEFINED_ALIAS: &str = "__ja_defined_alias";
+
+pub(super) fn has_name_suffix(atom: &Atom) -> bool {
+    matches!(
+        atom.lemma.as_deref(),
+        Some(PERSON_WITH_SUFFIX | HONORIFIC_NAME)
+    )
+}
 
 #[derive(Default)]
 pub(crate) struct HonorificContext {
@@ -265,7 +273,7 @@ pub(super) fn named_call(inner: &[Atom], report: &[Atom]) -> Option<String> {
     let [name, rest @ ..] = inner else {
         return None;
     };
-    if name.lemma.as_deref() != Some(PERSON_WITH_SUFFIX)
+    if !has_name_suffix(name)
         || !rest.is_empty() && !matches!(rest[0].surface.as_str(), "、" | "，")
     {
         return None;
@@ -574,7 +582,7 @@ impl HonorificContext {
                         && case.span.end_char == copula.span.start_char
                 });
             if previous.is_locked
-                && locks.locks.iter().any(|lock| {
+                && let Some(lock) = locks.locks.iter().find(|lock| {
                     lock.mandatory
                         && lock.source_span == previous.span
                         && lock.placeholder == previous.surface
@@ -593,7 +601,13 @@ impl HonorificContext {
                 let mut person = suffix.clone();
                 person.span.start_char = previous.span.start_char;
                 person.surface.clone_from(&previous.surface);
-                person.lemma = Some(PERSON_WITH_SUFFIX.to_owned());
+                person.lemma = Some(
+                    match lock.origin {
+                        LockOrigin::Glossary { .. } => PERSON_WITH_SUFFIX,
+                        _ => HONORIFIC_NAME,
+                    }
+                    .to_owned(),
+                );
                 person.upos = Some(Upos::Propn);
                 person.is_locked = true;
                 result.extend_from_slice(&atoms[cursor..suffix_idx - 1]);
@@ -645,7 +659,13 @@ impl HonorificContext {
                 };
                 // The case particle attaches to the suffix. Keep that syntax
                 // node as the head of the complete, already-rendered name.
-                noun.lemma = Some(PERSON_WITH_SUFFIX.to_owned());
+                noun.lemma = Some(
+                    match reading {
+                        PersonReading::Proven => PERSON_WITH_SUFFIX,
+                        PersonReading::Ambiguous => HONORIFIC_NAME,
+                    }
+                    .to_owned(),
+                );
                 noun.upos = Some(Upos::Propn);
                 noun.is_locked = true;
                 result.push(noun);

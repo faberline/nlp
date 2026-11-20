@@ -394,14 +394,10 @@ pub(super) fn contains_copular_node(atoms: &[Atom], at: usize, doc: &Document) -
 fn owner_atom(a: &Atom, doc: &Document) -> bool {
     matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
         && (!a.is_locked
+            || super::honorific::has_name_suffix(a)
             || matches!(
                 a.lemma.as_deref(),
-                Some(
-                    MODIFIED_NOUN
-                        | PROTECTED_COMPOUND
-                        | super::honorific::PERSON_WITH_SUFFIX
-                        | super::honorific::DEFINED_ALIAS
-                )
+                Some(MODIFIED_NOUN | PROTECTED_COMPOUND | super::honorific::DEFINED_ALIAS)
             )
             || whole_nominal_lock(a, doc))
 }

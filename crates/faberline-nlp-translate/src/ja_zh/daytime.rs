@@ -130,7 +130,10 @@ fn other_goal<'a>(
 // its own head is a person, including a caller-designated actor.
 fn personal_addressee(noun: &Atom, source: &[Atom], doc: &super::Document) -> bool {
     if noun.is_locked {
-        return noun.lemma.as_deref() == Some(super::LOCKED_RESIDENT_ATOM);
+        return matches!(
+            noun.lemma.as_deref(),
+            Some(super::LOCKED_RESIDENT_ATOM | super::honorific::PERSON_WITH_SUFFIX)
+        );
     }
     let is_person = |a: &Atom| {
         a.doc_tok_idx

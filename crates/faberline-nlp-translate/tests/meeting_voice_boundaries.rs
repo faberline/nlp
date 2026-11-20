@@ -1,6 +1,6 @@
 use faberline_nlp::{
     Span,
-    doc::{Document, Upos, analyze_document, frame::FrameRole, model::Backend},
+    doc::{Document, EntityKind, Upos, analyze_document, frame::FrameRole, model::Backend},
 };
 use faberline_nlp_translate::{
     GlossaryKind, TargetVariant, TranslateOptions, TranslatedDocument, TranslationGlossary,
@@ -168,6 +168,27 @@ fn assert_meeting_with_counterpart(case_id: &str, text: &str, label: &str, perso
             before_action.contains("明天") || before_action.contains("明日"),
             "{label}: missing the meeting date: {text}"
         );
+        assert!(
+            !before_action.contains("明天，") && !before_action.contains("明日，"),
+            "{label}: source-linked meeting date must not be separated: {text}"
+        );
+    }
+    if case_id == "M08" {
+        let subject = subjects
+            .iter()
+            .filter_map(|subject| before_action.find(*subject))
+            .min()
+            .expect("meeting subject was checked above");
+        // With a place lock, use its translated target. Without that lock,
+        // accept the existing rendering of the hall while checking its scope.
+        let place = before_action
+            .find("星潮中心")
+            .or_else(|| before_action.find("會館"))
+            .unwrap_or_else(|| panic!("{label}: missing meeting location: {text}"));
+        assert!(
+            subject < negative && negative < place && place < connector,
+            "{label}: meeting location must follow negation and precede the counterpart: {text}"
+        );
     }
 }
 
@@ -190,12 +211,49 @@ fn attached_voice_negatives_keep_the_meeting_counterpart() {
         let case = fixture.case(id);
         let translated = case.render(&case.document(Stage::Candidate).doc, &fixture.glossary);
         assert_meeting_with_counterpart(id, &translated.target_text, id, case.glossary);
+        if id == "M04" {
+            assert_sentence_spans(&case.source, &translated, id);
+        }
     }
 }
 
 fn slice_chars(text: &str, span: Span) -> String {
     let chars: Vec<char> = text.chars().collect();
     chars[span.start_char..span.end_char].iter().collect()
+}
+
+fn assert_sentence_spans(source: &str, translated: &TranslatedDocument, label: &str) {
+    assert_eq!(translated.source_chars, source.chars().count(), "{label}");
+    assert_eq!(
+        translated.target_chars,
+        translated.target_text.chars().count(),
+        "{label}"
+    );
+    assert_eq!(translated.sentences.len(), 1, "{label}");
+    let sentence = &translated.sentences[0];
+    assert_eq!(sentence.sentence, 0, "{label}");
+    assert_eq!(
+        sentence.source_span,
+        Span {
+            start_char: 0,
+            end_char: source.chars().count()
+        },
+        "{label}"
+    );
+    assert_eq!(
+        sentence.target_span,
+        Span {
+            start_char: 0,
+            end_char: translated.target_text.chars().count()
+        },
+        "{label}"
+    );
+    assert_eq!(slice_chars(source, sentence.source_span), source, "{label}");
+    assert_eq!(
+        slice_chars(&translated.target_text, sentence.target_span),
+        sentence.target_text,
+        "{label}"
+    );
 }
 
 fn assert_meeting_glossary(
@@ -450,13 +508,53 @@ fn removing_m04_counterpart_keeps_other_frame_roles() {
     assert_eq!(changed.tokens, original.tokens);
     assert_eq!(changed.syntax, original.syntax);
 
-    let translated = case.render(&changed, &fixture.glossary);
-    assert_meeting_with_counterpart(
-        "M04",
-        &translated.target_text,
-        "M04 without counterpart ARGM",
-        case.glossary,
-    );
+    for (label, doc) in [
+        ("M04 original", original),
+        ("M04 without counterpart ARGM", &changed),
+    ] {
+        let translated = case.render(doc, &fixture.glossary);
+        assert_meeting_with_counterpart("M04", &translated.target_text, label, case.glossary);
+        assert_eq!(translated.clause_alignments.len(), 2, "{label}");
+        let first = &translated.clause_alignments[0];
+        let second = &translated.clause_alignments[1];
+        assert_eq!((first.clause, first.sentence), (0, 0), "{label}");
+        assert_eq!((second.clause, second.sentence), (1, 0), "{label}");
+        assert_eq!(
+            first.source_span,
+            Span {
+                start_char: 0,
+                end_char: 5
+            },
+            "{label}"
+        );
+        assert_eq!(
+            second.source_span,
+            Span {
+                start_char: 6,
+                end_char: 17
+            },
+            "{label}"
+        );
+        assert_eq!(first.target_span.start_char, 0, "{label}");
+        assert_eq!(
+            first.target_span.end_char, second.target_span.start_char,
+            "{label}"
+        );
+        assert_eq!(
+            second.target_span.end_char, translated.target_chars,
+            "{label}"
+        );
+        assert_eq!(
+            slice_chars(&translated.target_text, first.target_span),
+            "校長明天",
+            "{label}"
+        );
+        assert_eq!(
+            slice_chars(&translated.target_text, second.target_span),
+            "不和家長見面。",
+            "{label}"
+        );
+    }
 }
 
 #[test]
@@ -533,6 +631,161 @@ fn past_negative_meeting_keeps_past_negation_when_chain_is_attached() {
         negative < connector,
         "past negation must precede counterpart: {text}"
     );
+}
+
+#[test]
+fn m04_comma_stays_without_source_linked_same_event_evidence() {
+    let fixture = Fixture::load();
+    let case = fixture.case("M04");
+    let original = &case.document(Stage::Candidate).doc;
+    let mut variants = Vec::new();
+    for (label, token) in [("date head", 2), ("comma head", 3), ("subject head", 0)] {
+        let index = original
+            .syntax
+            .iter()
+            .position(|edge| edge.token == token)
+            .unwrap();
+        assert_eq!(original.syntax[index].head, Some(7), "{label}");
+        let mut changed = original.clone();
+        changed.syntax[index].head = Some(5);
+        let mut restored = changed.clone();
+        restored.syntax[index].head = Some(7);
+        assert_eq!(&restored, original, "{label} changes only one head");
+        variants.push((label, changed));
+    }
+
+    let date_index = original
+        .entities
+        .iter()
+        .position(|entity| entity.kind == EntityKind::RelativeDate)
+        .unwrap();
+    let mut no_date = original.clone();
+    let date = no_date.entities.remove(date_index);
+    let mut restored = no_date.clone();
+    restored.entities.insert(date_index, date);
+    assert_eq!(
+        &restored, original,
+        "only the relative date entity was removed"
+    );
+    variants.push(("missing relative date", no_date));
+
+    let syntax_index = original
+        .syntax
+        .iter()
+        .position(|edge| edge.token == 2)
+        .unwrap();
+    let mut mismatched = original.clone();
+    mismatched.syntax[syntax_index].span.start_char += 1;
+    let mut restored = mismatched.clone();
+    restored.syntax[syntax_index].span = original.syntax[syntax_index].span;
+    assert_eq!(&restored, original, "only the date dependency span differs");
+    variants.push(("inconsistent date dependency", mismatched));
+
+    let mut second_verb = original.clone();
+    assert_ne!(second_verb.tokens[4].upos, Some(Upos::Verb));
+    second_verb.tokens[4].upos = Some(Upos::Verb);
+    let mut restored = second_verb.clone();
+    restored.tokens[4].upos = original.tokens[4].upos;
+    assert_eq!(
+        &restored, original,
+        "only the unrelated token's part of speech differs"
+    );
+    variants.push(("additional verb", second_verb));
+
+    for (label, doc) in variants {
+        let translated = case.render(&doc, &fixture.glossary);
+        assert!(
+            translated.target_text.contains('，'),
+            "{label}: source comma lost: {}",
+            translated.target_text
+        );
+        assert_sentence_spans(&case.source, &translated, label);
+    }
+}
+
+#[test]
+fn m04_glossary_locks_keep_comma_and_unicode_alignment() {
+    let fixture = Fixture::load();
+    let case = fixture.case("M04");
+    let doc = &case.document(Stage::Candidate).doc;
+    for (label, date_locked, counterpart_locked) in [
+        ("date lock", true, false),
+        ("counterpart lock", false, true),
+        ("both locks", true, true),
+    ] {
+        let mut entries = Vec::new();
+        if date_locked {
+            entries.push(serde_json::json!({
+                "canonical": "明日", "surfaces": ["明日"],
+                "targets": {"zh-Hant": "隔天"}
+            }));
+        }
+        if counterpart_locked {
+            entries.push(serde_json::json!({
+                "canonical": "保護者", "surfaces": ["保護者"],
+                "targets": {"zh-Hant": "家長代表"}
+            }));
+        }
+        let glossary: TranslationGlossary = serde_json::from_value(serde_json::json!({
+            "schema": "nlp.translate.glossary.v1", "domain_terms": entries
+        }))
+        .expect("M04 glossary fixture");
+        let translated = translate_document(
+            &case.source,
+            doc,
+            #[cfg(feature = "narrative")]
+            None,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &glossary,
+            None,
+        )
+        .unwrap_or_else(|error| panic!("{label}: {error}"));
+        assert!(
+            translated.target_text.contains('，'),
+            "{label}: source comma lost: {}",
+            translated.target_text
+        );
+        assert_sentence_spans(&case.source, &translated, label);
+        assert_eq!(
+            translated.glossary_hits.len(),
+            usize::from(date_locked) + usize::from(counterpart_locked),
+            "{label}"
+        );
+        for (enabled, canonical, target, start, end) in [
+            (date_locked, "明日", "隔天", 3, 5),
+            (counterpart_locked, "保護者", "家長代表", 6, 9),
+        ] {
+            if !enabled {
+                continue;
+            }
+            let hit = translated
+                .glossary_hits
+                .iter()
+                .find(|hit| hit.canonical == canonical)
+                .unwrap_or_else(|| panic!("{label}: missing {canonical}"));
+            assert_eq!(hit.kind, GlossaryKind::DomainTerm, "{label}: {canonical}");
+            assert_eq!(hit.sentence, Some(0), "{label}: {canonical}");
+            assert_eq!(
+                hit.source_span,
+                Span {
+                    start_char: start,
+                    end_char: end
+                },
+                "{label}: {canonical}"
+            );
+            assert_eq!(slice_chars(&case.source, hit.source_span), canonical);
+            assert_eq!(
+                slice_chars(&translated.target_text, hit.target_span),
+                target,
+                "{label}: {canonical}"
+            );
+            assert_eq!(
+                translated.target_text.matches(target).count(),
+                1,
+                "{label}: {canonical}"
+            );
+        }
+    }
 }
 
 #[test]

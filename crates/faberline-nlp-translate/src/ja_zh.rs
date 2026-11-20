@@ -326,8 +326,12 @@ pub(crate) fn translate_ja_sentence(
     let mut moved_report = direct_quote.and_then(|quote| quote.report);
     let opening = direct_quote.and_then(|quote| quote.opening.as_ref());
     let mut direct_quote_prefix_segments = 0;
+    // Track only a comma actually emitted from the immediately preceding
+    // clause, so a later verified event can adjust its own reading pause.
+    let mut emitted_clause_comma: Option<(usize, Span, usize, usize)> = None;
 
     for (seg_idx, seg) in segments.iter().enumerate() {
+        let previous_clause_comma = emitted_clause_comma.take();
         if direct_quote_prefix_segments > 0 {
             direct_quote_prefix_segments -= 1;
             continue;
@@ -336,7 +340,7 @@ pub(crate) fn translate_ja_sentence(
             skip_next_seg = false;
             continue;
         }
-        let tgt_start = out.chars().count();
+        let mut tgt_start = out.chars().count();
         if target == TargetVariant::ZhHant
             && moved_report.is_none()
             && let Some((prefix, report, quote_index)) =
@@ -840,6 +844,7 @@ pub(crate) fn translate_ja_sentence(
                 let cond_opt = Some(conditioning);
                 let inside_quote =
                     ends_continued_quote(segments.get(seg_idx + 1), doc, sentence_idx, chars);
+                let meeting_evidence = std::rc::Rc::new(std::cell::Cell::new(None));
                 let ctx = ClauseDiscourseCtx {
                     adjective: finite_adjective::Context::at(&segments, seg_idx, doc),
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
@@ -874,6 +879,7 @@ pub(crate) fn translate_ja_sentence(
                     sentence_topic_pronoun,
                     sonomono_antecedent: sonomono_antecedent.clone(),
                     prior_letter_distribution,
+                    meeting_evidence: Some(meeting_evidence.clone()),
                 };
                 let receiving_request = if target == TargetVariant::ZhHant
                     && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
@@ -952,6 +958,39 @@ pub(crate) fn translate_ja_sentence(
                     }
                 }
 
+                if target == TargetVariant::ZhHant
+                    && !inside_quote
+                    && let Some(evidence) = meeting_evidence.get()
+                    && let Some((previous_index, previous_span, byte_end, char_end)) =
+                        previous_clause_comma
+                    && previous_index.checked_add(1) == Some(seg_idx)
+                    && out.len() == byte_end
+                    && tgt_start == char_end
+                    && out.ends_with('，')
+                    && let Some(Segment::Clause {
+                        atoms: previous,
+                        span: prev_span,
+                        ..
+                    }) = segments.get(previous_index)
+                    && *prev_span == previous_span
+                    && let Some(source_comma) = meeting_removable_pause(
+                        previous,
+                        trimmed_atoms,
+                        &atoms,
+                        doc,
+                        chars,
+                        evidence,
+                    )
+                    && source_comma.start_char == previous_span.end_char
+                    && let Some((aligned_source, aligned_target)) = seg_target_spans.last_mut()
+                    && *aligned_source == previous_span
+                    && aligned_target.end_char == char_end
+                    && aligned_target.start_char < aligned_target.end_char
+                {
+                    out.pop();
+                    aligned_target.end_char -= 1;
+                    tgt_start -= 1;
+                }
                 out.push_str(&rendered);
                 let next_quote_framed = match (segments.get(seg_idx + 1), segments.get(seg_idx + 2))
                 {
@@ -996,7 +1035,12 @@ pub(crate) fn translate_ja_sentence(
                                 || rendered.ends_with("，以及")
                                 || rendered.ends_with('，'))))
                     {
-                        out.push_str(&localize_punct(p));
+                        let localized = localize_punct(p);
+                        out.push_str(&localized);
+                        if matches!(p, "、" | "，") && localized == "，" {
+                            emitted_clause_comma =
+                                Some((seg_idx, *span, out.len(), out.chars().count()));
+                        }
                     }
                 } else if matches!(segments.get(seg_idx + 1), Some(Segment::Quote { .. }))
                     && !next_quote_framed
@@ -5332,6 +5376,129 @@ struct ClauseDiscourseCtx<'a> {
     sentence_topic_pronoun: Option<&'static str>,
     sonomono_antecedent: Option<String>,
     prior_letter_distribution: Option<PriorLetterDistribution>,
+    meeting_evidence: Option<std::rc::Rc<std::cell::Cell<Option<meeting_voice::MeetingEvidence>>>>,
+}
+
+// A previously emitted reading pause can be removed only after the next
+// clause actually matched the same meeting event. Preserve all source spans.
+fn meeting_removable_pause(
+    previous: &[Atom],
+    current: &[Atom],
+    sentence_atoms: &[Atom],
+    doc: &Document,
+    chars: &[char],
+    evidence: meeting_voice::MeetingEvidence,
+) -> Option<Span> {
+    let [subject, topic, day] = previous else {
+        return None;
+    };
+    let original = |atom: &Atom| {
+        let Some(id) = atom.doc_tok_idx else {
+            return false;
+        };
+        let Some(token) = doc.tokens.get(id) else {
+            return false;
+        };
+        let mut edges = doc.syntax.iter().filter(|edge| edge.token == id);
+        let Some(edge) = edges.next() else {
+            return false;
+        };
+        !atom.is_locked
+            && edges.next().is_none()
+            && token.span == atom.span
+            && token.upos == atom.upos
+            && edge.span == atom.span
+            && edge.sentence == token.sentence
+            && edge.head == atom.head
+            && edge.deprel == atom.deprel
+            && chars
+                .get(atom.span.start_char..atom.span.end_char)
+                .is_some_and(|raw| raw.iter().copied().eq(atom.surface.chars()))
+    };
+    let mut commas = sentence_atoms
+        .iter()
+        .filter(|atom| !atom.is_locked && matches!(atom.surface.as_str(), "、" | "，"));
+    let comma = commas.next()?;
+    if commas.next().is_some()
+        || ![subject, topic, day, comma].into_iter().all(original)
+        || subject.deprel != "nsubj"
+        || subject.head != Some(evidence.predicate)
+        || !matches!(topic.surface.as_str(), "は" | "が")
+        || topic.deprel != "case"
+        || topic.head != subject.doc_tok_idx
+        || subject.span.end_char != topic.span.start_char
+        || topic.span.end_char != day.span.start_char
+        || day.deprel != "advmod"
+        || day.head != Some(evidence.predicate)
+        || day.span.end_char != comma.span.start_char
+        || comma.deprel != "punct"
+        || comma.head != Some(evidence.predicate)
+        || comma.span.end_char != evidence.counterpart_start
+        || current.first()?.span.start_char != evidence.counterpart_start
+        || sentence_atoms
+            .iter()
+            .filter(|atom| atom.upos == Some(Upos::Verb))
+            .count()
+            != 1
+    {
+        return None;
+    }
+    let verb = current
+        .iter()
+        .find(|atom| atom.doc_tok_idx == Some(evidence.predicate))?;
+    if !original(verb) || verb.deprel != "root" {
+        return None;
+    }
+    let day_token = doc.tokens.get(day.doc_tok_idx?)?;
+    let sentence = day_token.sentence;
+    let span = doc.segmentation.sentences.get(sentence)?.span;
+    let mut original_verbs = doc.tokens.iter().enumerate().filter(|(_, token)| {
+        token.upos == Some(Upos::Verb)
+            && (token.sentence == sentence
+                || (token.span.start_char < span.end_char && span.start_char < token.span.end_char))
+    });
+    if original_verbs.next().is_none_or(|(index, token)| {
+        index != evidence.predicate
+            || token.sentence != sentence
+            || token.span.start_char < span.start_char
+            || token.span.end_char > span.end_char
+    }) || original_verbs.next().is_some()
+    {
+        return None;
+    }
+    if [subject, topic, comma, verb].into_iter().any(|atom| {
+        atom.doc_tok_idx
+            .and_then(|id| doc.tokens.get(id))
+            .is_none_or(|token| token.sentence != sentence)
+            || atom.span.start_char < span.start_char
+            || atom.span.end_char > span.end_char
+    }) || !doc.entities.iter().any(|entity| {
+        entity.kind == faberline_nlp::doc::EntityKind::RelativeDate
+            && entity.span == day.span
+            && entity.sentence == sentence
+    }) {
+        return None;
+    }
+    let sentence_chars = chars.get(span.start_char..span.end_char)?;
+    if day.span.start_char < span.start_char
+        || day.span.end_char > span.end_char
+        || sentence_chars
+            .iter()
+            .filter(|ch| matches!(**ch, '、' | '，'))
+            .count()
+            != 1
+        || sentence_chars
+            .iter()
+            .any(|ch| matches!(ch, '「' | '」' | '『' | '』' | '"' | '“' | '”'))
+        || sentence_atoms.iter().any(|atom| {
+            atom.is_locked
+                && atom.span.start_char < comma.span.end_char
+                && day.span.start_char < atom.span.end_char
+        })
+    {
+        return None;
+    }
+    Some(comma.span)
 }
 
 // A quoted object can divide the next clause into segments. Only the
@@ -11401,14 +11568,45 @@ fn translate_clause_bunsetsus(
                     meeting_voice::localized_counterpart(&group, source, doc, ctx.source_chars)
                         .map(str::to_owned)
                         .unwrap_or_else(|| render_bunsetsu_np(&group, target));
+                if !name.is_empty()
+                    && let Some(signal) = &ctx.meeting_evidence
+                    && let Some(case) = group.atoms.iter().find(|atom| {
+                        !atom.is_locked && atom.deprel == "case" && atom.surface == "に"
+                    })
+                    && let Some(noun) = case.head
+                    && let Some(predicate) = doc
+                        .syntax
+                        .iter()
+                        .find(|edge| edge.token == noun)
+                        .and_then(|edge| edge.head)
+                    && let Some(first) = group.atoms.first()
+                {
+                    signal.set(Some(meeting_voice::MeetingEvidence {
+                        predicate,
+                        counterpart_start: first.span.start_char,
+                    }));
+                }
                 (!name.is_empty()).then_some((range, name))
             })
     } else {
         None
     };
+    let meeting_place = meeting_group.as_ref().and_then(|(partner, _)| {
+        meeting_voice::event_place(&bunsetsus, *partner.end(), source, doc, ctx.source_chars)
+            .and_then(|(range, group)| {
+                let place = render_bunsetsu_obl(&group, target, false);
+                (!place.is_empty()).then_some((range, place))
+            })
+    });
     let meeting_partner = meeting_group.as_ref().map(|(_, name)| name.clone());
     for (idx, b) in bunsetsus.drain(..).enumerate() {
         if meeting_group
+            .as_ref()
+            .is_some_and(|(range, _)| range.contains(&idx))
+        {
+            continue;
+        }
+        if meeting_place
             .as_ref()
             .is_some_and(|(range, _)| range.contains(&idx))
         {
@@ -13306,6 +13504,9 @@ fn translate_clause_bunsetsus(
         });
     }
     parts.extend(inner_pre_mods);
+    if let Some((_, place)) = meeting_place {
+        parts.push(place);
+    }
     if let Some(partner) = meeting_partner {
         parts.push(format!("和{partner}"));
     }

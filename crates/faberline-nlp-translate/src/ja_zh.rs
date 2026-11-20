@@ -20074,6 +20074,45 @@ mod clock_rule_tests {
     }
 
     #[test]
+    fn a_date_topic_and_an_open_clock_keep_their_shared_event() {
+        let glossary = TranslationGlossary::new();
+        for (jp, expected) in [
+            ("三月三日は何時に帰りますか。", "三月三日幾點回去？"),
+            ("三月三日は何時までに帰りますか。", "三月三日最晚幾點回去？"),
+            ("六月七日は午後何時に帰りますか。", "六月七日下午幾點回去？"),
+            ("１２月２４日は何時に帰りますか。", "12月24日幾點回去？"),
+            (
+                "三月三日は、母は何時に帰りますか。",
+                "三月三日，母親幾點回去？",
+            ),
+            ("三日間は家で休みました。", "三天在家休息了。"),
+            ("三日に一冊ずつ本を読みます。", "每三天讀一本書。"),
+        ] {
+            assert_eq!(
+                public_translate(jp, &glossary).target_text,
+                expected,
+                "{jp}"
+            );
+        }
+        let copy = public_translate(
+            "先生はノートに「三月三日は何時に帰りますか？」とそのまま写しました。",
+            &glossary,
+        );
+        assert!(
+            copy.target_text
+                .contains("「三月三日は何時に帰りますか？」")
+        );
+        let report = public_translate(
+            "三月三日は母が「何時までに帰りますか」と聞きました。",
+            &glossary,
+        );
+        assert!(!report.target_text.contains("「三月三日"));
+        let any_hour = public_translate("三月三日は何時にでも帰れますか。", &glossary);
+        assert!(!any_hour.target_text.contains("幾點"));
+        assert!(any_hour.target_text.ends_with("嗎？"));
+    }
+
+    #[test]
     fn topical_dated_clocks_keep_the_instant_and_the_deadline_distinct() {
         let glossary = TranslationGlossary::new();
         for time in [

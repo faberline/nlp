@@ -199,10 +199,9 @@ fn protected_date(atoms: &[Atom], start: usize, chars: &[char]) -> Option<(usize
         if offset > 0 && atoms[end - 1].span.end_char != part.span.start_char {
             break;
         }
-        if !atoms
-            .get(end + 1)
-            .is_some_and(|c| !c.is_locked && matches!(c.surface.as_str(), "に" | "まで" | "の"))
-        {
+        if !atoms.get(end + 1).is_some_and(|c| {
+            !c.is_locked && matches!(c.surface.as_str(), "に" | "まで" | "の" | "は")
+        }) {
             continue;
         }
         let parts = &atoms[start..=end];
@@ -236,6 +235,84 @@ fn protected_date(atoms: &[Atom], start: usize, chars: &[char]) -> Option<(usize
     None
 }
 
+// A は-marked day and a separately marked clock can describe the same event.
+// Their shared predicate licenses both arguments.
+fn topic_clock(
+    atoms: &[Atom],
+    start: usize,
+    day_end: usize,
+    chars: &[char],
+    doc: &Document,
+) -> Option<usize> {
+    let wa = atoms.get(day_end + 1)?;
+    if wa.is_locked || wa.surface != "は" || wa.deprel != "case" {
+        return None;
+    }
+    let day_surface = chars.get(atoms[start].span.start_char..wa.span.start_char)?;
+    if !day_surface.contains(&'月') || atoms[day_end].lemma.as_deref() == Some(DATE_LIST) {
+        return None;
+    }
+    // A following は can mark an entire date list. Its final day alone is
+    // not the topic.
+    if let [.., previous, join] = &atoms[..start]
+        && matches!(join.surface.as_str(), "と" | "や" | "・" | "、")
+        && chars.get(previous.span.end_char.checked_sub(1)?) == Some(&'日')
+    {
+        return None;
+    }
+    let day = doc.syntax.iter().find(|node| Some(node.token) == wa.head)?;
+    if day.deprel != "nsubj" || day.span.end_char != wa.span.start_char {
+        return None;
+    }
+    let owner = day.head?;
+    if doc.tokens.get(owner)?.upos != Some(Upos::Verb) {
+        return None;
+    }
+    let clock = (day_end + 2..atoms.len()).find(|&i| {
+        let time = &atoms[i];
+        chars.get(time.span.start_char..time.span.end_char) == Some(&['何', '時'])
+            && doc.syntax.iter().any(|node| {
+                node.span == time.span
+                    && node.head == Some(owner)
+                    && matches!(node.deprel.as_str(), "obl" | "iobj")
+            })
+            && !atoms[i + 1..].iter().any(|particle| {
+                particle.head == time.doc_tok_idx
+                    && matches!(particle.surface.as_str(), "か" | "も" | "でも")
+            })
+            && atoms.get(i + 1).is_some_and(|case| {
+                linked_case(case, time, time, "に")
+                    || (linked_case(case, time, time, "まで")
+                        && atoms
+                            .get(i + 2)
+                            .is_some_and(|ni| linked_case(ni, time, case, "に")))
+            })
+    })?;
+    let ka = atoms[clock + 1..].iter().find(|a| {
+        !a.is_locked && a.surface == "か" && a.deprel == "discourse" && a.head == Some(owner)
+    })?;
+    if chars[ka.span.end_char..]
+        .iter()
+        .find(|c| !c.is_whitespace())
+        .is_some_and(|c| {
+            !crate::ja_zh::is_quote_terminal(*c) && !matches!(c, '」' | '』' | '”' | '"')
+        })
+    {
+        return None;
+    }
+    if chars
+        .get(wa.span.end_char..ka.span.end_char)?
+        .iter()
+        .any(|c| {
+            matches!(c, '「' | '」' | '『' | '』' | '“' | '”' | '"')
+                || crate::ja_zh::is_quote_terminal(*c)
+        })
+    {
+        return None;
+    }
+    Some(clock)
+}
+
 fn bind_detached_dates(
     atoms: &mut Vec<Atom>,
     chars: &[char],
@@ -259,6 +336,38 @@ fn bind_detached_dates(
             } else {
                 continue;
             };
+        if let Some(clock) = topic_clock(atoms, start, end, chars, doc) {
+            let mut time = atoms[clock].clone();
+            if !time.is_locked {
+                time.surface = "幾點".to_owned();
+            }
+            time.is_locked = true;
+            time.lemma = Some(super::CLOCK_QUESTION.to_owned());
+            let period = &atoms[clock - 1];
+            let period_index = if period.span.end_char == time.span.start_char
+                && (period.head == time.head || period.head == time.doc_tok_idx)
+                && let Some(name) = match chars.get(period.span.start_char..period.span.end_char) {
+                    Some(['午', '前']) => Some("上午"),
+                    Some(['午', '後']) => Some("下午"),
+                    _ => None,
+                } {
+                time.surface.insert_str(
+                    0,
+                    if period.is_locked {
+                        &period.surface
+                    } else {
+                        name
+                    },
+                );
+                time.span.start_char = period.span.start_char;
+                clock - 1
+            } else {
+                clock
+            };
+            atoms.splice(period_index..=clock, [time]);
+            bind(atoms, start, end, text, DATE);
+            continue;
+        }
         let day = &atoms[end];
         // In 八月九日の切符 the date modifies the ticket. The month can
         // have a separate parser arc, but the genitive case belongs to 日.

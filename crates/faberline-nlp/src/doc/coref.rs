@@ -634,6 +634,29 @@ fn has_male_hint(s: &str) -> bool {
     lower.contains("男") && !lower.contains("男女")
 }
 
+fn has_japanese_honorific(canon_span: &str) -> bool {
+    let name = ["たち", "達", "ら"]
+        .into_iter()
+        .find_map(|plural| canon_span.strip_suffix(plural))
+        .unwrap_or(canon_span)
+        .trim_end();
+    let Some(stem) = name.strip_suffix("さん") else {
+        return false;
+    };
+    if stem.trim_end().is_empty() {
+        return false;
+    }
+    // A word such as `たくさん` has its own reading. A separate `さん` can follow a name.
+    let word = name.split_whitespace().next_back().unwrap_or(name);
+    word == "さん"
+        || crate::lexicon::lookup_ja(word).is_none_or(|entry| {
+            entry
+                .upos_candidates
+                .iter()
+                .all(|pos| matches!(pos, Upos::Noun | Upos::Propn | Upos::Pron))
+        })
+}
+
 fn has_human_hint(
     canon_span: &str,
     head_canon: &str,
@@ -704,7 +727,6 @@ fn has_human_hint(
         "记者",
         "医生",
         "先生",
-        "さん",
         "様",
         "先生",
         "씨",
@@ -712,9 +734,10 @@ fn has_human_hint(
         "학생",
         "선생",
     ];
-    HUMAN_NOUNS
-        .iter()
-        .any(|h| head_canon == *h || canon_span.contains(h))
+    has_japanese_honorific(canon_span)
+        || HUMAN_NOUNS
+            .iter()
+            .any(|h| head_canon == *h || canon_span.contains(h))
 }
 
 fn has_animal_hint(canon_span: &str, head_canon: &str) -> bool {
@@ -1811,6 +1834,42 @@ mod tests {
             "expected zero obj at 読んだ -> 本, got {:?}",
             doc.zero_mentions
         );
+    }
+
+    #[test]
+    fn japanese_honorific_requires_a_stem_at_the_end_of_the_mention() {
+        for name in [
+            "田中さん",
+            "田中 さん",
+            "母さん",
+            "田中 さん たち",
+            "田中さんら",
+        ] {
+            assert!(has_japanese_honorific(name), "{name}");
+        }
+        for other in ["さん", "さんま", "さんご", "たくさん", "田中さん の 本"] {
+            assert!(!has_japanese_honorific(other), "{other}");
+        }
+    }
+
+    #[test]
+    fn japanese_zero_subject_does_not_carry_the_previous_fish_object() {
+        let options = Options {
+            cpu_syntax: true,
+            enrich_morphology: true,
+            ..Options::default()
+        };
+        let doc = analyze_document("昼食にさんまを焼きました。夕食に魚を食べました。", &options);
+        assert!(doc.zero_mentions.iter().all(|z| z.role != ZeroRole::Nsubj));
+
+        let text = "田中さんたちは本を買った。魚を食べました。";
+        let doc = analyze_document(text, &options);
+        assert!(doc.zero_mentions.iter().any(|z| {
+            z.sentence == 1
+                && z.role == ZeroRole::Nsubj
+                && z.antecedent.span.start_char == 0
+                && z.antecedent.span.end_char == "田中さんたち".chars().count()
+        }));
     }
 
     #[test]

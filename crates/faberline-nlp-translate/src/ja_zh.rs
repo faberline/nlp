@@ -281,7 +281,10 @@ pub(crate) fn translate_ja_sentence(
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
-    let segments = split_atoms_into_segments(&atoms, doc, sent_span);
+    let separate_measured_activities = target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && written_form_continuation.is_none();
+    let segments = split_clause_atoms(&atoms, doc, sent_span, separate_measured_activities);
     let prior_letter_distribution = prior_letter_distribution.filter(|_| {
         direct_quote.is_none() && matches!(segments.as_slice(), [Segment::Clause { .. }])
     });
@@ -4413,6 +4416,15 @@ fn return_trip_at(atoms: &[Atom], link: usize, doc: &Document) -> Option<ReturnT
 }
 
 fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) -> Vec<Segment> {
+    split_clause_atoms(atoms, doc, parent_span, false)
+}
+
+fn split_clause_atoms(
+    atoms: &[Atom],
+    doc: &Document,
+    parent_span: Span,
+    separate_measured_activities: bool,
+) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<Atom> = Vec::new();
     let mut i = 0usize;
@@ -4536,6 +4548,16 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
         }
 
         current.push(a.clone());
+
+        if separate_measured_activities
+            && calendar::starts_another_day_activity(&current, &atoms[i + 1..], doc)
+        {
+            // A separate し already renders a conjunction with its comma.
+            let punctuation = (a.surface != "し").then(|| "，".to_owned());
+            flush_clause(&mut current, punctuation, &mut segments);
+            i += 1;
+            continue;
+        }
 
         // SCONJ clause boundary: `から`, `ので`, `けれど`, `けれども`, `けど`, `のに`, `たら`, `なら`, `ば`, `ながら`, `ても`, `ものの`
         // Guard obligation `ねばならない` / `なければならない`, proportional `ば...ほど`, and evaluative `てもいい/よかった`.
@@ -13534,15 +13556,20 @@ fn translate_clause_bunsetsus(
             Some(calendar::DayRole::Activity) if !passive_agent_needed => {
                 // Keep the extent inside its own predicate. A trailing clause
                 // could also be read as the duration of an earlier action.
-                let start = activity_start
-                    .as_ref()
-                    .and_then(|start| parts.iter().position(|part| part == start));
+                let unique_position = |label: Option<&String>| {
+                    let label = label?;
+                    let mut positions = parts
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, part)| (part == label).then_some(index));
+                    let index = positions.next()?;
+                    positions.next().is_none().then_some(index)
+                };
+                let start = unique_position(activity_start.as_ref());
+                let rate = unique_position(activity_rate.as_ref());
                 if let Some(start) = start {
-                    parts[start].push('起');
+                    parts[start].push_str("起，");
                 }
-                let rate = activity_rate
-                    .as_ref()
-                    .and_then(|rate| parts.iter().position(|part| part == rate));
                 if let Some(mut rate) = rate {
                     // The interval contains the repetitions. Do not put it
                     // after a rate, where it could measure each repetition.
@@ -13554,7 +13581,7 @@ fn translate_clause_bunsetsus(
                     parts.insert(
                         rate,
                         if focus.is_some() {
-                            format!("只在{days}期間")
+                            format!("只連續{days}")
                         } else if start.is_some() {
                             format!("連續{days}")
                         } else {
@@ -13564,8 +13591,6 @@ fn translate_clause_bunsetsus(
                 } else {
                     parts.push(if focus.is_some() {
                         format!("只有{days}在")
-                    } else if start.is_some() {
-                        format!("持續{days}")
                     } else {
                         format!("在{days}的時間裡持續")
                     });
@@ -19342,8 +19367,24 @@ mod clock_rule_tests {
                 "工作人員在三天期間每天早上檢查裝置，然後，寄送了記錄。",
             ),
             (
+                "係員は毎日出社し三日間毎日装置を点検しました。",
+                "工作人員每天出社，而且在三天期間每天檢查裝置。",
+            ),
+            (
+                "係員は毎日出社し、三日間毎日装置を点検しました。",
+                "工作人員每天出社，而且在三天期間每天檢查裝置。",
+            ),
+            (
+                "私は資料を送り五日間予約記録を確認しました。",
+                "我寄送資料，在五天的時間裡持續確認預約記錄。",
+            ),
+            (
+                "係員は毎日出社した三日間を記録しました。",
+                "工作人員記錄了每天出社的做的三天。",
+            ),
+            (
                 "私は昨日から五日間予約記録を確認します。",
-                "我從昨天起持續五天確認預約記錄。",
+                "我從昨天起，在五天的時間裡持續確認預約記錄。",
             ),
         ] {
             assert_eq!(

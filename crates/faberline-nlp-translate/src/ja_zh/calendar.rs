@@ -303,6 +303,109 @@ pub(super) fn links_to_day_activity(head: Option<usize>, owner: usize, source: &
                 == head)
 }
 
+// The continuative can be attached to 日間 as if it modified a noun.
+// Split only when the counted duration belongs to a separate lexical action.
+pub(super) fn starts_another_day_activity(
+    earlier: &[Atom],
+    following: &[Atom],
+    doc: &Document,
+) -> bool {
+    let [before @ .., terminal] = earlier else {
+        return false;
+    };
+    let Some(lemma) = terminal.lemma.as_deref() else {
+        return false;
+    };
+    if terminal.is_locked
+        || terminal.upos != Some(Upos::Verb)
+        || terminal.surface == lemma
+        || terminal.doc_tok_idx.is_none()
+        || (terminal.surface == "し"
+            && !before.last().is_some_and(|lexical| {
+                !lexical.is_locked
+                    && lexical.upos == Some(Upos::Verb)
+                    && lexical.head == terminal.doc_tok_idx
+                    && lexical.span.end_char == terminal.span.start_char
+            }))
+    {
+        return false;
+    }
+    let digits = following.iter().take_while(|atom| is_numeral(atom)).count();
+    let Some(day) = following.get(digits) else {
+        return false;
+    };
+    if digits == 0
+        || day.is_locked
+        || day.surface != "日間"
+        || day.doc_tok_idx.is_none()
+        || following[..=digits]
+            .windows(2)
+            .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
+        || counted_days(&following[..=digits]).is_none()
+        || following.get(digits + 1).is_some_and(|marker| {
+            marker.head == day.doc_tok_idx && marker.deprel == "case" && marker.surface != "しか"
+        })
+    {
+        return false;
+    }
+    let after = &following[digits + 1..];
+    let after = after
+        .split(|atom| super::is_punct_atom(atom) || super::is_quote_mark(atom))
+        .next()
+        .unwrap_or_default();
+    let attached_to = after
+        .iter()
+        .find(|atom| day.head.is_some() && atom.doc_tok_idx == day.head);
+    let owner = match attached_to {
+        Some(atom) if !atom.is_locked && atom.upos == Some(Upos::Verb) => day.head,
+        Some(atom)
+            if matches!(day.deprel.as_str(), "compound" | "nmod") && atom.deprel == "obj" =>
+        {
+            atom.head
+        }
+        _ => None,
+    };
+    let Some(action) = after.iter().find(|atom| {
+        owner.is_some()
+            && atom.doc_tok_idx == owner
+            && !atom.is_locked
+            && atom.upos == Some(Upos::Verb)
+            && is_information_activity(atom.lemma.as_deref().unwrap_or(&atom.surface))
+    }) else {
+        return false;
+    };
+    let light = day_light_verb(action, after);
+    let finite = matches!(action.deprel.as_str(), "root" | "conj")
+        || light.is_some_and(|id| {
+            after.iter().any(|atom| {
+                atom.doc_tok_idx == Some(id) && matches!(atom.deprel.as_str(), "root" | "conj")
+            })
+        });
+    // An earlier normalization can reattach 日間 to its verb. Its original
+    // link can still show that the analyzer placed both on the later object.
+    let shares_measured_object = terminal.deprel == "acl"
+        && terminal.head.is_some()
+        && after.iter().any(|noun| {
+            noun.doc_tok_idx == terminal.head && noun.deprel == "obj" && noun.head == owner
+        })
+        && doc.syntax.iter().any(|original| {
+            Some(original.token) == day.doc_tok_idx
+                && original.head == terminal.head
+                && matches!(original.deprel.as_str(), "compound" | "nmod")
+        })
+        && before.windows(2).any(|pair| {
+            !pair[0].is_locked
+                && pair[0].deprel == "obj"
+                && pair[0].head == terminal.doc_tok_idx
+                && linked_case(&pair[1], &pair[0], &pair[0], "を")
+        });
+    finite
+        && (terminal.deprel == "acl"
+            && (terminal.head == day.doc_tok_idx || shares_measured_object)
+            || terminal.deprel == "advcl"
+                && (terminal.head == owner || light.is_some() && terminal.head == light))
+}
+
 pub(super) fn day_role(
     duration: &ElapsedDuration,
     groups: &[Bunsetsu],

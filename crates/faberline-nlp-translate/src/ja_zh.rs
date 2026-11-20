@@ -9977,11 +9977,26 @@ fn localize_sufficiency(atoms: &mut Vec<Atom>) {
             && marker.deprel == "case"
             && matches!(word.deprel.as_str(), "advcl" | "amod" | "advmod")
         {
+            let Some(verb) = atoms.iter().find(|atom| {
+                !atom.is_locked && atom.upos == Some(Upos::Verb) && atom.deprel == "root"
+            }) else {
+                continue;
+            };
+            if word.head != verb.doc_tok_idx
+                && !atoms.iter().any(|arg| {
+                    arg.doc_tok_idx == word.head
+                        && arg.deprel == "obj"
+                        && arg.head == verb.doc_tok_idx
+                })
+            {
+                continue;
+            }
             let mut adverb = word.clone();
             adverb.surface = "充分".to_owned();
             adverb.lemma = None;
             adverb.upos = Some(Upos::Adv);
             adverb.deprel = "advmod".to_owned();
+            adverb.head = verb.doc_tok_idx;
             adverb.span.end_char = marker.span.end_char;
             atoms.splice(i - 1..=i, [adverb]);
         }

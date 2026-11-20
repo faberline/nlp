@@ -35214,7 +35214,7 @@
 予測	ja	762	-	NOUN|VERB	-	預測	src=first_party_mit
 予知	ja	762	-	NOUN|VERB	-	-	-
 予算	ja	1001	NOUN	NOUN	-	-	-
-予約	ja	763	-	NOUN|VERB	-	-	-
+予約	ja	763	-	NOUN|VERB	-	預約	src=first_party_mit
 予約する	ja	780	VERB	VERB	-	預約	infl=sahen
 予納	ja	768	-	NOUN|VERB	-	-	-
 予習	ja	763	-	NOUN|VERB	-	-	-
@@ -52433,7 +52433,7 @@
 暗殺	ja	762	-	NOUN|VERB	-	暗殺	-
 暗然	ja	1019	NOUN	NOUN	-	-	-
 暗示	ja	763	-	NOUN|VERB	-	暗示	-
-暗算	ja	759	-	NOUN|VERB	-	暗算	-
+暗算	ja	759	-	NOUN|VERB	-	心算	src=first_party_mit
 暗記	ja	763	-	NOUN|VERB	-	-	-
 暗誦	ja	763	-	NOUN|VERB	-	-	-
 暗譜	ja	763	-	NOUN|VERB	-	-	-

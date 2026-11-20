@@ -79,7 +79,7 @@ const DISTRIBUTED_SUBJECT: &str = "__ja_distributed_subject_count";
 const ONLY_MEASURED_SUBJECT: &str = "__ja_only_interval_subject_count";
 const PROTECTED_INTERVAL: &str = "__ja_protected_day_interval";
 
-fn regular_rate(surface: &str) -> bool {
+pub(super) fn regular_rate(surface: &str) -> bool {
     matches!(
         surface,
         "毎日" | "毎週" | "毎月" | "毎年" | "毎回" | "毎朝" | "毎晩"
@@ -291,6 +291,16 @@ fn day_light_verb(word: &Atom, source: &[Atom]) -> Option<usize> {
                 && matches!(word.deprel.as_str(), "advcl" | "compound")
         })
         .and_then(|atom| atom.doc_tok_idx)
+}
+
+pub(super) fn links_to_day_activity(head: Option<usize>, owner: usize, source: &[Atom]) -> bool {
+    head.is_some()
+        && (head == Some(owner)
+            || source
+                .iter()
+                .find(|atom| !atom.is_locked && atom.doc_tok_idx == Some(owner))
+                .and_then(|word| day_light_verb(word, source))
+                == head)
 }
 
 pub(super) fn day_role(

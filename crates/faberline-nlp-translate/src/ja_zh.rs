@@ -11150,6 +11150,55 @@ fn translate_clause_bunsetsus(
         )
     });
     let held_for_days = matches!(day_role, Some(calendar::DayRole::HeldEvent));
+    let (activity_rate, activity_start) = if let Some(duration) = measured_days
+        && matches!(day_role, Some(calendar::DayRole::Activity))
+    {
+        let owner = duration.owner;
+        let rate = bunsetsus.iter().find_map(|group| {
+            let [rate] = group.atoms.as_slice() else {
+                return None;
+            };
+            source
+                .iter()
+                .any(|original| {
+                    !original.is_locked
+                        && original.span == rate.span
+                        && original.deprel == "advmod"
+                        && calendar::regular_rate(&original.surface)
+                        && calendar::links_to_day_activity(original.head, owner, source)
+                })
+                .then(|| {
+                    if calendar::is_habit(rate) {
+                        rate.surface.clone()
+                    } else {
+                        render_bunsetsu_np(group, target)
+                    }
+                })
+        });
+        let start = bunsetsus.iter().find_map(|group| {
+            let [time, marker] = group.atoms.as_slice() else {
+                return None;
+            };
+            (group.role == BunsetsuRole::Obl
+                && !time.is_locked
+                && !marker.is_locked
+                && marker.surface == "から"
+                && marker.deprel == "case"
+                && time.span.end_char == marker.span.start_char
+                && calendar::links_to_day_activity(time_case_governor(marker, doc), owner, source)
+                && (calendar::is_date(time)
+                    || is_clock_atom(time)
+                    || is_daypart_surface(&time.surface)
+                    || matches!(
+                        time.surface.as_str(),
+                        "昨日" | "今日" | "明日" | "一昨日" | "明後日" | "翌日" | "前日"
+                    )))
+            .then(|| render_bunsetsu_obl(group, target, false))
+        });
+        (rate, start)
+    } else {
+        (None, None)
+    };
     let mut elapsed_duration = elapsed.map(|duration| duration.amount);
 
     #[derive(Clone, Copy)]
@@ -13485,12 +13534,42 @@ fn translate_clause_bunsetsus(
             Some(calendar::DayRole::Activity) if !passive_agent_needed => {
                 // Keep the extent inside its own predicate. A trailing clause
                 // could also be read as the duration of an earlier action.
-                let extent = if focus.is_some() {
-                    format!("只有{days}在")
+                let start = activity_start
+                    .as_ref()
+                    .and_then(|start| parts.iter().position(|part| part == start));
+                if let Some(start) = start {
+                    parts[start].push('起');
+                }
+                let rate = activity_rate
+                    .as_ref()
+                    .and_then(|rate| parts.iter().position(|part| part == rate));
+                if let Some(mut rate) = rate {
+                    // The interval contains the repetitions. Do not put it
+                    // after a rate, where it could measure each repetition.
+                    if let Some(start) = start.filter(|&start| start > rate) {
+                        let origin = parts.remove(start);
+                        parts.insert(rate, origin);
+                        rate += 1;
+                    }
+                    parts.insert(
+                        rate,
+                        if focus.is_some() {
+                            format!("只在{days}期間")
+                        } else if start.is_some() {
+                            format!("連續{days}")
+                        } else {
+                            format!("在{days}期間")
+                        },
+                    );
                 } else {
-                    format!("在{days}的時間裡持續")
-                };
-                parts.push(extent);
+                    parts.push(if focus.is_some() {
+                        format!("只有{days}在")
+                    } else if start.is_some() {
+                        format!("持續{days}")
+                    } else {
+                        format!("在{days}的時間裡持續")
+                    });
+                }
                 post_verb_mods.retain(|modifier| modifier != "了");
             }
             Some(calendar::DayRole::ResultState(action) | calendar::DayRole::Change(action)) => {
@@ -19253,6 +19332,18 @@ mod clock_rule_tests {
             (
                 "係員は二日間装置を点検し、その後、三日間温度を記録しました。",
                 "工作人員在兩天的時間裡持續檢查裝置，然後，在三天的時間裡持續記錄溫度。",
+            ),
+            (
+                "係員は三日間毎日装置を点検しました。",
+                "工作人員在三天期間每天檢查裝置。",
+            ),
+            (
+                "係員は三日間毎朝装置を点検し、その後、記録を送りました。",
+                "工作人員在三天期間每天早上檢查裝置，然後，寄送了記錄。",
+            ),
+            (
+                "私は昨日から五日間予約記録を確認します。",
+                "我從昨天起持續五天確認預約記錄。",
             ),
         ] {
             assert_eq!(

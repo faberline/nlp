@@ -1,6 +1,6 @@
 use faberline_nlp::{
     Span,
-    doc::{Document, analyze_document, frame::FrameRole, model::Backend},
+    doc::{Document, Upos, analyze_document, frame::FrameRole, model::Backend},
 };
 use faberline_nlp_translate::{
     GlossaryKind, TargetVariant, TranslateOptions, TranslatedDocument, TranslationGlossary,
@@ -108,11 +108,8 @@ fn assert_no_passive(text: &str, label: &str) {
 
 fn assert_meeting_with_counterpart(case_id: &str, text: &str, label: &str, person_locked: bool) {
     let (subjects, counterparts): (&[&str], &[&str]) = match case_id {
-        "P01" => (
-            &["老師", "先生"],
-            &["客人", "顧客", "來客", "訪客", "貴客", "客大人"],
-        ),
-        "M04" => (&["校長"], &["家長", "監護人", "保護者"]),
+        "P01" => (&["老師", "先生"], &["客人", "顧客", "來客", "訪客", "貴客"]),
+        "M04" => (&["校長"], &["家長"]),
         "M08" => (&["支部長", "分部長", "分會長", "分部主任"], &["森川代表"]),
         _ => panic!("no meeting criteria for {case_id}"),
     };
@@ -149,6 +146,16 @@ fn assert_meeting_with_counterpart(case_id: &str, text: &str, label: &str, perso
     assert!(
         contains_negation(before_action),
         "{label}: lost the meeting negation: {text}"
+    );
+    let negative = before_action
+        .find(['不', '沒', '未'])
+        .expect("meeting negation was checked above");
+    let connector = before_action
+        .find(['和', '跟', '與', '同'])
+        .expect("meeting counterpart was checked above");
+    assert!(
+        negative < connector,
+        "{label}: negation must precede the counterpart: {text}"
     );
     for modal in ["不能", "無法", "沒辦法", "不願", "不想"] {
         assert!(
@@ -357,11 +364,47 @@ fn meeting_frame_cannot_create_a_passive_agent() {
         .expect("P01 candidate must label the counterpart ARG0");
     arg.role = FrameRole::Argm;
 
+    let mut removed_counterpart = original.clone();
+    let counterpart_indices: Vec<_> = original.frames[frame_index]
+        .args
+        .iter()
+        .enumerate()
+        .filter(|(_, arg)| {
+            arg.role == FrameRole::Arg0 && slice_chars(&case.source, arg.span) == "様"
+        })
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        counterpart_indices.len(),
+        1,
+        "P01 has one counterpart argument"
+    );
+    let counterpart_index = counterpart_indices[0];
+    let removed_argument = removed_counterpart.frames[frame_index]
+        .args
+        .remove(counterpart_index);
+    assert!(
+        !removed_counterpart.frames[frame_index].args.is_empty(),
+        "P01 retains its other frame roles"
+    );
+    let mut restored_frames = removed_counterpart.frames.clone();
+    restored_frames[frame_index]
+        .args
+        .insert(counterpart_index, removed_argument);
+    assert_eq!(
+        restored_frames, original.frames,
+        "removing the counterpart changes no other frame or role"
+    );
+
     let mut removed_frame = original.clone();
     removed_frame.frames.remove(frame_index);
 
     for (label, doc) in [
         ("P01 with counterpart ARG0 changed to ARGM", &changed_role),
+        (
+            "P01 with only the counterpart argument removed",
+            &removed_counterpart,
+        ),
         ("P01 without the meeting frame", &removed_frame),
     ] {
         assert_eq!(doc.tokens, original.tokens, "{label}");
@@ -369,6 +412,127 @@ fn meeting_frame_cannot_create_a_passive_agent() {
         let translated = case.render(doc, &fixture.glossary);
         assert_meeting_with_counterpart("P01", &translated.target_text, label, case.glossary);
     }
+}
+
+#[test]
+fn removing_m04_counterpart_keeps_other_frame_roles() {
+    let fixture = Fixture::load();
+    let case = fixture.case("M04");
+    let original = &case.document(Stage::Candidate).doc;
+    let frame_index = original
+        .frames
+        .iter()
+        .position(|frame| slice_chars(&case.source, frame.span) == "会わ")
+        .expect("M04 candidate must have a meeting frame");
+    let frame = &original.frames[frame_index];
+    let matches: Vec<_> = frame
+        .args
+        .iter()
+        .enumerate()
+        .filter(|(_, arg)| arg.role == FrameRole::Argm && arg.head == 5)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(matches.len(), 1, "M04 has one counterpart argument");
+    let mut changed = original.clone();
+    let removed = changed.frames[frame_index].args.remove(matches[0]);
+    let remaining = &changed.frames[frame_index].args;
+    assert!(remaining.iter().any(|arg| {
+        arg.role == FrameRole::Arg1 && slice_chars(&case.source, arg.span) == "校長"
+    }));
+    assert!(remaining.iter().any(|arg| {
+        arg.role == FrameRole::Argm && slice_chars(&case.source, arg.span) == "明日"
+    }));
+    let mut restored_frames = changed.frames.clone();
+    restored_frames[frame_index]
+        .args
+        .insert(matches[0], removed);
+    assert_eq!(restored_frames, original.frames);
+    assert_eq!(changed.tokens, original.tokens);
+    assert_eq!(changed.syntax, original.syntax);
+
+    let translated = case.render(&changed, &fixture.glossary);
+    assert_meeting_with_counterpart(
+        "M04",
+        &translated.target_text,
+        "M04 without counterpart ARGM",
+        case.glossary,
+    );
+}
+
+#[test]
+fn past_negative_meeting_keeps_past_negation_when_chain_is_attached() {
+    let source = "先生はお客様に会われませんでした。";
+    let glossary = TranslationGlossary::new();
+    let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+    options.source_hint = Some(TargetVariant::Ja);
+    let doc_options = doc_options_for_translate(&options, &glossary);
+    let doc = analyze_document(source, &doc_options);
+    let translated = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+        .expect("past negative meeting translation");
+    let text = &translated.target_text;
+
+    let attached_chain = doc.tokens.windows(4).enumerate().any(|(index, chain)| {
+        let surfaces: Vec<_> = chain
+            .iter()
+            .map(|token| slice_chars(source, token.span))
+            .collect();
+        let root = doc.syntax.iter().find(|edge| edge.token == index);
+        chain[0].upos == Some(Upos::Verb)
+            && chain[0].lemma.as_deref() == Some("会う")
+            && root.is_some_and(|edge| edge.deprel == "root")
+            && matches!(
+                (surfaces[1].as_str(), chain[1].lemma.as_deref()),
+                ("れ", Some("れる")) | ("られ", Some("られる"))
+            )
+            && surfaces[2] == "ませ"
+            && chain[2].lemma.as_deref() == Some("ます")
+            && surfaces[3] == "ん"
+            && chain
+                .windows(2)
+                .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+            && (1..4).all(|offset| {
+                chain[offset].upos == Some(Upos::Aux)
+                    && doc.syntax.iter().any(|edge| {
+                        edge.token == index + offset
+                            && edge.deprel == "aux"
+                            && edge.head == Some(index)
+                    })
+            })
+    });
+    if !attached_chain {
+        assert!(
+            contains_negation(text),
+            "existing path lost negation: {text}"
+        );
+        return;
+    }
+    assert_no_passive(text, "past negative meeting");
+    assert!(
+        ["老師", "先生"]
+            .iter()
+            .any(|subject| text.contains(subject)),
+        "missing subject: {text}"
+    );
+    assert!(
+        ["客人", "顧客", "來客", "訪客", "貴客"]
+            .iter()
+            .any(|person| text.contains(person)),
+        "missing counterpart: {text}"
+    );
+    assert!(
+        ["見面", "會面", "相見"]
+            .iter()
+            .any(|verb| text.contains(verb)),
+        "missing meeting: {text}"
+    );
+    let negative = text.find('沒').expect("past negative must use 沒 or 沒有");
+    let connector = text
+        .find(['和', '跟', '與', '同'])
+        .expect("missing counterpart connector");
+    assert!(
+        negative < connector,
+        "past negation must precede counterpart: {text}"
+    );
 }
 
 #[test]

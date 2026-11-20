@@ -230,6 +230,57 @@ pub(super) fn expand_name(
     Some((first..=index, expanded))
 }
 
+/// Use context-specific wording only for an unlocked, proved counterpart.
+pub(super) fn localized_counterpart(
+    group: &Bunsetsu,
+    source: &[Atom],
+    doc: &Document,
+    chars: &[char],
+) -> Option<&'static str> {
+    let case = group
+        .atoms
+        .iter()
+        .find(|atom| !atom.is_locked && atom.surface == "に" && atom.deprel == "case")?;
+    let mut start = group.atoms.first()?.span.start_char;
+    let end = case.span.start_char;
+    let noun = case.head?;
+    let predicate = doc.syntax.iter().find(|edge| edge.token == noun)?.head?;
+    let raw: String = chars.get(start..end)?.iter().collect();
+    if raw == "客様"
+        && start > 0
+        && chars.get(start - 1) == Some(&'お')
+        && source.iter().any(|atom| {
+            !atom.is_locked
+                && atom.surface == "お"
+                && atom.span.start_char == start - 1
+                && atom.span.end_char == start
+                && atom.head == Some(predicate)
+        })
+    {
+        start -= 1;
+    }
+    let raw: String = chars.get(start..end)?.iter().collect();
+    if source
+        .iter()
+        .any(|atom| atom.is_locked && atom.span.start_char < end && start < atom.span.end_char)
+    {
+        return None;
+    }
+    if raw == "お客様" {
+        return Some("客人");
+    }
+    if raw != "保護者" {
+        return None;
+    }
+    let subject = doc
+        .syntax
+        .iter()
+        .find(|edge| edge.deprel == "nsubj" && edge.head == Some(predicate))?;
+    let span = doc.tokens.get(subject.token)?.span;
+    let subject: String = chars.get(span.start_char..span.end_char)?.iter().collect();
+    (subject == "校長").then_some("家長")
+}
+
 fn person_evidence(
     noun: &Atom,
     group: &Bunsetsu,
@@ -334,6 +385,95 @@ mod tests {
             sfp_tail: None,
         }];
         (atoms, groups, doc)
+    }
+
+    #[test]
+    fn localized_counterpart_respects_source_context_and_locks() {
+        let (source, groups, doc) = meeting();
+        let chars: Vec<_> = "先生はお客様に会われません。".chars().collect();
+        assert_eq!(
+            localized_counterpart(&groups[0], &source, &doc, &chars),
+            Some("客人")
+        );
+        let mut split_prefix = groups[0].clone();
+        split_prefix.atoms.remove(0);
+        assert_eq!(
+            localized_counterpart(&split_prefix, &source, &doc, &chars),
+            Some("客人")
+        );
+        for index in 2..=4 {
+            let mut locked = source.clone();
+            locked[index].is_locked = true;
+            assert_eq!(
+                localized_counterpart(&groups[0], &locked, &doc, &chars),
+                None,
+                "locked source token {index}"
+            );
+            assert_eq!(
+                localized_counterpart(&split_prefix, &locked, &doc, &chars),
+                None,
+                "locked source token {index} with split prefix"
+            );
+        }
+
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/fixtures/meeting-voice-documents.json"
+        ))
+        .unwrap();
+        let case = fixture["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["id"] == "M04")
+            .unwrap();
+        let chars: Vec<_> = case["source"].as_str().unwrap().chars().collect();
+        let doc: Document = serde_json::from_value(case["documents"][1]["doc"].clone()).unwrap();
+        let source: Vec<_> = doc
+            .tokens
+            .iter()
+            .enumerate()
+            .map(|(index, token)| {
+                let edge = doc.syntax.iter().find(|edge| edge.token == index).unwrap();
+                Atom {
+                    span: token.span,
+                    surface: chars[token.span.start_char..token.span.end_char]
+                        .iter()
+                        .collect(),
+                    lemma: token.lemma.clone(),
+                    upos: token.upos,
+                    doc_tok_idx: Some(index),
+                    head: edge.head,
+                    deprel: edge.deprel.clone(),
+                    is_locked: false,
+                }
+            })
+            .collect();
+        let group = Bunsetsu {
+            atoms: source[4..7].to_vec(),
+            role: BunsetsuRole::IObj,
+            case_particle: Some("に".to_owned()),
+            sconj_tail: None,
+            sfp_tail: None,
+        };
+        assert_eq!(
+            localized_counterpart(&group, &source, &doc, &chars),
+            Some("家長")
+        );
+        let mut non_school = chars.clone();
+        non_school[0] = '部';
+        assert_eq!(
+            localized_counterpart(&group, &source, &doc, &non_school),
+            None
+        );
+        for index in 4..=5 {
+            let mut locked = source.clone();
+            locked[index].is_locked = true;
+            assert_eq!(
+                localized_counterpart(&group, &locked, &doc, &chars),
+                None,
+                "locked source token {index}"
+            );
+        }
     }
 
     #[test]

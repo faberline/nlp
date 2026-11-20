@@ -11397,7 +11397,10 @@ fn translate_clause_bunsetsus(
         meeting_voice::counterpart(&bunsetsus, source, doc, ctx.source_chars)
             .and_then(|index| meeting_voice::expand_name(&bunsetsus, index, doc))
             .and_then(|(range, group)| {
-                let name = render_bunsetsu_np(&group, target);
+                let name =
+                    meeting_voice::localized_counterpart(&group, source, doc, ctx.source_chars)
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| render_bunsetsu_np(&group, target));
                 (!name.is_empty()).then_some((range, name))
             })
     } else {
@@ -12776,9 +12779,6 @@ fn translate_clause_bunsetsus(
     let mut goal_tails: Vec<String> = Vec::new();
     let mut cause_prefixes: Vec<String> = Vec::new();
     let mut pre_iobjs: Vec<String> = Vec::new();
-    if let Some(partner) = meeting_partner {
-        pre_iobjs.push(format!("和{partner}"));
-    }
 
     if is_goal_verb {
         let mut kept_obls = Vec::new();
@@ -13306,6 +13306,9 @@ fn translate_clause_bunsetsus(
         });
     }
     parts.extend(inner_pre_mods);
+    if let Some(partner) = meeting_partner {
+        parts.push(format!("和{partner}"));
+    }
     // 遊べる and 飲める already carry ability in their Chinese lexical gloss.
     // Keep 不能 together, then put the shared activity before the action.
     if joint_manner.is_some() && !offer {

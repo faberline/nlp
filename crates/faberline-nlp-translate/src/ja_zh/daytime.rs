@@ -419,7 +419,7 @@ fn time_modifier(word: &Atom, end: usize, owner: usize, also: bool) -> Atom {
 // Identify the time before selecting the filing or extraction sense of 出す.
 // A comma in a series of actions can depend on the final verb. The time and
 // the form must instead share the actual action's own dependency node.
-pub(super) fn bind_form_time(atoms: &mut Vec<Atom>, chars: &[char]) {
+pub(super) fn bind_form_time(atoms: &mut Vec<Atom>, chars: &[char], doc: &super::Document) {
     for i in (0..atoms.len().saturating_sub(1)).rev() {
         let word = &atoms[i];
         let Some((end, owner, also)) = atoms
@@ -439,14 +439,20 @@ pub(super) fn bind_form_time(atoms: &mut Vec<Atom>, chars: &[char]) {
         };
         if action <= i
             || passive_or_causative(atoms, owner)
-            || also && parallel_goals(atoms, word, owner)
-            || !super::application_form::has_form_role(atoms, &atoms[action], chars)
+            || !super::application_form::has_form_object(atoms, &atoms[action], chars)
         {
             continue;
         }
         let Some(last) = (i..action).find(|&j| atoms[j].span.end_char == end) else {
             continue;
         };
+        if also && parallel_goals(atoms, word, owner) {
+            super::application_form::paired_recipients(atoms, i, last, owner, doc);
+            continue;
+        }
+        if !super::application_form::has_form_role(atoms, owner, chars) {
+            continue;
+        }
         let pause = atoms.get(last + 1).is_some_and(|a| {
             !a.is_locked
                 && a.deprel == "punct"

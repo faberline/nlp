@@ -212,7 +212,7 @@ pub(crate) fn translate_ja_sentence(
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
-        daytime::bind_form_time(&mut atoms, chars);
+        daytime::bind_form_time(&mut atoms, chars, doc);
         application_form::normalize(&mut atoms, chars, doc);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
         daytime::join_recipient_pauses(&mut atoms);

@@ -206,7 +206,22 @@ fn protect_sibling_forms(
                 .any(|label| strip_suffix(before, label).is_some());
         }
         let measures_form = measures_written_form(after);
-        let reads_word = names_source_reading(after);
+        let before_joined = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
+        let before_list = &chars[scope.start_char..quotes[first_in_list].start_char - 1];
+        let list_count = index - first_in_list + 1;
+        let counts_words = first_in_list < first_for_comparison
+            && (has_counted_name_before(before_list, list_count, WORD_NAMES)
+                || strip_prefix(after, "という")
+                    .and_then(|tail| skip_space(tail).first())
+                    .is_some_and(|&number| matches_list_count(number, list_count)));
+        let reads_word = names_source_reading(
+            if counts_words {
+                before_list
+            } else {
+                before_joined
+            },
+            after,
+        );
         let shared_copy_object = index > first_in_list && after.starts_with(&['を']);
         let copies_form =
             copies_written_form(chars, after, scope.end_char, syntax, shared_copy_object);
@@ -219,17 +234,19 @@ fn protect_sibling_forms(
             protected.push(protection_span(*quote, nested));
         }
 
-        // The final operand can carry the count phrase or the copying predicate for the
-        // list. Terminal marks inside the quotes do not end the list.
+        // The last operand can carry the predicate for a list. A comma alone can
+        // also separate an utterance from the following word-reading question.
         let first = if index > first_in_list
-            && (measures_form || reads_word || (shared_copy_object && copies_form))
+            && (measures_form
+                || (reads_word && counts_words)
+                || (shared_copy_object && copies_form))
         {
             first_in_list
         } else if index > first_for_comparison {
-            let before = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
             let count = index - first_for_comparison + 1;
-            if !compares_written_forms(after)
-                && !compares_apposed_forms(before, after, count, labelled)
+            if !reads_word
+                && !compares_written_forms(after)
+                && !compares_apposed_forms(before_joined, after, count, labelled)
             {
                 continue;
             }
@@ -281,7 +298,9 @@ fn quote_join(between: &[char]) -> Option<QuoteJoin> {
 }
 
 fn compares_apposed_forms(before: &[char], after: &[char], count: usize, labelled: bool) -> bool {
-    if compares_objects(after) && (labelled || has_form_name_before(before, count)) {
+    if compares_objects(after)
+        && (labelled || has_counted_name_before(before, count, COMPARED_FORM_NAMES))
+    {
         return true;
     }
     let after = strip_prefix(after, "という")
@@ -302,8 +321,8 @@ fn compares_apposed_forms(before: &[char], after: &[char], count: usize, labelle
         })
 }
 
-fn has_form_name_before(before: &[char], count: usize) -> bool {
-    COMPARED_FORM_NAMES.iter().any(|form| {
+fn has_counted_name_before(before: &[char], count: usize, names: &[&str]) -> bool {
+    names.iter().any(|form| {
         let Some(before) = strip_suffix(trim_space_end(before), form) else {
             return false;
         };
@@ -706,7 +725,10 @@ fn after_word_name(nominal: &[char]) -> Option<&[char]> {
         .map(skip_space)
 }
 
-fn names_source_reading(after: &[char]) -> bool {
+fn names_source_reading(before: &[char], after: &[char]) -> bool {
+    let labels = WORD_NAMES
+        .iter()
+        .chain(["漢字", "仮名", "片仮名", "平仮名"].iter());
     let named_word = strip_prefix(after, "という").and_then(|nominal| {
         let nominal = skip_space(nominal);
         let rest = without_count(nominal);
@@ -717,12 +739,19 @@ fn names_source_reading(after: &[char]) -> bool {
         } else {
             nominal
         };
-        after_word_name(nominal)
+        labels
+            .clone()
+            .find_map(|word| strip_prefix(skip_space(nominal), word))
+            .map(skip_space)
     });
+    let explicit_word = named_word.is_some()
+        || labels
+            .clone()
+            .any(|word| strip_suffix(trim_space_end(before), word).is_some());
     let relation = named_word.unwrap_or(after);
     if let Some(attribute) = relation.strip_prefix(&['の']).map(skip_space) {
         // 読み方 can also mean how to read a book or a newspaper.
-        let is_reading = named_word.is_some()
+        let is_reading = explicit_word
             && ["読み方", "よみかた"]
                 .iter()
                 .any(|name| strip_prefix(attribute, name).is_some_and(noun_boundary));
@@ -737,30 +766,41 @@ fn names_source_reading(after: &[char]) -> bool {
     if !matches!(particle, 'は' | 'を' | 'も') {
         return false;
     }
-    let question = after_clause_comma(tail);
+    let tail = after_clause_comma(tail);
+    let question = strip_prefix(tail, "日本語で").map_or(tail, skip_space);
+    let pronounce = strip_prefix(question, "どう").map(skip_space);
     let verb = ["何と", "なんと", "何て", "なんて"]
         .iter()
         .find_map(|word| strip_prefix(question, word))
-        .or_else(|| named_word.and_then(|_| strip_prefix(question, "どう")));
+        .or_else(|| pronounce.filter(|rest| explicit_word || strip_prefix(rest, "発音").is_some()));
     verb.is_some_and(|verb| {
         let verb = skip_space(verb);
-        ["読む", "読みます", "発音する", "発音します"]
-            .iter()
-            .filter_map(|form| strip_prefix(verb, form))
-            .any(|end| {
-                let end = skip_space(end);
-                matches!(
-                    end.first(),
-                    None | Some('。' | '？' | '?' | '」' | '』' | 'か')
-                ) || strip_prefix(end, "のですか").is_some()
-                    || strip_prefix(end, "のか").is_some()
-                    || end.strip_prefix(&['の']).is_some_and(|end| {
-                        matches!(
-                            skip_space(end).first(),
-                            None | Some('？' | '?' | '」' | '』')
-                        )
-                    })
-            })
+        [
+            "読む",
+            "読みます",
+            "読みました",
+            "読んだ",
+            "発音する",
+            "発音します",
+            "発音しました",
+            "発音した",
+        ]
+        .iter()
+        .filter_map(|form| strip_prefix(verb, form))
+        .any(|end| {
+            let end = skip_space(end);
+            matches!(
+                end.first(),
+                None | Some('。' | '？' | '?' | '」' | '』' | 'か')
+            ) || strip_prefix(end, "のですか").is_some()
+                || strip_prefix(end, "のか").is_some()
+                || end.strip_prefix(&['の']).is_some_and(|end| {
+                    matches!(
+                        skip_space(end).first(),
+                        None | Some('？' | '?' | '」' | '』')
+                    )
+                })
+        })
     })
 }
 
@@ -1545,6 +1585,17 @@ mod tests {
                 &[][..],
             ),
             ("「駅」は何と読みますか。", &["「駅」"], &[]),
+            ("「ドイツ」をどう発音しますか。", &["「ドイツ」"], &[]),
+            (
+                "「ありがとう」、「駅」という漢字の読み方を調べました。",
+                &["「駅」"],
+                &["謝謝"],
+            ),
+            (
+                "二つの単語「写真」、「駅」の読み方を調べました。",
+                &["「写真」", "「駅」"],
+                &[],
+            ),
             (
                 "「写真」と「ドイツ」という二つの単語の読み方を調べました。",
                 &["「写真」", "「ドイツ」"],

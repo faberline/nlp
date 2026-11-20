@@ -1,4 +1,4 @@
-//! Distinguish a restored time setting from a physical destination of 戻る.
+//! Resolve homecoming, physical destinations, and restored time settings.
 use super::{
     Atom, Bunsetsu, BunsetsuRole, Document, Segment, Span, TargetVariant, Upos,
     bounded_clock_number, clock_case_governor, clock_number, deadline_weekday, explicit_clock_case,
@@ -1082,6 +1082,78 @@ fn nominal_case(group: &Bunsetsu, head: usize) -> Option<(&Atom, &str)> {
     Some((noun, &case.surface))
 }
 
+fn nonpast_homecoming(
+    groups: &[Bunsetsu],
+    predicate: &Bunsetsu,
+    verb: &Atom,
+    source: &[Atom],
+    head: usize,
+    doc: &Document,
+) -> Option<(usize, String)> {
+    if verb.deprel != "root" {
+        return None;
+    }
+    match predicate.atoms.as_slice() {
+        [plain] if plain.surface == "帰る" => {}
+        [stem, polite]
+            if stem.surface == "帰り"
+                && !polite.is_locked
+                && polite.surface == "ます"
+                && polite.upos == Some(Upos::Aux)
+                && polite.deprel == "aux"
+                && polite.head == Some(head)
+                && stem.span.end_char == polite.span.start_char => {}
+        _ => return None,
+    }
+
+    // A route or a quote can end its current rendering clause before the
+    // homecoming. Only use the neutral wording for a whole source sentence.
+    let sentence = doc.tokens.get(head)?.sentence;
+    let (first, last) = (source.first()?, source.last()?);
+    if doc.tokens.iter().any(|token| {
+        token.sentence == sentence
+            && (token.span.start_char < first.span.start_char
+                || token.span.end_char > last.span.end_char && token.upos != Some(Upos::Punct))
+    }) {
+        return None;
+    }
+
+    // An overt arrival time calls for the existing endpoint wording.
+    if source.windows(2).any(|pair| {
+        let [time, case] = pair else { return false };
+        time.head == Some(head)
+            && is_daypart_surface(&time.surface)
+            && case.surface == "に"
+            && attached_case(time, case)
+    }) || groups.iter().any(|group| {
+        is_plain_clock_ni(group)
+            && explicit_clock_case(group)
+                .is_some_and(|(clock, case)| clock_case_governor(clock, case, doc) == Some(head))
+    }) {
+        return None;
+    }
+
+    let mut destinations = groups.iter().enumerate().filter_map(|(index, group)| {
+        let (noun, case) = nominal_case(group, head)?;
+        (case == "へ" || case == "に" && (noun.surface == "家" || is_place(noun)))
+            .then_some((index, group))
+    });
+    let (index, home) = destinations.next()?;
+    let [noun, case] = home.atoms.as_slice() else {
+        return None;
+    };
+    if destinations.next().is_some()
+        || noun.surface != "家"
+        || noun.upos != Some(Upos::Noun)
+        || source
+            .iter()
+            .any(|atom| atom.head == noun.doc_tok_idx && atom.doc_tok_idx != case.doc_tok_idx)
+    {
+        return None;
+    }
+    Some((index, "回家".to_owned()))
+}
+
 // A time or a place can be the result of 戻る. Match its own governor and
 // subject before removing the case marker; an event time keeps its usual role.
 pub(super) fn resolve(
@@ -1098,7 +1170,6 @@ pub(super) fn resolve(
         .filter(|a| a.upos == Some(Upos::Verb));
     let verb = verbs.next()?;
     if verb.is_locked
-        || verb.lemma.as_deref().unwrap_or(&verb.surface) != "戻る"
         || verbs.next().is_some()
         || predicates_has_passive(predicates)
         || predicate
@@ -1109,6 +1180,13 @@ pub(super) fn resolve(
         return None;
     }
     let head = verb.doc_tok_idx?;
+    match verb.lemma.as_deref().unwrap_or(&verb.surface) {
+        "帰る" if target == TargetVariant::ZhHant => {
+            return nonpast_homecoming(groups, predicate, verb, source, head, doc);
+        }
+        "戻る" => {}
+        _ => return None,
+    }
     let schedule = source
         .iter()
         .any(|a| a.head == Some(head) && a.deprel == "nsubj" && schedule_noun(a, source));
@@ -1148,4 +1226,36 @@ pub(super) fn resolve(
     });
     let endpoint = endpoints.next()?;
     endpoints.next().is_none().then_some(endpoint)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    #[test]
+    fn nonpast_homecoming_keeps_the_actual_destination_and_completion() {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        for (source, expected) in [
+            ("私は家に帰ります。", "我回家。"),
+            ("私は家に帰る。", "我回家。"),
+            ("母は家へ帰ります。", "母親回家。"),
+            ("私は家に帰りました。", "我回到家了。"),
+            ("父は自分の家に帰ります。", "父親回到自己的家。"),
+            ("私は夕方に帰ります。", "我傍晚回去。"),
+            ("私は早朝に家に帰ります。", "我清晨回到家。"),
+            ("公園を通って家に帰ります。", "經過公園，回到家。"),
+        ] {
+            let result = analyze_and_translate(
+                source,
+                &options,
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(result.target_text, expected, "{source}");
+        }
+    }
 }

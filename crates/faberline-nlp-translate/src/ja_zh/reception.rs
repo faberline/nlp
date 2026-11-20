@@ -14,8 +14,29 @@ pub(super) fn location_relation(inflection: &str) -> Option<&'static str> {
     }
 }
 
-// A nominal qualifier can mark an intake method or activity. Only an attached
-// place genitive, as in 図書館の受付, identifies a physical counterpart.
+fn is_direct_genitive(modifier: &Atom, particle: &Atom, noun: &Atom) -> bool {
+    modifier.deprel == "nmod"
+        && modifier.head == noun.doc_tok_idx
+        && particle.surface == "の"
+        && particle.span.end_char == noun.span.start_char
+        && dasu_case_link(modifier, particle)
+}
+
+fn is_unanchored_nearby(atoms: &[Atom], modifier: &Atom) -> bool {
+    !modifier.is_locked
+        && modifier.upos == Some(Upos::Adj)
+        && modifier.surface == "近く"
+        && modifier.lemma.as_deref() == Some("近い")
+        && modifier.doc_tok_idx.is_some()
+        // A dependent can anchor the proximity in time, as in 締切近く.
+        && !atoms.iter().any(|atom| {
+            atom.head == modifier.doc_tok_idx
+                && !matches!(atom.deprel.as_str(), "case" | "punct")
+        })
+}
+
+// A nominal qualifier can mark an intake method or activity. An attached
+// place genitive or unanchored 近くの can qualify a physical counter.
 fn has_only_place_qualifiers(atoms: &[Atom], counter: &Atom) -> bool {
     atoms
         .iter()
@@ -28,13 +49,10 @@ fn has_only_place_qualifiers(atoms: &[Atom], counter: &Atom) -> bool {
                 )
         })
         .all(|(index, modifier)| {
-            modifier.deprel == "nmod"
-                && return_endpoint::is_place(modifier)
-                && atoms.get(index + 1).is_some_and(|no| {
-                    no.surface == "の"
-                        && no.span.end_char == counter.span.start_char
-                        && dasu_case_link(modifier, no)
-                })
+            atoms
+                .get(index + 1)
+                .is_some_and(|particle| is_direct_genitive(modifier, particle, counter))
+                && (return_endpoint::is_place(modifier) || is_unanchored_nearby(atoms, modifier))
         })
 }
 
@@ -170,6 +188,17 @@ pub(super) fn normalize(atoms: &mut Vec<Atom>) {
         if let Some(label) = reading(atoms, i) {
             // Keep the source surface for the case and floor rules.
             atoms[i].lemma = Some(label.to_owned());
+            if label == COUNTER
+                && i >= 2
+                && is_direct_genitive(&atoms[i - 2], &atoms[i - 1], &atoms[i])
+                && is_unanchored_nearby(atoms, &atoms[i - 2])
+                && has_only_place_qualifiers(atoms, &atoms[i])
+            {
+                let modifier = &mut atoms[i - 2];
+                modifier.surface = "附近".to_owned();
+                modifier.lemma = None;
+                modifier.upos = Some(Upos::Noun);
+            }
             if label == SERVICE && i >= 2 {
                 let modifier = &atoms[i - 2];
                 let case = &atoms[i - 1];
@@ -392,6 +421,24 @@ mod tests {
             ("受付の前に立ちました。", "在櫃檯前面站了。"),
             ("受付で申請を受け付けます。", "在櫃檯受理申請。"),
             ("受付で申請を受け付けない。", "在櫃檯不受理申請。"),
+            ("近くの受付の前で待ちました。", "在附近的櫃檯前面等待了。"),
+            ("近くの受付で申請を受け付けます。", "在附近的櫃檯受理申請。"),
+            (
+                "近くの電話受付で申請を受け付けます。",
+                "用近近地的電話受付受理申請。",
+            ),
+            (
+                "近くのオンライン受付で申請を受け付けます。",
+                "在近近地的オンライン受付受理申請。",
+            ),
+            (
+                "締切近くの受付で申請を受け付けます。",
+                "在近近地的受付締切受理申請。",
+            ),
+            (
+                "近くの受付の前に申請しました。",
+                "在近近地的受付前面申請了。",
+            ),
             (
                 "図書館の受付で申請を受け付けます。",
                 "在圖書館的櫃檯受理申請。",

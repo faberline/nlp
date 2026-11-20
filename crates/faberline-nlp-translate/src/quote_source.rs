@@ -224,24 +224,29 @@ fn protect_sibling_forms(
             &chars[after_close..opening]
         });
         let join = between.and_then(quote_join);
+        let after_named_operand = between.and_then(|gap| {
+            strip_prefix(skip_space(gap), "という").and_then(after_word_or_character_name)
+        });
         // 「A」という言葉と「B」を names A and B as the two operands.
         // 「A」という言葉の意味と「B」を names the meaning of A instead.
         if !matches!(join, Some(QuoteJoin::Conjunction(_)))
-            && !between.is_some_and(|gap| {
-                strip_prefix(skip_space(gap), "という")
-                    .and_then(after_word_or_character_name)
-                    .and_then(quote_join)
-                    .is_some_and(|join| matches!(join, QuoteJoin::Conjunction(_)))
-            })
+            && !matches!(
+                after_named_operand.and_then(quote_join),
+                Some(QuoteJoin::Conjunction(_))
+            )
         {
             first_for_writing = index;
             // 「A」の文字と「B」の文字 repeats the character label on each
-            // operand. の意味 or の位置 instead names another object.
+            // operand. や can join the operands of a counted act too. の意味
+            // or の位置 instead names another object.
             if join.is_none()
-                && between
-                    .and_then(|gap| after_possessive_character_name(skip_space(gap)))
-                    .and_then(quote_join)
-                    .is_none()
+                && !after_named_operand.is_some_and(is_example_quote_join)
+                && !between.is_some_and(|gap| {
+                    is_example_quote_join(gap)
+                        || after_possessive_character_name(skip_space(gap)).is_some_and(|rest| {
+                            quote_join(rest).is_some() || is_example_quote_join(rest)
+                        })
+                })
             {
                 first_for_counted_form = index;
             }
@@ -302,11 +307,12 @@ fn protect_sibling_forms(
                 let word = quotes[i];
                 let next = quotes[i + 1];
                 let gap = &chars[word.end_char + 1..next.start_char - 1];
-                // In 「A」、「B」を the analyser can attach A to B instead of
+                // In 「A」、「B」を or 「A」や「B」を the analyser can attach A to B instead of
                 // the predicate. Follow this link only for a proven counted act.
                 let via_next = counted
                     && next_is_operand
-                    && quote_join(gap) == Some(QuoteJoin::Enumeration)
+                    && (quote_join(gap) == Some(QuoteJoin::Enumeration)
+                        || is_example_quote_join(gap))
                     && quote_attaches_to_form(word, next, syntax);
                 next_is_operand = via_next || written_operand(word) == match_form;
                 if next_is_operand {
@@ -420,6 +426,12 @@ fn quote_join(between: &[char]) -> Option<QuoteJoin> {
             .any(|label| strip_prefix(rest, label).is_some_and(|tail| skip_space(tail).is_empty()))
             .then_some(QuoteJoin::Conjunction(true))
     }
+}
+
+fn is_example_quote_join(between: &[char]) -> bool {
+    skip_space(between)
+        .strip_prefix(&['や'])
+        .is_some_and(|tail| after_clause_comma(tail).is_empty())
 }
 
 fn compares_apposed_forms(before: &[char], after: &[char], count: usize, labelled: bool) -> bool {
@@ -1005,6 +1017,7 @@ fn quotes_exact_writing(
     let mut unchanged = false;
     let mut writing_surface = false;
     let mut surface_after_operand = false;
+    let mut copy_destination = None;
     let mut surface_has_foreign_text = false;
     let mut writes_in_japanese = false;
     for (i, token) in syntax.tokens[..predicate]
@@ -1054,9 +1067,13 @@ fn quotes_exact_writing(
             && is_writing_surface(chars, scope.start_char, token.span.end_char, syntax, copies);
         writing_surface |= surface;
         surface_after_operand |= surface && token.span.start_char >= start;
-        if surface && !copies {
-            surface_has_foreign_text |=
-                has_foreign_surface_inscription(chars, scope, quote, syntax, i);
+        if surface {
+            if copies {
+                copy_destination.get_or_insert(i);
+            } else {
+                surface_has_foreign_text |=
+                    has_foreign_surface_inscription(chars, scope, quote, syntax, i);
+            }
         }
         let language_case = inscription_language_case(case);
         let states_language = matches!(language_case, Some('で' | 'に'))
@@ -1109,7 +1126,12 @@ fn quotes_exact_writing(
     // An explicit quoted writing operand can also name the place of the act
     // (入口に) without naming a material. A distinct object belongs to the verb.
     let directly_counted = after_character_step(after_clause_comma(tail)).is_some();
+    // In を一文字ずつノートに写す the analyzer can attach the count to the
+    // destination rather than to 写す. The destination itself modifies 写す.
+    let counted_copy =
+        copies && particle == 'を' && (directly_counted || copy_destination.is_some());
     if reads_word
+        || counted_copy
         || (copies && unchanged)
         || (writes
             && (writes_in_japanese
@@ -1123,7 +1145,7 @@ fn quotes_exact_writing(
             scope,
             first_in_quote..end_of_quote,
             predicate,
-            [voice, None],
+            [voice, copy_destination],
             syntax,
         );
         if reads_word || letter_by_letter {
@@ -2484,6 +2506,116 @@ mod tests {
                 analyze_and_translate(source, &options, &glossary(), None, Backend::Onnx).unwrap();
             assert_eq!(result.target_text.contains("「ドイツ」"), kept, "{source}");
             assert_eq!(result.glossary_hits.is_empty(), kept, "{source}");
+        }
+    }
+
+    #[test]
+    fn counted_copying_retains_the_content_of_its_quoted_object() {
+        let mut glossary = glossary();
+        for (surface, target) in [("受付", "櫃檯"), ("入口", "入站口"), ("出口", "EXIT")]
+        {
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: surface.to_owned(),
+                surfaces: vec![surface.to_owned()],
+                targets: [(TargetVariant::ZhHant, target.to_owned())].into(),
+                pronoun_class: Default::default(),
+                speech_register: Default::default(),
+            });
+        }
+        for source_hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = source_hint;
+            for (source, literal, expected_hits) in [
+                (
+                    "「受付で待つ」を一文字ずつノートに写しました。受付を確認しました。",
+                    &["「受付で待つ」"][..],
+                    1,
+                ),
+                ("「入口」を一文字ずつノートに写しました。", &["「入口」"], 0),
+                (
+                    "「出口」を一文字ずつノートに写しませんでした。",
+                    &["「出口」"],
+                    0,
+                ),
+                (
+                    "「入口」や「出口」より先に、「受付」を一文字ずつノートに写しました。",
+                    &["「受付」"],
+                    2,
+                ),
+                ("「入口」や「出口」をカメラで一文字ずつ写しました。", &[], 2),
+                (
+                    "「入口」を一字ずつ読み上げ、次に「出口」をノートに写しました。",
+                    &["「入口」"],
+                    1,
+                ),
+            ] {
+                let result =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                for quote in literal {
+                    assert!(
+                        result.target_text.contains(quote),
+                        "{source}: {}",
+                        result.target_text
+                    );
+                }
+                assert_eq!(result.glossary_hits.len(), expected_hits, "{source}");
+            }
+        }
+    }
+
+    #[test]
+    fn ya_joins_only_the_operands_of_the_same_counted_act() {
+        let mut glossary = glossary();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "受付".to_owned(),
+            surfaces: vec!["受付".to_owned()],
+            targets: [(TargetVariant::ZhHant, "櫃檯".to_owned())].into(),
+            pronoun_class: Default::default(),
+            speech_register: Default::default(),
+        });
+        for source_hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = source_hint;
+            for (source, literal) in [
+                ("「ドイツ」や「受付」を紙に一字ずつ書きました。", true),
+                (
+                    "「ドイツ」や「受付」の文字を一字ずつ書きませんでした。",
+                    true,
+                ),
+                (
+                    "先生は「ドイツ」や「受付」の文字を一字ずつ声に出して読みました。",
+                    true,
+                ),
+                (
+                    "「ドイツ」の文字や「受付」の文字を一字ずつ読み上げました。",
+                    true,
+                ),
+                ("「ドイツ」や「受付」を一字ずつノートに写さなかった。", true),
+                ("「ドイツ」や「受付」と言いました。", false),
+                (
+                    "「ドイツ」や「受付」とは違う英単語を紙に一字ずつ書きました。",
+                    false,
+                ),
+                (
+                    "「ドイツ」や「受付」を英語で一字ずつ読み上げました。",
+                    false,
+                ),
+            ] {
+                let result =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                for raw in ["「ドイツ」", "「受付」"] {
+                    assert_eq!(
+                        result.target_text.contains(raw),
+                        literal,
+                        "{source}: {}",
+                        result.target_text
+                    );
+                }
+                let hit_count = if literal { 0 } else { 2 };
+                assert_eq!(result.glossary_hits.len(), hit_count, "{source}");
+            }
         }
     }
 

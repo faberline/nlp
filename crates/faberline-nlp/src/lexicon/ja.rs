@@ -122,6 +122,7 @@ fn is_ja_stem_char(c: char) -> bool {
 enum EdgeKind {
     Lexicon,
     HagakiTopic(String),
+    MealSaury,
     Oov,
     Inflected {
         dict_lemma: String,
@@ -148,6 +149,65 @@ fn overlaps_custom_term(
         (start.saturating_sub(len.saturating_sub(1))..end)
             .any(|at| at + len < byte_offs.len() && text[byte_offs[at]..].starts_with(term))
     })
+}
+
+// にさん can win the lattice before a hiragana fish name. Repair that
+// boundary only for a meal's に and a distinct object of a cooking verb.
+fn resolve_meal_saury(
+    path: &mut Vec<(usize, usize, BackEdge)>,
+    text: &str,
+    byte_offs: &[usize],
+    custom_terms: &[(&str, usize)],
+) {
+    for first in (1..path.len()).rev() {
+        let start = path[first].0;
+        let end = start + 4;
+        if !text[byte_offs[start]..].starts_with("にさんまを") {
+            continue;
+        }
+        let meal = ["朝食", "昼食", "夕食", "朝ご飯", "昼ご飯", "晩ご飯"]
+            .into_iter()
+            .find_map(|meal| {
+                let begin = byte_offs[start].checked_sub(meal.len())?;
+                if text.get(begin..byte_offs[start]) != Some(meal) {
+                    return None;
+                }
+                (first.saturating_sub(3)..first).find(|&i| byte_offs[path[i].0] == begin)
+            });
+        let Some(meal) = meal else { continue };
+        if meal > 0 && &text[byte_offs[path[meal - 1].0]..byte_offs[path[meal].0]] == "の"
+            || overlaps_custom_term(path[meal].0, end + 1, text, byte_offs, custom_terms)
+        {
+            continue;
+        }
+        let Some(object_case) = (first..path.len()).find(|&i| path[i].0 >= end) else {
+            continue;
+        };
+        if path[object_case].0 != end || path[object_case].1 != end + 1 {
+            continue;
+        }
+        let Some((verb_begin, verb_end, verb)) = path.get(object_case + 1) else {
+            continue;
+        };
+        let verb = match &verb.kind {
+            EdgeKind::Inflected { dict_lemma, .. } => dict_lemma,
+            EdgeKind::Lexicon => &text[byte_offs[*verb_begin]..byte_offs[*verb_end]],
+            _ => continue,
+        };
+        if matches!(verb, "焼く" | "食べる" | "煮る") {
+            path.splice(
+                first..object_case,
+                [(
+                    start,
+                    end,
+                    BackEdge {
+                        len_chars: end - start,
+                        kind: EdgeKind::MealSaury,
+                    },
+                )],
+            );
+        }
+    }
 }
 
 fn has_human_topic(surface: &str) -> bool {
@@ -1038,6 +1098,9 @@ pub(crate) fn segment_ja_with_context(
         index += 1;
     }
 
+    if text.contains("にさんまを") {
+        resolve_meal_saury(&mut path, &text, &byte_offs, &custom_terms);
+    }
     let mut out = Vec::with_capacity(path.len());
     for (start, end, edge) in path {
         if chars[start..end].iter().all(|c| c.is_whitespace()) {
@@ -1059,6 +1122,25 @@ pub(crate) fn segment_ja_with_context(
                     base_char + end,
                     &lemma,
                 ));
+            }
+            EdgeKind::MealSaury => {
+                let boundary = base_char + start + 1;
+                out.push(lexicon_segment(
+                    Span {
+                        start_char: base_char + start,
+                        end_char: boundary,
+                    },
+                    "に",
+                ));
+                let mut noun = lexicon_segment(
+                    Span {
+                        start_char: boundary,
+                        end_char: base_char + end,
+                    },
+                    "サンマ",
+                );
+                noun.lemma.get_or_insert_with(|| "サンマ".to_owned());
+                out.push(noun);
             }
             EdgeKind::Oov => {
                 out.push(JaSegment {
@@ -1477,6 +1559,48 @@ pub fn map_ja_shinjitai_char(c: char) -> char {
 /// [`map_ja_shinjitai_char`].
 pub fn map_ja_shinjitai(s: &str) -> String {
     s.chars().map(map_ja_shinjitai_char).collect()
+}
+
+#[cfg(test)]
+mod meal_saury_segmentation_tests {
+    use super::*;
+
+    #[test]
+    fn meal_and_cooking_recover_only_the_ambiguous_fish_boundary() {
+        for sentence in [
+            "夕食にさんまを焼きました。",
+            "昼ご飯にさんまを食べました。",
+            "朝食にさんまを煮ました。",
+        ] {
+            let chars: Vec<_> = sentence.chars().collect();
+            let segments = segment_ja(&chars, 11);
+            let fish = segments
+                .iter()
+                .position(|s| s.lemma.as_deref() == Some("サンマ"));
+            let index = fish.expect(sentence);
+            assert_eq!(segments[index].decided_upos, Some(Upos::Noun));
+            let surface = |segment: &JaSegment| {
+                chars[segment.span.start_char - 11..segment.span.end_char - 11]
+                    .iter()
+                    .collect::<String>()
+            };
+            assert_eq!(surface(&segments[index - 1]), "に");
+            assert_eq!(surface(&segments[index]), "さんま");
+            assert_eq!(surface(&segments[index + 1]), "を");
+        }
+        for sentence in [
+            "明石家さんまがテレビに出ました。",
+            "夕食にさんまを見せました。",
+            "魚を買って夕食に焼きました。",
+        ] {
+            let chars: Vec<_> = sentence.chars().collect();
+            assert!(
+                !segment_ja(&chars, 0)
+                    .iter()
+                    .any(|s| s.lemma.as_deref() == Some("サンマ"))
+            );
+        }
+    }
 }
 
 #[cfg(test)]

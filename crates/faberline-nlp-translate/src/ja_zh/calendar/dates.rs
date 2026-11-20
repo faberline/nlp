@@ -243,6 +243,7 @@ fn protected_date(atoms: &[Atom], start: usize, chars: &[char]) -> Option<(usize
 struct BoundTopic {
     owner: usize,
     anchor: usize,
+    case_index: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -367,7 +368,11 @@ fn topic_clock(
     chars: &[char],
     doc: &Document,
 ) -> Option<TopicClock> {
-    let wa = atoms.get(day_end + 1)?;
+    let case_index = match kind {
+        DateTopic::Bound(topic) => topic.case_index,
+        _ => day_end + 1,
+    };
+    let wa = atoms.get(case_index)?;
     if wa.is_locked {
         return None;
     }
@@ -421,7 +426,8 @@ fn topic_clock(
     if doc.tokens.get(owner)?.upos != Some(Upos::Verb) {
         return None;
     }
-    let (clock, pause) = (day_end + 2..atoms.len()).chain(0..start).find_map(|i| {
+    let after_date = case_index + 1;
+    let (clock, pause) = (after_date..atoms.len()).chain(0..start).find_map(|i| {
         let time = &atoms[i];
         if chars.get(time.span.start_char..time.span.end_char) != Some(&['何', '時'])
             || !doc.syntax.iter().any(|node| {
@@ -482,7 +488,7 @@ fn topic_clock(
     // Use the question's source syntax even when the final punctuation was
     // taken out of the translation atoms. A bare ？ still belongs to its verb.
     let (matrix, advice) = clock_question_head(atoms, owner);
-    if advice.is_some_and(|(action, _)| action <= clock.max(day_end)) {
+    if advice.is_some_and(|(action, _)| action <= clock.max(case_index)) {
         return None;
     }
     let end = doc.syntax.iter().find(|node| {
@@ -523,9 +529,9 @@ fn topic_clock(
     }
     let fronted = clock < start;
     let object_words = if fronted {
-        &atoms[day_end + 2..]
+        &atoms[after_date..]
     } else {
-        &atoms[day_end + 2..clock]
+        &atoms[after_date..clock]
     };
     let object_quotes: Vec<_> = object_words
         .windows(4)
@@ -686,7 +692,15 @@ fn inclusive_date_topic(
         }
         _ => return None,
     };
-    Some((end, label, BoundTopic { owner, anchor }))
+    Some((
+        end,
+        label,
+        BoundTopic {
+            owner,
+            anchor,
+            case_index: end + 1,
+        },
+    ))
 }
 
 fn weekday_label(atom: &Atom, chars: &[char]) -> Option<String> {
@@ -735,12 +749,23 @@ fn weekday_topic(
     };
     let case = atoms.get(end + 1)?;
     let weekday = date_case_node(case, &atoms[end], doc)?;
-    if !matches!(
-        (case.surface.as_str(), weekday.deprel.as_str()),
-        ("は", "nsubj") | ("に", "obl" | "iobj")
-    ) {
-        return None;
-    }
+    let case_index = match (case.surface.as_str(), weekday.deprel.as_str()) {
+        // Both particles of には must belong to the same named weekday.
+        ("に", "nsubj" | "obl" | "iobj")
+            if atoms.get(end + 2).is_some_and(|wa| {
+                !wa.is_locked
+                    && wa.surface == "は"
+                    && wa.upos == Some(Upos::Adp)
+                    && wa.deprel == "case"
+                    && wa.head == Some(weekday.token)
+                    && wa.span.start_char == case.span.end_char
+            }) =>
+        {
+            end + 2
+        }
+        ("は", "nsubj") | ("に", "obl" | "iobj") => end + 1,
+        _ => return None,
+    };
     let owner = weekday.head?;
     if end > start
         && !doc.syntax.iter().any(|node| {
@@ -769,6 +794,7 @@ fn weekday_topic(
         BoundTopic {
             owner,
             anchor: weekday.token,
+            case_index,
         },
     ))
 }
@@ -947,6 +973,11 @@ fn bind_date_question(
     let normalize_case = temporal_choice || matches!(kind, DateTopic::Bound(_));
     if normalize_case {
         if let DateTopic::Bound(topic) = kind {
+            if topic.case_index == topic_end + 2 {
+                // Keep both source particles in the normalized topic span.
+                atoms[topic.case_index].span.start_char = atoms[topic_end + 1].span.start_char;
+                atoms.remove(topic_end + 1);
+            }
             let day = &mut atoms[topic_end];
             day.doc_tok_idx = Some(topic.anchor);
             day.head = Some(topic.owner);
@@ -1524,6 +1555,53 @@ mod dated_question_tests {
             assert!(out.starts_with(&format!("{day}姊姊{clock}")), "{out}");
             assert!(out.ends_with('？') && !out.contains('嗎'), "{out}");
         }
+    }
+
+    #[test]
+    fn fronted_clock_binds_a_weekday_with_two_linked_case_particles() {
+        for (stacked, single, expected) in [
+            (
+                "何時に、金曜日には資料館へ行けばいいですか。",
+                "何時に、金曜日は資料館へ行けばいいですか。",
+                "星期五應該幾點往資料館去？",
+            ),
+            (
+                "何時までに、木曜日には市役所へ着けばいいですか。",
+                "何時までに、木曜日は市役所へ着けばいいですか。",
+                "星期四最晚應該幾點往市役所抵達？",
+            ),
+            (
+                "何時に、金曜日には資料館へ行きますか。",
+                "何時に、金曜日は資料館へ行きますか。",
+                "星期五幾點往資料館去？",
+            ),
+        ] {
+            assert_eq!(translate(stacked), expected);
+            assert_eq!(translate(single), expected);
+        }
+    }
+
+    #[test]
+    fn stacked_weekday_topic_preserves_true_conditionals_and_distinct_events() {
+        assert_eq!(
+            translate("何時に、金曜日には資料館へ行けば、先生に会えますか。"),
+            "給何時，如果往資料館去到金曜日，給老師会え嗎？"
+        );
+        assert_eq!(
+            translate("何時に、金曜日には公民館で、土曜日には美術館で集合しますか。"),
+            "給何時，在公民館給金曜日，在美術館給土曜日集合嗎？"
+        );
+        assert_eq!(
+            translate(
+                "何時に、金曜日には資料館へ行けばいいですか。昼食にさんまを焼きました。朝食にパンを食べました。"
+            ),
+            "星期五應該幾點往資料館去？午餐烤了秋刀魚。給朝食吃了麵包。"
+        );
+        let source = "「何時に、金曜日には資料館へ行けばいいですか」と一字ずつ紙に書きました。";
+        assert_eq!(
+            translate(source),
+            "「何時に、金曜日には資料館へ行けばいいですか」給紙一字ずつ寫了。"
+        );
     }
 
     #[test]

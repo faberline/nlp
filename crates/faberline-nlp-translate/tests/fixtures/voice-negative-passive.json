@@ -1,0 +1,220 @@
+{
+  "case": "S01",
+  "stage": "candidate",
+  "source": "荷物が運ばれません。",
+  "doc": {
+    "entities": [],
+    "frames": [
+      {
+        "args": [
+          {
+            "head": 0,
+            "role": "ARG1",
+            "span": {
+              "end_char": 2,
+              "start_char": 0
+            }
+          }
+        ],
+        "predicate": 2,
+        "sentence": 0,
+        "span": {
+          "end_char": 5,
+          "start_char": 3
+        }
+      }
+    ],
+    "options": {
+      "cpu_syntax": true,
+      "enrich_morphology": true
+    },
+    "relations": [],
+    "schema": "nlp.doc.v1",
+    "segmentation": {
+      "clauses": [
+        {
+          "lang": "ja",
+          "sentence": 0,
+          "span": {
+            "end_char": 10,
+            "start_char": 0
+          }
+        }
+      ],
+      "opaque": [],
+      "paragraphs": [
+        {
+          "lang": "ja",
+          "span": {
+            "end_char": 10,
+            "start_char": 0
+          }
+        }
+      ],
+      "sentences": [
+        {
+          "lang": "ja",
+          "paragraph": 0,
+          "span": {
+            "end_char": 10,
+            "start_char": 0
+          }
+        }
+      ]
+    },
+    "syntax": [
+      {
+        "deprel": "nsubj",
+        "head": 2,
+        "score": 0.9,
+        "sentence": 0,
+        "span": {
+          "end_char": 2,
+          "start_char": 0
+        },
+        "token": 0
+      },
+      {
+        "deprel": "case",
+        "head": 0,
+        "score": 0.9,
+        "sentence": 0,
+        "span": {
+          "end_char": 3,
+          "start_char": 2
+        },
+        "token": 1
+      },
+      {
+        "deprel": "root",
+        "head": null,
+        "score": 0.9,
+        "sentence": 0,
+        "span": {
+          "end_char": 5,
+          "start_char": 3
+        },
+        "token": 2
+      },
+      {
+        "deprel": "aux",
+        "head": 2,
+        "score": 0.9,
+        "sentence": 0,
+        "span": {
+          "end_char": 6,
+          "start_char": 5
+        },
+        "token": 3
+      },
+      {
+        "deprel": "aux",
+        "head": 2,
+        "score": 0.9,
+        "sentence": 0,
+        "span": {
+          "end_char": 8,
+          "start_char": 6
+        },
+        "token": 4
+      },
+      {
+        "deprel": "aux",
+        "head": 2,
+        "score": 0.9,
+        "sentence": 0,
+        "span": {
+          "end_char": 9,
+          "start_char": 8
+        },
+        "token": 5
+      },
+      {
+        "deprel": "punct",
+        "head": 2,
+        "score": 0.9,
+        "sentence": 0,
+        "span": {
+          "end_char": 10,
+          "start_char": 9
+        },
+        "token": 6
+      }
+    ],
+    "text_chars": 10,
+    "text_sha256": "6dccf8052793b1eba939dac3c539b865b4d087caef2e92d7243d4ef5c60af905",
+    "tokens": [
+      {
+        "lang": "ja",
+        "sentence": 0,
+        "span": {
+          "end_char": 2,
+          "start_char": 0
+        },
+        "upos": "NOUN"
+      },
+      {
+        "lang": "ja",
+        "sentence": 0,
+        "span": {
+          "end_char": 3,
+          "start_char": 2
+        },
+        "upos": "ADP",
+        "upos_candidates": [
+          "ADP",
+          "SCONJ"
+        ]
+      },
+      {
+        "lang": "ja",
+        "lemma": "運ぶ",
+        "sentence": 0,
+        "span": {
+          "end_char": 5,
+          "start_char": 3
+        },
+        "upos": "VERB"
+      },
+      {
+        "lang": "ja",
+        "lemma": "れる",
+        "sentence": 0,
+        "span": {
+          "end_char": 6,
+          "start_char": 5
+        },
+        "upos": "AUX"
+      },
+      {
+        "lang": "ja",
+        "lemma": "ます",
+        "sentence": 0,
+        "span": {
+          "end_char": 8,
+          "start_char": 6
+        },
+        "upos": "AUX"
+      },
+      {
+        "lang": "ja",
+        "sentence": 0,
+        "span": {
+          "end_char": 9,
+          "start_char": 8
+        },
+        "upos": "AUX"
+      },
+      {
+        "lang": "und",
+        "sentence": 0,
+        "span": {
+          "end_char": 10,
+          "start_char": 9
+        },
+        "upos": "PUNCT"
+      }
+    ],
+    "unknown": []
+  }
+}

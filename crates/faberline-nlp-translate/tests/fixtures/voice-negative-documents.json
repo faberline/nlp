@@ -1,0 +1,5858 @@
+{
+  "purpose": "synthetic source Document cases, both split and attached morphology",
+  "base": "2e37126335b649801c5ee6a7941e0ce1dc0a61ef",
+  "candidate_head": "a34e3d0a4dd0c7aac8de1d21122672a963d37622",
+  "frozen_before_implementation": true,
+  "rows": [
+    {
+      "case": "test-come",
+      "stage": "base",
+      "source": "六時までに駅に来られません。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 14,
+        "text_sha256": "c6b301e2233cfef585c1d569d4e75d8625d7fd7b7a2e142ffcdb59f6b5922c6e",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NUM",
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ],
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 6
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "来る"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "INTJ"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "upos_candidates": [
+              "ADP",
+              "AUX",
+              "PART"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "head": 1,
+            "deprel": "nummod",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 6
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "head": 4,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": 9,
+            "deprel": "advcl",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "head": 9,
+            "deprel": "dep",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "head": 9,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "head": 9,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 1,
+                "span": {
+                  "start_char": 1,
+                  "end_char": 2
+                }
+              },
+              {
+                "role": "ARGM",
+                "head": 4,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 6
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 6,
+                "span": {
+                  "start_char": 7,
+                  "end_char": 8
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "b0a7f359b11f2036402ba50d42afd338e94fd4ebcb882d27286f605a938ec7db",
+      "observed_target": "被讓最晚在六點ま不來到車站。",
+      "provenance": "#349 official ARM"
+    },
+    {
+      "case": "test-come",
+      "stage": "candidate",
+      "source": "六時までに駅に来られません。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 14,
+        "text_sha256": "c6b301e2233cfef585c1d569d4e75d8625d7fd7b7a2e142ffcdb59f6b5922c6e",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NUM",
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ],
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 6
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "来る"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "head": 1,
+            "deprel": "nummod",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 6
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "head": 4,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 12
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "head": 6,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 1,
+                "span": {
+                  "start_char": 1,
+                  "end_char": 2
+                }
+              },
+              {
+                "role": "ARGM",
+                "head": 4,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 6
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "ba11c14c2f389d9b4532be014ab52cad8e4aeaf4bd2c5817d71f32be0b1ccc85",
+      "observed_target": "被到六點為止不來到車站。",
+      "provenance": "same-tree local author build"
+    },
+    {
+      "case": "test-see",
+      "stage": "base",
+      "source": "明日までに映画を見られません。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 15,
+        "text_sha256": "4d6ebb5ca9a0442cfd901e2b2ff40fb7def49c3acf452556f9ca55bcbc76775a",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 15
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 15
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 15
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "見る"
+          },
+          {
+            "span": {
+              "start_char": 9,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "INTJ"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB"
+          },
+          {
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "upos_candidates": [
+              "ADP",
+              "AUX",
+              "PART"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [
+          {
+            "kind": "relative_date",
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "sentence": 0
+          }
+        ],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "head": 5,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "head": 5,
+            "deprel": "obj",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "head": 8,
+            "deprel": "advcl",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 9,
+              "end_char": 11
+            },
+            "head": 5,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 8,
+            "deprel": "dep",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "head": 8,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "head": 8,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 0,
+                "span": {
+                  "start_char": 0,
+                  "end_char": 2
+                }
+              },
+              {
+                "role": "ARG1",
+                "head": 3,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 7
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 5,
+                "span": {
+                  "start_char": 8,
+                  "end_char": 9
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "4074cc557bb1c32628e82363b1e8b7df676f91f29ba4c32f9c35bb71ee79ee29",
+      "observed_target": "電影被讓最晚在明天ま不看。",
+      "provenance": "#349 official ARM"
+    },
+    {
+      "case": "test-see",
+      "stage": "candidate",
+      "source": "明日までに映画を見られません。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 15,
+        "text_sha256": "4d6ebb5ca9a0442cfd901e2b2ff40fb7def49c3acf452556f9ca55bcbc76775a",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 15
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 15
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 15
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "見る"
+          },
+          {
+            "span": {
+              "start_char": 9,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 13
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [
+          {
+            "kind": "relative_date",
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "sentence": 0
+          }
+        ],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "head": 5,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "head": 5,
+            "deprel": "obj",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 9,
+              "end_char": 11
+            },
+            "head": 5,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 13
+            },
+            "head": 5,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "head": 5,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "head": 5,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 0,
+                "span": {
+                  "start_char": 0,
+                  "end_char": 2
+                }
+              },
+              {
+                "role": "ARG1",
+                "head": 3,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 7
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "474f941677746f5d4a86a4e7b4573f42088ea6ae16cde4fd981a43351e8f2a26",
+      "observed_target": "電影被到明天為止不看。",
+      "provenance": "same-tree local author build"
+    },
+    {
+      "case": "test-past",
+      "stage": "base",
+      "source": "六時までに会場に来ませんでした。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 16,
+        "text_sha256": "b930fbd6bb2a045c9ed3c3cf2baa1879e6e9b8b336daa8f0f56d9e3b9986c3d2",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 16
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 16
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 16
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NUM",
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ],
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "来る"
+          },
+          {
+            "span": {
+              "start_char": 9,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "です"
+          },
+          {
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 15,
+              "end_char": 16
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "head": 1,
+            "deprel": "nummod",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": 4,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 9,
+              "end_char": 11
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 15,
+              "end_char": 16
+            },
+            "head": 6,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 1,
+                "span": {
+                  "start_char": 1,
+                  "end_char": 2
+                }
+              },
+              {
+                "role": "ARGM",
+                "head": 4,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 7
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "fca3384e975d2af260a7a85b95f319f8cb6c9be4f9a3217422ba9ced31744565",
+      "observed_target": "到六點為止沒有來到會場。",
+      "provenance": "#349 official ARM"
+    },
+    {
+      "case": "test-past",
+      "stage": "candidate",
+      "source": "六時までに会場に来ませんでした。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 16,
+        "text_sha256": "b930fbd6bb2a045c9ed3c3cf2baa1879e6e9b8b336daa8f0f56d9e3b9986c3d2",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 16
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 16
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 16
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NUM",
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ],
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "来る"
+          },
+          {
+            "span": {
+              "start_char": 9,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "です"
+          },
+          {
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 15,
+              "end_char": 16
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "head": 1,
+            "deprel": "nummod",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": 4,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 9,
+              "end_char": 11
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 15,
+              "end_char": 16
+            },
+            "head": 6,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 1,
+                "span": {
+                  "start_char": 1,
+                  "end_char": 2
+                }
+              },
+              {
+                "role": "ARGM",
+                "head": 4,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 7
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "fca3384e975d2af260a7a85b95f319f8cb6c9be4f9a3217422ba9ced31744565",
+      "observed_target": "到六點為止沒有來到會場。",
+      "provenance": "same-tree local author build"
+    },
+    {
+      "case": "F01",
+      "stage": "base",
+      "source": "豆は六時までにられません。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 13,
+        "text_sha256": "6f7e84c93d833a51abcf2f84e47401c5214c4dbefdd1cfa52ead94ffe72ccdaa",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 13
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 13
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 13
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 3
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NUM",
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 3,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ],
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 6
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "にる"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 9
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 9,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "INTJ"
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "upos_candidates": [
+              "ADP",
+              "AUX",
+              "PART"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "head": 5,
+            "deprel": "nsubj",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 3
+            },
+            "head": 3,
+            "deprel": "nummod",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 3,
+              "end_char": 4
+            },
+            "head": 5,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 6
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "head": 8,
+            "deprel": "advcl",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 9
+            },
+            "head": 5,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 9,
+              "end_char": 10
+            },
+            "head": 8,
+            "deprel": "dep",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 8,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "head": 8,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "args": [
+              {
+                "role": "ARG1",
+                "head": 0,
+                "span": {
+                  "start_char": 0,
+                  "end_char": 1
+                }
+              },
+              {
+                "role": "ARGM",
+                "head": 3,
+                "span": {
+                  "start_char": 3,
+                  "end_char": 4
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 5,
+                "span": {
+                  "start_char": 6,
+                  "end_char": 7
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "0ffd3ae56e66d45da21fb7e6a95df7fd93660addac2e8e2ddd241fa4921f0510",
+      "observed_target": "豆被讓到六點為止ま不在。",
+      "provenance": "#349 official ARM"
+    },
+    {
+      "case": "F01",
+      "stage": "candidate",
+      "source": "豆は六時までにられません。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 13,
+        "text_sha256": "6f7e84c93d833a51abcf2f84e47401c5214c4dbefdd1cfa52ead94ffe72ccdaa",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 13
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 13
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 13
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 3
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NUM",
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 3,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ],
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 6
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "にる"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 9
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 9,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "head": 5,
+            "deprel": "nsubj",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 3
+            },
+            "head": 3,
+            "deprel": "nummod",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 3,
+              "end_char": 4
+            },
+            "head": 5,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 6
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 9
+            },
+            "head": 5,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 9,
+              "end_char": 11
+            },
+            "head": 5,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 5,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "head": 5,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "args": [
+              {
+                "role": "ARG1",
+                "head": 0,
+                "span": {
+                  "start_char": 0,
+                  "end_char": 1
+                }
+              },
+              {
+                "role": "ARGM",
+                "head": 3,
+                "span": {
+                  "start_char": 3,
+                  "end_char": 4
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "92d3997433364a51b8c3940f9f5d517832df8503e0de0388963a9d8b7b7348f5",
+      "observed_target": "豆被到六點為止不在。",
+      "provenance": "#352 failed-head official ARM"
+    },
+    {
+      "case": "F02",
+      "stage": "base",
+      "source": "豆は六時までににられません。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 14,
+        "text_sha256": "78c9d07df957ee030d7d9b1b69396071f46e4601a209daa08e9c89ebdc122def",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 3
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NUM",
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 3,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ],
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 6
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "にる"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "INTJ"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "upos_candidates": [
+              "ADP",
+              "AUX",
+              "PART"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "head": 6,
+            "deprel": "nsubj",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 3
+            },
+            "head": 3,
+            "deprel": "nummod",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 3,
+              "end_char": 4
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 6
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": 9,
+            "deprel": "advcl",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "head": 9,
+            "deprel": "dep",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "head": 9,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "head": 9,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "args": [
+              {
+                "role": "ARG1",
+                "head": 0,
+                "span": {
+                  "start_char": 0,
+                  "end_char": 1
+                }
+              },
+              {
+                "role": "ARGM",
+                "head": 3,
+                "span": {
+                  "start_char": 3,
+                  "end_char": 4
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 6,
+                "span": {
+                  "start_char": 7,
+                  "end_char": 8
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "5fbdd1aabb4d081ee25f429aaa6068c321e65fb7efcd955ac8b8b0967e758c9c",
+      "observed_target": "豆被讓最晚在六點ま不在。",
+      "provenance": "#349 official ARM"
+    },
+    {
+      "case": "F02",
+      "stage": "candidate",
+      "source": "豆は六時までににられません。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 14,
+        "text_sha256": "78c9d07df957ee030d7d9b1b69396071f46e4601a209daa08e9c89ebdc122def",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 14
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 3
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NUM",
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 3,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ],
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 6
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "にる"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "head": 6,
+            "deprel": "nsubj",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 3
+            },
+            "head": 3,
+            "deprel": "nummod",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 3,
+              "end_char": 4
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 6
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 6,
+              "end_char": 7
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 12
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "head": 6,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "args": [
+              {
+                "role": "ARG1",
+                "head": 0,
+                "span": {
+                  "start_char": 0,
+                  "end_char": 1
+                }
+              },
+              {
+                "role": "ARGM",
+                "head": 3,
+                "span": {
+                  "start_char": 3,
+                  "end_char": 4
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "7d5289ad1f57725924800ebdb1228c7ec3ac66f164490075c659428c36e76f32",
+      "observed_target": "豆被到六點為止不在。",
+      "provenance": "#352 failed-head official ARM"
+    },
+    {
+      "case": "F03",
+      "stage": "base",
+      "source": "六時までに映画を見て、駅には来られません。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 21,
+        "text_sha256": "52aef3983c0e831bc30a2f32ea7d8a065dd8bd42369ff471dd49d2ff49b4f66e",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 21
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 21
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 10
+              },
+              "lang": "ja",
+              "sentence": 0
+            },
+            {
+              "span": {
+                "start_char": 11,
+                "end_char": 21
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NUM",
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ],
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "見る"
+          },
+          {
+            "span": {
+              "start_char": 9,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "SCONJ"
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "来る"
+          },
+          {
+            "span": {
+              "start_char": 15,
+              "end_char": 17
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 17,
+              "end_char": 18
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "INTJ"
+          },
+          {
+            "span": {
+              "start_char": 18,
+              "end_char": 19
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB"
+          },
+          {
+            "span": {
+              "start_char": 19,
+              "end_char": 20
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "upos_candidates": [
+              "ADP",
+              "AUX",
+              "PART"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 20,
+              "end_char": 21
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "head": 1,
+            "deprel": "nummod",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "head": 6,
+            "deprel": "obj",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": 4,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "head": 12,
+            "deprel": "advcl",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 9,
+              "end_char": 10
+            },
+            "head": 6,
+            "deprel": "mark",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "head": 6,
+            "deprel": "punct",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 12,
+            "deprel": "nsubj",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "head": 9,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "head": 9,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 12,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "head": 15,
+            "deprel": "advcl",
+            "score": 0.9
+          },
+          {
+            "token": 13,
+            "sentence": 0,
+            "span": {
+              "start_char": 15,
+              "end_char": 17
+            },
+            "head": 12,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 14,
+            "sentence": 0,
+            "span": {
+              "start_char": 17,
+              "end_char": 18
+            },
+            "head": 15,
+            "deprel": "dep",
+            "score": 0.9
+          },
+          {
+            "token": 15,
+            "sentence": 0,
+            "span": {
+              "start_char": 18,
+              "end_char": 19
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 16,
+            "sentence": 0,
+            "span": {
+              "start_char": 19,
+              "end_char": 20
+            },
+            "head": 15,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 17,
+            "sentence": 0,
+            "span": {
+              "start_char": 20,
+              "end_char": 21
+            },
+            "head": 15,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 1,
+                "span": {
+                  "start_char": 1,
+                  "end_char": 2
+                }
+              },
+              {
+                "role": "ARG1",
+                "head": 4,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 7
+                }
+              },
+              {
+                "role": "ARG0",
+                "head": 9,
+                "span": {
+                  "start_char": 11,
+                  "end_char": 12
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 12,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 6,
+                "span": {
+                  "start_char": 8,
+                  "end_char": 9
+                }
+              },
+              {
+                "role": "ARG1",
+                "head": 9,
+                "span": {
+                  "start_char": 11,
+                  "end_char": 12
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 15,
+            "sentence": 0,
+            "span": {
+              "start_char": 18,
+              "end_char": 19
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 12,
+                "span": {
+                  "start_char": 14,
+                  "end_char": 15
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "afd656d867aef4afc4d2440b6e6804d68ea164c776fba51771cf7d37c1348665",
+      "observed_target": "最晚在六點看電影，被讓ま不來到車站。",
+      "provenance": "#349 official ARM"
+    },
+    {
+      "case": "F03",
+      "stage": "candidate",
+      "source": "六時までに映画を見て、駅には来られません。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 21,
+        "text_sha256": "52aef3983c0e831bc30a2f32ea7d8a065dd8bd42369ff471dd49d2ff49b4f66e",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 21
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 21
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 10
+              },
+              "lang": "ja",
+              "sentence": 0
+            },
+            {
+              "span": {
+                "start_char": 11,
+                "end_char": 21
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NUM",
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ],
+            "sem_class": "quantity"
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "見る"
+          },
+          {
+            "span": {
+              "start_char": 9,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "SCONJ"
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "来る"
+          },
+          {
+            "span": {
+              "start_char": 15,
+              "end_char": 17
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 17,
+              "end_char": 19
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 19,
+              "end_char": 20
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 20,
+              "end_char": 21
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 1
+            },
+            "head": 1,
+            "deprel": "nummod",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 1,
+              "end_char": 2
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 1,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "head": 6,
+            "deprel": "obj",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": 4,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "head": 12,
+            "deprel": "advcl",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 9,
+              "end_char": 10
+            },
+            "head": 6,
+            "deprel": "mark",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "head": 6,
+            "deprel": "punct",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 12,
+            "deprel": "nsubj",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "head": 9,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "head": 9,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 12,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 13,
+            "sentence": 0,
+            "span": {
+              "start_char": 15,
+              "end_char": 17
+            },
+            "head": 12,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 14,
+            "sentence": 0,
+            "span": {
+              "start_char": 17,
+              "end_char": 19
+            },
+            "head": 12,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 15,
+            "sentence": 0,
+            "span": {
+              "start_char": 19,
+              "end_char": 20
+            },
+            "head": 12,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 16,
+            "sentence": 0,
+            "span": {
+              "start_char": 20,
+              "end_char": 21
+            },
+            "head": 12,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 1,
+                "span": {
+                  "start_char": 1,
+                  "end_char": 2
+                }
+              },
+              {
+                "role": "ARG1",
+                "head": 4,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 7
+                }
+              },
+              {
+                "role": "ARG0",
+                "head": 9,
+                "span": {
+                  "start_char": 11,
+                  "end_char": 12
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 12,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 6,
+                "span": {
+                  "start_char": 8,
+                  "end_char": 9
+                }
+              },
+              {
+                "role": "ARG1",
+                "head": 9,
+                "span": {
+                  "start_char": 11,
+                  "end_char": 12
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "37bb7e97ae51d99688858d40edd272f590c5b6adb0c9365b06c4d102504dc783",
+      "observed_target": "最晚在六點看電影，被不來到車站。",
+      "provenance": "#352 failed-head official ARM"
+    },
+    {
+      "case": "F04",
+      "stage": "base",
+      "source": "明日までに資料が提出されませんでした。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 19,
+        "text_sha256": "3198b836158580e51aca3bab553281557093d439d24deabd448d6c91586bc5fc",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 19
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 19
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 19
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP",
+            "upos_candidates": [
+              "ADP",
+              "SCONJ"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "NOUN",
+              "VERB"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "する"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "れる"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "INTJ"
+          },
+          {
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB"
+          },
+          {
+            "span": {
+              "start_char": 14,
+              "end_char": 16
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "SCONJ"
+          },
+          {
+            "span": {
+              "start_char": 16,
+              "end_char": 17
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "する"
+          },
+          {
+            "span": {
+              "start_char": 17,
+              "end_char": 18
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 18,
+              "end_char": 19
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [
+          {
+            "kind": "relative_date",
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "sentence": 0
+          }
+        ],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "head": 6,
+            "deprel": "nsubj",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "head": 9,
+            "deprel": "advcl",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 13
+            },
+            "head": 11,
+            "deprel": "dep",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "head": 11,
+            "deprel": "advcl",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 16
+            },
+            "head": 9,
+            "deprel": "mark",
+            "score": 0.9
+          },
+          {
+            "token": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 16,
+              "end_char": 17
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 12,
+            "sentence": 0,
+            "span": {
+              "start_char": 17,
+              "end_char": 18
+            },
+            "head": 11,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 13,
+            "sentence": 0,
+            "span": {
+              "start_char": 18,
+              "end_char": 19
+            },
+            "head": 11,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 0,
+                "span": {
+                  "start_char": 0,
+                  "end_char": 2
+                }
+              },
+              {
+                "role": "ARG1",
+                "head": 3,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 7
+                }
+              },
+              {
+                "role": "ARGM",
+                "head": 5,
+                "span": {
+                  "start_char": 8,
+                  "end_char": 10
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 6,
+                "span": {
+                  "start_char": 10,
+                  "end_char": 11
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 16,
+              "end_char": 17
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 9,
+                "span": {
+                  "start_char": 13,
+                  "end_char": 14
+                }
+              }
+            ]
+          }
+        ],
+        "zero_mentions": [
+          {
+            "zero_at": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 13,
+              "end_char": 14
+            },
+            "role": "nsubj",
+            "antecedent": {
+              "start_token": 3,
+              "end_token": 3,
+              "head_token": 3,
+              "sentence": 0,
+              "span": {
+                "start_char": 5,
+                "end_char": 7
+              }
+            }
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "c98490507fe0b42256eb1f4b4e9ff5d9967e3d4938a663feb6b2970ff088165d",
+      "observed_target": "資料讓最晚在明天提出されま做了。",
+      "provenance": "#349 official ARM"
+    },
+    {
+      "case": "F04",
+      "stage": "candidate",
+      "source": "明日までに資料が提出されませんでした。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 19,
+        "text_sha256": "3198b836158580e51aca3bab553281557093d439d24deabd448d6c91586bc5fc",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 19
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 19
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 19
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN"
+          },
+          {
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP",
+            "upos_candidates": [
+              "ADP",
+              "SCONJ"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "NOUN",
+              "VERB"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "する"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "れる"
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 15,
+              "end_char": 17
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "です"
+          },
+          {
+            "span": {
+              "start_char": 17,
+              "end_char": 18
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 18,
+              "end_char": 19
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [
+          {
+            "kind": "relative_date",
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "sentence": 0
+          }
+        ],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 7
+            },
+            "head": 6,
+            "deprel": "nsubj",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 7,
+              "end_char": 8
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "head": 6,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 15
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 15,
+              "end_char": 17
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 17,
+              "end_char": 18
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 12,
+            "sentence": 0,
+            "span": {
+              "start_char": 18,
+              "end_char": 19
+            },
+            "head": 6,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 0,
+                "span": {
+                  "start_char": 0,
+                  "end_char": 2
+                }
+              },
+              {
+                "role": "ARG1",
+                "head": 3,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 7
+                }
+              },
+              {
+                "role": "ARGM",
+                "head": 5,
+                "span": {
+                  "start_char": 8,
+                  "end_char": 10
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "d0d5a08948ba8dce1e46c2bbae1cd314e231255ca311ce92a3e84cf65f93a175",
+      "observed_target": "資料最晚在明天提出されませんでした。",
+      "provenance": "#352 failed-head official ARM"
+    },
+    {
+      "case": "F05",
+      "stage": "base",
+      "source": "明日までに見られませんと聞きました。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 18,
+        "text_sha256": "de465c64d429f4ccd01bdfe15a7e6cbeb238f9b19d6337aa00cfac1c25ce3e5f",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 18
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 18
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 18
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 6
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "見る"
+          },
+          {
+            "span": {
+              "start_char": 6,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "INTJ"
+          },
+          {
+            "span": {
+              "start_char": 9,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB"
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "upos_candidates": [
+              "ADP",
+              "AUX",
+              "PART"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP",
+            "upos_candidates": [
+              "ADP",
+              "SCONJ"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "聞く"
+          },
+          {
+            "span": {
+              "start_char": 14,
+              "end_char": 16
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 16,
+              "end_char": 17
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 17,
+              "end_char": 18
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [
+          {
+            "kind": "relative_date",
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "sentence": 0
+          }
+        ],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "head": 3,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 6
+            },
+            "head": 6,
+            "deprel": "advcl",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 6,
+              "end_char": 8
+            },
+            "head": 3,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 9
+            },
+            "head": 9,
+            "deprel": "dep",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 9,
+              "end_char": 10
+            },
+            "head": 9,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "head": 6,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 6,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 16
+            },
+            "head": 9,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 16,
+              "end_char": 17
+            },
+            "head": 9,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 12,
+            "sentence": 0,
+            "span": {
+              "start_char": 17,
+              "end_char": 18
+            },
+            "head": 9,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 6
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 0,
+                "span": {
+                  "start_char": 0,
+                  "end_char": 2
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 9,
+              "end_char": 10
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 3,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 6
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 6,
+                "span": {
+                  "start_char": 9,
+                  "end_char": 10
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "11ed6d6e33e67c16f5900752b8e053c66be493f77cea3e86e66049ce81a8d27f",
+      "observed_target": "當被讓最晚在明天ま不看聽了時。",
+      "provenance": "#349 official ARM"
+    },
+    {
+      "case": "F05",
+      "stage": "candidate",
+      "source": "明日までに見られませんと聞きました。",
+      "doc": {
+        "schema": "nlp.doc.v1",
+        "text_chars": 18,
+        "text_sha256": "de465c64d429f4ccd01bdfe15a7e6cbeb238f9b19d6337aa00cfac1c25ce3e5f",
+        "options": {
+          "enrich_morphology": true,
+          "cpu_syntax": true
+        },
+        "segmentation": {
+          "paragraphs": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 18
+              },
+              "lang": "ja"
+            }
+          ],
+          "sentences": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 18
+              },
+              "lang": "ja",
+              "paragraph": 0
+            }
+          ],
+          "clauses": [
+            {
+              "span": {
+                "start_char": 0,
+                "end_char": 18
+              },
+              "lang": "ja",
+              "sentence": 0
+            }
+          ],
+          "opaque": []
+        },
+        "tokens": [
+          {
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "NOUN",
+            "upos_candidates": [
+              "ADV",
+              "NOUN"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP"
+          },
+          {
+            "span": {
+              "start_char": 5,
+              "end_char": 6
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "見る"
+          },
+          {
+            "span": {
+              "start_char": 6,
+              "end_char": 8
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "られる"
+          },
+          {
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "ADP",
+            "upos_candidates": [
+              "ADP",
+              "SCONJ"
+            ]
+          },
+          {
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "VERB",
+            "lemma": "聞く"
+          },
+          {
+            "span": {
+              "start_char": 14,
+              "end_char": 16
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX",
+            "lemma": "ます"
+          },
+          {
+            "span": {
+              "start_char": 16,
+              "end_char": 17
+            },
+            "lang": "ja",
+            "sentence": 0,
+            "upos": "AUX"
+          },
+          {
+            "span": {
+              "start_char": 17,
+              "end_char": 18
+            },
+            "lang": "und",
+            "sentence": 0,
+            "upos": "PUNCT"
+          }
+        ],
+        "entities": [
+          {
+            "kind": "relative_date",
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "sentence": 0
+          }
+        ],
+        "syntax": [
+          {
+            "token": 0,
+            "sentence": 0,
+            "span": {
+              "start_char": 0,
+              "end_char": 2
+            },
+            "head": 3,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 1,
+            "sentence": 0,
+            "span": {
+              "start_char": 2,
+              "end_char": 4
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 2,
+            "sentence": 0,
+            "span": {
+              "start_char": 4,
+              "end_char": 5
+            },
+            "head": 0,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 6
+            },
+            "head": 8,
+            "deprel": "obl",
+            "score": 0.9
+          },
+          {
+            "token": 4,
+            "sentence": 0,
+            "span": {
+              "start_char": 6,
+              "end_char": 8
+            },
+            "head": 3,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 5,
+            "sentence": 0,
+            "span": {
+              "start_char": 8,
+              "end_char": 10
+            },
+            "head": 3,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 6,
+            "sentence": 0,
+            "span": {
+              "start_char": 10,
+              "end_char": 11
+            },
+            "head": 3,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 7,
+            "sentence": 0,
+            "span": {
+              "start_char": 11,
+              "end_char": 12
+            },
+            "head": 3,
+            "deprel": "case",
+            "score": 0.9
+          },
+          {
+            "token": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "head": null,
+            "deprel": "root",
+            "score": 0.9
+          },
+          {
+            "token": 9,
+            "sentence": 0,
+            "span": {
+              "start_char": 14,
+              "end_char": 16
+            },
+            "head": 8,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 10,
+            "sentence": 0,
+            "span": {
+              "start_char": 16,
+              "end_char": 17
+            },
+            "head": 8,
+            "deprel": "aux",
+            "score": 0.9
+          },
+          {
+            "token": 11,
+            "sentence": 0,
+            "span": {
+              "start_char": 17,
+              "end_char": 18
+            },
+            "head": 8,
+            "deprel": "punct",
+            "score": 0.9
+          }
+        ],
+        "frames": [
+          {
+            "predicate": 3,
+            "sentence": 0,
+            "span": {
+              "start_char": 5,
+              "end_char": 6
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 0,
+                "span": {
+                  "start_char": 0,
+                  "end_char": 2
+                }
+              }
+            ]
+          },
+          {
+            "predicate": 8,
+            "sentence": 0,
+            "span": {
+              "start_char": 12,
+              "end_char": 14
+            },
+            "args": [
+              {
+                "role": "ARGM",
+                "head": 3,
+                "span": {
+                  "start_char": 5,
+                  "end_char": 6
+                }
+              }
+            ]
+          }
+        ],
+        "relations": [],
+        "unknown": []
+      },
+      "doc_raw_sha256": "c910f4019385ea01c0e07d77184a36e7dd6a0bfb18d2ee591d18e90985d7430c",
+      "observed_target": "當被到明天為止不看聽了時。",
+      "provenance": "#352 failed-head official ARM"
+    }
+  ]
+}

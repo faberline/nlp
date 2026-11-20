@@ -6519,8 +6519,9 @@ fn translate_clause_atoms(
         {
             group.role = BunsetsuRole::Adv;
         }
-        if deadline_governor(group, doc).is_some_and(|head| has_detached_voice_negation(body, head))
-        {
+        if deadline_governor(group, doc).is_some_and(|head| {
+            has_detached_voice_negation(body, head) || has_attached_voice_negation(body, head)
+        }) {
             group.role = BunsetsuRole::DeadlineWithDetachedNegation;
         }
     }
@@ -16940,6 +16941,30 @@ fn has_detached_voice_negation(source: &[Atom], timed: usize) -> bool {
         })
 }
 
+fn has_attached_voice_negation(source: &[Atom], timed: usize) -> bool {
+    source.windows(4).any(|tokens| {
+        let [verb, voice, polite, negative] = tokens else {
+            return false;
+        };
+        tokens.iter().all(|token| !token.is_locked)
+            && verb.doc_tok_idx == Some(timed)
+            && verb.upos == Some(Upos::Verb)
+            && [voice, polite, negative].iter().all(|token| {
+                token.upos == Some(Upos::Aux) && token.deprel == "aux" && token.head == Some(timed)
+            })
+            && matches!(
+                (voice.surface.as_str(), voice.lemma.as_deref()),
+                ("れ", Some("れる")) | ("られ", Some("られる"))
+            )
+            && polite.surface == "ませ"
+            && polite.lemma.as_deref() == Some("ます")
+            && negative.surface == "ん"
+            && tokens
+                .windows(2)
+                .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+    })
+}
+
 fn deadline_governor(group: &Bunsetsu, doc: &Document) -> Option<usize> {
     if group.case_particle.as_deref() != Some("までに") {
         return None;
@@ -18351,6 +18376,39 @@ mod clock_rule_tests {
             deprel: String::new(),
             is_locked: locked,
         }
+    }
+
+    #[test]
+    fn attached_voice_negation_requires_contiguous_unlocked_same_head_tokens() {
+        let mut verb = atom("来", 0, false);
+        verb.doc_tok_idx = Some(7);
+        verb.upos = Some(Upos::Verb);
+        let mut voice = atom("られ", 1, false);
+        voice.lemma = Some("られる".to_owned());
+        let mut polite = atom("ませ", 3, false);
+        polite.lemma = Some("ます".to_owned());
+        let negative = atom("ん", 5, false);
+        let mut tokens = [verb, voice, polite, negative];
+        for token in &mut tokens[1..] {
+            token.upos = Some(Upos::Aux);
+            token.deprel = "aux".to_owned();
+            token.head = Some(7);
+        }
+        assert!(super::has_attached_voice_negation(&tokens, 7));
+        assert!(!super::has_attached_voice_negation(&tokens, 8));
+        for i in 1..tokens.len() {
+            let mut other_head = tokens.clone();
+            other_head[i].head = Some(99);
+            assert!(!super::has_attached_voice_negation(&other_head, 7));
+        }
+        for i in 0..tokens.len() {
+            let mut locked = tokens.clone();
+            locked[i].is_locked = true;
+            assert!(!super::has_attached_voice_negation(&locked, 7));
+        }
+        let mut gap = tokens.clone();
+        gap[2].span.start_char += 1;
+        assert!(!super::has_attached_voice_negation(&gap, 7));
     }
 
     #[test]

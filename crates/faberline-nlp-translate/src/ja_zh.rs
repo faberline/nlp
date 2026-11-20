@@ -211,6 +211,8 @@ pub(crate) fn translate_ja_sentence(
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
+        join_sequential_connector(&mut atoms);
+        daytime::bind_form_time(&mut atoms, chars, doc);
         application_form::normalize(&mut atoms, chars, doc);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
         calendar::bind_day_arguments(&mut atoms, doc, || {
@@ -1751,6 +1753,42 @@ fn build_sentence_atoms(
 
     // Re-attach any `[[PHk]]` literal tokens if `translate_ja_fragment` was called on pre-masked text.
     merge_literal_placeholders(atoms)
+}
+
+// After a connected action, そのあと can be split into a determiner and an
+// adverb. Keep the phrase with the following event instead of its destination.
+fn join_sequential_connector(atoms: &mut Vec<Atom>) {
+    for i in (3..atoms.len().saturating_sub(1)).rev() {
+        let [first, link, pause, determiner, after] = &atoms[i - 3..=i + 1] else {
+            continue;
+        };
+        if [first, link, pause, determiner, after]
+            .iter()
+            .any(|a| a.is_locked)
+            || first.upos != Some(Upos::Verb)
+            || first.deprel != "advcl"
+            || link.deprel != "mark"
+            || link.head != first.doc_tok_idx
+            || !matches!(link.surface.as_str(), "て" | "で")
+            || !matches!(pause.surface.as_str(), "、" | "，" | ",")
+            || determiner.surface != "その"
+            || determiner.upos != Some(Upos::Det)
+            || after.surface != "あと"
+            || after.upos != Some(Upos::Adv)
+            || after.deprel != "advmod"
+            || after.head.is_none()
+            || after.head != first.head
+            || pause.span.end_char != determiner.span.start_char
+            || determiner.span.end_char != after.span.start_char
+        {
+            continue;
+        }
+        let mut connector = after.clone();
+        connector.span.start_char = determiner.span.start_char;
+        connector.surface = "その後".to_owned();
+        connector.upos = Some(Upos::Cconj);
+        atoms.splice(i..=i + 1, [connector]);
+    }
 }
 
 fn normalized_sentence_atoms(
@@ -20374,6 +20412,35 @@ mod motion_endpoint_tests {
         ] {
             assert!(!translate(source).contains("白天"), "{source}");
         }
+    }
+
+    #[test]
+    fn daytime_belongs_to_the_filing_or_extraction_with_its_own_participants() {
+        for (source, expected) in [
+            (
+                "私は日中に、大家に入居申込書を出しました。",
+                "我白天向房東交了入住申請表。",
+            ),
+            (
+                "私は日中に、大家と一緒に入居申込書を出しました。",
+                "我白天和房東一起交了入住申請表。",
+            ),
+            (
+                "私は日中に、大家のかばんから入居申込書を出して、そのあとドイツへ送りました。",
+                "我白天從房東的包包拿出入住申請表，然後往德國寄送了。",
+            ),
+            (
+                "私は日中に、郵便局へ申込書を送りました。姉は大家に入居申込書を出しました。",
+                "我白天往郵局寄送了申請表。姊姊向房東交了入住申請表。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        let countries = translate("政府は日中にも米国にも申込書を出しました。");
+        assert!(
+            countries.contains("日中") && countries.contains("米國") && !countries.contains("白天"),
+            "{countries}"
+        );
     }
 
     #[test]

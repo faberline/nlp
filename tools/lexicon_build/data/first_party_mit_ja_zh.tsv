@@ -18,6 +18,8 @@
 財布	NOUN	錢包	650	-
 社長	NOUN	社長	650	-
 部長	NOUN	部長	650	-
+# The general staff noun follows the existing 職員 cost (947).
+係員	NOUN	工作人員	947	-
 # General application form; cost follows the existing form noun 願書 (1035).
 申込書	NOUN	申請表	1035	-
 # Cost follows the existing ja.tsv management title 部長 (956).

@@ -1062,6 +1062,8 @@ godan_ka	1	かれてる	60	VERB	*か/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+�
 godan_ka	1	かれてた	60	VERB	*か/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+た/いる/VERB
 godan_ka	1	かれます	45	VERB	*か/<LEMMA>/VERB+れ/れる/AUX+ます/ます/AUX
 godan_ka	1	かれました	45	VERB	*か/<LEMMA>/VERB+れ/れる/AUX+まし/ます/AUX+た/た/AUX
+godan_ka	1	かれません	330	VERB	*か/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX
+godan_ka	1	かれませんでした	335	VERB	*か/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 godan_ka	1	かれてしまう	55	VERB	*か/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまう/しまう/AUX
 godan_ka	1	かれてしまった	55	VERB	*か/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 godan_ka	1	かせ	60	VERB	*か/<LEMMA>/VERB+せ/せる/AUX
@@ -1090,6 +1092,8 @@ godan_ga	1	がれてる	60	VERB	*が/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+�
 godan_ga	1	がれてた	60	VERB	*が/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+た/いる/VERB
 godan_ga	1	がれます	45	VERB	*が/<LEMMA>/VERB+れ/れる/AUX+ます/ます/AUX
 godan_ga	1	がれました	45	VERB	*が/<LEMMA>/VERB+れ/れる/AUX+まし/ます/AUX+た/た/AUX
+godan_ga	1	がれません	330	VERB	*が/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX
+godan_ga	1	がれませんでした	335	VERB	*が/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 godan_ga	1	がれてしまう	55	VERB	*が/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまう/しまう/AUX
 godan_ga	1	がれてしまった	55	VERB	*が/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 godan_ga	1	がせ	60	VERB	*が/<LEMMA>/VERB+せ/せる/AUX
@@ -1104,6 +1108,8 @@ godan_sa	1	されてる	60	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+�
 godan_sa	1	されてた	60	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+た/いる/VERB
 godan_sa	1	されます	45	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+ます/ます/AUX
 godan_sa	1	されました	45	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+まし/ます/AUX+た/た/AUX
+godan_sa	1	されません	330	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX
+godan_sa	1	されませんでした	335	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 godan_sa	1	されてしまう	55	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまう/しまう/AUX
 godan_sa	1	されてしまった	55	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 godan_sa	1	させ	60	VERB	*さ/<LEMMA>/VERB+せ/せる/AUX
@@ -1118,6 +1124,8 @@ godan_ta	1	たれてる	60	VERB	*た/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+�
 godan_ta	1	たれてた	60	VERB	*た/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+た/いる/VERB
 godan_ta	1	たれます	45	VERB	*た/<LEMMA>/VERB+れ/れる/AUX+ます/ます/AUX
 godan_ta	1	たれました	45	VERB	*た/<LEMMA>/VERB+れ/れる/AUX+まし/ます/AUX+た/た/AUX
+godan_ta	1	たれません	330	VERB	*た/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX
+godan_ta	1	たれませんでした	335	VERB	*た/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 godan_ta	1	たれてしまう	55	VERB	*た/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまう/しまう/AUX
 godan_ta	1	たれてしまった	55	VERB	*た/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 godan_ta	1	たせ	60	VERB	*た/<LEMMA>/VERB+せ/せる/AUX
@@ -1132,6 +1140,8 @@ godan_na	1	なれてる	60	VERB	*な/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+�
 godan_na	1	なれてた	60	VERB	*な/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+た/いる/VERB
 godan_na	1	なれます	45	VERB	*な/<LEMMA>/VERB+れ/れる/AUX+ます/ます/AUX
 godan_na	1	なれました	45	VERB	*な/<LEMMA>/VERB+れ/れる/AUX+まし/ます/AUX+た/た/AUX
+godan_na	1	なれません	330	VERB	*な/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX
+godan_na	1	なれませんでした	335	VERB	*な/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 godan_na	1	なれてしまう	55	VERB	*な/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまう/しまう/AUX
 godan_na	1	なれてしまった	55	VERB	*な/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 godan_na	1	なせ	60	VERB	*な/<LEMMA>/VERB+せ/せる/AUX
@@ -1146,6 +1156,8 @@ godan_ba	1	ばれてる	60	VERB	*ば/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+�
 godan_ba	1	ばれてた	60	VERB	*ば/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+た/いる/VERB
 godan_ba	1	ばれます	45	VERB	*ば/<LEMMA>/VERB+れ/れる/AUX+ます/ます/AUX
 godan_ba	1	ばれました	45	VERB	*ば/<LEMMA>/VERB+れ/れる/AUX+まし/ます/AUX+た/た/AUX
+godan_ba	1	ばれません	330	VERB	*ば/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX
+godan_ba	1	ばれませんでした	335	VERB	*ば/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 godan_ba	1	ばれてしまう	55	VERB	*ば/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまう/しまう/AUX
 godan_ba	1	ばれてしまった	55	VERB	*ば/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 godan_ba	1	ばせ	60	VERB	*ば/<LEMMA>/VERB+せ/せる/AUX
@@ -1160,6 +1172,8 @@ godan_ma	1	まれてる	60	VERB	*ま/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+�
 godan_ma	1	まれてた	60	VERB	*ま/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+た/いる/VERB
 godan_ma	1	まれます	45	VERB	*ま/<LEMMA>/VERB+れ/れる/AUX+ます/ます/AUX
 godan_ma	1	まれました	45	VERB	*ま/<LEMMA>/VERB+れ/れる/AUX+まし/ます/AUX+た/た/AUX
+godan_ma	1	まれません	330	VERB	*ま/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX
+godan_ma	1	まれませんでした	335	VERB	*ま/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 godan_ma	1	まれてしまう	55	VERB	*ま/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまう/しまう/AUX
 godan_ma	1	まれてしまった	55	VERB	*ま/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 godan_ma	1	ませ	60	VERB	*ま/<LEMMA>/VERB+せ/せる/AUX
@@ -1174,6 +1188,8 @@ godan_ra	1	られてる	60	VERB	*ら/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+�
 godan_ra	1	られてた	60	VERB	*ら/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+た/いる/VERB
 godan_ra	1	られます	45	VERB	*ら/<LEMMA>/VERB+れ/れる/AUX+ます/ます/AUX
 godan_ra	1	られました	45	VERB	*ら/<LEMMA>/VERB+れ/れる/AUX+まし/ます/AUX+た/た/AUX
+godan_ra	1	られません	330	VERB	*ら/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX
+godan_ra	1	られませんでした	335	VERB	*ら/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 godan_ra	1	られてしまう	55	VERB	*ら/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまう/しまう/AUX
 godan_ra	1	られてしまった	55	VERB	*ら/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 godan_ra	1	らせ	60	VERB	*ら/<LEMMA>/VERB+せ/せる/AUX
@@ -1188,6 +1204,8 @@ godan_wa	1	われてる	60	VERB	*わ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+�
 godan_wa	1	われてた	60	VERB	*わ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+た/いる/VERB
 godan_wa	1	われます	45	VERB	*わ/<LEMMA>/VERB+れ/れる/AUX+ます/ます/AUX
 godan_wa	1	われました	45	VERB	*わ/<LEMMA>/VERB+れ/れる/AUX+まし/ます/AUX+た/た/AUX
+godan_wa	1	われません	330	VERB	*わ/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX
+godan_wa	1	われませんでした	335	VERB	*わ/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 godan_wa	1	われてしまう	55	VERB	*わ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまう/しまう/AUX
 godan_wa	1	われてしまった	55	VERB	*わ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 godan_wa	1	わせ	60	VERB	*わ/<LEMMA>/VERB+せ/せる/AUX
@@ -1202,6 +1220,8 @@ ichidan	1	られてる	60	VERB	*/<LEMMA>/VERB+られ/られる/AUX+て/て/SCONJ
 ichidan	1	られてた	60	VERB	*/<LEMMA>/VERB+られ/られる/AUX+て/て/SCONJ+た/いる/VERB
 ichidan	1	られます	45	VERB	*/<LEMMA>/VERB+られ/られる/AUX+ます/ます/AUX
 ichidan	1	られました	45	VERB	*/<LEMMA>/VERB+られ/られる/AUX+まし/ます/AUX+た/た/AUX
+ichidan	1	られません	50	VERB	*/<LEMMA>/VERB+られ/られる/AUX+ませ/ます/AUX+ん/ん/AUX
+ichidan	1	られませんでした	55	VERB	*/<LEMMA>/VERB+られ/られる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 ichidan	1	られてしまう	55	VERB	*/<LEMMA>/VERB+られ/られる/AUX+て/て/SCONJ+しまう/しまう/AUX
 ichidan	1	られてしまった	55	VERB	*/<LEMMA>/VERB+られ/られる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 ichidan	1	させ	60	VERB	*/<LEMMA>/VERB+させ/せる/AUX
@@ -1216,6 +1236,8 @@ sahen	2	されてる	60	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+る/
 sahen	2	されてた	60	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+た/いる/VERB
 sahen	2	されます	45	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+ます/ます/AUX
 sahen	2	されました	45	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+まし/ます/AUX+た/た/AUX
+sahen	2	されません	50	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX
+sahen	2	されませんでした	55	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 sahen	2	されてしまう	55	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまう/しまう/AUX
 sahen	2	されてしまった	55	VERB	*さ/<LEMMA>/VERB+れ/れる/AUX+て/て/SCONJ+しまっ/しまう/AUX+た/た/AUX
 sahen	2	させ	60	VERB	*さ/<LEMMA>/VERB+せ/せる/AUX
@@ -1228,6 +1250,8 @@ kahen	2	来られている	45	VERB	*来/<LEMMA>/VERB+られ/られる/AUX+て/�
 kahen	2	来られていた	45	VERB	*来/<LEMMA>/VERB+られ/られる/AUX+て/て/SCONJ+い/いる/VERB+た/た/AUX
 kahen	2	来られます	45	VERB	*来/<LEMMA>/VERB+られ/られる/AUX+ます/ます/AUX
 kahen	2	来られました	45	VERB	*来/<LEMMA>/VERB+られ/られる/AUX+まし/ます/AUX+た/た/AUX
+kahen	2	来られません	50	VERB	*来/<LEMMA>/VERB+られ/られる/AUX+ませ/ます/AUX+ん/ん/AUX
+kahen	2	来られませんでした	55	VERB	*来/<LEMMA>/VERB+られ/られる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 kahen	2	来させ	60	VERB	*来/<LEMMA>/VERB+させ/せる/AUX
 kahen	2	来させて	55	VERB	*来/<LEMMA>/VERB+させ/せる/AUX+て/て/SCONJ
 kahen	2	こられ	55	VERB	*こ/<LEMMA>/VERB+られ/られる/AUX
@@ -1236,6 +1260,8 @@ kahen	2	こられている	45	VERB	*こ/<LEMMA>/VERB+られ/られる/AUX+て/�
 kahen	2	こられていた	45	VERB	*こ/<LEMMA>/VERB+られ/られる/AUX+て/て/SCONJ+い/いる/VERB+た/た/AUX
 kahen	2	こられます	45	VERB	*こ/<LEMMA>/VERB+られ/られる/AUX+ます/ます/AUX
 kahen	2	こられました	45	VERB	*こ/<LEMMA>/VERB+られ/られる/AUX+まし/ます/AUX+た/た/AUX
+kahen	2	こられません	50	VERB	*こ/<LEMMA>/VERB+られ/られる/AUX+ませ/ます/AUX+ん/ん/AUX
+kahen	2	こられませんでした	55	VERB	*こ/<LEMMA>/VERB+られ/られる/AUX+ませ/ます/AUX+ん/ん/AUX+でし/です/AUX+た/た/AUX
 kahen	2	こさせ	60	VERB	*こ/<LEMMA>/VERB+させ/せる/AUX
 kahen	2	こさせて	55	VERB	*こ/<LEMMA>/VERB+させ/せる/AUX+て/て/SCONJ
 kahen	2	来てしまう	50	VERB	*来/<LEMMA>/VERB+て/て/SCONJ+しまう/しまう/AUX

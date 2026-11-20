@@ -827,13 +827,22 @@ fn person_reading(before: &[Atom], suffix: &Atom, doc: &Document) -> Option<Pers
         start_char: noun.span.start_char,
         end_char: suffix.span.end_char,
     };
+    // A name entity can end at the surname. The separate honorific still
+    // owns its case when the proven proper noun is its compound dependent.
+    let attached_person = entry.decided_upos == Some(Upos::Propn)
+        && suffix.doc_tok_idx.is_some()
+        && noun.head == suffix.doc_tok_idx
+        && noun.deprel == "compound"
+        && noun.span.end_char == suffix.span.start_char;
     let mut exact = false;
     for entity in doc
         .entities
         .iter()
         .filter(|e| e.span.start_char < span.end_char && span.start_char < e.span.end_char)
     {
-        if entity.kind != EntityKind::Name || entity.span != span {
+        if entity.kind != EntityKind::Name
+            || !(entity.span == span || attached_person && entity.span == noun.span)
+        {
             return None;
         }
         exact = true;

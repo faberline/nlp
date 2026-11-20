@@ -11,6 +11,7 @@ mod calendar;
 pub(crate) use calendar::DateContext;
 mod copular_time;
 mod counted_object;
+mod daytime;
 mod finite_adjective;
 mod homework_desire;
 mod homework_relative;
@@ -210,6 +211,7 @@ pub(crate) fn translate_ja_sentence(
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
+        daytime::join_recipient_pauses(&mut atoms);
         nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target, chars);
     }
 
@@ -1663,6 +1665,16 @@ fn build_sentence_atoms(
                     lemma: match (&lk.origin, whole_lock) {
                         (
                             LockOrigin::Glossary {
+                                kind: GlossaryKind::DomainTerm,
+                                ..
+                            },
+                            true,
+                        ) => daytime::glossary_role(
+                            &chars[lk.source_span.start_char..lk.source_span.end_char],
+                        )
+                        .map(str::to_owned),
+                        (
+                            LockOrigin::Glossary {
                                 kind: GlossaryKind::Place,
                                 ..
                             },
@@ -1742,6 +1754,7 @@ fn normalized_sentence_atoms(
     let atoms = normalize_keigo_atoms(&atoms);
     let atoms = normalize_glossary_clocks(&atoms, chars, locks);
     let mut atoms = normalize_clock_atoms(&atoms);
+    daytime::restore_glossary_attachment(&mut atoms);
     copular_time::mark_questions(&mut atoms, chars, locks);
     preserve_clock_adjacent_locks(&atoms, doc, sentence_idx)
 }
@@ -6246,6 +6259,7 @@ fn translate_clause_atoms(
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
+        daytime::bind(&mut norm_atoms, body, doc);
     }
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
@@ -10852,6 +10866,11 @@ fn translate_clause_bunsetsus(
         .enumerate()
         .filter_map(|(idx, group)| is_event_daypart(group, &bunsetsus, source).then_some(idx))
         .collect();
+    let daylight_meeting = bunsetsus
+        .iter()
+        .flat_map(|g| &g.atoms)
+        .filter(|a| daytime::is_modifier(a))
+        .find_map(|day| daytime::meeting_verb(source, day));
     for (idx, b) in bunsetsus.drain(..).enumerate() {
         if arrival_head.is_some()
             && b.role == BunsetsuRole::Subj
@@ -11360,6 +11379,15 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, passive_agent_needed) =
         synthesize_predicate_complex(&predicates, !objs.is_empty(), target, transfer);
+    if let Some((span, action)) = daylight_meeting
+        && matches!(verb_core.as_str(), "開" | "舉辦")
+        && predicates
+            .iter()
+            .flat_map(|g| &g.atoms)
+            .any(|a| a.span.start_char <= span.start_char && span.end_char <= a.span.end_char)
+    {
+        verb_core = action.to_owned();
+    }
     if elapsed_progressive_relative && !elapsed_progressive_negative {
         pre_verb_mods.retain(|m| m != "正在");
         pre_verb_mods.push("已經".to_owned());
@@ -16367,7 +16395,11 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
         }
     }
 
-    let role = if is_connector
+    // The original frame may call a glossary token covering 日中に a
+    // predicate. Its resolved activity modifier must keep its local role.
+    let role = if matches!(atoms.as_slice(), [day] if daytime::is_modifier(day)) {
+        BunsetsuRole::Adv
+    } else if is_connector
         && case_particle.is_none()
         && !has_verb_or_adj
         && !has_copula
@@ -17114,6 +17146,9 @@ fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool
 // Keep the time only when its own governor and that governor's other
 // arguments support an event-time reading.
 fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> bool {
+    if matches!(group.atoms.as_slice(), [day] if daytime::is_modifier(day)) {
+        return true;
+    }
     let (time, ni, focused) = match group.atoms.as_slice() {
         [time, ni] => (time, ni, false),
         [time, ni, focus]
@@ -17688,6 +17723,59 @@ mod clock_rule_tests {
             Backend::Onnx,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn daylight_respects_the_extent_and_role_of_a_glossary_entry() {
+        for (source, term, actor, expected_daylight) in [
+            ("父は日中にも本を読みました。", "日中", false, false),
+            ("父は日中に本を読みました。", "日中に", false, false),
+            ("日中に先生に手紙を送りました。", "先生", true, true),
+            ("係員は日中に机の上を片付けました。", "机の上", false, true),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            let entries = if actor {
+                &mut glossary.actors
+            } else {
+                &mut glossary.domain_terms
+            };
+            entries.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "山海".to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            let rendered = public_translate(source, &glossary);
+            assert_eq!(rendered.glossary_hits.len(), 1, "{source}");
+            assert_eq!(rendered.target_text.matches("山海").count(), 1, "{source}");
+            if term == "日中に" {
+                assert_eq!(rendered.target_text, "父親山海讀了書。");
+            }
+            assert_eq!(
+                rendered.target_text.contains("白天"),
+                expected_daylight,
+                "{source}"
+            );
+        }
+        for term in ["日中", "日中に"] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "日間".to_owned())]),
+                ..GlossaryEntry::default()
+            });
+            let sentence = public_translate(
+                "病院は日中に、患者に予約の確認メールを送りました。",
+                &glossary,
+            );
+            assert_eq!(sentence.glossary_hits.len(), 1);
+            assert!(
+                sentence.target_text.starts_with("醫院日間給患者寄送"),
+                "{}",
+                sentence.target_text
+            );
+        }
     }
 
     #[test]
@@ -19721,6 +19809,102 @@ mod motion_endpoint_tests {
             ("私は`夕方`に帰ります。", "我回到`夕方`。"),
         ] {
             assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn daylight_stays_with_its_activity_and_preserves_the_recipient() {
+        for (source, expected) in [
+            (
+                "係員は日中に机の上を片付けました。",
+                "係員白天收拾了書桌上面。",
+            ),
+            ("父は日中には本を読みました。", "父親白天讀了書。"),
+            ("母は日中にも働きます。", "母親白天也工作。"),
+            ("日中に会議を開きました。", "白天召開了會議。"),
+            ("市は日中に会議を開催しました。", "市白天召開了會議。"),
+            ("日中に説明会を開きます。", "白天舉辦說明會。"),
+            ("日中に先生に手紙を送りました。", "白天給老師寄送了信。"),
+            ("日中に先生へ手紙を送りました。", "白天給老師寄送了信。"),
+            (
+                "日中に働いた先生は夜に本を読みました。",
+                "白天工作的老師夜晚讀了書。",
+            ),
+            (
+                "母は日中に先生に手紙を送り、父は夜に働きました。",
+                "母親白天給老師寄送信，父親夜晚工作了。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+        for (source, participant) in [
+            ("私は日中に駅へ行きました。", "車站"),
+            ("日中に雨が止みました。", "雨"),
+            ("店は日中に開きます。", "商店"),
+            ("日中に生徒に手紙を配りました。", "信"),
+            ("私は日中に友達に会いました。", "朋友"),
+        ] {
+            let result = translate(source);
+            assert!(
+                result.contains("白天") && result.contains(participant),
+                "{source}: {result}"
+            );
+            assert!(
+                !result.contains("給白天") && !result.contains("到白天"),
+                "{source}: {result}"
+            );
+        }
+        for source in [
+            "政府は日中に協力を求めました。",
+            "米国は日中に市場を開きました。",
+            "日中両国に書類を送りました。",
+            "手紙を日中に送りました。",
+            "母は日中に手紙を送り、父は夜に先生に会いました。",
+            "一日中に起きた変化を調べます。",
+            "父は`日中`に本を読みました。",
+            "私は日中に本を読まれました。",
+            "政府は日中にも米国にも書簡を送りました。",
+        ] {
+            assert!(!translate(source).contains("白天"), "{source}");
+        }
+    }
+
+    #[test]
+    fn daytime_shipping_keeps_the_destination_and_the_personal_recipient() {
+        for (goal, expected) in [
+            ("ドイツへ", "往德國"),
+            ("郵便局へ", "往郵局"),
+            ("ドイツの友達に", "給德國的朋友"),
+            ("ドイツの友達へ", "給德國的朋友"),
+            ("友達の学校へ", "往朋友的學校"),
+        ] {
+            let source = format!("私は日中に、{goal}申込書を送りました。");
+            assert_eq!(
+                translate(&source),
+                format!("我白天{expected}寄送了申請表。")
+            );
+        }
+    }
+
+    #[test]
+    fn distribution_can_omit_recipients_and_a_sender_can_name_two() {
+        assert_eq!(translate("明日は日中に本を配ります。"), "明天白天發放書。");
+        let coordinated = translate("私は日中に、姉と兄に写真とはがきを送りました。");
+        assert!(
+            coordinated.starts_with("我白天給姊姊和哥哥寄送了"),
+            "{coordinated}"
+        );
+        let documents = translate("今日は日中に資料を配ります。");
+        assert!(
+            documents.contains("白天") && documents.contains("資料"),
+            "{documents}"
+        );
+        for source in [
+            "明日は日中に協力を求めます。",
+            "政府は日中に、声明を送りました。",
+            "政府は日中両国に本を配りました。",
+        ] {
+            assert!(!translate(source).contains("白天"), "{source}");
         }
     }
 

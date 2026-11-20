@@ -9977,7 +9977,9 @@ fn elapsed_duration_surface(text: &str) -> Option<String> {
 }
 
 fn elapsed_minutes(text: &str, limit: u32) -> Option<String> {
-    let number = text.strip_suffix('分')?;
+    let number = text
+        .strip_suffix("分間")
+        .or_else(|| text.strip_suffix('分'))?;
     let normalized = normalize_decimal_digits(number);
     (elapsed_number(number)? < limit).then_some(normalized)
 }
@@ -18219,6 +18221,25 @@ mod clock_rule_tests {
                 public_translate(reading, &glossary).target_text
             );
         }
+    }
+
+    #[test]
+    fn explicit_minutes_stay_with_their_action_next_to_an_adequacy_modifier() {
+        let terms = TranslationGlossary::new();
+        for (source, time) in [
+            ("資料を十分間読みました。", "十分鐘"),
+            ("資料を10分間読みました。", "10分鐘"),
+            ("三十分間待ちました。", "三十分鐘"),
+            ("先生と二時間話して、資料を十分間読みました。", "十分鐘"),
+        ] {
+            let text = public_translate(source, &terms).target_text;
+            assert!(
+                text.contains(time) && !text.contains("間十分"),
+                "{source} -> {text}"
+            );
+        }
+        let text = public_translate("十分な資料を読みました。", &terms).target_text;
+        assert!(!text.contains("分鐘"), "{text}");
     }
 
     #[test]

@@ -1698,6 +1698,74 @@ fn a_quoted_definition_resolves_a_later_honorific_in_its_paragraph() {
 }
 
 #[test]
+fn a_caller_named_person_keeps_the_spoken_address_and_possessive_roles() {
+    let glossary = actor_glossary("愛麗絲代表");
+    for (source, expected, hits) in [
+        (
+            "先生は「アリスさん、こちらへ」と言いました。",
+            "「愛麗絲代表，",
+            1,
+        ),
+        ("先生は「アリスさん」と呼びました。", "「愛麗絲代表」", 1),
+        (
+            "この本はアリスさんの本か、ボブさんのですか。",
+            "這本書是愛麗絲代表的還是鮑伯的？",
+            2,
+        ),
+        (
+            "先生は「アリスさん」と紙にそのまま書き写しました。",
+            "「アリスさん」",
+            0,
+        ),
+    ] {
+        let translated = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &translated);
+        assert!(
+            translated.target_text.contains(expected),
+            "{source}: {}",
+            translated.target_text
+        );
+        assert_eq!(translated.glossary_hits.len(), hits, "{source}");
+    }
+}
+
+#[test]
+fn a_fragmented_kana_subject_keeps_its_original_name_and_uncertainty() {
+    let name = "こむぎさん";
+    let source = format!("{name}は台所にいます。");
+    let doc = analyze_and_translate(
+        &source,
+        &TranslateOptions::new(TargetVariant::ZhHant),
+        &TranslationGlossary::new(),
+        None,
+        Backend::Onnx,
+    )
+    .unwrap();
+    assert_eq!(doc.target_text, "こむぎさん在廚房。");
+    let [unknown] = doc.unknown.as_slice() else {
+        panic!("{:?}", doc.unknown);
+    };
+    assert_eq!(
+        unknown.source_span,
+        Span {
+            start_char: 0,
+            end_char: name.chars().count()
+        }
+    );
+    assert_eq!(
+        unknown.kind,
+        faberline_nlp_translate::TranslateUnknownKind::LowConfidence
+    );
+}
+
+#[test]
 fn an_unresolved_kana_subject_retains_its_full_original_scalar_span() {
     let end = "ことりさんは、ここにいます。";
     for (prefix, structural) in [

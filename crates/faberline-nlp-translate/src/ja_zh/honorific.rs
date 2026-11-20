@@ -390,13 +390,6 @@ impl HonorificContext {
                 || suffix.surface != "さん"
                 || case.is_locked
                 || suffix.doc_tok_idx.is_none()
-                || case.deprel != "case"
-                || case.head != suffix.doc_tok_idx
-                || !matches!(case.upos, Some(Upos::Adp | Upos::Part))
-                || !matches!(
-                    case.surface.as_str(),
-                    "は" | "が" | "を" | "に" | "へ" | "で" | "と" | "も" | "の"
-                )
                 || suffix.span.end_char != case.span.start_char
                 || suffix_idx <= cursor
             {
@@ -404,6 +397,26 @@ impl HonorificContext {
             }
             let previous = &atoms[suffix_idx - 1];
             if previous.span.end_char != suffix.span.start_char {
+                continue;
+            }
+            let attached_case = case.deprel == "case"
+                && case.head == suffix.doc_tok_idx
+                && matches!(case.upos, Some(Upos::Adp | Upos::Part))
+                && matches!(
+                    case.surface.as_str(),
+                    "は" | "が" | "を" | "に" | "へ" | "で" | "と" | "も" | "の"
+                );
+            // At the start of an utterance, a comma or closing quote can end a
+            // direct address without a particle. Written quotations are already
+            // protected as one source span before the honorific pass.
+            let address = matches!(case.upos, Some(Upos::Punct))
+                && matches!(case.surface.as_str(), "、" | "，" | "」" | "』")
+                && (suffix_idx == 1
+                    || matches!(
+                        atoms[suffix_idx - 2].surface.as_str(),
+                        "「" | "『" | "、" | "，"
+                    ));
+            if !(attached_case || address) {
                 continue;
             }
             // In 名前さんのです the copula and genitive particle both depend
@@ -431,10 +444,17 @@ impl HonorificContext {
                         )
                 })
             {
-                if copular_owner {
-                    continue;
-                }
-                result.extend_from_slice(&atoms[cursor..suffix_idx]);
+                // Case and copula depend on the suffix in the source parse.
+                // Carry its grammatical head while preserving the exact caller
+                // placeholder. The glossary hit retains its original span.
+                let mut person = suffix.clone();
+                person.span.start_char = previous.span.start_char;
+                person.surface.clone_from(&previous.surface);
+                person.lemma = Some(PERSON_WITH_SUFFIX.to_owned());
+                person.upos = Some(Upos::Propn);
+                person.is_locked = true;
+                result.extend_from_slice(&atoms[cursor..suffix_idx - 1]);
+                result.push(person);
                 cursor = suffix_idx + 1;
                 continue;
             }
@@ -492,7 +512,7 @@ impl HonorificContext {
                 cursor = suffix_idx + 1;
                 continue;
             }
-            if start == suffix_idx {
+            if !attached_case || start == suffix_idx {
                 continue;
             }
             let span = Span {
@@ -540,6 +560,14 @@ impl HonorificContext {
                 let fragmented = pieces.len() >= 2
                     && pieces.iter().all(|a| {
                         matches!(a.upos, Some(Upos::Noun | Upos::Part))
+                            || a.upos == Some(Upos::Verb)
+                                && a.deprel == "acl"
+                                && a.head == suffix.doc_tok_idx
+                                && pieces.iter().any(|n| {
+                                    n.upos == Some(Upos::Noun)
+                                        && n.deprel == "compound"
+                                        && n.head == suffix.doc_tok_idx
+                                })
                             || a.upos == Some(Upos::Aux)
                                 && a.deprel == "aux"
                                 && pieces.iter().any(|n| {

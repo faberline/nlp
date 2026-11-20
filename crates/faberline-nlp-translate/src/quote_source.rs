@@ -717,8 +717,12 @@ fn quotes_exact_writing(
     let Some(marker) = first.checked_sub(1).and_then(|i| syntax.tokens.get(i)) else {
         return false;
     };
-    // The first character of という does not introduce the written phrase.
-    if marker.span.start_char + 1 != start || marker.span.end_char != start {
+    // という can name the word being written, or just describe its meaning.
+    let names_written_word = strip_prefix(after, "という")
+        .and_then(after_word_name)
+        .is_some_and(|rest| matches!(rest.first(), Some('を' | 'が' | 'と')));
+    if (marker.span.start_char + 1 != start || marker.span.end_char != start) && !names_written_word
+    {
         return false;
     }
     let Some((predicate, verb)) = syntax.first_predicate(first, scope.end_char) else {

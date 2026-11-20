@@ -170,9 +170,15 @@ fn has_human_topic(surface: &str) -> bool {
         "彼ら",
         "彼女たち",
     ];
+    // These nouns denote people even when the dictionary only supplies POS.
+    const HUMAN_NOUNS: &[&str] = &[
+        "父", "母", "兄", "姉", "弟", "妹", "息子", "娘", "祖父", "祖母", "夫", "妻", "友達",
+        "学生",
+    ];
     lookup_ja(surface).is_some_and(|hit| {
         hit.sem_class == Some(SemanticClass::Person)
             || (hit.upos_candidates.contains(&Upos::Pron) && PERSONAL_PRONOUNS.contains(&surface))
+            || (hit.decided_upos == Some(Upos::Noun) && HUMAN_NOUNS.contains(&surface))
     })
 }
 
@@ -1351,6 +1357,11 @@ mod hagaki_topic_segmentation_tests {
             ("彼", "じゃないよ。"),
             ("彼女", "ではないよね。"),
             ("僕", "じゃなかったか。"),
+            ("兄", "のころ、雨でも外で遊んだ。"),
+            ("祖母", "の頃に川で泳いだ。"),
+            ("娘", "ではないよ。"),
+            ("友達", "じゃないよ。"),
+            ("学生", "のときにサッカーを始めた。"),
         ] {
             assert!(
                 recovers_topic(person, suffix, &[]),
@@ -1377,6 +1388,7 @@ mod hagaki_topic_segmentation_tests {
             ("これ", "ではないよ。"),
             ("昔", "だった。"),
             ("彼", "の表を見た。"),
+            ("兄", "の表に住所を書いた。"),
         ] {
             assert!(
                 !recovers_topic(previous, suffix, &[]),

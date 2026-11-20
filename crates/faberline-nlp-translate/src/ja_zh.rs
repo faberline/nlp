@@ -818,10 +818,7 @@ pub(crate) fn translate_ja_sentence(
                         && !inside_quote
                         && matches!(trailing_punct.as_deref(), None | Some("、" | "，"))
                     {
-                        match segments.get(seg_idx + 1) {
-                            Some(Segment::Clause { atoms: next, .. }) => parallel_elapsed_te(trimmed_atoms, next),
-                            _ => None,
-                        }
+                        elapsed_te_before_following(trimmed_atoms, &segments[seg_idx + 1..])
                     } else { None },
                     elapsed_modal_applied: None,
                     inside_quote,
@@ -5199,14 +5196,48 @@ struct ClauseDiscourseCtx<'a> {
     prior_letter_distribution: Option<PriorLetterDistribution>,
 }
 
+// A quoted object can divide the next clause into segments. Only the
+// material outside that object supplies syntactic evidence for its verb.
+fn elapsed_te_before_following(first: &[Atom], following: &[Segment]) -> Option<usize> {
+    let tail_after_object = |tail: &[Atom]| {
+        tail.first()
+            .is_some_and(|case| !case.is_locked && case.surface == "を")
+    };
+    match following {
+        [
+            Segment::Clause {
+                atoms: prefix,
+                trailing_punct: None,
+                ..
+            },
+            Segment::Quote { .. },
+            Segment::Clause { atoms: tail, .. },
+            ..,
+        ] if tail_after_object(tail) && !prefix.iter().any(|a| a.upos == Some(Upos::Verb)) => {
+            let outside: Vec<_> = prefix.iter().chain(tail).cloned().collect();
+            parallel_elapsed_te(first, &outside)
+        }
+        [
+            Segment::Quote { .. },
+            Segment::Clause { atoms: tail, .. },
+            ..,
+        ] if tail_after_object(tail) => parallel_elapsed_te(first, tail),
+        [Segment::Clause { atoms, .. }, ..] => parallel_elapsed_te(first, atoms),
+        _ => None,
+    }
+}
+
 // The segmenter has already separated the two clauses. Prove the terminal て
 // belongs to the first action and that action reaches the second lexical event.
 fn parallel_elapsed_te(first: &[Atom], next: &[Atom]) -> Option<usize> {
-    if first
-        .iter()
-        .chain(next)
-        .any(|a| a.is_locked || a.doc_tok_idx.is_none())
-        || next.first().is_some_and(|a| a.surface == "から")
+    if first.iter().chain(next).any(|a| {
+        a.doc_tok_idx.is_none()
+            || a.is_locked
+                && !matches!(
+                    a.lemma.as_deref(),
+                    Some(LOCKED_RESIDENT_ATOM | LOCKED_OBJECT_ATOM)
+                )
+    }) || next.first().is_some_and(|a| a.surface == "から")
     {
         return None;
     }
@@ -10098,6 +10129,26 @@ fn elapsed_partner(noun: &Atom, marker: &Atom, context: &[Atom]) -> bool {
         && noun.span.end_char == marker.span.start_char
 }
 
+// In 四十分友達と, the parser can treat 十分 as an adjective of 友達.
+// Keep it in the quantity when a complete number precedes the と participant.
+fn minute_before_partner(modifier: &Bunsetsu, next: &Bunsetsu, source: &[Atom]) -> bool {
+    let ([unit], [noun, marker]) = (modifier.atoms.as_slice(), next.atoms.as_slice()) else {
+        return false;
+    };
+    !unit.is_locked
+        && unit.upos == Some(Upos::Adj)
+        && unit.deprel == "amod"
+        && unit.head == noun.doc_tok_idx
+        && unit.span.end_char == noun.span.start_char
+        && elapsed_partner(noun, marker, source)
+        && source.iter().any(|a| {
+            !a.is_locked && a.upos == Some(Upos::Num) && a.span.end_char == unit.span.start_char
+        })
+        && noun
+            .head
+            .is_some_and(|id| elapsed_attached_before(source, id, Some(noun.span.start_char)))
+}
+
 fn partner_before_elapsed(partner: &Bunsetsu, next: &Bunsetsu, source: &[Atom]) -> bool {
     let [.., noun, marker] = partner.atoms.as_slice() else {
         return false;
@@ -14737,6 +14788,9 @@ fn is_person_like_bunsetsu(b: &Bunsetsu) -> bool {
 }
 
 fn is_person_like_atom(a: &Atom) -> bool {
+    if a.is_locked && a.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM) {
+        return false;
+    }
     matches!(a.upos, Some(Upos::Pron | Upos::Propn))
         || a.is_locked
             && matches!(
@@ -14793,6 +14847,10 @@ fn is_noun_bunsetsu(b: &Bunsetsu) -> bool {
 }
 
 fn elapsed_owned_by(source: &[Atom], owner: usize) -> bool {
+    elapsed_attached_before(source, owner, None)
+}
+
+fn elapsed_attached_before(source: &[Atom], owner: usize, before: Option<usize>) -> bool {
     let Some(action_index) = source
         .iter()
         .position(|a| a.doc_tok_idx == Some(owner) && !a.is_locked && a.upos == Some(Upos::Verb))
@@ -14802,6 +14860,9 @@ fn elapsed_owned_by(source: &[Atom], owner: usize) -> bool {
     elapsed_argument_ends(source, action_index, owner)
         .into_iter()
         .any(|(end, partner_id)| {
+            if before.is_some_and(|at| at != source[end].span.start_char) {
+                return false;
+            }
             (0..end).any(|start| {
                 if starts_inside_elapsed_number(source, start) {
                     return false;
@@ -15673,6 +15734,8 @@ fn merge_adnominal_bunsetsus(
 
                 if let Some(pred_b) = res.pop_if(|prev| {
                     is_prenominal_pred(prev)
+                        && !(target == TargetVariant::ZhHant
+                            && minute_before_partner(prev, &b, source))
                         || target == TargetVariant::ZhHant
                             && (homework_relative::attached_predicate(prev, &b, source)
                                 || finite_adjective::voiced_past_modifier(prev, &b, source)
@@ -17706,6 +17769,42 @@ mod clock_rule_tests {
             translate("先生と二時間本を読みました。"),
             "跟老師讀書讀了兩個小時。"
         );
+    }
+
+    #[test]
+    fn elapsed_minutes_and_typed_arguments_stay_with_the_first_action() {
+        let mut terms = TranslationGlossary::new();
+        let entry = |source: &str, target: &str| crate::schema::GlossaryEntry {
+            canonical: source.to_owned(),
+            surfaces: vec![source.to_owned()],
+            targets: std::collections::BTreeMap::from([(TargetVariant::ZhHant, target.to_owned())]),
+            ..Default::default()
+        };
+        terms.actors.push(entry("森田", "莫里田"));
+        terms.objects.push(entry("設計図", "工程藍圖"));
+        for source in ["四十分友達と話しました。", "友達と四十分話しました。"]
+        {
+            assert_eq!(
+                public_translate(source, &terms).target_text,
+                "跟朋友說了四十分鐘。"
+            );
+        }
+        for source in [
+            "二時間森田と設計図を読みました。",
+            "森田と二時間設計図を読みました。",
+        ] {
+            assert_eq!(
+                public_translate(source, &terms).target_text,
+                "跟莫里田讀工程藍圖讀了兩個小時。"
+            );
+        }
+        let copied = public_translate(
+            "森田と二時間設計図を読んで、紙に『設計図』を書き写しました。",
+            &terms,
+        );
+        let (reading, writing) = copied.target_text.split_once('，').expect("two events");
+        assert_eq!(reading, "跟莫里田讀工程藍圖兩個小時");
+        assert!(writing.contains("『設計図』") && !writing.contains("小時"));
     }
 
     #[test]

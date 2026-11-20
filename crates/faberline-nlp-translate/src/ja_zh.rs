@@ -20198,9 +20198,18 @@ mod motion_endpoint_tests {
                 "私は日中に、大家のかばんから入居申込書を出して、そのあとドイツへ送りました。",
                 "我白天從房東的包包拿出入住申請表，然後往德國寄送了。",
             ),
+            (
+                "私は日中に、郵便局へ申込書を送りました。姉は大家に入居申込書を出しました。",
+                "我白天往郵局寄送了申請表。姊姊向房東交了入住申請表。",
+            ),
         ] {
             assert_eq!(translate(source), expected, "{source}");
         }
+        let countries = translate("政府は日中にも米国にも申込書を出しました。");
+        assert!(
+            countries.contains("日中") && countries.contains("米國") && !countries.contains("白天"),
+            "{countries}"
+        );
     }
 
     #[test]

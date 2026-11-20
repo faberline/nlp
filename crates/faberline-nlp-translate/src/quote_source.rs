@@ -706,27 +706,52 @@ fn is_written_phrase(
 
 fn describes_writing(chars: &[char], start: usize, end: usize) -> bool {
     let phrase = &chars[start..end];
-    [
-        "書く",
-        "書いた",
-        "書かない",
-        "書かなかった",
-        "書きます",
-        "書きました",
-        "書きません",
-        "書きませんでした",
-    ]
-    .iter()
-    .filter_map(|form| strip_prefix(phrase, form))
-    .any(|tail| {
-        let tail = skip_space(tail);
-        matches!(
-            tail.first(),
-            None | Some('。' | '？' | '！' | '?' | '!' | '、' | 'と' | 'が')
-        ) || ["後", "あと", "前", "から", "ので", "けれど"]
-            .iter()
-            .any(|link| strip_prefix(tail, link).is_some())
-    })
+    let (stem, forms): (_, &[&str]) = if let Some(aspect) = strip_prefix(phrase, "書いてい") {
+        // いる carries the tense and negation of an ongoing inscription.
+        (
+            aspect,
+            &[
+                "る",
+                "た",
+                "ない",
+                "なかった",
+                "ます",
+                "ました",
+                "ません",
+                "ませんでした",
+            ],
+        )
+    } else {
+        (
+            phrase,
+            &[
+                "書く",
+                "書いた",
+                "書かない",
+                "書かなかった",
+                "書きます",
+                "書きました",
+                "書きません",
+                "書きませんでした",
+                "書いて",
+                "書き",
+                "書かずに",
+                "書かないで",
+            ],
+        )
+    };
+    forms
+        .iter()
+        .filter_map(|form| strip_prefix(stem, form))
+        .any(|tail| {
+            let tail = skip_space(tail);
+            matches!(
+                tail.first(),
+                None | Some('。' | '？' | '！' | '?' | '!' | '、' | 'と' | 'が')
+            ) || ["後", "あと", "前", "から", "ので", "けれど"]
+                .iter()
+                .any(|link| strip_prefix(tail, link).is_some())
+        })
 }
 
 fn is_writing_instruction(
@@ -1849,6 +1874,15 @@ mod tests {
                 &["十分鐘", "「写真」"],
             ),
             ("私は「駅」と紙に写しませんでした。", &["「駅」", "沒有"]),
+            (
+                "先生は紙に「駅」と書いてから、朝まで椅子に座っていました。",
+                &["「駅」", "早上"],
+            ),
+            (
+                "ノートに「写真」と書いていませんでした。",
+                &["「写真」", "沒有"],
+            ),
+            ("紙に「赤い」と英語で書いてから、席を立ちました。", &["紅"]),
             ("教科書の「走る」をノートに写しました。", &["「走る」"]),
             ("妹はカメラでノートの「写真」を写しました。", &["照片"]),
             (

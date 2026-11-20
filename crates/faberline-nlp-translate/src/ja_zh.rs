@@ -6264,6 +6264,13 @@ fn translate_clause_atoms(
 
     if target == TargetVariant::ZhHant
         && !ctx.inside_quote
+        && let Some(text) = handover::before_travel(atoms, ctx.following, doc, ctx.source_chars)
+    {
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
         && let Some(text) =
             translate_elapsed_embedded_question(atoms, doc, sentence_idx, ctx, target)
     {

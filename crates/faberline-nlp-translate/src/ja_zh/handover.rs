@@ -4,8 +4,9 @@ use faberline_nlp::doc::{EntityKind, Token};
 
 use super::{
     Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM,
-    LOCKED_RESIDENT_ATOM, SemanticClass, Span, TargetVariant, Upos, dasu_case_link, daytime,
-    honorific, is_demonstrative_person_noun, is_time_or_place_bunsetsu, render_bunsetsu_np,
+    LOCKED_RESIDENT_ATOM, Segment, SemanticClass, Span, TargetVariant, Upos, classroom_role,
+    dasu_case_link, daytime, honorific, is_demonstrative_person_noun, is_time_or_place_bunsetsu,
+    purpose_stem_lemma, render_bunsetsu_np, return_endpoint,
 };
 
 pub(super) struct Handover {
@@ -191,6 +192,197 @@ fn written_case(source: &[char], span: Span) -> Option<char> {
         return None;
     };
     Some(*marker)
+}
+
+fn travel_place(place: &Atom, doc: &Document, source: &[char]) -> bool {
+    let Some(token) = written_head(place, doc) else {
+        return false;
+    };
+    if !matches!(token.upos, Some(Upos::Noun | Upos::Propn))
+        || matches!(
+            token.sem_class,
+            Some(SemanticClass::Person | SemanticClass::Time)
+        )
+        || matches!(
+            source.get(token.span.start_char..token.span.end_char),
+            Some(['方'] | ['方', '向'])
+        )
+    {
+        return false;
+    }
+    if place.is_locked {
+        return whole_glossary_atom(place, LOCKED_PLACE_ATOM, doc);
+    }
+    token.span == place.span
+        && (token.sem_class == Some(SemanticClass::Location)
+            || return_endpoint::is_place(place)
+            || place.surface == "教室")
+}
+
+fn travel_past(past: &[Atom], go_id: usize, doc: &Document) -> bool {
+    let affirmative = match past {
+        [ta] => ta.surface == "た",
+        [mas, ta] => mas.surface == "まし" && ta.surface == "た",
+        _ => false,
+    };
+    affirmative
+        && past.iter().all(|atom| {
+            !atom.is_locked
+                && atom.head == Some(go_id)
+                && atom.deprel == "aux"
+                && written_head(atom, doc)
+                    .is_some_and(|token| token.span == atom.span && token.upos == Some(Upos::Aux))
+        })
+}
+
+// A bare 渡し before a comma can be tagged as a noun modifying the next
+// place. Recover the continuative only from a complete left argument frame
+// and an independently anchored finite movement on the right.
+pub(super) fn before_travel(
+    atoms: &[Atom],
+    following: &[Segment],
+    doc: &Document,
+    source: &[char],
+) -> Option<String> {
+    let [
+        speaker,
+        topic,
+        first,
+        first_case,
+        second,
+        second_case,
+        hand,
+        continuation @ ..,
+    ] = atoms
+    else {
+        return None;
+    };
+    let [
+        Segment::Clause {
+            atoms: travel,
+            trailing_punct,
+            ..
+        },
+    ] = following
+    else {
+        return None;
+    };
+    let [place, direction, go, past @ ..] = travel.as_slice() else {
+        return None;
+    };
+    let go_id = go.doc_tok_idx?;
+    let go_source = written_head(go, doc)?;
+    if go.is_locked
+        || go.span != go_source.span
+        || go_source.upos != Some(Upos::Verb)
+        || go_source.lemma.as_deref() != Some("行く")
+        || go.deprel != "root"
+        || go.head.is_some()
+        || place.head != Some(go_id)
+        || place.deprel != "obl"
+        || !travel_place(place, doc, source)
+        || !matches!(direction.surface.as_str(), "へ" | "に")
+        || !dasu_case_link(place, direction)
+        || written_head(direction, doc).is_none()
+        || !matches!(trailing_punct.as_deref(), None | Some("。"))
+        || !travel_past(past, go_id, doc)
+        || travel
+            .windows(2)
+            .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
+    {
+        return None;
+    }
+    let hand_id = hand.doc_tok_idx?;
+    let hand_source = written_head(hand, doc)?;
+    if hand.is_locked || hand.surface != "渡し" || hand.span != hand_source.span {
+        return None;
+    }
+    let (owner, end) = match continuation {
+        [] if hand_source.upos == Some(Upos::Noun)
+            && hand.deprel == "nmod"
+            && hand.head == place.doc_tok_idx
+            && purpose_stem_lemma(hand).as_deref() == Some("渡す") =>
+        {
+            (go_id, hand.span.end_char)
+        }
+        [te] if hand_source.upos == Some(Upos::Verb)
+            && hand_source.lemma.as_deref() == Some("渡す")
+            && hand.deprel == "advcl"
+            && hand.head == Some(go_id)
+            && !te.is_locked
+            && te.surface == "て"
+            && te.deprel == "mark"
+            && te.head == Some(hand_id)
+            && written_head(te, doc).is_some() =>
+        {
+            (hand_id, te.span.end_char)
+        }
+        _ => return None,
+    };
+    let sentence = doc.segmentation.sentences.get(go_source.sentence)?.span;
+    if atoms[0].span.start_char != sentence.start_char
+        || atoms
+            .windows(2)
+            .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
+        || !matches!(source.get(end..place.span.start_char), Some(['、' | '，']))
+        || !doc.syntax.iter().any(|node| {
+            node.span.start_char == end
+                && node.span.end_char == place.span.start_char
+                && node.head == Some(owner)
+                && node.deprel == "punct"
+        })
+    {
+        return None;
+    }
+    let (object, wo, receiver, dative) = if first_case.surface == "を" {
+        (first, first_case, second, second_case)
+    } else {
+        (second, second_case, first, first_case)
+    };
+    if speaker.head != Some(owner)
+        || speaker.deprel != "nsubj"
+        || !matches!(topic.surface.as_str(), "は" | "が")
+        || !dasu_case_link(speaker, topic)
+        || written_head(topic, doc).is_none()
+        || !is_explicit_object(object, wo, owner, doc)
+        || receiver.head != Some(owner)
+        || !matches!(receiver.deprel.as_str(), "obl" | "iobj")
+        || !matches!(dative.surface.as_str(), "に" | "へ")
+        || !dasu_case_link(receiver, dative)
+        || written_head(dative, doc).is_none()
+    {
+        return None;
+    }
+    let nominal = |head: &Atom, case: &Atom, role| Bunsetsu {
+        atoms: vec![head.clone(), case.clone()],
+        role,
+        case_particle: Some(case.surface.clone()),
+        sconj_tail: None,
+        sfp_tail: None,
+    };
+    let mover = nominal(speaker, topic, BunsetsuRole::Subj);
+    let recipient = nominal(receiver, dative, BunsetsuRole::IObj);
+    let item = nominal(object, wo, BunsetsuRole::Obj);
+    if !human_recipient(&mover, speaker, written_head(speaker, doc)?, doc)
+        || !human_recipient(&recipient, receiver, written_head(receiver, doc)?, doc)
+    {
+        return None;
+    }
+    let render_person = |group, atom: &Atom| {
+        if !atom.is_locked
+            && let Some((_, name)) = classroom_role(&[], atom)
+        {
+            return name.to_owned();
+        }
+        render_bunsetsu_np(group, TargetVariant::ZhHant)
+    };
+    let mover = render_person(&mover, speaker);
+    let item = render_bunsetsu_np(&item, TargetVariant::ZhHant);
+    let recipient = render_person(&recipient, receiver);
+    if mover.is_empty() || item.is_empty() || recipient.is_empty() {
+        return None;
+    }
+    Some(format!("{mover}把{item}交給{recipient}"))
 }
 
 /// Resolve both arguments before the caller consumes either group. This
@@ -425,5 +617,118 @@ mod tests {
             hits.iter()
                 .any(|(src, dst)| src == "資料" && dst == "講義材料")
         );
+    }
+
+    #[test]
+    fn coordinated_actions_keep_the_handover_and_travel_roles_separate() {
+        let glossary = TranslationGlossary::new();
+        for hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = hint;
+            for (source, expected) in [
+                (
+                    "先生は生徒に資料を渡し、教室へ行きました。",
+                    "老師把資料交給學生，往教室去了。",
+                ),
+                (
+                    "先生は資料を生徒に渡し、図書館へ行きました。",
+                    "老師把資料交給學生，往圖書館去了。",
+                ),
+                (
+                    "先生は生徒に資料を渡して、教室へ行きました。",
+                    "老師把資料交給學生，往教室去了。",
+                ),
+                (
+                    "先生は資料を渡し、教室へ行きました。",
+                    "老師渡し資料，往教室去了。",
+                ),
+                (
+                    "先生は生徒に資料を渡さず、教室へ行きました。",
+                    "老師給生徒不遞給資料，往教室去了。",
+                ),
+                (
+                    "先生は橋を渡って図書館へ行きました。",
+                    "老師渡過橋，往圖書館去了。",
+                ),
+                (
+                    "先生は生徒に資料を渡し、教室の方へ行きました。",
+                    "老師給生徒渡し資料，往教室的位去了。",
+                ),
+                ("私は渡しの近くへ行きました。", "我往渡し的近近地去了。"),
+            ] {
+                let result =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                assert_eq!(result.target_text, expected, "{source}");
+            }
+            let literal = "「先生は生徒に資料を渡し、教室へ行きました」";
+            let source = format!("紙に{literal}と一字ずつ写しました。");
+            let result =
+                analyze_and_translate(&source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert!(result.target_text.contains(literal));
+        }
+    }
+
+    #[test]
+    fn coordinated_actions_keep_all_glossary_spans() {
+        let mut glossary = TranslationGlossary::new();
+        let entry = |source: &str, target: &str| GlossaryEntry {
+            canonical: source.to_owned(),
+            surfaces: vec![source.to_owned()],
+            targets: [(TargetVariant::ZhHant, target.to_owned())].into(),
+            ..GlossaryEntry::default()
+        };
+        glossary.actors.push(entry("先生", "教師甲"));
+        glossary.actors.push(entry("生徒", "學生乙"));
+        glossary.objects.push(entry("資料", "指定資料"));
+        glossary.places.push(entry("教室", "指定教室"));
+        let slice = |text: &str, start, end| {
+            text.chars()
+                .skip(start)
+                .take(end - start)
+                .collect::<String>()
+        };
+        for hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = hint;
+            for source in [
+                "先生は生徒に資料を渡し、教室へ行きました。",
+                "先生は資料を生徒に渡し、教室へ行きました。",
+                "先生は生徒に資料を渡して、教室へ行きました。",
+            ] {
+                let output =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                assert_eq!(
+                    output.target_text, "教師甲把指定資料交給學生乙，往指定教室去了。",
+                    "{source}"
+                );
+                let mut hits: Vec<_> = output
+                    .glossary_hits
+                    .iter()
+                    .map(|hit| {
+                        (
+                            slice(source, hit.source_span.start_char, hit.source_span.end_char),
+                            slice(
+                                &output.target_text,
+                                hit.target_span.start_char,
+                                hit.target_span.end_char,
+                            ),
+                        )
+                    })
+                    .collect();
+                hits.sort();
+                assert_eq!(
+                    hits,
+                    [
+                        ("先生".to_owned(), "教師甲".to_owned()),
+                        ("教室".to_owned(), "指定教室".to_owned()),
+                        ("生徒".to_owned(), "學生乙".to_owned()),
+                        ("資料".to_owned(), "指定資料".to_owned()),
+                    ],
+                    "{source}"
+                );
+            }
+        }
     }
 }

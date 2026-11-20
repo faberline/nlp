@@ -243,7 +243,7 @@ fn topic_clock(
     day_end: usize,
     chars: &[char],
     doc: &Document,
-) -> Option<usize> {
+) -> Option<(usize, Option<usize>)> {
     let wa = atoms.get(day_end + 1)?;
     if wa.is_locked || wa.surface != "は" || wa.deprel != "case" {
         return None;
@@ -277,7 +277,8 @@ fn topic_clock(
     if doc.tokens.get(owner)?.upos != Some(Upos::Verb) {
         return None;
     }
-    let clock = (day_end + 2..atoms.len()).find(|&i| {
+    let mut pause = None;
+    let clock = (day_end + 2..atoms.len()).chain(0..start).find(|&i| {
         let time = &atoms[i];
         chars.get(time.span.start_char..time.span.end_char) == Some(&['何', '時'])
             && doc.syntax.iter().any(|node| {
@@ -297,6 +298,28 @@ fn topic_clock(
                 } else {
                     return false;
                 };
+                if i < start {
+                    let between = &atoms[last_case + 1..start];
+                    // Without a predicate between the clock and the topic,
+                    // an event-owned comma here is a pause in the question.
+                    if between.iter().any(|a| {
+                        a.upos == Some(Upos::Verb)
+                            || a.upos == Some(Upos::Punct)
+                                && !(matches!(a.surface.as_str(), "、" | "，" | ",")
+                                    && !a.is_locked
+                                    && a.head == Some(owner))
+                    }) {
+                        return false;
+                    }
+                    let mut commas = between
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, a)| a.upos == Some(Upos::Punct));
+                    pause = commas.next().map(|(n, _)| last_case + 1 + n);
+                    if commas.next().is_some() {
+                        return false;
+                    }
+                }
                 // Any further particle attached to 何時 qualifies this clock.
                 // For example, 何時にだって asks about availability at any hour.
                 !atoms[last_case + 1..].iter().any(|a| {
@@ -308,7 +331,9 @@ fn topic_clock(
     // Use the question's source syntax even when the final punctuation was
     // taken out of the translation atoms. A bare ？ still belongs to its verb.
     let end = doc.syntax.iter().find(|node| {
-        if node.head != Some(owner) || node.span.start_char < atoms[clock].span.end_char {
+        if node.head != Some(owner)
+            || node.span.start_char < atoms[clock].span.end_char.max(wa.span.end_char)
+        {
             return false;
         }
         match chars.get(node.span.start_char..node.span.end_char) {
@@ -326,7 +351,13 @@ fn topic_clock(
             _ => false,
         }
     })?;
-    let object_quotes: Vec<_> = atoms[day_end + 2..clock]
+    let fronted = clock < start;
+    let object_words = if fronted {
+        &atoms[day_end + 2..]
+    } else {
+        &atoms[day_end + 2..clock]
+    };
+    let object_quotes: Vec<_> = object_words
         .windows(4)
         .filter_map(|words| {
             let [open, name, close, wo] = words else {
@@ -342,7 +373,7 @@ fn topic_clock(
             .then_some((open.span.start_char, close.span.start_char))
         })
         .collect();
-    if (wa.span.end_char..end.span.start_char).any(|at| {
+    if (wa.span.end_char.min(atoms[clock].span.start_char)..end.span.start_char).any(|at| {
         let c = chars[at];
         crate::ja_zh::is_quote_terminal(c)
             || matches!(c, '「' | '」' | '『' | '』' | '“' | '”' | '"')
@@ -352,7 +383,7 @@ fn topic_clock(
     }) {
         return None;
     }
-    Some(clock)
+    Some((clock, pause))
 }
 
 // Alternatives share は at the end of the last date. Read each complete
@@ -418,16 +449,18 @@ fn bind_detached_dates(
                 continue;
             };
         let (topic_end, topic_text) = date_alternatives(atoms, end, &text);
-        if let Some(clock) = topic_clock(atoms, start, topic_end, chars, doc) {
+        if let Some((clock, pause)) = topic_clock(atoms, start, topic_end, chars, doc) {
             let mut time = atoms[clock].clone();
             if !time.is_locked {
                 time.surface = "幾點".to_owned();
             }
             time.is_locked = true;
             time.lemma = Some(super::CLOCK_QUESTION.to_owned());
-            let period = &atoms[clock - 1];
-            let period_index = if period.span.end_char == time.span.start_char
-                && (period.head == time.head || period.head == time.doc_tok_idx)
+            let period_index = if let Some(period) = clock.checked_sub(1).and_then(|i| atoms.get(i))
+                && period.span.end_char == time.span.start_char
+                && (period.head == time.head
+                    || period.head == time.doc_tok_idx
+                    || clock < start && period.head == atoms[start].doc_tok_idx)
                 && let Some(name) = match chars.get(period.span.start_char..period.span.end_char) {
                     Some(['午', '前']) => Some("上午"),
                     Some(['午', '後']) => Some("下午"),
@@ -447,7 +480,15 @@ fn bind_detached_dates(
                 clock
             };
             atoms.splice(period_index..=clock, [time]);
-            bind(atoms, start, topic_end, topic_text, DATE);
+            let shift = if clock < start {
+                clock - period_index
+            } else {
+                0
+            };
+            bind(atoms, start - shift, topic_end - shift, topic_text, DATE);
+            if let Some(comma) = pause {
+                atoms.remove(comma - shift);
+            }
             continue;
         }
         let day = &atoms[end];

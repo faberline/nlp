@@ -839,6 +839,11 @@ pub(crate) fn translate_ja_sentence(
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
                     following: &segments[seg_idx + 1..],
+                    preceding_activity: match segments[..seg_idx].last() {
+                        Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
+                            if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
+                        _ => &[],
+                    },
                     return_trip: None,
                     parallel_elapsed_te: if target == TargetVariant::ZhHant
                         && !prev_was_quote
@@ -5302,6 +5307,7 @@ struct ClauseDiscourseCtx<'a> {
     contrasts_recurrence: bool,
     source_chars: &'a [char],
     following: &'a [Segment],
+    preceding_activity: &'a [Atom],
     return_trip: Option<ReturnTrip>,
     parallel_elapsed_te: Option<usize>,
     inside_quote: bool,
@@ -6526,8 +6532,15 @@ fn translate_clause_atoms(
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
-        && let Some(homework) =
-            try_translate_homework_transfer(&bunsetsus, body, doc, target, None, None)
+        && let Some(homework) = render_homework_transfer(
+            &bunsetsus,
+            body,
+            doc,
+            target,
+            None,
+            None,
+            ctx.preceding_activity,
+        )
     {
         return (homework, false);
     }
@@ -6856,6 +6869,83 @@ fn try_translate_homework_transfer(
     desire: Option<homework_desire::Desire<'_>>,
     relative: Option<ClassroomRole>,
 ) -> Option<String> {
+    render_homework_transfer(bunsetsus, source, doc, target, desire, relative, &[])
+}
+
+/// A conjunctive movement verb and its classroom subject must both be linked
+/// to the right events. A noun followed by から is never a movement connective.
+fn preceding_homework_actor(previous: &[Atom], transfer: &Atom) -> Option<ClassroomRole> {
+    if transfer.deprel != "root" {
+        return None;
+    }
+    let movement = match previous {
+        [.., verb, te, kara]
+            if has_temporal_te_kara_tail(previous)
+                && verb.deprel == "obl"
+                && te.head == verb.doc_tok_idx
+                && kara.head == verb.doc_tok_idx =>
+        {
+            verb
+        }
+        [.., verb, te]
+            if !te.is_locked
+                && te.surface == "て"
+                && te.upos == Some(Upos::Sconj)
+                && te.head == verb.doc_tok_idx
+                && verb.deprel == "advcl" =>
+        {
+            verb
+        }
+        [.., verb] if verb.deprel == "advcl" => verb,
+        _ => return None,
+    };
+    if movement.is_locked
+        || movement.upos != Some(Upos::Verb)
+        || movement.head != transfer.doc_tok_idx
+        || !matches!(movement.lemma.as_deref(), Some("着く" | "入る" | "行く"))
+        || previous.iter().any(|a| a.surface == "と")
+    {
+        return None;
+    }
+    let mut subjects = previous
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.deprel == "nsubj" && a.head == movement.doc_tok_idx);
+    let (idx, actor) = subjects.next()?;
+    let marker = previous.get(idx + 1)?;
+    if actor.is_locked
+        || subjects.next().is_some()
+        || !dasu_case_link(actor, marker)
+        || !matches!(marker.surface.as_str(), "は" | "が")
+    {
+        return None;
+    }
+    let prefix = &previous[..idx];
+    let (rest, modifiers) = match prefix {
+        [rest @ .., compound]
+            if !compound.is_locked
+                && compound.deprel == "compound"
+                && compound.head == actor.doc_tok_idx =>
+        {
+            (rest, &prefix[rest.len()..])
+        }
+        _ => (prefix, &[][..]),
+    };
+    if rest.iter().any(|a| a.head == actor.doc_tok_idx) {
+        return None;
+    }
+    classroom_role(modifiers, actor).map(|(role, _)| role)
+}
+
+fn render_homework_transfer(
+    bunsetsus: &[Bunsetsu],
+    source: &[Atom],
+    doc: &Document,
+    target: TargetVariant,
+    desire: Option<homework_desire::Desire<'_>>,
+    relative: Option<ClassroomRole>,
+    previous: &[Atom],
+) -> Option<String> {
     // Inspect the source before nominal groups render protected atoms.
     // Normalized dates and clocks retain their source heads. A glossary
     // placeholder cannot supply a time or a classroom participant.
@@ -6905,6 +6995,8 @@ fn try_translate_homework_transfer(
     {
         return None;
     }
+    let shared_actor = preceding_homework_actor(previous, verb)
+        .filter(|_| !source.iter().any(|a| a.deprel == "nsubj" && a.head == head));
     let mut deadline = None;
     let mut continuation_end = None;
     let mut has_time_modifier = false;
@@ -6961,9 +7053,39 @@ fn try_translate_homework_transfer(
             }
             continue;
         }
+        let person = || {
+            homework_relative::person(bunsetsu, source).or_else(|| {
+                shared_actor?;
+                let [prefix, receiver, ni] = bunsetsu.atoms.as_slice() else {
+                    return None;
+                };
+                // The normal genitive renderer already supplied the modifier's translation.
+                // Check the original noun, の and recipient before using that text.
+                if !prefix.is_locked
+                    || prefix.doc_tok_idx.is_some()
+                    || !prefix.surface.ends_with('的')
+                    || ni.surface != "に"
+                    || !dasu_case_link(receiver, ni)
+                    || !source.windows(3).any(|w| {
+                        let [noun, no, person] = w else { return false };
+                        person.doc_tok_idx == receiver.doc_tok_idx
+                            && noun.upos == Some(Upos::Noun)
+                            && noun.deprel == "nmod"
+                            && noun.head == receiver.doc_tok_idx
+                            && no.surface == "の"
+                            && dasu_case_link(noun, no)
+                            && no.span.end_char == receiver.span.start_char
+                    })
+                {
+                    return None;
+                }
+                let (role, name) = classroom_role(&[], receiver)?;
+                Some((role, format!("{}{name}", prefix.surface)))
+            })
+        };
         if bunsetsu.role != BunsetsuRole::Obj
             && bunsetsu.atoms.iter().any(|atom| atom.is_locked)
-            && homework_relative::person(bunsetsu, source).is_none()
+            && person().is_none()
         {
             return None;
         }
@@ -7064,7 +7186,7 @@ fn try_translate_homework_transfer(
                 adjuncts.push(format!("在{time}"));
             }
             ("obl" | "iobj", "に") if recipient.is_none() => {
-                recipient = Some(homework_relative::person(bunsetsu, source)?);
+                recipient = Some(person()?);
                 recipient_before_subject = subject.is_none();
             }
             ("obl", "で")
@@ -7097,6 +7219,13 @@ fn try_translate_homework_transfer(
         }
         (Some((actor, name)), None, Some(receiver)) if actor != receiver => {
             (actor, name, Some(String::new()))
+        }
+        (None, Some((receiver, text)), None) => {
+            let actor = shared_actor?;
+            if receiver == actor {
+                return None;
+            }
+            (actor, String::new(), Some(text))
         }
         _ => return None,
     };
@@ -21106,6 +21235,58 @@ mod motion_endpoint_tests {
         )
         .expect("CPU rules translate the control sentence")
         .target_text
+    }
+
+    #[test]
+    fn adjacent_arrival_shares_only_the_unspoken_homework_actor() {
+        for (source, right) in [
+            (
+                "生徒は二時に教室に着いて、四時までに先生に宿題を出しました。",
+                "最晚在四點把作業交給老師了",
+            ),
+            (
+                "先生が二時に教室に着いて、四時までに生徒に宿題を出しました。",
+                "最晚在四點出作業給學生了",
+            ),
+            (
+                "先生は教室に着いてから、学生に宿題を出しました。",
+                "出作業給學生了",
+            ),
+            (
+                "学生は教室に入り、先生に宿題を出しました。",
+                "把作業交給老師了",
+            ),
+            (
+                "先生は学校に着いて、宿題を出しませんでした。",
+                "沒有拿出作業",
+            ),
+            ("生徒は教室に着いて、宿題を出しました。", "拿出了作業"),
+            (
+                "生徒は三時に教室に着いて、四時に担任の先生に宿題を出しました。",
+                "在四點把作業交給擔任的老師了",
+            ),
+            (
+                "先生は教室に着いて、生徒が先生に宿題を出しました。",
+                "學生把作業交給老師了",
+            ),
+            (
+                "生徒は教室に入り、かばんから宿題を出しました。",
+                "從包包拿出了作業",
+            ),
+            ("父は駅に着いて、宿題を出しました。", "拿出了作業"),
+            ("先生が来たと聞いて、宿題を出しました。", "拿出了作業"),
+            (
+                "生徒は二時に着きました。先生に宿題を出しました。",
+                "給老師拿出了作業",
+            ),
+        ] {
+            let result = translate(source);
+            let (_, action) = result
+                .trim_end_matches('。')
+                .rsplit_once(['，', '。'])
+                .unwrap();
+            assert_eq!(action, right, "{source}: {result}");
+        }
     }
 
     #[test]

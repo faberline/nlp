@@ -200,6 +200,29 @@ fn reporting_time(words: &[Atom], doc: &Document, chars: &[char]) -> Option<Stri
     }
 }
 
+// The case after a single normalized month, day and clock applies to
+// the whole timestamp. Keep its source boundary for the reporting frame.
+fn dated_time(args: &[Atom], chars: &[char]) -> Option<(usize, String)> {
+    let [time, case, rest @ ..] = args else {
+        return None;
+    };
+    let raw = chars.get(time.span.start_char..time.span.end_char)?;
+    if !crate::ja_zh::is_clock_atom(time) || !raw.contains(&'月') || !raw.contains(&'日') {
+        return None;
+    }
+    if linked_case(case, time, time, "に") {
+        Some((2, format!("在{}", time.surface)))
+    } else if linked_case(case, time, time, "まで")
+        && rest
+            .first()
+            .is_some_and(|a| linked_case(a, time, case, "に"))
+    {
+        Some((3, format!("最晚在{}", time.surface)))
+    } else {
+        None
+    }
+}
+
 impl Frame {
     // The case and its governor establish the role, including for occupations
     // and names for which the source dictionary supplies no person label.
@@ -293,7 +316,7 @@ pub(in crate::ja_zh) fn take(
     let verb = &core[report];
     let spoken = match verb.lemma.as_deref().unwrap_or(&verb.surface) {
         "答える" => "回答",
-        "言う" => "說",
+        "言う" | "話す" => "說",
         "伝える" => "轉告",
         "説明する" => "說明",
         "述べる" => "表示",
@@ -381,25 +404,43 @@ pub(in crate::ja_zh) fn take(
     {
         return None;
     }
-    if !(0..pred).any(|i| {
-        let day = &core[i];
-        (is_date(day) || super::dates::dated_atom(day) || !day.is_locked && day.surface == "日")
-            && day.head == event.doc_tok_idx
-            && core
-                .get(i + 1)
-                .is_some_and(|ni| linked_case(ni, day, day, "に"))
-            && (is_date(day)
-                || super::dates::dated_atom(day)
-                || number_before(core, i).is_some()
-                || i.checked_sub(1).is_some_and(|p| {
-                    !core[p].is_locked && core[p].surface == "何" && core[p].head == day.doc_tok_idx
-                }))
-    }) {
+    let dated_report = (0..report).any(|i| {
+        (core[i].head == event.doc_tok_idx || core[i].head == verb.doc_tok_idx)
+            && dated_time(&core[i..report], chars).is_some()
+    });
+    if !dated_report
+        && !(0..pred).any(|i| {
+            let day = &core[i];
+            (is_date(day) || super::dates::dated_atom(day) || !day.is_locked && day.surface == "日")
+                && day.head == event.doc_tok_idx
+                && core
+                    .get(i + 1)
+                    .is_some_and(|ni| linked_case(ni, day, day, "に"))
+                && (is_date(day)
+                    || super::dates::dated_atom(day)
+                    || number_before(core, i).is_some()
+                    || i.checked_sub(1).is_some_and(|p| {
+                        !core[p].is_locked
+                            && core[p].surface == "何"
+                            && core[p].head == day.doc_tok_idx
+                    }))
+        })
+    {
         return None;
     }
     let mut frame = Frame::default();
     let mut after = &core[after_start..report];
     while !after.is_empty() {
+        if after[0].head == verb.doc_tok_idx
+            && let Some((len, time)) = dated_time(after, chars)
+        {
+            if frame.time.replace(time).is_some() {
+                return None;
+            }
+            frame.wh |= after[0].lemma.as_deref() == Some(super::CLOCK_QUESTION);
+            after = &after[len..];
+            continue;
+        }
         if is_punct_atom(&after[0]) {
             after = &after[1..];
             continue;
@@ -465,6 +506,42 @@ pub(in crate::ja_zh) fn take(
         })
         .map(|n| start + n)
     {
+        if let Some((len, time)) = dated_time(&core[start..pred], chars) {
+            let end = start + len;
+            // Before the speaker's topic, or at a comma that brackets the
+            // statement, a fronted time covers the reporting event. Inside
+            // an overt subject's complement the clock stays with that verb.
+            let span_end = core[end - 1].span.end_char;
+            let comma = chars.get(span_end..).is_some_and(|s| {
+                matches!(
+                    s.strip_prefix(&['は']).unwrap_or(s).first(),
+                    Some('、' | '，' | ',')
+                )
+            });
+            let speaker_follows = frame.person.is_none()
+                && core[end..pred]
+                    .windows(2)
+                    .find(|pair| {
+                        pair[0].deprel == "nsubj"
+                            && pair[0].head == event.doc_tok_idx
+                            && pair[1].head == pair[0].doc_tok_idx
+                    })
+                    .is_some_and(|pair| linked_case(&pair[1], &pair[0], &pair[0], "は"));
+            if core[start].head == verb.doc_tok_idx
+                || (core[start].head == event.doc_tok_idx && (comma || speaker_follows))
+            {
+                if frame.time.replace(time).is_some() {
+                    return None;
+                }
+                frame.wh |= core[start].lemma.as_deref() == Some(super::CLOCK_QUESTION);
+                start = end;
+                if core.get(start).is_some_and(is_punct_atom) {
+                    start += 1
+                }
+                continue;
+            }
+            break;
+        }
         let Some(owner) = core[start..case]
             .iter()
             .find(|a| a.doc_tok_idx == core[case].head)

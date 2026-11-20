@@ -202,6 +202,78 @@ pub(super) fn is_voice_report(voice: &Atom, case: &Atom, verb: &Atom) -> bool {
         )
 }
 
+// The compound かける / 掛ける directs a call, question or statement to
+// someone. Keep that act distinct from its public-appeal reading.
+fn addressed_verb(verb: &Atom) -> Option<&'static str> {
+    let lemma = verb.lemma.as_deref().unwrap_or(&verb.surface);
+    let stem = lemma
+        .strip_suffix("かける")
+        .or_else(|| lemma.strip_suffix("掛ける"));
+    match (stem, lemma) {
+        (Some("呼び"), _) => Some("招呼說"),
+        (Some("話し" | "語り"), _) => Some("開口說"),
+        (Some("問い"), _) => Some("問道"),
+        (_, "呼ぶ" | "叫ぶ") => Some("喊道"),
+        (_, "ささやく" | "囁く") => Some("低聲說"),
+        _ => None,
+    }
+}
+
+pub(super) fn named_call(inner: &[Atom], report: &[Atom]) -> Option<String> {
+    let [name, rest @ ..] = inner else {
+        return None;
+    };
+    if name.lemma.as_deref() != Some(PERSON_WITH_SUFFIX)
+        || !rest.is_empty() && !matches!(rest[0].surface.as_str(), "、" | "，")
+    {
+        return None;
+    }
+    let [marker, words @ ..] = report else {
+        return None;
+    };
+    if marker.is_locked || marker.surface != "と" || marker.head.is_none() {
+        return None;
+    }
+    let index = words.iter().position(|a| a.doc_tok_idx == marker.head)?;
+    let (manner, head) = words.split_at(index);
+    let [verb, auxiliaries @ ..] = head else {
+        return None;
+    };
+    if verb.is_locked
+        || verb.upos != Some(Upos::Verb)
+        || !auxiliaries.iter().all(|a| {
+            !a.is_locked
+                && a.upos == Some(Upos::Aux)
+                && a.head == verb.doc_tok_idx
+                && matches!(a.surface.as_str(), "た" | "まし" | "ます")
+        })
+    {
+        return None;
+    }
+    let spoken = addressed_verb(verb)?;
+    let how = match manner {
+        [] => "",
+        [size, voice, case]
+            if manner.iter().all(|a| !a.is_locked)
+                && size.head == voice.doc_tok_idx
+                && size.deprel == "det"
+                && voice.surface == "声"
+                && voice.head == verb.doc_tok_idx
+                && case.surface == "で"
+                && case.deprel == "case"
+                && case.head == voice.doc_tok_idx =>
+        {
+            match size.surface.as_str() {
+                "大きな" => "大聲",
+                "小さな" => "小聲",
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    Some(format!("{how}{spoken}"))
+}
+
 // Quotation marks can enclose an address or the words being discussed.
 // Follow the quotative particle to the predicate that owns this quotation.
 fn reported_speech(atoms: &[Atom], quoted: Span) -> bool {
@@ -220,8 +292,9 @@ fn reported_speech(atoms: &[Atom], quoted: Span) -> bool {
     }
     matches!(
         verb.lemma.as_deref().unwrap_or(&verb.surface),
-        "言う" | "話す" | "呼ぶ" | "伝える" | "聞く" | "尋ねる" | "答える" | "叫ぶ"
-    ) || rest.windows(2).any(|p| is_voice_report(&p[0], &p[1], verb))
+        "言う" | "話す" | "伝える" | "聞く" | "尋ねる" | "答える"
+    ) || addressed_verb(verb).is_some()
+        || rest.windows(2).any(|p| is_voice_report(&p[0], &p[1], verb))
 }
 
 impl HonorificContext {

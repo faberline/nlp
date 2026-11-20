@@ -5006,6 +5006,13 @@ fn local_direct_quote(
     if inner_atoms.iter().any(is_quote_mark) {
         return None;
     }
+    // Any preceding speaker or setting stays in its ordinary clause. Move
+    // only the reporting predicate that belongs to this direct address.
+    if quote_index == 0
+        && let Some(spoken) = honorific::named_call(inner_atoms, report)
+    {
+        return Some((spoken, *span, quote_index));
+    }
     if let Some(prefix) = payment_potential::reported_question(
         &segments[..quote_index],
         inner_atoms,

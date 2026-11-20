@@ -734,7 +734,25 @@ fn quotes_exact_writing(
         .tokens
         .partition_point(|t| t.span.start_char < quote.end_char);
     let attached = |i| syntax.head(i) == Some(predicate);
-    if !(first_in_quote..end_of_quote).any(attached) {
+    let words = &syntax.tokens[first_in_quote..end_of_quote];
+    let Some(opening_word) = words.first() else {
+        return false;
+    };
+    // Punctuation inside a quote can end the analysis sentence before と or
+    // を. The adjacent case particle then begins the outer clause, whose first
+    // predicate we already checked. It marks only the immediately preceding quote.
+    let split_operand = quote == last
+        && words
+            .last()
+            .is_some_and(|word| word.sentence < verb.sentence)
+        && first.checked_sub(1).is_some_and(|i| {
+            let case = &syntax.tokens[i];
+            case.span.start_char + 1 == start
+                && case.span.end_char == start
+                && case.sentence == verb.sentence
+                && case.upos == Some(Upos::Adp)
+        });
+    if !split_operand && !(first_in_quote..end_of_quote).any(attached) {
         return false;
     }
 
@@ -744,7 +762,9 @@ fn quotes_exact_writing(
         .iter()
         .enumerate()
         .rev()
-        .take_while(|(_, t)| t.sentence == verb.sentence && t.span.start_char >= scope.start_char)
+        .take_while(|(_, t)| {
+            t.sentence >= opening_word.sentence && t.span.start_char >= scope.start_char
+        })
     {
         if (first_in_quote..end_of_quote).contains(&i) {
             continue;
@@ -2067,6 +2087,19 @@ mod tests {
             ),
             ("紙に「赤い」と英語で書いてから、席を立ちました。", &["紅"]),
             ("教科書の「走る」をノートに写しました。", &["「走る」"]),
+            (
+                "先生はノートに「駅はどこですか？」とそのまま写しました。",
+                &["「駅はどこですか？」"],
+            ),
+            (
+                "黒板の「駅はどこですか？」をノートに写しました。",
+                &["「駅はどこですか？」"],
+            ),
+            ("ノートに「駅はどこですか？」と書きました。", &["車站"]),
+            (
+                "黒板の「駅はどこですか？」をカメラで写しました。",
+                &["車站"],
+            ),
             ("妹はカメラでノートの「写真」を写しました。", &["照片"]),
             (
                 "ノートに「写真」と言った後で、別の写真を写しました。",

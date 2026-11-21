@@ -2,28 +2,54 @@
 
 use faberline_nlp::doc::SyntaxToken;
 
-use super::{Atom, Document, Upos, dasu_case_link, is_companion_person};
+use super::{
+    Atom, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Token, Upos, dasu_case_link,
+    is_companion_person, source_time_head,
+};
 
-fn source_link<'a>(atom: &Atom, doc: &'a Document) -> Option<&'a SyntaxToken> {
+#[derive(Clone, Copy)]
+pub(super) struct AffirmativeMeal {
+    pub(super) predicate: usize,
+    pub(super) topic: usize,
+    pub(super) time_first: bool,
+}
+
+fn source_identity<'a>(atom: &Atom, doc: &'a Document) -> Option<(&'a SyntaxToken, &'a Token)> {
     let id = atom.doc_tok_idx?;
     let token = doc.tokens.get(id)?;
     let link = doc.syntax.get(id)?;
-    (!atom.is_locked
-        && token.span == atom.span
-        && token.upos == atom.upos
+    (token.span == atom.span
         && link.token == id
         && link.span == token.span
         && link.sentence == token.sentence
         && link.head == atom.head
         && link.deprel == atom.deprel)
-        .then_some(link)
+        .then_some((link, token))
 }
 
-fn qualifies_topic(noun: &Atom, predicate: &SyntaxToken, doc: &Document) -> bool {
-    matches!(noun.upos, Some(Upos::Noun | Upos::Propn))
-        && matches!(noun.deprel.as_str(), "nsubj" | "obj" | "obl")
-        && noun.head == Some(predicate.token)
-        && source_link(noun, doc).is_some_and(|link| link.sentence == predicate.sentence)
+fn source_link<'a>(atom: &Atom, doc: &'a Document) -> Option<&'a SyntaxToken> {
+    let (link, token) = source_identity(atom, doc)?;
+    (!atom.is_locked && token.upos == atom.upos).then_some(link)
+}
+
+fn qualifies_topic(
+    noun: &Atom,
+    predicate: &SyntaxToken,
+    allowed_lock: Option<&str>,
+    doc: &Document,
+) -> bool {
+    source_identity(noun, doc).is_some_and(|(link, token)| {
+        let trusted = if noun.is_locked {
+            allowed_lock.is_some_and(|kind| noun.lemma.as_deref() == Some(kind))
+        } else {
+            token.upos == noun.upos
+        };
+        trusted
+            && matches!(token.upos, Some(Upos::Noun | Upos::Propn))
+            && matches!(link.deprel.as_str(), "nsubj" | "obj" | "obl")
+            && link.head == Some(predicate.token)
+            && link.sentence == predicate.sentence
+    })
 }
 
 fn only_adverbs(atoms: &[Atom], predicate: &SyntaxToken, doc: &Document) -> bool {
@@ -59,7 +85,23 @@ fn past_negative(verb: &Atom, tail: &[Atom], doc: &Document) -> bool {
         })
 }
 
-pub(super) fn matches(previous: &[Atom], current: &[Atom], doc: &Document) -> bool {
+fn meal_topic(noun: &Atom, verb: &Atom, doc: &Document, chars: &[char]) -> bool {
+    verb.doc_tok_idx
+        .and_then(|id| doc.tokens.get(id))
+        .is_some_and(|token| token.lemma.as_deref() == Some("食べる"))
+        && matches!(
+            chars.get(noun.span.start_char..noun.span.end_char),
+            Some(
+                ['ご', '飯']
+                    | ['御', '飯']
+                    | ['朝' | '昼' | '夕', 'ご', '飯']
+                    | ['朝' | '昼' | '夕', '食']
+                    | ['食', '事']
+            )
+        )
+}
+
+pub(super) fn matches(previous: &[Atom], current: &[Atom], doc: &Document, chars: &[char]) -> bool {
     let [first_leading @ .., object, first_topic, action, connector] = previous else {
         return false;
     };
@@ -85,6 +127,7 @@ pub(super) fn matches(previous: &[Atom], current: &[Atom], doc: &Document) -> bo
     let Some(second) = source_link(go, doc) else {
         return false;
     };
+    let meal = meal_topic(object, action, doc, chars);
     // An object topic of a deliberate action supports a contrast. A weather
     // event or change of state can instead give a reason for the negated trip.
     first.sentence == second.sentence
@@ -106,7 +149,7 @@ pub(super) fn matches(previous: &[Atom], current: &[Atom], doc: &Document) -> bo
         && first_topic.surface == "は"
         && dasu_case_link(object, first_topic)
         && source_link(first_topic, doc).is_some()
-        && qualifies_topic(object, first, doc)
+        && qualifies_topic(object, first, meal.then_some(LOCKED_OBJECT_ATOM), doc)
         && !is_companion_person(object)
         && matches!(direction.surface.as_str(), "に" | "へ")
         && dasu_case_link(destination, direction)
@@ -117,11 +160,30 @@ pub(super) fn matches(previous: &[Atom], current: &[Atom], doc: &Document) -> bo
         && second_topic.head == destination.doc_tok_idx
         && direction.span.end_char == second_topic.span.start_char
         && source_link(second_topic, doc).is_some()
-        && qualifies_topic(destination, second, doc)
+        && qualifies_topic(destination, second, meal.then_some(LOCKED_PLACE_ATOM), doc)
         && object.surface != destination.surface
         && only_adverbs(first_leading, first, doc)
         && only_adverbs(second_leading, second, doc)
         && past_negative(go, &current[go_index + 1..], doc)
+}
+
+pub(super) fn affirmative_meal(
+    previous: &[Atom],
+    current: &[Atom],
+    doc: &Document,
+    chars: &[char],
+) -> Option<AffirmativeMeal> {
+    let [leading @ .., topic, _, verb, _] = previous else {
+        return None;
+    };
+    if !meal_topic(topic, verb, doc, chars) || !matches(previous, current, doc, chars) {
+        return None;
+    }
+    Some(AffirmativeMeal {
+        predicate: verb.doc_tok_idx?,
+        topic: topic.doc_tok_idx?,
+        time_first: leading.iter().any(source_time_head),
+    })
 }
 
 #[cfg(test)]
@@ -186,6 +248,48 @@ mod tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn affirmative_meal_preserves_the_time_and_glossary_terms() {
+        let source = "朝ご飯は食べて、学校には行きませんでした。";
+        let assert_contrast = |text: &str, meal: &str, place: &str| {
+            let (first, second) = text.split_once('，').unwrap();
+            assert_eq!(first, meal);
+            let destination = second.strip_prefix("但沒有去").unwrap();
+            let destination = destination.strip_prefix('到').unwrap_or(destination);
+            assert_eq!(destination.strip_suffix('。'), Some(place));
+        };
+        let mut glossary = TranslationGlossary::new();
+        let natural = translate(source, &glossary);
+        assert_contrast(&natural.target_text, "早上有吃飯", "學校");
+
+        let term = |canonical: &str, alias: &str| GlossaryEntry {
+            canonical: canonical.to_owned(),
+            surfaces: vec![canonical.to_owned()],
+            targets: [(TargetVariant::ZhHant, alias.to_owned())].into(),
+            ..GlossaryEntry::default()
+        };
+        glossary.objects.push(term("朝ご飯", "早餐"));
+        glossary.places.push(term("学校", "新校舍"));
+        let locked = translate(source, &glossary);
+        assert_contrast(&locked.target_text, "早餐有吃", "新校舍");
+        assert_eq!(locked.glossary_hits.len(), 2);
+        for (hit, alias) in locked.glossary_hits.iter().zip(["早餐", "新校舍"]) {
+            let span = hit.target_span;
+            let text: String = locked
+                .target_text
+                .chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect();
+            assert_eq!(text, alias);
+        }
+        assert!(
+            !translate("ご飯は食べて、学校に行きませんでした。", &glossary)
+                .target_text
+                .contains("有吃")
+        );
     }
 
     #[test]

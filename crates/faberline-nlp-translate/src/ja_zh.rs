@@ -869,6 +869,14 @@ pub(crate) fn translate_ja_sentence(
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
                     following: &segments[seg_idx + 1..],
+                    affirmative_meal: match (trailing_punct.as_deref(), segments.get(seg_idx + 1)) {
+                        (Some("、" | "，"), Some(Segment::Clause { atoms: trip, .. }))
+                            if target == TargetVariant::ZhHant && !inside_quote =>
+                        {
+                            polarity_contrast::affirmative_meal(trimmed_atoms, trip, doc, chars)
+                        }
+                        _ => None,
+                    },
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
                             if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
@@ -1036,7 +1044,7 @@ pub(crate) fn translate_ja_sentence(
                     && let Some(Segment::Clause {
                         atoms: previous, ..
                     }) = segments.get(previous_index)
-                    && polarity_contrast::matches(previous, trimmed_atoms, doc)
+                    && polarity_contrast::matches(previous, trimmed_atoms, doc, chars)
                 {
                     rendered.insert(0, '但');
                 }
@@ -5516,6 +5524,7 @@ struct ClauseDiscourseCtx<'a> {
     contrasts_recurrence: bool,
     source_chars: &'a [char],
     following: &'a [Segment],
+    affirmative_meal: Option<polarity_contrast::AffirmativeMeal>,
     preceding_activity: &'a [Atom],
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
     prepared_for_predicate: Option<usize>,
@@ -11320,6 +11329,30 @@ fn translate_clause_bunsetsus(
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> (String, bool) {
+    let affirmative_meal = ctx.affirmative_meal.and_then(|meal| {
+        let topic = bunsetsus.iter().position(|group| {
+            group.role == BunsetsuRole::Subj
+                && group.case_particle.as_deref() == Some("は")
+                && group
+                    .atoms
+                    .iter()
+                    .any(|atom| atom.doc_tok_idx == Some(meal.topic))
+        })?;
+        bunsetsus
+            .iter()
+            .filter(|group| group.role == BunsetsuRole::Predicate)
+            .flat_map(|group| &group.atoms)
+            .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(meal.predicate))
+            .then_some((meal, topic))
+    });
+    // An explicit time can lead the clause. Keep a bare meal topic in front.
+    if let Some((meal, topic)) = affirmative_meal
+        && meal.time_first
+    {
+        bunsetsus[topic].role = BunsetsuRole::Obj;
+    }
+    let allow_pro_drop_inject = allow_pro_drop_inject && affirmative_meal.is_none();
+
     let focused_days = if target == TargetVariant::ZhHant {
         calendar::take_focused_days(&mut bunsetsus, source)
     } else {
@@ -12464,6 +12497,14 @@ fn translate_clause_bunsetsus(
         synthesize_predicate_complex(&predicates, past_until, target, transfer);
     if meeting_partner.is_some() {
         passive_agent_needed = false;
+    }
+    if affirmative_meal.is_some()
+        && verb_core == "吃"
+        && pre_verb_mods.is_empty()
+        && post_verb_mods.is_empty()
+        && !passive_agent_needed
+    {
+        pre_verb_mods.push("有".to_owned());
     }
     if let Some(state) = bounded_state {
         verb_core = state.to_owned();

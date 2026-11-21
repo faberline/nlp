@@ -12312,7 +12312,12 @@ fn translate_clause_bunsetsus(
                 }
             }
             BunsetsuRole::Obj => {
-                let text = render_bunsetsu_np(&b, target);
+                let text =
+                    if target == TargetVariant::ZhHant && lesson_as_object_of_start(&b, source) {
+                        "上課".to_owned()
+                    } else {
+                        render_bunsetsu_np(&b, target)
+                    };
                 if let Some(marker) = motion
                     .filter(|m| !m.expressed_by_verb)
                     .and_then(|m| route_marker(&b, source, m.head))
@@ -25124,6 +25129,29 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     out
 }
 
+// Render the bare object as an activity only for the linked verb 始める.
+fn lesson_as_object_of_start(group: &Bunsetsu, source: &[Atom]) -> bool {
+    let [lesson, case] = group.atoms.as_slice() else {
+        return false;
+    };
+    let Some(action) = lesson.head else {
+        return false;
+    };
+    !lesson.is_locked
+        && lesson.surface == "授業"
+        && lesson.upos == Some(Upos::Noun)
+        && lesson.deprel == "obj"
+        && case.surface == "を"
+        && dasu_case_link(lesson, case)
+        && source.iter().any(|atom| {
+            atom.doc_tok_idx == Some(action)
+                && !atom.is_locked
+                && atom.upos == Some(Upos::Verb)
+                && atom.deprel == "root"
+                && atom.lemma.as_deref() == Some("始める")
+        })
+}
+
 fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool) -> String {
     let core = render_bunsetsu_np(b, target);
     if core.is_empty() {
@@ -27542,6 +27570,40 @@ mod existence_rule_tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn starting_class_preserves_the_question_and_the_callers_word() {
+        let statement = "先生は授業を始めます。";
+        let question = "先生は授業を始めますか。";
+        let empty = TranslationGlossary::new();
+        assert_eq!(translate(statement, &empty).target_text, "老師開始上課。");
+        assert_eq!(translate(question, &empty).target_text, "老師開始上課嗎？");
+
+        let glossary = TranslationGlossary {
+            objects: vec![GlossaryEntry {
+                canonical: "授業".into(),
+                surfaces: vec!["授業".into()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "專題課".into())]),
+                ..GlossaryEntry::default()
+            }],
+            ..TranslationGlossary::new()
+        };
+        let locked = translate(statement, &glossary);
+        assert_eq!(locked.target_text, "老師開始專題課。");
+        let [hit] = locked.glossary_hits.as_slice() else {
+            panic!("expected one glossary hit for the class noun");
+        };
+        let span = hit.target_span;
+        assert_eq!(
+            locked
+                .target_text
+                .chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect::<String>(),
+            "專題課"
+        );
     }
 
     #[test]

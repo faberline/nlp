@@ -1,0 +1,108 @@
+{
+  "schema": "faberline.nlp.ja_zh.naide_chain_dev.v1",
+  "version": 1,
+  "status": "proposed-development-visible",
+  "source": "https://github.com/faberline/nlp/issues/355; #363 engineering note 7054417578 establishes missing coverage only",
+  "visibility": "development-visible",
+  "source_main": "6d93a26191492436a681a04e2225c229cca5207d",
+  "source_tree": "a59d40dcfbbd548bad1406083c91b4b28bc26ac7",
+  "items": [
+    {
+      "id": "NAIDE-CHAIN-N5-01",
+      "level_approx": "N5",
+      "jp": "朝に新聞を読まないで、テレビを見ないで、駅へ行きました。",
+      "zh_hant": "早上沒看報紙，沒看電視，去了車站。",
+      "semantic_checks": [
+        "新聞を読むこととテレビを見ることの二つをしないで、駅へ行った。",
+        "駅へ行ったことは肯定の過去の出来事である。",
+        "新聞を読まなかったことやテレビを見なかったことが、駅へ行った理由だとは述べていない。"
+      ],
+      "semantic_unknowns": [
+        "新聞やテレビを見なかった理由は示されていない。",
+        "駅へ行った時刻や目的は示されていない。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent naide_chain_data_author",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "NAIDE-CHAIN-N5-02",
+      "level_approx": "N5",
+      "jp": "朝に新聞を読んで、テレビを見ないで、駅へ行きました。",
+      "zh_hant": "早上看了報紙，沒看電視，去了車站。",
+      "semantic_checks": [
+        "新聞を読んだことは肯定の過去の出来事である。",
+        "テレビを見ないで、駅へ行った。",
+        "駅へ行ったことは肯定の過去の出来事である。"
+      ],
+      "semantic_unknowns": [
+        "テレビを見なかった理由は示されていない。",
+        "新聞を読んだ後、駅へ行くまでの時間は示されていない。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent naide_chain_data_author",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "NAIDE-CHAIN-N5-03",
+      "level_approx": "N5",
+      "jp": "窓を開けないでください。ここで写真を撮らないでください。",
+      "zh_hant": "請不要開窗。請不要在這裡拍照。",
+      "semantic_checks": [
+        "窓を開けないように、丁寧に頼んでいる。",
+        "ここで写真を撮らないように、丁寧に頼んでいる。",
+        "二つはそれぞれ独立した丁寧な禁止依頼である。"
+      ],
+      "semantic_unknowns": [
+        "依頼を受けた人が実際にどうしたかは示されていない。",
+        "依頼が行われた場面や理由は示されていない。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent naide_chain_data_author",
+        "license": "MIT"
+      }
+    }
+  ],
+  "provenance": {
+    "origin": "first_party_original",
+    "author": "Codex subagent naide_chain_data_author",
+    "license": "MIT",
+    "semantic_reviewer": null
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  }
+}

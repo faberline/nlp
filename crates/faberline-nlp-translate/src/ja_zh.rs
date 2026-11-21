@@ -16969,6 +16969,62 @@ fn coordinated_elapsed_both_genitive(
     })
 }
 
+fn fold_motion_ability(
+    modifier: &Bunsetsu,
+    noun_group: &mut Bunsetsu,
+    preceding: Option<&Bunsetsu>,
+    source: &[Atom],
+) -> bool {
+    let ([action], [noun, tail @ ..]) =
+        (modifier.atoms.as_slice(), noun_group.atoms.as_mut_slice())
+    else {
+        return false;
+    };
+    let Some(action_id) = action.doc_tok_idx else {
+        return false;
+    };
+    let coordinated_noun = preceding
+        .filter(|group| ends_in_coord_to(group) || ends_in_coord_ya(group))
+        .and_then(|group| group.atoms.last())
+        .and_then(|case| case.head);
+    if action.is_locked
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "acl"
+        || noun.is_locked
+        || noun.upos != Some(Upos::Noun)
+        || noun.surface != "力"
+        || noun.doc_tok_idx.is_none()
+        || action.head != noun.doc_tok_idx
+        || action.span.end_char != noun.span.start_char
+        || tail.iter().any(|part| {
+            part.is_locked
+                || part.deprel != "case"
+                || part.head != noun.doc_tok_idx
+                || part.surface == "で"
+        })
+        || source.iter().any(|part| {
+            part.head == Some(action_id)
+                && !(part.surface == "力"
+                    && part.doc_tok_idx.is_some()
+                    && part.doc_tok_idx == coordinated_noun)
+        })
+    {
+        return false;
+    }
+    // Bare motion verbs can name a learned ability. Other actions may name
+    // physical force, and an instrumental で can express force even here.
+    let ability = match action.lemma.as_deref().unwrap_or(&action.surface) {
+        "泳ぐ" => "游泳能力",
+        "歩く" => "步行能力",
+        "走る" => "跑步能力",
+        _ => return false,
+    };
+    noun.span.start_char = action.span.start_char;
+    noun.surface = ability.to_owned();
+    noun.is_locked = true;
+    true
+}
+
 fn merge_adnominal_bunsetsus(
     bunsetsus: Vec<Bunsetsu>,
     source: &[Atom],
@@ -17181,6 +17237,11 @@ fn merge_adnominal_bunsetsus(
 
                     if target == TargetVariant::ZhHant
                         && homework_relative::fold(&mut res, &pred_b, &mut b, source, doc, target)
+                    {
+                        continue;
+                    }
+                    if target == TargetVariant::ZhHant
+                        && fold_motion_ability(&pred_b, &mut b, res.last(), source)
                     {
                         continue;
                     }

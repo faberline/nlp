@@ -420,7 +420,7 @@ fn noun_classifier(word: &str, noun: &Atom) -> &'static str {
         "帽子" => "頂",
         "筆記本" | "課本" => "本",
         "鞋子" => "雙",
-        _ => super::demonstrative_classifier(word, noun),
+        _ => super::demonstrative_classifier(word, noun, TargetVariant::ZhHant),
     }
 }
 

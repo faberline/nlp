@@ -11961,6 +11961,10 @@ fn translate_clause_bunsetsus(
             setting_origin = Some(format!("從{}", setting_time_label(&b, target)));
             continue;
         }
+        if target == TargetVariant::ZhHant && is_bare_first_step(&b, source) {
+            temporal_others.push("先".to_owned());
+            continue;
+        }
         if daypart_groups.contains(&idx)
             || timed_result.is_some_and(|f| f.time == SettingTime::At(idx))
             || hand_return
@@ -18552,6 +18556,28 @@ fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool
 // 夕方に働く, 夕方にする and 夕方に戻る can share the same case relation.
 // Keep the time only when its own governor and that governor's other
 // arguments support an event-time reading.
+fn is_bare_first_step(group: &Bunsetsu, source: &[Atom]) -> bool {
+    let [first, ni] = group.atoms.as_slice() else {
+        return false;
+    };
+    let Some(governor) = first.head else {
+        return false;
+    };
+    first.surface == "初め"
+        && first.upos == Some(Upos::Noun)
+        && ni.surface == "に"
+        && linked_joint_case(first, ni)
+        && source
+            .iter()
+            .all(|atom| atom.head != first.doc_tok_idx || atom.doc_tok_idx == ni.doc_tok_idx)
+        && source.iter().any(|atom| {
+            !atom.is_locked
+                && atom.doc_tok_idx == Some(governor)
+                && atom.upos == Some(Upos::Verb)
+                && atom.deprel == "root"
+        })
+}
+
 fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> bool {
     if matches!(group.atoms.as_slice(), [day] if daytime::is_modifier(day)) {
         return true;
@@ -22115,6 +22141,14 @@ mod motion_endpoint_tests {
             books.contains("書桌") && books.ends_with("的書。"),
             "{books}"
         );
+    }
+
+    #[test]
+    fn bare_hajime_ni_marks_the_first_action() {
+        assert_eq!(translate("私は初めに名前を書きます。"), "我先寫名字。");
+        assert!(translate("本の始めは大切です。").starts_with("書的開始"));
+        assert!(translate("先生は授業を始めます。").starts_with("老師開始"));
+        assert!(translate("先生は授業を始めますか。").ends_with("嗎？"));
     }
 
     #[test]

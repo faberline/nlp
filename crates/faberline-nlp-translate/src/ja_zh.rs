@@ -18,6 +18,7 @@ mod finite_adjective;
 mod handover;
 mod homework_desire;
 mod homework_relative;
+mod household_entry;
 mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
@@ -13150,10 +13151,12 @@ fn translate_clause_bunsetsus(
         && only_goal.is_some_and(|o| o.physical_goal_head == negative_go_head)
         && single_goal
         && !has_until;
-    let household_entry = household_entry_head.is_some()
-        && only_goal.is_some_and(|o| o.household_goal_head == household_entry_head)
-        && single_goal
-        && !has_until;
+    let household_entry = single_goal
+        && !has_until
+        && household_entry_head.is_some_and(|predicate| {
+            only_goal.is_some_and(|o| o.household_goal_head == Some(predicate))
+                && household_entry::allows_physical_entry(doc, ctx.source_chars, predicate)
+        });
     let seated_until = past_until && verb_core == "坐";
     let format_directional_goal = |arg: &PlacedArg, raw_np: &str| {
         if household_entry && arg.household_goal_head == household_entry_head {
@@ -18826,6 +18829,24 @@ mod household_entry_tests {
         assert_eq!(translated.target_text, "狗進入舊屋了。");
         assert_eq!(translated.glossary_hits.len(), 1);
         assert_eq!(translated.glossary_hits[0].canonical, "家");
+    }
+
+    #[test]
+    fn a_family_role_or_family_work_does_not_assert_physical_entry() {
+        let glossary = TranslationGlossary::new();
+        for text in [
+            "一人娘と結婚し、婿養子として家に入った。",
+            "養子に迎えられて、家に入った。",
+            "妻は家に入って専業主婦になった。",
+            "結婚後、仕事を辞めて家に入り、子育てに専念しました。",
+        ] {
+            assert!(!translate(text, &glossary).target_text.contains("進屋"));
+        }
+        assert!(
+            translate("訪問客として、家に入った。", &glossary)
+                .target_text
+                .contains("進屋")
+        );
     }
 }
 

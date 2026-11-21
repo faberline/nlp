@@ -24,6 +24,7 @@ mod order_noun;
 mod payment_potential;
 mod reception;
 mod return_endpoint;
+mod trip_after_meal;
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
@@ -872,6 +873,15 @@ pub(crate) fn translate_ja_sentence(
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
                             if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
                         _ => &[],
+                    },
+                    prior_meal: match segments.as_slice() {
+                        [Segment::Clause { atoms: meal, trailing_punct: Some(comma), .. }, Segment::Clause { atoms: trip, .. }]
+                            if matches!(comma.as_str(), "、" | "，")
+                                && target == TargetVariant::ZhHant && !inside_quote =>
+                        {
+                            trip_after_meal::prior_meal(meal, trip, doc, chars)
+                        }
+                        _ => None,
                     },
                     measured_activity: Some(&measured_activity),
                     prepared_for_predicate: previous_preparation
@@ -5501,6 +5511,7 @@ struct ClauseDiscourseCtx<'a> {
     source_chars: &'a [char],
     following: &'a [Segment],
     preceding_activity: &'a [Atom],
+    prior_meal: Option<usize>,
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
     prepared_for_predicate: Option<usize>,
     return_trip: Option<ReturnTrip>,
@@ -11730,7 +11741,7 @@ fn translate_clause_bunsetsus(
         .find_map(|day| daytime::meeting_verb(source, day));
     let handover = handover::resolve(&bunsetsus, ctx.source_chars, doc, target);
     let completed_go = if target == TargetVariant::ZhHant && !ctx.inside_quote {
-        finished_go::resolve(&bunsetsus, source, doc, ctx.source_chars)
+        finished_go::resolve(&bunsetsus, source, doc, ctx.source_chars, ctx.prior_meal)
     } else {
         None
     };
@@ -13259,6 +13270,18 @@ fn translate_clause_bunsetsus(
     // Separate top-level pre-verbal modals (`請不要` / `不要` / `請` / `讓` / `聽說`) so modals precede adverbs.
     let mut front_modals: Vec<String> = Vec::new();
     let mut inner_pre_mods: Vec<String> = Vec::new();
+    let completed_prior_meal = ctx.prior_meal.is_some_and(|action| {
+        matches!(predicates.as_slice(), [predicate] if predicate.atoms.iter().any(
+            |atom| !atom.is_locked && atom.doc_tok_idx == Some(action)))
+            && verb_core == "吃"
+            && objs.len() == 1
+            && pre_verb_mods.is_empty()
+            && post_verb_mods.is_empty()
+            && !passive_agent_needed
+    });
+    if completed_prior_meal {
+        post_verb_mods.push("了".to_owned());
+    }
     for m in pre_verb_mods.drain(..) {
         if matches!(m.as_str(), "請不要" | "不要" | "請" | "讓" | "聽說") {
             front_modals.push(m);
@@ -13913,6 +13936,9 @@ fn translate_clause_bunsetsus(
     parts.extend(event_counts);
     parts.extend(counted_arrival);
     parts.extend(objs);
+    if completed_prior_meal {
+        parts.push("後".to_owned());
+    }
     parts.extend(elapsed_duration);
     parts.extend(activity_period_tail);
     parts.extend(purpose_recipients);

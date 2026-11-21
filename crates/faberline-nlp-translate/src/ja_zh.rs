@@ -330,10 +330,12 @@ pub(crate) fn translate_ja_sentence(
     // clause, so a later verified event can adjust its own reading pause.
     let mut emitted_clause_comma: Option<(usize, Span, usize, usize)> = None;
     let mut emitted_preparation: Option<(usize, usize, String)> = None;
+    let mut emitted_naide_action = None;
 
     for (seg_idx, seg) in segments.iter().enumerate() {
         let previous_clause_comma = emitted_clause_comma.take();
         let previous_preparation = emitted_preparation.take();
+        let preceding_naide_action = emitted_naide_action.take();
         if direct_quote_prefix_segments > 0 {
             direct_quote_prefix_segments -= 1;
             continue;
@@ -848,7 +850,7 @@ pub(crate) fn translate_ja_sentence(
                     ends_continued_quote(segments.get(seg_idx + 1), doc, sentence_idx, chars);
                 let meeting_evidence = std::rc::Rc::new(std::cell::Cell::new(None));
                 let measured_activity = std::cell::Cell::new(None);
-                let joined_naide = std::cell::Cell::new(false);
+                let joined_naide = std::cell::Cell::new(None);
                 let previous_preparation = previous_preparation.filter(|_| {
                     !inside_quote
                         && previous_clause_comma.is_some_and(
@@ -892,6 +894,7 @@ pub(crate) fn translate_ja_sentence(
                         _ => None,
                     },
                     joined_naide: Some(&joined_naide),
+                    preceding_naide_action,
                     return_trip: None,
                     parallel_elapsed_te: if target == TargetVariant::ZhHant
                         && !prev_was_quote
@@ -1041,6 +1044,7 @@ pub(crate) fn translate_ja_sentence(
                 }
                 let byte_start = out.len();
                 out.push_str(&rendered);
+                emitted_naide_action = joined_naide.get();
                 let next_quote_framed = match (segments.get(seg_idx + 1), segments.get(seg_idx + 2))
                 {
                     (Some(Segment::Quote { .. }), Some(Segment::Clause { atoms: nx2, .. })) => {
@@ -1068,7 +1072,7 @@ pub(crate) fn translate_ja_sentence(
                             && topic.deprel == "case" && topic.head == name.doc_tok_idx
                             && matches!(segments.get(seg_idx + 1), Some(Segment::Clause { atoms, .. })
                                 if atoms.iter().any(|verb| verb.upos == Some(Upos::Verb) && verb.doc_tok_idx == name.head)));
-                    if !(joined_naide.get()
+                    if !(emitted_naide_action.is_some()
                         || suppress_cleft_comma
                         || inside_habitual_action
                         || (continued_subject && matches!(p, "、" | ","))
@@ -5679,7 +5683,8 @@ struct ClauseDiscourseCtx<'a> {
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
     prepared_for_predicate: Option<usize>,
     naide_adverbial: Option<NaideAdverbial>,
-    joined_naide: Option<&'a std::cell::Cell<bool>>,
+    joined_naide: Option<&'a std::cell::Cell<Option<usize>>>,
+    preceding_naide_action: Option<usize>,
     return_trip: Option<ReturnTrip>,
     parallel_elapsed_te: Option<usize>,
     inside_quote: bool,
@@ -11907,7 +11912,13 @@ fn translate_clause_bunsetsus(
         .find_map(|day| daytime::meeting_verb(source, day));
     let handover = handover::resolve(&bunsetsus, ctx.source_chars, doc, target);
     let completed_go = if target == TargetVariant::ZhHant && !ctx.inside_quote {
-        finished_go::resolve(&bunsetsus, source, doc, ctx.source_chars)
+        finished_go::resolve(
+            &bunsetsus,
+            source,
+            doc,
+            ctx.source_chars,
+            ctx.preceding_naide_action,
+        )
     } else {
         None
     };
@@ -14137,11 +14148,11 @@ fn translate_clause_bunsetsus(
             text: join_zh_parts(&preparation),
         }));
     }
-    if naide_adverbial.is_some_and(|adverbial| adverbial.join_unstated_subject)
+    if let Some(adverbial) = naide_adverbial.filter(|adverbial| adverbial.join_unstated_subject)
         && let Some(joined) = ctx.joined_naide
     {
         parts.push("就".to_owned());
-        joined.set(true);
+        joined.set(Some(adverbial.action));
     }
     (join_zh_parts(&parts), had_overt_subj_no_pred)
 }
@@ -18956,6 +18967,10 @@ mod naide_adverbial_tests {
         {
             assert_eq!(translate(text), "沒有喝水就跑了。");
         }
+        assert_eq!(
+            translate("朝ご飯を食べないで、学校へ行きました。"),
+            "早上沒有吃飯就去了學校。"
+        );
     }
 
     #[test]

@@ -11641,6 +11641,9 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
+    let finish_letter_by_deadline = target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && letter_writing_has_completion_deadline(&bunsetsus, &candidates, source, doc);
     // Resolve time and result roles while the other arguments of the predicate are available.
     let hand_return = if ctx.return_trip.is_none() && target == TargetVariant::ZhHant {
         return_endpoint::clock_hand_return(
@@ -13381,6 +13384,17 @@ fn translate_clause_bunsetsus(
         verb_core = action;
         Some(modal)
     });
+
+    if finish_letter_by_deadline
+        && verb_core == "寫"
+        && objs.as_slice() == ["信"]
+        && inner_pre_mods.is_empty()
+        && post_verb_mods.is_empty()
+        && matches!(obliques.as_slice(), [time] if time.case_particle.as_deref() == Some("までに")
+            && !matches!(time.deadline_endpoint, DeadlineEndpoint::Question { .. }))
+    {
+        verb_core.push('完');
+    }
 
     // Assemble SVO order:
     let implicit_subject = subjects.is_empty();
@@ -17480,6 +17494,57 @@ fn deadline_governor(group: &Bunsetsu, doc: &Document) -> Option<usize> {
         return date.head;
     }
     time_case_governor(group.atoms.last()?, doc)
+}
+
+// A letter is the result of the writing. In a plain nonpast assertion,
+// the deadline bounds finishing the letter without asserting it is done.
+fn letter_writing_has_completion_deadline(
+    groups: &[Bunsetsu],
+    predicates: &[Bunsetsu],
+    source: &[Atom],
+    doc: &Document,
+) -> bool {
+    let [predicate] = predicates else {
+        return false;
+    };
+    if predicate.sconj_tail.is_some() || predicate.sfp_tail.is_some() {
+        return false;
+    }
+    let verb = match core_non_punct(&predicate.atoms) {
+        [verb] if verb.surface == "書く" => verb,
+        [verb, polite]
+            if !polite.is_locked
+                && polite.surface == "ます"
+                && polite.deprel == "aux"
+                && polite.head == verb.doc_tok_idx =>
+        {
+            verb
+        }
+        _ => return false,
+    };
+    let Some(action) = verb.doc_tok_idx else {
+        return false;
+    };
+    !verb.is_locked
+        && verb.upos == Some(Upos::Verb)
+        && verb.lemma.as_deref() == Some("書く")
+        && verb.deprel == "root"
+        && groups
+            .iter()
+            .any(|group| group.atoms.len() == 3 && deadline_governor(group, doc) == Some(action))
+        && !groups.iter().any(|group| group.role == BunsetsuRole::IObj)
+        && source.windows(2).any(|pair| {
+            let [letter, case] = pair else { return false };
+            !letter.is_locked
+                && letter.surface == "手紙"
+                && letter.deprel == "obj"
+                && letter.head == Some(action)
+                && case.surface == "を"
+                && linked_letter_case(letter, case)
+        })
+        && !source
+            .iter()
+            .any(|atom| matches!(atom.surface.as_str(), "？" | "?"))
 }
 
 fn time_case_governor(case: &Atom, doc: &Document) -> Option<usize> {
@@ -21646,7 +21711,11 @@ mod clock_rule_tests {
         let translate = |s| public_translate(s, &glossary).target_text;
         assert_eq!(
             translate("私は六時までに手紙を書きます。"),
-            "我最晚在六點寫信。"
+            "我最晚在六點寫完信。"
+        );
+        assert_eq!(
+            translate("私は日曜日までに手紙を書きます。"),
+            "我最晚在星期日寫完信。"
         );
         assert_eq!(
             translate("金曜日までに先生に手紙を書きます。"),
@@ -24059,10 +24128,10 @@ mod motion_endpoint_tests {
     }
 
     #[test]
-    fn temporal_made_leaves_deadlines_and_other_endpoints_alone() {
+    fn temporal_made_distinguishes_deadlines_and_other_endpoints() {
         assert_eq!(
             translate("私は六時までに手紙を書きます。"),
-            "我最晚在六點寫信。"
+            "我最晚在六點寫完信。"
         );
         assert_eq!(translate("私は六時に手紙を書きます。"), "我在六點寫信。");
         assert_eq!(translate("先生まで歩いた。"), "連老師都走了。");

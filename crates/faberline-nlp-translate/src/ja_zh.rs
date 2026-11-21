@@ -1038,7 +1038,7 @@ pub(crate) fn translate_ja_sentence(
                     }) = segments.get(previous_index)
                     && polarity_contrast::matches(previous, trimmed_atoms, doc)
                 {
-                    rendered.insert_str(0, "但");
+                    rendered.insert(0, '但');
                 }
                 let byte_start = out.len();
                 out.push_str(&rendered);

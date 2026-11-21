@@ -146,8 +146,11 @@ mod tests {
     #[test]
     fn marks_a_meal_as_complete_before_a_past_trip() {
         let mut glossary = TranslationGlossary::new();
-        let meal = translate("ご飯を食べて、駅に行った。", &glossary);
-        assert!(meal.target_text.starts_with("吃了飯後，"));
+        let source = "朝ご飯を食べて、学校へ行きました。";
+        let meal = translate(source, &glossary);
+        assert_eq!(meal.target_text, "早上吃了飯後，去了學校。");
+        let plain = translate("ご飯を食べて、駅に行った。", &glossary);
+        assert_eq!(plain.target_text, "吃了飯後，去了車站。");
 
         glossary.objects.push(GlossaryEntry {
             canonical: "朝ご飯".into(),
@@ -155,8 +158,8 @@ mod tests {
             targets: [(TargetVariant::ZhHant, "早餐".into())].into(),
             ..GlossaryEntry::default()
         });
-        let locked = translate("朝ご飯を食べて、駅へ行きました。", &glossary);
-        assert!(locked.target_text.starts_with("吃了早餐後，"));
+        let locked = translate(source, &glossary);
+        assert_eq!(locked.target_text, "吃了早餐後，去了學校。");
         let [hit] = locked.glossary_hits.as_slice() else {
             panic!("expected one meal glossary hit");
         };

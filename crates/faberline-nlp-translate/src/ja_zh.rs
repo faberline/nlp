@@ -874,11 +874,12 @@ pub(crate) fn translate_ja_sentence(
                             if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
                         _ => &[],
                     },
-                    prior_meal: match (trailing_punct.as_deref(), segments.as_slice()) {
-                        (Some("、" | "，"), [_, Segment::Clause { atoms: trip, .. }])
-                            if seg_idx == 0 && target == TargetVariant::ZhHant && !inside_quote =>
+                    prior_meal: match segments.as_slice() {
+                        [Segment::Clause { atoms: meal, trailing_punct: Some(comma), .. }, Segment::Clause { atoms: trip, .. }]
+                            if matches!(comma.as_str(), "、" | "，")
+                                && target == TargetVariant::ZhHant && !inside_quote =>
                         {
-                            trip_after_meal::prior_meal(trimmed_atoms, trip, doc, chars)
+                            trip_after_meal::prior_meal(meal, trip, doc, chars)
                         }
                         _ => None,
                     },
@@ -11740,7 +11741,7 @@ fn translate_clause_bunsetsus(
         .find_map(|day| daytime::meeting_verb(source, day));
     let handover = handover::resolve(&bunsetsus, ctx.source_chars, doc, target);
     let completed_go = if target == TargetVariant::ZhHant && !ctx.inside_quote {
-        finished_go::resolve(&bunsetsus, source, doc, ctx.source_chars)
+        finished_go::resolve(&bunsetsus, source, doc, ctx.source_chars, ctx.prior_meal)
     } else {
         None
     };

@@ -1,0 +1,100 @@
+{
+  "schema": "faberline.nlp.ja_zh.two_handover_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source": "https://github.com/faberline/nlp/issues/325#issuecomment-7044131915",
+  "visibility": "development-visible",
+  "provenance": {
+    "author": "Codex subagent two_handover_dev_author (Luna)",
+    "license": "MIT",
+    "origin": "first_party_original"
+  },
+  "source_main": "6d93a26191492436a681a04e2225c229cca5207d",
+  "source_tree": "a59d40dcfbbd548bad1406083c91b4b28bc26ac7",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "T01",
+      "level_approx": "N5",
+      "jp": "先生は健太に本を渡し、美咲に手紙を渡しました。",
+      "zh_hant": "老師把書交給健太，再把信交給美咲。",
+      "semantic_checks": [
+        "老師把書交給健太，也把信交給美咲。",
+        "兩次交付的對象和物品都不同。"
+      ],
+      "semantic_unknowns": [
+        "句子沒有說明書和信原本屬於誰。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent two_handover_dev_author (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "T02",
+      "level_approx": "N5",
+      "jp": "店員は客の田中さんに紙袋を渡し、別の客の佐藤さんに箱を渡しました。",
+      "zh_hant": "店員把紙袋交給名叫田中的客人，再把箱子交給另一位名叫佐藤的客人。",
+      "semantic_checks": [
+        "店員把紙袋交給客人田中，也把箱子交給另一位客人佐藤。",
+        "兩位收件人都是客人，交付的物品不同。"
+      ],
+      "semantic_unknowns": [
+        "句子沒有說明田中和佐藤的性別。",
+        "句子沒有說明紙袋和箱子原本屬於誰。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent two_handover_dev_author (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "T03",
+      "level_approx": "N5",
+      "jp": "先生は学生の葵に地図を渡しましたが、葵は道を尋ねました。",
+      "zh_hant": "老師把地圖交給學生葵，但葵問了路。",
+      "semantic_checks": [
+        "老師把地圖交給學生葵。",
+        "葵之後問了路；這是另一個動作，不是再次交付。"
+      ],
+      "semantic_unknowns": [],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent two_handover_dev_author (Luna)",
+        "license": "MIT"
+      }
+    }
+  ]
+}

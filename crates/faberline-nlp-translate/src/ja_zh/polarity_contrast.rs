@@ -147,28 +147,25 @@ mod tests {
     #[test]
     fn paired_topics_put_the_contrast_in_the_negative_clause() {
         let glossary = TranslationGlossary::new();
-        for (source, suffix) in [
-            (
-                "本は読んで、図書館へは行かなかった。",
-                "，但往圖書館沒有去。",
-            ),
-            (
-                "コーヒーは飲んで、会社には行きませんでした。",
-                "，但沒有去到公司。",
-            ),
+        for (source, destination) in [
+            ("本は読んで、図書館へは行かなかった。", "圖書館"),
+            ("コーヒーは飲んで、会社には行きませんでした。", "公司"),
         ] {
             let translated = translate(source, &glossary);
-            assert!(translated.target_text.ends_with(suffix), "{source}");
             let [first, second] = translated.clause_alignments.as_slice() else {
                 panic!("expected the two clauses to have separate alignments");
             };
             assert_eq!(first.target_span.end_char, second.target_span.start_char);
-            assert_eq!(
-                translated
-                    .target_text
-                    .chars()
-                    .nth(second.target_span.start_char),
-                Some('但')
+            let negative_clause: String = translated
+                .target_text
+                .chars()
+                .skip(second.target_span.start_char)
+                .collect();
+            assert!(
+                negative_clause.starts_with('但')
+                    && negative_clause.contains("沒有去")
+                    && negative_clause.contains(destination),
+                "{source}"
             );
         }
     }

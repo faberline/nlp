@@ -2139,7 +2139,7 @@ fn nominal_receiving_request_keeps_eligibility_assistance_and_ability_paths() {
     for (source, expected) in [
         (
             "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。",
-            "這份資料給參加者只發放。參加者以外面的人不能得到資料嗎？",
+            "這份資料只發給參加者。參加者以外的人不能得到資料嗎？",
         ),
         (
             "この荷物を持っていただけますか。",
@@ -2151,13 +2151,34 @@ fn nominal_receiving_request_keeps_eligibility_assistance_and_ability_paths() {
         ),
         (
             "この犬の泳ぐ力を調べています。泳げますか。",
-            "正在調查這狗的游泳的力。能游泳嗎？",
+            "正在調查這隻狗的游泳能力。能游泳嗎？",
         ),
         (
             "この犬の泳ぐ力を調べています。泳げませんか。",
-            "正在調查這狗的游泳的力。不能游泳嗎？",
+            "正在調查這隻狗的游泳能力。不能游泳嗎？",
         ),
         ("写真を撮ってもらえますか。", "可以幫我拍攝照片嗎？"),
+    ] {
+        let doc = analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_valid_ja_zh_doc(source, &doc);
+        assert_eq!(doc.target_text, expected, "{source}");
+    }
+}
+
+#[test]
+fn motion_ability_keeps_physical_force_on_the_existing_path() {
+    for (source, expected) in [
+        ("泳ぐ力と歩く力を比べます。", "比較游泳能力和步行能力。"),
+        ("選手の走る力を鍛えます。", "磨練選手的跑步能力。"),
+        ("相手を押す力を測ります。", "測定推對方的力。"),
+        ("泳ぐ力で船を押します。", "在游泳的力推船。"),
     ] {
         let doc = analyze_and_translate(
             source,

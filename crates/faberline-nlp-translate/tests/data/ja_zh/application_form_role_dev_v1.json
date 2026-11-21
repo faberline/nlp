@@ -1,0 +1,161 @@
+{
+  "schema": "faberline.nlp.ja_zh.application_form_role_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "review_status": "pending_independent_adoption",
+  "source": "https://github.com/faberline/nlp/issues/277",
+  "source_main": "6d93a26191492436a681a04e2225c229cca5207d",
+  "source_tree": "a59d40dcfbbd548bad1406083c91b4b28bc26ac7",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "author": "Luna"
+  },
+  "control_groups": {
+    "submission": ["AFR-01", "AFR-03"],
+    "physical_extraction": ["AFR-02", "AFR-04"],
+    "mixed_actions": ["AFR-05", "AFR-06"]
+  },
+  "paired_cases": {
+    "bare_form": ["AFR-01", "AFR-02"],
+    "course_form": ["AFR-03", "AFR-04"]
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "AFR-01",
+      "level_approx": "N5",
+      "jp": "田中さんは受付に申込書を出しました。",
+      "zh_hant": "田中把報名表交到服務台了。",
+      "allowed_variants": ["田中已經把報名表交給服務台了。"],
+      "semantic_checks": ["保留田中是交表的人。", "表明報名表交到服務台。", "表達交付，不是從容器拿出。"],
+      "semantic_unknowns": ["原文沒有說明是誰在服務台收件。", "原文沒有說明這份表是哪一種申請表。"],
+      "control": {"kind": "filing_submission", "contrast_ids": ["AFR-02"]},
+      "fixture": {
+        "translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"},
+        "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []},
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"}
+    },
+    {
+      "id": "AFR-02",
+      "level_approx": "N5",
+      "jp": "田中さんは受付の箱から申込書を出しました。",
+      "zh_hant": "田中從服務台的箱子裡拿出報名表了。",
+      "allowed_variants": ["田中已經從服務台的箱子拿出報名表了。"],
+      "semantic_checks": ["保留田中是拿出表格的人。", "表明報名表原先在服務台的箱子裡。", "表達從箱中取出，不是交給服務台。"],
+      "semantic_unknowns": ["原文沒有說明箱子由誰管理。", "原文沒有說明拿出表格的用途。"],
+      "control": {"kind": "physical_extraction", "contrast_ids": ["AFR-01"]},
+      "fixture": {
+        "translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"},
+        "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []},
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"}
+    },
+    {
+      "id": "AFR-03",
+      "level_approx": "N5",
+      "jp": "田中さんは受付に講座の申込書を出しました。",
+      "zh_hant": "田中把課程報名表交到服務台了。",
+      "allowed_variants": ["田中已經把課程報名表交給服務台了。"],
+      "semantic_checks": ["保留田中是交表的人。", "表明課程報名表交到服務台。", "表達交付，不是從容器拿出。"],
+      "semantic_unknowns": ["原文沒有說明是誰在服務台收件。", "原文沒有說明這份表是否已完成填寫。"],
+      "control": {"kind": "filing_submission", "contrast_ids": ["AFR-04"]},
+      "fixture": {
+        "translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"},
+        "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []},
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"}
+    },
+    {
+      "id": "AFR-04",
+      "level_approx": "N5",
+      "jp": "田中さんは受付の箱から講座の申込書を出しました。",
+      "zh_hant": "田中從服務台的箱子裡拿出課程報名表了。",
+      "allowed_variants": ["田中已經從服務台的箱子拿出課程報名表了。"],
+      "semantic_checks": ["保留田中是拿出表格的人。", "表明課程報名表原先在服務台的箱子裡。", "表達從箱中取出，不是交給服務台。"],
+      "semantic_unknowns": ["原文沒有說明箱子由誰管理。", "原文沒有說明拿出表格的用途。"],
+      "control": {"kind": "physical_extraction", "contrast_ids": ["AFR-03"]},
+      "fixture": {
+        "translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"},
+        "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []},
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"}
+    },
+    {
+      "id": "AFR-05",
+      "level_approx": "N5",
+      "jp": "田中さんは箱から申込書を出しました。それから、受付に申込書を出しました。",
+      "zh_hant": "田中從箱子裡拿出報名表。之後，他把報名表交到服務台。",
+      "allowed_variants": ["田中先從箱子拿出報名表，接著交到服務台。"],
+      "semantic_checks": ["保留田中先從箱中取出報名表，再交到服務台的順序。", "兩個動作的對象都是報名表。", "分清從箱中拿出和交到服務台。"],
+      "semantic_unknowns": ["原文沒有說明箱子的位置或管理者。", "原文沒有說明服務台的收件人。"],
+      "control": {"kind": "mixed_actions", "contrast_ids": []},
+      "fixture": {
+        "translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"},
+        "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []},
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"}
+    },
+    {
+      "id": "AFR-06",
+      "level_approx": "N5",
+      "jp": "山田さんは受付に講座の申込書を出しました。鈴木さんは机の箱から申込書を出しました。",
+      "zh_hant": "山田把課程報名表交到服務台。鈴木從桌上的箱子裡拿出報名表。",
+      "allowed_variants": ["山田將課程報名表交給服務台；鈴木則從桌上的箱子拿出報名表。"],
+      "semantic_checks": ["保留山田交課程報名表到服務台。", "保留鈴木從桌上箱子拿出另一份報名表。", "兩個動作的參與者和對象範圍清楚。"],
+      "semantic_unknowns": ["原文沒有說明兩份報名表是否相同。", "原文沒有說明服務台的收件人或箱子的管理者。"],
+      "control": {"kind": "mixed_actions", "contrast_ids": []},
+      "fixture": {
+        "translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"},
+        "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []},
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"}
+    }
+  ]
+}

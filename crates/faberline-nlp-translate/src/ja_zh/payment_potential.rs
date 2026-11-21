@@ -1,4 +1,4 @@
-//! Resolve the potential of 払う from its arguments within one clause.
+//! Resolve payment and potential 払う from their source arguments.
 
 use super::*;
 
@@ -730,6 +730,77 @@ pub(super) fn render(source: &[Atom], target: TargetVariant, reported: bool) -> 
     ))
 }
 
+pub(super) fn render_fare_statement(
+    source: &[Atom],
+    doc: &Document,
+    chars: &[char],
+) -> Option<String> {
+    let [charge @ .., topic, medium, by, verb, polite] = source else {
+        return None;
+    };
+    if source.iter().any(|atom| atom.is_locked) {
+        return None;
+    }
+    let fare = match charge {
+        [fare] if fare.surface == "切符代" => fare,
+        [ticket, fare]
+            if ticket.surface == "切符"
+                && ticket.upos == Some(Upos::Noun)
+                && ticket.deprel == "compound"
+                && ticket.head == fare.doc_tok_idx
+                && ticket.span.end_char == fare.span.start_char
+                && fare.surface == "代" =>
+        {
+            fare
+        }
+        _ => return None,
+    };
+    let governor = verb.doc_tok_idx?;
+    if fare.upos != Some(Upos::Noun)
+        || fare.deprel != "nsubj"
+        || fare.head != Some(governor)
+        || topic.surface != "は"
+        || !dasu_case_link(fare, topic)
+        || medium.upos != Some(Upos::Noun)
+        || medium.deprel != "obl"
+        || medium.head != Some(governor)
+        || by.surface != "で"
+        || !dasu_case_link(medium, by)
+        || verb.upos != Some(Upos::Verb)
+        || verb.lemma.as_deref() != Some("支払う")
+        || verb.deprel != "root"
+        || verb.head.is_some()
+        || polite.surface != "ます"
+        || polite.upos != Some(Upos::Aux)
+        || polite.deprel != "aux"
+        || polite.head != Some(governor)
+        || verb.span.end_char != polite.span.start_char
+    {
+        return None;
+    }
+    // Keep the ordinary renderer for questions and for fragments of a larger sentence.
+    let sentence = doc
+        .segmentation
+        .sentences
+        .get(doc.tokens.get(governor)?.sentence)?
+        .span;
+    let prefix = chars.get(sentence.start_char..charge.first()?.span.start_char)?;
+    let suffix = chars.get(polite.span.end_char..sentence.end_char)?;
+    if !prefix.iter().all(|ch| ch.is_whitespace())
+        || !suffix
+            .iter()
+            .all(|ch| matches!(ch, '。' | '.') || ch.is_whitespace())
+    {
+        return None;
+    }
+    let method = match medium.surface.as_str() {
+        "カード" => "刷卡",
+        "現金" => "用現金",
+        _ => return None,
+    };
+    Some(format!("{method}付票款"))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
@@ -779,6 +850,26 @@ mod tests {
             ("このカードでは遊べますか。", "在這卡片能玩嗎？"),
         ] {
             assert_eq!(translate(jp), expected, "{jp}");
+        }
+    }
+
+    #[test]
+    fn ticket_fare_is_the_amount_paid() {
+        for (source, expected) in [
+            (
+                "窓口で切符を買います。切符代はカードで支払います。",
+                "刷卡付票款。",
+            ),
+            (
+                "窓口で切符を買います。切符代は現金で支払います。",
+                "用現金付票款。",
+            ),
+        ] {
+            let translated = translate(source);
+            assert_eq!(
+                translated.split_once('。').map(|(_, payment)| payment),
+                Some(expected)
+            );
         }
     }
 

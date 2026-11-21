@@ -2,6 +2,36 @@
 
 use super::*;
 
+// The parser treats the payment stem as a relative clause. Keep the bare
+// compound as one noun and preserve the method token's link to its governor.
+pub(super) fn bind_method(atoms: &mut Vec<Atom>) {
+    for end in (1..atoms.len()).rev() {
+        let payment = &atoms[end - 1];
+        let method = &atoms[end];
+        if payment.is_locked
+            || method.is_locked
+            || payment.surface != "支払い"
+            || payment.upos != Some(Upos::Verb)
+            || payment.lemma.as_deref() != Some("支払う")
+            || payment.deprel != "acl"
+            || method.surface != "方法"
+            || method.upos != Some(Upos::Noun)
+            || method.doc_tok_idx.is_none()
+            || payment.head != method.doc_tok_idx
+            || payment.span.end_char != method.span.start_char
+            || payment.doc_tok_idx.is_none()
+            || atoms.iter().any(|atom| atom.head == payment.doc_tok_idx)
+        {
+            continue;
+        }
+        let mut compound = method.clone();
+        compound.span.start_char = payment.span.start_char;
+        compound.surface = "付款方式".to_owned();
+        compound.is_locked = true;
+        atoms.splice(end - 1..=end, [compound]);
+    }
+}
+
 fn potential(atom: &Atom) -> bool {
     !atom.is_locked
         && atom.upos == Some(Upos::Verb)
@@ -747,6 +777,26 @@ mod tests {
         )
         .unwrap()
         .target_text
+    }
+
+    #[test]
+    fn payment_method_keeps_the_store_and_question_polarity() {
+        for (source, expected) in [
+            (
+                "この店の支払い方法を調べています。お客さんはスマホで支払えますか。",
+                "正在調查這家商店的付款方式。客人能用智慧型手機付款嗎？",
+            ),
+            (
+                "この店の支払い方法を調べています。お客さんはスマホで支払えませんか。",
+                "正在調查這家商店的付款方式。客人不能用智慧型手機付款嗎？",
+            ),
+            (
+                "この店の支払う方法を調べています。",
+                "正在調查這家商店的結帳的方法。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
     }
 
     #[test]

@@ -495,6 +495,104 @@ fn has_surface_colour(noun: &Atom, previous: &[Atom], colour: &str) -> bool {
     literal_colour(&name, colour)
 }
 
+// Recover the head of a whole, simple Object subject for sense selection.
+// The rendered phrase still uses the caller's placeholder.
+fn locked_colour_noun(subject: &Atom, doc: &Document, chars: &[char]) -> Option<Atom> {
+    if !subject.is_locked
+        || subject.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM)
+        || subject.deprel != "nsubj"
+    {
+        return None;
+    }
+    let start = doc
+        .tokens
+        .partition_point(|token| token.span.start_char < subject.span.start_char);
+    let tokens = doc.tokens.get(start..=subject.doc_tok_idx?)?;
+    let last = tokens.last()?;
+    if tokens.first()?.span.start_char != subject.span.start_char
+        || last.span.end_char != subject.span.end_char
+        || last.upos != Some(Upos::Noun)
+        || tokens
+            .windows(2)
+            .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
+        || tokens.iter().any(|token| {
+            !matches!(
+                token.upos,
+                Some(Upos::Noun | Upos::Propn | Upos::Pron | Upos::Det)
+            ) && !(token.upos == Some(Upos::Adp)
+                && chars.get(token.span.start_char..token.span.end_char) == Some(&['の']))
+        })
+    {
+        return None;
+    }
+    let spelling: String = chars
+        .get(last.span.start_char..last.span.end_char)?
+        .iter()
+        .collect();
+    // A caller lexicon entry can join a demonstrative or genitive noun phrase
+    // into one token. Take the noun at its end for the literal-colour check.
+    let nominal = ["この", "その", "あの"]
+        .into_iter()
+        .find_map(|prefix| spelling.strip_prefix(prefix))
+        .unwrap_or(&spelling);
+    let word = nominal.rsplit_once('の').map_or(nominal, |(_, noun)| noun);
+    let mut original = subject.clone();
+    original.surface = word.to_owned();
+    original.lemma = last.lemma.clone();
+    original.upos = last.upos;
+    original.span = Span {
+        start_char: last.span.end_char - word.chars().count(),
+        end_char: last.span.end_char,
+    };
+    original.is_locked = false;
+    Some(original)
+}
+
+pub(super) fn bind_locked_colour_subject(
+    atoms: &mut Vec<Atom>,
+    doc: &Document,
+    sentence: usize,
+    chars: &[char],
+) {
+    for index in (1..atoms.len()).rev() {
+        let subject = &atoms[index];
+        let Some(original) = locked_colour_noun(subject, doc, chars) else {
+            continue;
+        };
+        if original.span != subject.span {
+            continue;
+        }
+        let det = &atoms[index - 1];
+        if attached_demonstrative(det, &original).is_none() {
+            continue;
+        }
+        if !atoms.iter().any(|predicate| {
+            !predicate.is_locked
+                && predicate.upos == Some(Upos::Adj)
+                && predicate.doc_tok_idx.is_some()
+                && predicate.doc_tok_idx == subject.head
+                && hue(predicate.lemma.as_deref().unwrap_or(&predicate.surface)).is_some_and(
+                    |colour| original.surface != "色" && literal_colour(&original.surface, colour),
+                )
+        }) {
+            continue;
+        }
+        let Some(label) = nominal_possession::choice_phrase(
+            &atoms[index - 1..=index],
+            doc,
+            sentence,
+            TargetVariant::ZhHant,
+            chars,
+        ) else {
+            continue;
+        };
+        let mut phrase = subject.clone();
+        phrase.span.start_char = det.span.start_char;
+        phrase.surface = label;
+        atoms.splice(index - 1..=index, [phrase]);
+    }
+}
+
 fn green_or_unripe(name: &str) -> bool {
     const GREEN_OR_UNRIPE: &[&str] = &["実", "葉", "果物", "信号", "信号機", "りんご", "リンゴ"];
     GREEN_OR_UNRIPE.contains(&name)
@@ -1246,6 +1344,7 @@ pub(super) fn take_time_interval(
 pub(super) fn render(
     source: &[Atom],
     predicates: &[Bunsetsu],
+    doc: &Document,
     ctx: &ClauseDiscourseCtx,
     adverbs: &mut Vec<String>,
     times: &mut Vec<String>,
@@ -1311,7 +1410,14 @@ pub(super) fn render(
     let lemma = predicate.lemma.as_deref().unwrap_or(&predicate.surface);
     let colour = hue(lemma);
     if let Some(c) = colour {
-        if !has_surface_colour(subject?, before, c) {
+        let subject = subject?;
+        let has_hue = if subject.is_locked {
+            locked_colour_noun(subject, doc, ctx.source_chars)
+                .is_some_and(|noun| noun.surface != "色" && literal_colour(&noun.surface, c))
+        } else {
+            has_surface_colour(subject, before, c)
+        };
+        if !has_hue {
             return None;
         }
     } else if !(gradable(lemma) || bounded && matches!(lemma, "強い" | "弱い" | "忙しい"))
@@ -1461,6 +1567,56 @@ pub(super) fn render(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn caller_object_terms_keep_colour_subjects_and_ordinary_adjectives() {
+        use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+        use faberline_nlp::doc::model::Backend;
+
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        for (source, term, translation, expected) in [
+            ("この車は白いです。", "車", "測試車", "這輛測試車是白色的。"),
+            (
+                "この車は白いです。",
+                "この車",
+                "這輛測試車",
+                "這輛測試車是白色的。",
+            ),
+            (
+                "先生の車は白いです。",
+                "車",
+                "測試車",
+                "老師的測試車是白色的。",
+            ),
+            (
+                "先生の車は白いです。",
+                "先生の車",
+                "老師的配車",
+                "老師的配車是白色的。",
+            ),
+            (
+                "昨日買った本はとても面白い。",
+                "本",
+                "書冊",
+                "昨天買的書冊非常有趣。",
+            ),
+        ] {
+            let glossary: TranslationGlossary = serde_json::from_value(serde_json::json!({
+                "schema": "nlp.translate.glossary.v1",
+                "objects": [{
+                    "canonical": term,
+                    "surfaces": [term],
+                    "targets": {"zh-Hant": translation}
+                }]
+            }))
+            .unwrap();
+            let translated =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(translated.target_text, expected, "{source}");
+            assert_eq!(translated.glossary_hits.len(), 1, "{source}");
+        }
+    }
+
     use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
     use faberline_nlp::doc::model::Backend;
 

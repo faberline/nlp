@@ -11409,7 +11409,7 @@ fn translate_clause_bunsetsus(
 
     let focused_goal = |group: &Bunsetsu| {
         if target == TargetVariant::ZhHant {
-            focused_physical_goal_head(group, doc)
+            focused_physical_goal_head(group, doc, ctx.source_chars)
         } else {
             None
         }
@@ -24158,11 +24158,14 @@ fn physical_goal_head(b: &Bunsetsu) -> Option<usize> {
     physical_goal_head_for_case(b, particle, content)
 }
 
-fn focused_physical_goal_head(b: &Bunsetsu, doc: &Document) -> Option<usize> {
+fn focused_physical_goal_head(b: &Bunsetsu, doc: &Document, chars: &[char]) -> Option<usize> {
     let [content @ .., case, focus] = b.atoms.as_slice() else {
         return None;
     };
     let noun = content.last()?;
+    if noun.is_locked && (content.len() != 1 || noun.lemma.as_deref() != Some(LOCKED_PLACE_ATOM)) {
+        return None;
+    }
     if !matches!(case.surface.as_str(), "に" | "へ")
         || focus.surface != "は"
         || focus.upos != Some(Upos::Adp)
@@ -24183,16 +24186,32 @@ fn focused_physical_goal_head(b: &Bunsetsu, doc: &Document) -> Option<usize> {
         let token = doc.tokens.get(id)?;
         let link = doc.syntax.get(id)?;
         if token.span != atom.span
-            || token.upos != atom.upos
+            || (!atom.is_locked && token.upos != atom.upos)
             || link.token != id
             || link.span != atom.span
+            || link.sentence != token.sentence
             || link.head != atom.head
             || link.deprel != atom.deprel
         {
             return None;
         }
     }
-    physical_goal_head_for_case(b, case, content)
+    if !noun.is_locked {
+        return physical_goal_head_for_case(b, case, content);
+    }
+
+    // The whole lock preserves rendering, but the original noun must still
+    // pass the same physical-place check as an unlocked argument.
+    let token = doc.tokens.get(noun.doc_tok_idx?)?;
+    let source = chars.get(noun.span.start_char..noun.span.end_char)?;
+    let original = Atom {
+        surface: source.iter().collect(),
+        lemma: token.lemma.clone(),
+        upos: token.upos,
+        is_locked: false,
+        ..noun.clone()
+    };
+    physical_goal_head_for_case(b, case, std::slice::from_ref(&original))
 }
 
 fn physical_goal_head_for_case(b: &Bunsetsu, particle: &Atom, content: &[Atom]) -> Option<usize> {

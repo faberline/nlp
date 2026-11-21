@@ -23,6 +23,7 @@ mod nominal_possession;
 mod order_noun;
 mod payment_potential;
 mod reception;
+mod recipient_scope;
 mod return_endpoint;
 
 use faberline_nlp::Span;
@@ -6805,6 +6806,7 @@ fn translate_clause_atoms(
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
         daytime::bind(&mut norm_atoms, body, doc);
         order_noun::bind(&mut norm_atoms, body, ctx.source_chars);
+        recipient_scope::mark_exclusions(&mut norm_atoms);
     }
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
@@ -13324,6 +13326,24 @@ fn translate_clause_bunsetsus(
 
     let mut transfer_prefix = None;
     let mut transfer_recipient = None;
+    if target == TargetVariant::ZhHant
+        && verb_core == "發放"
+        && transfer.is_none()
+        && objs.is_empty()
+        && !passive_agent_needed
+        && recipient_scope::distributes_only_to(source)
+        && let [recipient] = iobjs.as_slice()
+        && recipient.transfer_dative
+        && let Some(person) = recipient
+            .text
+            .strip_prefix('對')
+            .and_then(|text| text.strip_suffix('只'))
+        && !person.is_empty()
+    {
+        transfer_recipient = Some(person.to_owned());
+        iobjs.clear();
+        verb_core = "只發給".to_owned();
+    }
     if let Some(transfer) = transfer
         && subjects.len() <= 1
     {
@@ -25023,6 +25043,11 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut i = 0usize;
     while i < b.atoms.len() {
         let a = &b.atoms[i];
+        if a.lemma.as_deref() == Some(recipient_scope::EXCLUSION_OUTSIDE) {
+            out.push('外');
+            i += 1;
+            continue;
+        }
         if !a.is_locked
             && a.surface == "子"
             && a.upos == Some(Upos::Noun)

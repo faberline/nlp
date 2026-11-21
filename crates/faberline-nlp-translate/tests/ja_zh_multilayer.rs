@@ -2139,7 +2139,7 @@ fn nominal_receiving_request_keeps_eligibility_assistance_and_ability_paths() {
     for (source, expected) in [
         (
             "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。",
-            "這份資料給參加者只發放。參加者以外面的人不能得到資料嗎？",
+            "這份資料只發給參加者。參加者以外的人不能得到資料嗎？",
         ),
         (
             "この荷物を持っていただけますか。",

@@ -1,0 +1,233 @@
+{
+  "schema": "faberline.nlp.ja_zh.quoted_reading_dev.v1",
+  "version": 1,
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "status": "development-visible",
+  "visibility": "development-visible",
+  "review_status": "pending_independent_adoption",
+  "source": "https://github.com/faberline/nlp/issues/402",
+  "source_main": "6d93a26191492436a681a04e2225c229cca5207d",
+  "source_tree": "a59d40dcfbbd548bad1406083c91b4b28bc26ac7",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "author": "Luna"
+  },
+  "items": [
+    {
+      "id": "quoted-reading-01",
+      "jp": "「山田」をそのまま読んでください。",
+      "zh_hant": "請照原樣讀出「山田」。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Preserve the quoted written payload 山田 and its quotation marks.",
+        "Translate the request as reading aloud verbatim."
+      ],
+      "semantic_unknowns": [
+        "No audio or pronunciation is supplied."
+      ],
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT",
+        "author": "Luna"
+      },
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "quoted-reading-02",
+      "jp": "「山田」は何と読みますか。",
+      "zh_hant": "「山田」怎麼讀？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Keep the quoted written payload 山田 unchanged.",
+        "Keep this as a question about pronunciation and do not answer it."
+      ],
+      "semantic_unknowns": [
+        "The intended pronunciation is not given."
+      ],
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT",
+        "author": "Luna"
+      },
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "quoted-reading-03",
+      "jp": "「山田」をそのまま書いてください。",
+      "zh_hant": "請照原樣寫下「山田」。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Preserve the quoted written payload 山田 and its quotation marks.",
+        "Translate the request as verbatim copying in writing."
+      ],
+      "semantic_unknowns": [
+        "No writing medium is specified."
+      ],
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT",
+        "author": "Luna"
+      },
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "quoted-reading-04",
+      "jp": "「山田」と言ってください。",
+      "zh_hant": "請說「山田」。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Translate ordinary direct speech as a request to say the quoted name.",
+        "Keep the name text unchanged."
+      ],
+      "semantic_unknowns": [
+        "The speaker's voice or volume is not specified."
+      ],
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT",
+        "author": "Luna"
+      },
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "quoted-reading-05",
+      "jp": "「山田」を読みました。",
+      "zh_hant": "我讀了「山田」。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Translate the completed ordinary reading event.",
+        "Keep the quoted written name unchanged."
+      ],
+      "semantic_unknowns": [
+        "The text containing the name is not identified."
+      ],
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT",
+        "author": "Luna"
+      },
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "quoted-reading-06",
+      "jp": "山田さんを見ました。",
+      "zh_hant": "我看見山田先生了。",
+      "allowed_variants": [
+        "我看到山田先生了。"
+      ],
+      "semantic_checks": [
+        "Translate 山田さん as a person outside quotation marks.",
+        "Do not preserve it as a quoted text operand."
+      ],
+      "semantic_unknowns": [
+        "The person's gender is not specified; 先生 is a polite address here."
+      ],
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT",
+        "author": "Luna"
+      },
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "quoted-reading-07",
+      "jp": "「山田」を声に出して読んでください。",
+      "zh_hant": "請把「山田」念出來。",
+      "allowed_variants": [
+        "請大聲讀出「山田」。"
+      ],
+      "semantic_checks": [
+        "Preserve the quoted written payload 山田 and its punctuation.",
+        "Translate the request as reading the text aloud."
+      ],
+      "semantic_unknowns": [
+        "No pronunciation is provided."
+      ],
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT",
+        "author": "Luna"
+      },
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "quoted-reading-08",
+      "jp": "「山田」と書いてください。",
+      "zh_hant": "請寫「山田」。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Translate the request to write the quoted name.",
+        "Keep the written name unchanged."
+      ],
+      "semantic_unknowns": [
+        "The request does not say whether to copy a source or write from memory."
+      ],
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT",
+        "author": "Luna"
+      },
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    }
+  ],
+  "control_groups": {
+    "verbatim_read_aloud": [
+      "quoted-reading-01",
+      "quoted-reading-07"
+    ],
+    "pronunciation_question": [
+      "quoted-reading-02"
+    ],
+    "verbatim_copying": [
+      "quoted-reading-03",
+      "quoted-reading-08"
+    ],
+    "ordinary_direct_speech": [
+      "quoted-reading-04"
+    ],
+    "ordinary_reading": [
+      "quoted-reading-05"
+    ],
+    "unquoted_same_noun": [
+      "quoted-reading-06"
+    ]
+  }
+}

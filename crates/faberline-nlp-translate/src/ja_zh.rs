@@ -24,6 +24,7 @@ mod order_noun;
 mod payment_potential;
 mod reception;
 mod return_endpoint;
+mod te_help_glossary;
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
@@ -276,6 +277,9 @@ pub(crate) fn translate_ja_sentence(
         calendar::bind_relative_contrast(&mut atoms, chars);
         homework_relative::mark_argument_commas(&mut atoms, doc);
         finished_go::mark_reading_pause(&mut atoms, doc, chars);
+        if let Some(restored) = te_help_glossary::restore_object(&atoms, doc, chars) {
+            atoms = restored;
+        }
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.

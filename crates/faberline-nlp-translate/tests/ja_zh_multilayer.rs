@@ -2173,7 +2173,7 @@ fn nominal_receiving_request_keeps_eligibility_assistance_and_ability_paths() {
 }
 
 #[test]
-fn nominal_receiving_request_leaves_a_locked_object_on_its_existing_path() {
+fn nominal_receiving_request_preserves_the_locked_object_text() {
     let source = "この資料をいただけませんか。";
     let mut glossary = TranslationGlossary::new();
     glossary.objects.push(GlossaryEntry {
@@ -2191,8 +2191,7 @@ fn nominal_receiving_request_leaves_a_locked_object_on_its_existing_path() {
     )
     .unwrap();
     assert_valid_ja_zh_doc(source, &doc);
-    assert!(doc.target_text.contains("資料原件"), "{}", doc.target_text);
-    assert!(doc.target_text.contains("不能得到"), "{}", doc.target_text);
+    assert_eq!(doc.target_text, "可以給我這份資料原件嗎？");
     assert_eq!(doc.glossary_hits.len(), 1);
 }
 

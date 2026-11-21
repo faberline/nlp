@@ -20,6 +20,7 @@ mod homework_desire;
 mod homework_relative;
 mod meeting_voice;
 mod nominal_possession;
+mod nominal_receiving_glossary;
 mod order_noun;
 mod payment_potential;
 mod reception;
@@ -905,7 +906,17 @@ pub(crate) fn translate_ja_sentence(
                 let receiving_request = if target == TargetVariant::ZhHant
                     && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
                 {
-                    try_translate_nominal_receiving_request(trimmed_atoms, doc, sentence_idx)
+                    if trimmed_atoms.iter().any(|atom| atom.is_locked) {
+                        nominal_receiving_glossary::render(trimmed_atoms, chars)
+                    } else {
+                        render_nominal_receiving_request(
+                            trimmed_atoms,
+                            doc,
+                            sentence_idx,
+                            None,
+                            chars,
+                        )
+                    }
                 } else {
                     None
                 };
@@ -6355,10 +6366,12 @@ fn render_nominal_receiving_count(
     Some(quantity)
 }
 
-fn try_translate_nominal_receiving_request(
+fn render_nominal_receiving_request(
     atoms: &[Atom],
     doc: &Document,
     sentence_idx: usize,
+    lock: Option<&Atom>,
+    source: &[char],
 ) -> Option<String> {
     let [args @ .., verb, masu, neg, question] = atoms else {
         return None;
@@ -6442,11 +6455,28 @@ fn try_translate_nominal_receiving_request(
         Some(NominalReceivingAmount::Approximate(text)) => text.to_owned(),
         None => String::new(),
     };
-    let object = render_bunsetsu_np(&object, TargetVariant::ZhHant);
-    if object.is_empty() || has_kana_no_hangul(&object) {
+    let raw_object = render_bunsetsu_np(&object, TargetVariant::ZhHant);
+    if raw_object.is_empty() || has_kana_no_hangul(&raw_object) {
         return None;
     }
-    if object == "時間" {
+    let time_request = raw_object == "時間";
+    let object = if let Some(lock) = lock {
+        let qualifier = usize::from(
+            matches!(amount, Some(NominalReceivingAmount::Count { .. }))
+                && phrase.first().is_some_and(|a| a.upos == Some(Upos::Det)),
+        );
+        nominal_receiving_glossary::render_object(
+            &phrase[qualifier..],
+            lock,
+            doc,
+            sentence_idx,
+            source,
+            time_request,
+        )?
+    } else {
+        raw_object
+    };
+    if time_request {
         if matches!(amount, Some(NominalReceivingAmount::Count { .. })) {
             return None;
         }

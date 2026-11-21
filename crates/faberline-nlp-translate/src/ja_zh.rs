@@ -22,6 +22,7 @@ mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
 mod payment_potential;
+mod polarity_contrast;
 mod reception;
 mod return_endpoint;
 
@@ -1023,6 +1024,21 @@ pub(crate) fn translate_ja_sentence(
                     tgt_start = out.chars().count();
                     aligned_target.end_char = tgt_start;
                     rendered.insert_str(0, "接著");
+                }
+                if target == TargetVariant::ZhHant
+                    && !inside_quote
+                    && !rendered.is_empty()
+                    && !rendered.starts_with(['但', '卻'])
+                    && let Some((previous_index, _, byte_end, char_end)) = previous_clause_comma
+                    && previous_index.checked_add(1) == Some(seg_idx)
+                    && out.len() == byte_end
+                    && tgt_start == char_end
+                    && let Some(Segment::Clause {
+                        atoms: previous, ..
+                    }) = segments.get(previous_index)
+                    && polarity_contrast::matches(previous, trimmed_atoms, doc)
+                {
+                    rendered.insert_str(0, "但");
                 }
                 let byte_start = out.len();
                 out.push_str(&rendered);

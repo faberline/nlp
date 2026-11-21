@@ -23,6 +23,7 @@ mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
 mod payment_potential;
+mod place_goal_glossary;
 mod reception;
 mod return_endpoint;
 
@@ -277,6 +278,7 @@ pub(crate) fn translate_ja_sentence(
         calendar::bind_relative_contrast(&mut atoms, chars);
         homework_relative::mark_argument_commas(&mut atoms, doc);
         finished_go::mark_reading_pause(&mut atoms, doc, chars);
+        place_goal_glossary::restore_destination(&mut atoms, chars, sent_span, doc, lock_table);
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.

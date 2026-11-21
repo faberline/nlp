@@ -29,7 +29,7 @@ use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
 
 use crate::conditioning::zh_pronoun_for_hint;
-use crate::lock::{LockOrigin, SpanLockTable};
+use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
 use crate::schema::{ClauseAlignment, GlossaryKind, SentenceConditioning, TargetVariant};
 use crate::variant::{convert_zh_text_to_target, convert_zh_text_to_target_with_spans};
 
@@ -206,8 +206,105 @@ pub(crate) fn translate_ja_sentence(
     sentence_idx: usize,
     chars: &[char],
     doc: &Document,
+    verb_grammar: Option<&Document>,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
+    conditioning: &SentenceConditioning,
+    target: TargetVariant,
+    direct_quote: Option<&DirectQuotePlacement>,
+    written_form_continuation: Option<Span>,
+    dates: &mut DateContext,
+    prior_letter_distribution: Option<PriorLetterDistribution>,
+    honorifics: &mut HonorificContext,
+) -> (String, Vec<ClauseAlignment>) {
+    if target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && written_form_continuation.is_none()
+    {
+        let structural = verb_grammar.filter(|analysis| {
+            analysis
+                .segmentation
+                .sentences
+                .get(sentence_idx)
+                .is_some_and(|sentence| {
+                    let original = &doc.segmentation.sentences[sentence_idx];
+                    sentence.span == original.span && sentence.paragraph == original.paragraph
+                })
+        });
+        let grammar = structural.unwrap_or(doc);
+        let stems: Vec<_> = lock_table
+            .locks
+            .iter()
+            .filter(|lock| crate::verb_glossary::is_stem_lock(lock, grammar, sentence_idx))
+            .collect();
+        if !stems.is_empty() {
+            let mut grammar_locks = lock_table.clone();
+            grammar_locks
+                .locks
+                .retain(|lock| !stems.iter().any(|stem| stem.index == lock.index));
+            let grammar_tokens;
+            let tokens = if structural.is_some() {
+                grammar_tokens = grammar
+                    .tokens
+                    .iter()
+                    .filter(|token| token.sentence == sentence_idx)
+                    .collect::<Vec<_>>();
+                grammar_tokens.as_slice()
+            } else {
+                sent_tokens
+            };
+            let mut trial_dates = dates.clone();
+            let mut trial_honorifics = honorifics.clone();
+            let result = translate_ja_sentence_with_stems(
+                sentence_idx,
+                chars,
+                grammar,
+                tokens,
+                &grammar_locks,
+                &stems,
+                conditioning,
+                target,
+                None,
+                None,
+                &mut trial_dates,
+                prior_letter_distribution,
+                &mut trial_honorifics,
+            );
+            if stems
+                .iter()
+                .all(|lock| result.0.matches(&lock.placeholder).count() == 1)
+            {
+                *dates = trial_dates;
+                *honorifics = trial_honorifics;
+                return result;
+            }
+        }
+    }
+    translate_ja_sentence_with_stems(
+        sentence_idx,
+        chars,
+        doc,
+        sent_tokens,
+        lock_table,
+        &[],
+        conditioning,
+        target,
+        direct_quote,
+        written_form_continuation,
+        dates,
+        prior_letter_distribution,
+        honorifics,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn translate_ja_sentence_with_stems(
+    sentence_idx: usize,
+    chars: &[char],
+    doc: &Document,
+    sent_tokens: &[&Token],
+    lock_table: &SpanLockTable,
+    verb_stems: &[&LockedSpan],
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -870,6 +967,7 @@ pub(crate) fn translate_ja_sentence(
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
+                    verb_stems,
                     following: &segments[seg_idx + 1..],
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
@@ -1214,6 +1312,7 @@ pub(crate) fn translate_ja_fragment(
             si,
             &chars,
             &doc,
+            None,
             &sent_tokens,
             &lock_table,
             &cond,
@@ -5678,6 +5777,7 @@ struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
     contrasts_recurrence: bool,
     source_chars: &'a [char],
+    verb_stems: &'a [&'a LockedSpan],
     following: &'a [Segment],
     preceding_activity: &'a [Atom],
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
@@ -12645,6 +12745,33 @@ fn translate_clause_bunsetsus(
             transfer,
             naide_adverbial.map(|adverbial| adverbial.past),
         );
+    let stem_render = match predicates.as_slice() {
+        [predicate] if !ctx.verb_stems.is_empty() && transfer.is_none() => {
+            match predicate.atoms.as_slice() {
+                [head, ending @ ..]
+                    if head.upos == Some(Upos::Verb)
+                        && !head.is_locked
+                        && !ending.is_empty()
+                        && ending.iter().all(|atom| {
+                            !atom.is_locked && matches!(atom.upos, Some(Upos::Aux | Upos::Sconj))
+                        })
+                        && verb_core
+                            == translate_single_ja_term(
+                                &head.surface,
+                                head.lemma.as_deref(),
+                                head.upos,
+                            ) =>
+                {
+                    ctx.verb_stems
+                        .iter()
+                        .find(|lock| lock.source_span == head.span)
+                        .map(|lock| (verb_core.clone(), lock.placeholder.as_str()))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
     if meeting_partner.is_some() {
         passive_agent_needed = false;
     }
@@ -14050,7 +14177,12 @@ fn translate_clause_bunsetsus(
         parts.push(objs.remove(0));
     }
     if !verb_core.is_empty() {
-        parts.push(verb_core);
+        // Classification, polarity and argument placement used the native
+        // verb. Replace only the lexical core that survived assembly intact.
+        let rendered = stem_render
+            .filter(|(core, _)| core == &verb_core && !parts.iter().any(|item| item == core))
+            .map_or(verb_core, |(_, placeholder)| placeholder.to_owned());
+        parts.push(rendered);
     }
     if keep_go {
         for endpoint in &mut made_endpoints {

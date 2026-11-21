@@ -4682,12 +4682,22 @@ fn naide_adverbial(
         })
         || request(main)
         || clause.iter().any(|atom| {
-            atom.head == Some(governor)
+            !atom.is_locked
+                && atom.head == Some(governor)
                 && (request(atom)
-                    || (!atom.is_locked
-                        && atom.surface == "か"
+                    || (atom.surface == "か"
                         && atom.upos == Some(Upos::Part)
-                        && atom.deprel == "discourse"))
+                        && atom.deprel == "discourse")
+                    // A negated matrix action does not establish a later
+                    // event. Adding 就 can change the scope of its negation.
+                    || (atom.upos == Some(Upos::Aux)
+                        && atom.deprel == "aux"
+                        && (matches!(atom.lemma.as_deref(), Some("ない" | "ぬ" | "ず"))
+                            || matches!(
+                                atom.surface.as_str(),
+                                "ない" | "なかっ" | "なかった" | "ぬ" | "ず" | "ん"
+                                    | "ませ" | "ません" | "ませんでした"
+                            ))))
         })
     {
         return None;
@@ -4696,7 +4706,7 @@ fn naide_adverbial(
         !atom.is_locked
             && atom.head == Some(governor)
             && atom.deprel == "aux"
-            && matches!(atom.surface.as_str(), "た" | "だ" | "ました" | "なかった")
+            && matches!(atom.surface.as_str(), "た" | "だ" | "ました")
     });
     let dictionary_form = main.lemma.as_deref().map_or_else(
         || {
@@ -4710,7 +4720,7 @@ fn naide_adverbial(
             !atom.is_locked
                 && atom.head == Some(governor)
                 && atom.deprel == "aux"
-                && matches!(atom.surface.as_str(), "ます" | "ません" | "ない")
+                && atom.surface == "ます"
         });
     if !past && !nonpast {
         return None;
@@ -18969,6 +18979,18 @@ mod naide_adverbial_tests {
             translate("市長に手紙を四通書かないでいただけた。"),
             "給市長四通不寫能得到了信。"
         );
+    }
+
+    #[test]
+    fn a_negated_following_action_does_not_add_a_result() {
+        for text in [
+            "傘を持たないで出かけませんでした。傘を持って出かけました。",
+            "傘を持たないで、出かけませんでした。",
+            "水を飲まないで走らなかった。",
+            "水を飲まないで、走らない。",
+        ] {
+            assert!(!translate(text).contains('就'));
+        }
     }
 }
 

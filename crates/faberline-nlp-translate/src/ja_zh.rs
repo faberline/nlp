@@ -6856,6 +6856,15 @@ fn translate_clause_atoms(
     if let Some((predicate, _)) = proposal {
         localize_proposal_arguments(&mut grouped, predicate, body, target);
     }
+    if target == TargetVariant::ZhHant
+        && grouped.iter().any(|group| {
+            group.atoms.first().is_some_and(|atom| {
+                atom.is_locked && atom.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
+            })
+        })
+    {
+        grouped = fold_locked_document_demonstratives(grouped, doc, ctx.source_chars);
+    }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
@@ -16483,15 +16492,19 @@ fn attached_demonstrative(det: &Atom, noun: &Atom) -> Option<char> {
 }
 
 fn attached_demonstrative_at(det: &Atom, noun: &Atom, nominal_start: usize) -> Option<char> {
+    if noun.is_locked || noun.upos != Some(Upos::Noun) {
+        return None;
+    }
+    source_demonstrative(det, noun.doc_tok_idx?, nominal_start)
+}
+
+fn source_demonstrative(det: &Atom, noun_index: usize, nominal_start: usize) -> Option<char> {
     if det.is_locked
-        || noun.is_locked
         || det.upos != Some(Upos::Det)
-        || noun.upos != Some(Upos::Noun)
         || det.span.end_char != nominal_start
         || det.deprel != "det"
         || det.doc_tok_idx.is_none()
-        || noun.doc_tok_idx.is_none()
-        || det.head != noun.doc_tok_idx
+        || det.head != Some(noun_index)
     {
         return None;
     }
@@ -16500,6 +16513,61 @@ fn attached_demonstrative_at(det: &Atom, noun: &Atom, nominal_start: usize) -> O
         "その" | "あの" => Some('那'),
         _ => None,
     }
+}
+
+fn locked_document_demonstrative(
+    det: &Atom,
+    noun: &Atom,
+    doc: &Document,
+    source_chars: &[char],
+) -> Option<String> {
+    if !noun.is_locked || noun.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM) {
+        return None;
+    }
+    let noun_index = noun.doc_tok_idx?;
+    let pointer = source_demonstrative(det, noun_index, noun.span.start_char)?;
+    let token = doc.tokens.get(noun_index)?;
+    if token.span != noun.span
+        || token.upos != Some(Upos::Noun)
+        || doc.tokens.get(noun_index + 1).is_some_and(|next| {
+            next.span.start_char == token.span.end_char
+                && matches!(next.upos, Some(Upos::Noun | Upos::Propn))
+        })
+    {
+        return None;
+    }
+    // The locked atom contains the caller's placeholder. Select the unit from
+    // the original noun and keep the placeholder as its own atom.
+    let source: String = source_chars
+        .get(noun.span.start_char..noun.span.end_char)?
+        .iter()
+        .collect();
+    let word = translate_single_ja_term(&source, token.lemma.as_deref(), token.upos);
+    takes_document_counter(&word).then(|| format!("{pointer}份"))
+}
+
+fn takes_document_counter(word: &str) -> bool {
+    matches!(word, "資料" | "文件" | "報告" | "報紙")
+}
+
+fn fold_locked_document_demonstratives(
+    groups: Vec<Bunsetsu>,
+    doc: &Document,
+    source_chars: &[char],
+) -> Vec<Bunsetsu> {
+    let mut merged: Vec<Bunsetsu> = Vec::with_capacity(groups.len());
+    for mut group in groups {
+        if let Some(previous) = merged.last()
+            && let [det] = previous.atoms.as_slice()
+            && let Some(noun) = group.atoms.first()
+            && let Some(prefix) = locked_document_demonstrative(det, noun, doc, source_chars)
+        {
+            merged.pop();
+            prepend_locked_atom(&mut group, prefix);
+        }
+        merged.push(group);
+    }
+    merged
 }
 
 /// A demonstrative already has an attached noun here. Use complete person nouns,
@@ -25008,7 +25076,7 @@ fn demonstrative_classifier(word: &str, noun: &Atom) -> &'static str {
     match word {
         "書" | "小說" | "雜誌" | "字典" => "本",
         "車" | "公車" | "電車" | "汽車" | "卡車" | "腳踏車" | "自行車" => "輛",
-        "資料" | "文件" | "報告" | "報紙" => "份",
+        _ if takes_document_counter(word) => "份",
         "商店" | "餐廳" | "公司" => "家",
         "寺" | "寺廟" | "橋" => "座",
         "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
@@ -27520,6 +27588,44 @@ mod existence_rule_tests {
         assert_eq!(slice(source, hit.source_span), "その本");
         assert_eq!(slice(&doc.target_text, hit.target_span), "藏書甲");
         assert_eq!(doc.target_text.matches("藏書甲").count(), 1);
+    }
+
+    #[test]
+    fn document_demonstrative_respects_the_extent_of_an_object_lock() {
+        let source = "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。";
+        let translate_locked = |surface: &str| {
+            let glossary = TranslationGlossary {
+                objects: vec![GlossaryEntry {
+                    canonical: surface.into(),
+                    surfaces: vec![surface.into()],
+                    targets: BTreeMap::from([(TargetVariant::ZhHant, "講義".into())]),
+                    ..GlossaryEntry::default()
+                }],
+                ..TranslationGlossary::new()
+            };
+            translate(source, &glossary)
+        };
+        let noun_only = translate_locked("資料");
+        assert!(noun_only.target_text.starts_with("這份講義"));
+        assert_eq!(noun_only.glossary_hits.len(), 2);
+        let slice = |text: &str, span: Span| {
+            text.chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect::<String>()
+        };
+        for hit in &noun_only.glossary_hits {
+            assert_eq!(slice(source, hit.source_span), "資料");
+            assert_eq!(slice(&noun_only.target_text, hit.target_span), "講義");
+        }
+
+        let whole_phrase = translate_locked("この資料");
+        assert!(whole_phrase.target_text.starts_with("講義"));
+        let [hit] = whole_phrase.glossary_hits.as_slice() else {
+            panic!("expected one whole-phrase glossary hit");
+        };
+        assert_eq!(slice(source, hit.source_span), "この資料");
+        assert_eq!(slice(&whole_phrase.target_text, hit.target_span), "講義");
     }
 
     #[test]

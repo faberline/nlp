@@ -4,8 +4,12 @@ use faberline_nlp::doc::{EntityKind, Token};
 
 use super::{
     Atom, Bunsetsu, BunsetsuRole, CLOCK_ATOM, Document, LOCKED_PLACE_ATOM, SemanticClass, Span,
-    Upos, clock_case_governor, dasu_case_link, is_clock_atom, physical_goal_head,
+    Upos, clock_case_governor, dasu_case_link, is_clock_atom, is_companion_person,
+    physical_goal_head, return_companion_owner, source_time_head,
 };
+
+#[cfg(test)]
+mod companion_tests;
 
 pub(super) struct FinishedGo {
     pub(super) predicate: usize,
@@ -142,6 +146,7 @@ fn direct_destination(
     predicate: usize,
     doc: &Document,
     source: &[char],
+    is_companion_case: impl Fn(usize) -> bool,
 ) -> Option<DirectGo> {
     let mut clock_marker = None;
     for (i, atom) in atoms.iter().enumerate() {
@@ -157,7 +162,10 @@ fn direct_destination(
         let Some(argument) = link.head.and_then(|head| doc.syntax.get(head)) else {
             continue;
         };
-        if argument.head != Some(predicate) || Some(link.token) == clock_marker {
+        if argument.head != Some(predicate)
+            || Some(link.token) == clock_marker
+            || is_companion_case(link.token)
+        {
             continue;
         }
         match (argument.deprel.as_str(), raw(source, link.span)?) {
@@ -177,18 +185,16 @@ fn direct_destination(
     })
 }
 
-fn physical_destination(
-    group: &Bunsetsu,
+fn source_destination<'a>(
+    group: &'a Bunsetsu,
     going: &DirectGo,
-    doc: &Document,
+    doc: &'a Document,
     source: &[char],
-) -> bool {
+) -> Option<(&'a Atom, &'a Atom, &'a Token)> {
     let [place, marker] = group.atoms.as_slice() else {
-        return false;
+        return None;
     };
-    let Some(noun) = source_head(place, doc) else {
-        return false;
-    };
+    let noun = source_head(place, doc)?;
     if place.doc_tok_idx != Some(going.place)
         || marker.doc_tok_idx != Some(going.marker)
         || place.head != Some(going.predicate)
@@ -208,8 +214,20 @@ fn physical_destination(
                 )
         })
     {
-        return false;
+        return None;
     }
+    Some((place, marker, noun))
+}
+
+fn physical_destination(
+    group: &Bunsetsu,
+    going: &DirectGo,
+    doc: &Document,
+    source: &[char],
+) -> bool {
+    let Some((place, marker, noun)) = source_destination(group, going, doc, source) else {
+        return false;
+    };
     if !place.is_locked {
         return physical_goal_head(group) == Some(going.predicate);
     }
@@ -248,12 +266,20 @@ fn physical_destination(
     physical_goal_head(&source_group) == Some(going.predicate)
 }
 
-pub(super) fn resolve(
-    groups: &[Bunsetsu],
-    atoms: &[Atom],
+fn companion_market_destination(
+    group: &Bunsetsu,
+    going: &DirectGo,
     doc: &Document,
     source: &[char],
-) -> Option<FinishedGo> {
+) -> bool {
+    // 市場 has no Location tag. With a proved companion, the direct に/へ
+    // argument of completed 行く still identifies the market as a place.
+    source_destination(group, going, doc, source).is_some_and(|(place, _, _)| {
+        !place.is_locked && raw(source, place.span) == Some(&['市', '場'])
+    })
+}
+
+fn completed_predicate(groups: &[Bunsetsu], doc: &Document, source: &[char]) -> Option<usize> {
     if doc.text_chars != source.len() {
         return None;
     }
@@ -265,24 +291,124 @@ pub(super) fn resolve(
     if predicates.next().is_some() || group.sconj_tail.is_some() || group.sfp_tail.is_some() {
         return None;
     }
-    let predicate = completed_go(verb, tail, doc, source)?;
-    let going = direct_destination(atoms, predicate, doc, source)?;
+    completed_go(verb, tail, doc, source)
+}
+
+fn has_local_subject(groups: &[Bunsetsu], predicate: usize, doc: &Document) -> bool {
     // The renderer must have the original subject group in this same clause.
     let mut subjects = doc
         .syntax
         .iter()
         .filter(|node| node.head == Some(predicate) && node.deprel == "nsubj");
-    if let Some(subject) = subjects.next()
-        && (subjects.next().is_some()
-            || !groups.iter().flat_map(|group| &group.atoms).any(|atom| {
+    subjects.next().is_none_or(|subject| {
+        subjects.next().is_none()
+            && groups.iter().flat_map(|group| &group.atoms).any(|atom| {
                 atom.doc_tok_idx == Some(subject.token) && source_head(atom, doc).is_some()
-            }))
+            })
+    })
+}
+
+pub(super) fn mark_companions(
+    groups: &mut [Bunsetsu],
+    atoms: &[Atom],
+    doc: &Document,
+    source: &[char],
+) {
+    let Some(predicate) = completed_predicate(groups, doc, source) else {
+        return;
+    };
+    let mut person = None;
+    let mut together = None;
+    for (index, group) in groups.iter().enumerate() {
+        let [noun, marker] = group.atoms.as_slice() else {
+            continue;
+        };
+        if noun.head != Some(predicate)
+            || noun.deprel != "obl"
+            || noun.is_locked
+            || source_head(noun, doc).is_none_or(|original| original.span != noun.span)
+            || source_head(marker, doc).is_none_or(|original| original.span != marker.span)
+            || !dasu_case_link(noun, marker)
+        {
+            continue;
+        }
+        let candidate = (index, marker.doc_tok_idx);
+        let previous = match (raw(source, noun.span), raw(source, marker.span)) {
+            (_, Some(['と']))
+                if is_companion_person(noun)
+                    && atoms
+                        .iter()
+                        .position(|atom| atom.doc_tok_idx == marker.doc_tok_idx)
+                        .and_then(|position| return_companion_owner(atoms, position))
+                        == Some(predicate) =>
+            {
+                person.replace(candidate)
+            }
+            (Some(['一', '緒']), Some(['に'])) => together.replace(candidate),
+            _ => continue,
+        };
+        if previous.is_some() {
+            return;
+        }
+    }
+    if person.is_none() && together.is_none() {
+        return;
+    }
+    let allows = |id| {
+        person.is_some_and(|(_, marker)| marker == Some(id))
+            || together.is_some_and(|(_, marker)| marker == Some(id))
+    };
+    let Some(going) = direct_destination(atoms, predicate, doc, source, allows) else {
+        return;
+    };
+    if !has_local_subject(groups, predicate, doc)
+        || !groups.iter().any(|group| {
+            physical_destination(group, &going, doc, source)
+                || companion_market_destination(group, &going, doc, source)
+                // へ proves a direction even for a noun without a location
+                // tag. Keep its existing directional order in that case.
+                || group.case_particle.as_deref() == Some("へ")
+                    && source_destination(group, &going, doc, source)
+                        .is_some_and(|(place, _, _)| !place.is_locked && !source_time_head(place))
+        })
     {
+        return;
+    }
+    if let Some((index, _)) = person {
+        groups[index].role = BunsetsuRole::TravelCompanion;
+    }
+    if let Some((index, _)) = together {
+        groups[index].role = BunsetsuRole::TravelTogether;
+    }
+}
+
+pub(super) fn resolve(
+    groups: &[Bunsetsu],
+    atoms: &[Atom],
+    doc: &Document,
+    source: &[char],
+) -> Option<FinishedGo> {
+    let predicate = completed_predicate(groups, doc, source)?;
+    let is_companion_group = |group: &Bunsetsu| {
+        matches!(
+            group.role,
+            BunsetsuRole::TravelCompanion | BunsetsuRole::TravelTogether
+        )
+    };
+    let going = direct_destination(atoms, predicate, doc, source, |id| {
+        groups.iter().any(|group| {
+            is_companion_group(group)
+                && group.atoms.last().and_then(|atom| atom.doc_tok_idx) == Some(id)
+        })
+    })?;
+    if !has_local_subject(groups, predicate, doc) {
         return None;
     }
-    let goal_group = groups
-        .iter()
-        .position(|group| physical_destination(group, &going, doc, source))?;
+    let has_companions = groups.iter().any(is_companion_group);
+    let goal_group = groups.iter().position(|group| {
+        physical_destination(group, &going, doc, source)
+            || has_companions && companion_market_destination(group, &going, doc, source)
+    })?;
     Some(FinishedGo {
         predicate,
         goal_group,
@@ -307,7 +433,7 @@ fn reading_pause(atoms: &[Atom], doc: &Document, source: &[char]) -> Option<usiz
         _ => ending,
     };
     let predicate = completed_go(verb, tail, doc, source)?;
-    let going = direct_destination(atoms, predicate, doc, source)?;
+    let going = direct_destination(atoms, predicate, doc, source, |_| false)?;
     if pause.is_locked
         || pause.deprel != "punct"
         || pause.head != Some(predicate)

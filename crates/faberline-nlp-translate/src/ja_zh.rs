@@ -26,6 +26,9 @@ mod polarity_contrast;
 mod reception;
 mod return_endpoint;
 
+#[cfg(test)]
+mod focused_negative_go_tests;
+
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
 
@@ -11449,8 +11452,17 @@ fn translate_clause_bunsetsus(
         is_event_time_ni: bool,
         transfer_dative: bool,
         physical_goal_head: Option<usize>,
+        focused_goal_head: Option<usize>,
         completed_go_place: Option<String>,
     }
+
+    let focused_goal = |group: &Bunsetsu| {
+        if target == TargetVariant::ZhHant {
+            focused_physical_goal_head(group, doc, ctx.source_chars)
+        } else {
+            None
+        }
+    };
 
     struct PlacedSubj {
         text: String,
@@ -12308,6 +12320,7 @@ fn translate_clause_bunsetsus(
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
+                        focused_goal_head: focused_goal(&b),
                         completed_go_place,
                     });
                 }
@@ -12356,6 +12369,7 @@ fn translate_clause_bunsetsus(
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
+                        focused_goal_head: focused_goal(&b),
                         completed_go_place,
                     });
                 }
@@ -12935,6 +12949,7 @@ fn translate_clause_bunsetsus(
                     is_event_time_ni: false,
                     transfer_dative: false,
                     physical_goal_head: None,
+                    focused_goal_head: None,
                     completed_go_place: None,
                 });
             }
@@ -13182,15 +13197,18 @@ fn translate_clause_bunsetsus(
         .chain(&iobjs)
         .filter(|o| matches!(o.case_particle.as_deref(), Some("に" | "へ")) && !o.is_event_time_ni);
     let only_goal = marked_goals.next();
-    let direct_negative_physical_go = negative_go_head.is_some()
-        && only_goal.is_some_and(|o| o.physical_goal_head == negative_go_head)
+    let goes_to_arg = |arg: &PlacedArg| {
+        negative_go_head
+            .is_some_and(|head| arg.physical_goal_head.or(arg.focused_goal_head) == Some(head))
+    };
+    let direct_negative_physical_go = only_goal.is_some_and(goes_to_arg)
         && marked_goals.next().is_none()
         && !obliques
             .iter()
             .any(|o| o.case_particle.as_deref() == Some("まで"));
     let seated_until = past_until && verb_core == "坐";
     let format_directional_goal = |arg: &PlacedArg, raw_np: &str| {
-        if direct_negative_physical_go && arg.physical_goal_head == negative_go_head {
+        if direct_negative_physical_go && goes_to_arg(arg) {
             raw_np.to_owned()
         } else if seated_until && arg.case_particle.as_deref() == Some("に") {
             let place = raw_np.strip_prefix('到').unwrap_or(raw_np);
@@ -13693,7 +13711,7 @@ fn translate_clause_bunsetsus(
             parts.push(format!("連{raw_np}都"));
         } else if direct_negative_physical_go
             && o.case_particle.as_deref() == Some("へ")
-            && o.physical_goal_head == negative_go_head
+            && goes_to_arg(&o)
         {
             if let Some(place) = o.text.strip_prefix('往') {
                 goal_tails.push(place.to_owned());
@@ -24194,6 +24212,66 @@ fn clock_case_governor(clock: &Atom, marker: &Atom, doc: &Document) -> Option<us
 
 fn physical_goal_head(b: &Bunsetsu) -> Option<usize> {
     let (particle, content) = b.atoms.split_last()?;
+    physical_goal_head_for_case(b, particle, content)
+}
+
+fn focused_physical_goal_head(b: &Bunsetsu, doc: &Document, chars: &[char]) -> Option<usize> {
+    let [content @ .., case, focus] = b.atoms.as_slice() else {
+        return None;
+    };
+    let noun = content.last()?;
+    if noun.is_locked && (content.len() != 1 || noun.lemma.as_deref() != Some(LOCKED_PLACE_ATOM)) {
+        return None;
+    }
+    if !matches!(case.surface.as_str(), "に" | "へ")
+        || focus.surface != "は"
+        || focus.upos != Some(Upos::Adp)
+        || focus.deprel != "case"
+        || focus.head != noun.doc_tok_idx
+        || focus.is_locked
+        || case.span.end_char != focus.span.start_char
+        || !dasu_case_link(noun, case)
+        || !matches!(noun.deprel.as_str(), "nsubj" | "obl")
+    {
+        return None;
+    }
+
+    // The parser can mark the focused place as a subject. Keep the original
+    // case links so only the place attached to the negated verb qualifies.
+    for atom in [noun, case, focus] {
+        let id = atom.doc_tok_idx?;
+        let token = doc.tokens.get(id)?;
+        let link = doc.syntax.get(id)?;
+        if token.span != atom.span
+            || (!atom.is_locked && token.upos != atom.upos)
+            || link.token != id
+            || link.span != atom.span
+            || link.sentence != token.sentence
+            || link.head != atom.head
+            || link.deprel != atom.deprel
+        {
+            return None;
+        }
+    }
+    if !noun.is_locked {
+        return physical_goal_head_for_case(b, case, content);
+    }
+
+    // The whole lock preserves rendering, but the original noun must still
+    // pass the same physical-place check as an unlocked argument.
+    let token = doc.tokens.get(noun.doc_tok_idx?)?;
+    let source = chars.get(noun.span.start_char..noun.span.end_char)?;
+    let original = Atom {
+        surface: source.iter().collect(),
+        lemma: token.lemma.clone(),
+        upos: token.upos,
+        is_locked: false,
+        ..noun.clone()
+    };
+    physical_goal_head_for_case(b, case, std::slice::from_ref(&original))
+}
+
+fn physical_goal_head_for_case(b: &Bunsetsu, particle: &Atom, content: &[Atom]) -> Option<usize> {
     if !matches!(b.case_particle.as_deref(), Some("に" | "へ" | "まで"))
         || Some(particle.surface.as_str()) != b.case_particle.as_deref()
         || particle.upos != Some(Upos::Adp)

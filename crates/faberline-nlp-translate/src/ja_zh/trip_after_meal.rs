@@ -386,7 +386,15 @@ mod tests {
         let mut glossary = TranslationGlossary::new();
         let source = "朝ご飯を食べて、学校へ行きました。";
         let meal = translate(source, &glossary);
-        assert_eq!(meal.target_text, "早上吃了飯後，去了學校。");
+        let native = match faberline_nlp::lexicon::ja::lookup_ja_gloss(
+            "朝ご飯",
+            Some(faberline_nlp::doc::Upos::Noun),
+        ) {
+            None => "早上吃了飯後，去了學校。",
+            Some("早餐") => "吃了早餐後，去了學校。",
+            Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+        };
+        assert_eq!(meal.target_text, native);
         let plain = translate("ご飯を食べて、駅に行った。", &glossary);
         assert_eq!(plain.target_text, "吃了飯後，去了車站。");
 

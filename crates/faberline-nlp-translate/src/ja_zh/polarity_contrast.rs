@@ -405,7 +405,15 @@ mod tests {
         };
         let mut glossary = TranslationGlossary::new();
         let natural = translate(source, &glossary);
-        assert_contrast(&natural.target_text, "早上有吃飯", "學校");
+        let native_meal = match faberline_nlp::lexicon::ja::lookup_ja_gloss(
+            "朝ご飯",
+            Some(faberline_nlp::doc::Upos::Noun),
+        ) {
+            None => "早上有吃飯",
+            Some("早餐") => "早餐有吃",
+            Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+        };
+        assert_contrast(&natural.target_text, native_meal, "學校");
 
         let term = |canonical: &str, alias: &str| GlossaryEntry {
             canonical: canonical.to_owned(),

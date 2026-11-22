@@ -12951,7 +12951,7 @@ fn translate_clause_bunsetsus(
         && verb_core == "拿著"
         && !ctx.inside_quote
         && !passive_agent_needed
-        && stem_render.is_none()
+        && verb_render.is_none()
         && !pre_verb_mods.iter().any(|m| m == "讓")
         && carrying::with_motion(
             source,
@@ -13009,7 +13009,7 @@ fn translate_clause_bunsetsus(
         && outward_look::is_direction(source, &predicates, doc)
     {
         objs.clear();
-        if stem_render.is_some() {
+        if verb_render.is_some() {
             pre_verb_mods.push("往外".to_owned());
         } else {
             verb_core = "往外看".to_owned();
@@ -13035,7 +13035,7 @@ fn translate_clause_bunsetsus(
         {
             *object = format!("{modifiers}菸");
         }
-        if stem_render.is_none() {
+        if verb_render.is_none() {
             verb_core = "抽".to_owned();
         }
     }
@@ -13691,9 +13691,8 @@ fn translate_clause_bunsetsus(
     let has_until = obliques
         .iter()
         .any(|o| o.case_particle.as_deref() == Some("まで"));
-    let direct_negative_physical_go = only_goal.is_some_and(goes_to_arg)
-        && single_goal
-        && !has_until;
+    let direct_negative_physical_go =
+        only_goal.is_some_and(goes_to_arg) && single_goal && !has_until;
     let household_entry = single_goal
         && !has_until
         && household_entry_head.is_some_and(|predicate| {

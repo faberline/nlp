@@ -56,12 +56,27 @@ pub(crate) fn may_restore_glossary_syntax(
             let last = chars.get(lock.source_span.end_char.saturating_sub(1));
             lock.mandatory
                 && (if zuni {
-                    matches!(lock.origin, LockOrigin::Glossary { kind: GlossaryKind::Place, .. })
+                    matches!(
+                        lock.origin,
+                        LockOrigin::Glossary {
+                            kind: GlossaryKind::Place,
+                            ..
+                        }
+                    )
                 } else {
                     false
-                } || naide && (covers_case_marker(lock, chars)
-                    || matches!((&lock.origin, last),
-                        (LockOrigin::Glossary { kind: GlossaryKind::DomainTerm, .. }, Some('た')))))
+                } || naide
+                    && (covers_case_marker(lock, chars)
+                        || matches!(
+                            (&lock.origin, last),
+                            (
+                                LockOrigin::Glossary {
+                                    kind: GlossaryKind::DomainTerm,
+                                    ..
+                                },
+                                Some('た')
+                            )
+                        )))
         })
 }
 
@@ -76,10 +91,13 @@ pub(crate) fn glossary_render_locks(
 ) -> Option<(SpanLockTable, Option<usize>)> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
     omitted_render_locks(sentence, doc, chars, locks, &atoms)
-        .or_else(|| polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms)
-            .map(|locks| (locks, None)))
-        .or_else(|| outward_look::restore_case(doc, chars, locks, &atoms)
-            .map(|locks| (locks, None)))
+        .or_else(|| {
+            polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms)
+                .map(|locks| (locks, None))
+        })
+        .or_else(|| {
+            outward_look::restore_case(doc, chars, locks, &atoms).map(|locks| (locks, None))
+        })
 }
 
 fn omitted_render_locks(
@@ -115,7 +133,8 @@ fn omitted_render_locks(
     } else {
         whole_entry_lock(sentence, doc, chars, following, later, locks)
     };
-    if completed_entry.is_none() && !omission.zuni
+    if completed_entry.is_none()
+        && !omission.zuni
         && !locks
             .locks
             .iter()

@@ -12758,9 +12758,9 @@ fn translate_clause_bunsetsus(
                     if head.upos == Some(Upos::Verb)
                         && !head.is_locked
                         && !ending.is_empty()
-                        && ending.iter().all(|atom| {
+                        && (ending.iter().all(|atom| {
                             !atom.is_locked && matches!(atom.upos, Some(Upos::Aux | Upos::Sconj))
-                        })
+                        }) || is_polite_prohibition_ending(head, ending))
                         && verb_core
                             == translate_single_ja_term(
                                 &head.surface,
@@ -12839,7 +12839,9 @@ fn translate_clause_bunsetsus(
         {
             *object = format!("{modifiers}菸");
         }
-        verb_core = "抽".to_owned();
+        if stem_render.is_none() {
+            verb_core = "抽".to_owned();
+        }
     }
     if elapsed_progressive_relative && !elapsed_progressive_negative {
         pre_verb_mods.retain(|m| m != "正在");
@@ -25643,6 +25645,34 @@ fn localize_honorific(name: &str, suffix: &str) -> String {
         "様" | "さま" => format!("{name}大人"),
         _ => format!("{name}{suffix}"),
     }
+}
+
+fn is_polite_prohibition_ending(action: &Atom, ending: &[Atom]) -> bool {
+    let [negative, connective, request] = ending else {
+        return false;
+    };
+    action.doc_tok_idx.is_some()
+        && request.doc_tok_idx.is_some()
+        && action.deprel == "advcl"
+        && action.head == request.doc_tok_idx
+        && [negative, connective, request]
+            .iter()
+            .all(|atom| !atom.is_locked)
+        && negative.surface == "ない"
+        && negative.upos == Some(Upos::Aux)
+        && negative.deprel == "aux"
+        && negative.head == action.doc_tok_idx
+        && connective.surface == "で"
+        && connective.upos == Some(Upos::Sconj)
+        && connective.deprel == "mark"
+        && connective.head == action.doc_tok_idx
+        && request.surface == "ください"
+        && request.lemma.as_deref() == Some("くださる")
+        && request.upos == Some(Upos::Verb)
+        && request.deprel == "root"
+        && action.span.end_char == negative.span.start_char
+        && negative.span.end_char == connective.span.start_char
+        && connective.span.end_char == request.span.start_char
 }
 
 fn predicate_is_imperative(b: &Bunsetsu, subordinate_naide: bool) -> bool {

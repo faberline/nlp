@@ -13545,7 +13545,8 @@ fn translate_clause_bunsetsus(
     }
 
     if !goal_tails.is_empty() {
-        if household_entry {
+        // The household shorthand supplies its own verb only without a caller stem.
+        if household_entry && stem_render.is_none() {
             verb_core = "進".to_owned();
         } else if verb_core == "回去" {
             verb_core = "回".to_owned();

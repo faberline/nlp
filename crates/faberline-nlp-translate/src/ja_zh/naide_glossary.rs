@@ -77,6 +77,13 @@ pub(crate) fn glossary_render_locks(
             return None;
         }
         let span = lock.source_span;
+        // Keep the linked verb stems while exposing the separate case markers.
+        if movement.is_some_and(|entry| {
+            entry.lemma.as_deref() == Some("入る") && (span == action.span || span == entry.span)
+        }) && crate::verb_glossary::is_stem_lock(lock, doc, sentence)
+        {
+            continue;
+        }
         let first = atoms
             .iter()
             .position(|a| a.span.start_char == span.start_char)?;

@@ -241,6 +241,12 @@ pub(super) fn may_restore_topics(chars: &[char], locks: &SpanLockTable) -> bool 
                         ..
                     },
                     Some('に' | 'へ' | 'は')
+                ) | (
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::DomainTerm,
+                        ..
+                    },
+                    Some('た')
                 )
             )
     })
@@ -252,7 +258,7 @@ pub(super) fn restore_topics(
     chars: &[char],
     locks: &SpanLockTable,
     atoms: &[Atom],
-) -> Option<SpanLockTable> {
+) -> Option<(SpanLockTable, Option<usize>)> {
     if !may_restore_topics(chars, locks) {
         return None;
     }
@@ -283,12 +289,18 @@ pub(super) fn restore_topics(
     if focused_physical_goal_head(&goal, doc, chars) != go.doc_tok_idx {
         return None;
     }
+    let finite_trip = Span {
+        start_char: go.span.start_char,
+        end_char: current.last()?.span.end_char,
+    };
+    let declarative = !matches!(last.surface.as_str(), "？" | "?");
     let meal_prefix = leading.last().filter(|prefix| {
         prefix.span.end_char == meal.span.start_char
             && prefix.head == action.doc_tok_idx
             && is_meal(&chars[prefix.span.start_char..meal.span.end_char])
     });
     let mut render = locks.clone();
+    let mut whole_trip = None;
     for lock in &mut render.locks {
         let LockOrigin::Glossary { kind, .. } = lock.origin else {
             return None;
@@ -323,11 +335,15 @@ pub(super) fn restore_topics(
             {
                 span.end_char
             }
+            GlossaryKind::DomainTerm if span == finite_trip && declarative => {
+                whole_trip = Some(lock.index);
+                span.end_char
+            }
             _ => return None,
         };
         lock.source_span = Span { end_char, ..span };
     }
-    Some(render)
+    Some((render, whole_trip))
 }
 
 #[cfg(test)]
@@ -483,6 +499,49 @@ mod tests {
         let complete = translate(source, &glossary);
         assert_eq!(complete.target_text.matches("享用過").count(), 1);
         assert!(!complete.target_text.contains("有享用過"));
+    }
+
+    #[test]
+    fn the_whole_negative_trip_keeps_its_contrast_and_place() {
+        let source = "朝ご飯は食べて、学校には行きませんでした。";
+        let entry = |canonical: &str, alias: &str| GlossaryEntry {
+            canonical: canonical.into(),
+            surfaces: vec![canonical.into()],
+            targets: [(TargetVariant::ZhHant, alias.into())].into(),
+            ..GlossaryEntry::default()
+        };
+        let mut glossary = TranslationGlossary::new();
+        glossary.objects.push(entry("朝ご飯は", "早餐"));
+        glossary.places.push(entry("学校には", "新校舍"));
+        glossary.domain_terms.push(entry("食べ", "享用"));
+        glossary
+            .domain_terms
+            .push(entry("行きませんでした", "沒有前往"));
+        let translated = translate(source, &glossary);
+        assert_eq!(translated.target_text, "早餐有享用，但沒有前往新校舍。");
+        assert_eq!(translated.target_text.matches("沒有").count(), 1);
+        let [first, second] = translated.clause_alignments.as_slice() else {
+            panic!("expected alignments for both topics");
+        };
+        assert_eq!(first.target_span.end_char, second.target_span.start_char);
+        assert_eq!(translated.glossary_hits.len(), 4);
+        let trip = translated.glossary_hits.last().unwrap();
+        assert_eq!(trip.canonical, "行きませんでした");
+        assert_eq!(trip.source_span.end_char + 1, source.chars().count());
+        assert_eq!(
+            trip.source_span.end_char - trip.source_span.start_char,
+            "行きませんでした".chars().count()
+        );
+        assert_eq!(
+            trip.target_span.start_char,
+            second.target_span.start_char + 1
+        );
+        assert_eq!(trip.target_span.end_char - trip.target_span.start_char, 4);
+
+        let question = translate("朝ご飯は食べて、学校には行きませんでした？", &glossary);
+        assert!(question.target_text.ends_with('？'));
+        assert_eq!(question.target_text.matches("沒有前往").count(), 1);
+        assert!(!question.target_text.contains('但'));
     }
 
     #[test]

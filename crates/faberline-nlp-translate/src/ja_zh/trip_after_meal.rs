@@ -1,8 +1,12 @@
 //! Recognize a meal followed by a completed trip.
 
-use faberline_nlp::doc::SyntaxToken;
+use faberline_nlp::Span;
+use faberline_nlp::doc::{Options, SyntaxToken, analyze_document};
 
-use super::{Atom, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Token, Upos, dasu_case_link};
+use super::{
+    Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, SpanLockTable,
+    Token, Upos, build_sentence_atoms, dasu_case_link, finished_go, group_into_bunsetsus,
+};
 
 fn source_identity<'a>(atom: &Atom, doc: &'a Document) -> Option<(&'a SyntaxToken, &'a Token)> {
     let id = atom.doc_tok_idx?;
@@ -54,6 +58,185 @@ fn is_meal_noun(source: &[char]) -> bool {
             | ['朝' | '昼' | '夕', '食']
             | ['食', '事']
     )
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct RecoveredTrip {
+    pub(super) meal_predicate: usize,
+    motion_predicate: usize,
+    wide_meal: Option<Span>,
+    wide_place: Option<Span>,
+    place: Span,
+    marker: Span,
+    direction: &'static str,
+}
+
+impl RecoveredTrip {
+    pub(super) fn restore_arguments(
+        self,
+        groups: &mut [Bunsetsu],
+    ) -> Option<finished_go::FinishedGo> {
+        let wide_lock = |group: &Bunsetsu, span: Option<Span>, kind: &str| {
+            matches!(group.atoms.as_slice(), [atom] if atom.is_locked
+                && Some(atom.span) == span && atom.lemma.as_deref() == Some(kind))
+        };
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|group| wide_lock(group, self.wide_meal, LOCKED_OBJECT_ATOM))
+        {
+            group.role = BunsetsuRole::Obj;
+        }
+        let goal_group = groups.iter().position(|group| {
+            wide_lock(group, self.wide_place, LOCKED_PLACE_ATOM)
+                || matches!(group.atoms.as_slice(), [place, marker]
+                    if place.span == self.place && marker.span == self.marker
+                        && marker.surface == self.direction && !marker.is_locked)
+        })?;
+        // Keep the one placeholder and its original lock span. The case
+        // marker is needed by the renderer only for the role of this group.
+        groups[goal_group].role = BunsetsuRole::Obl;
+        groups[goal_group].case_particle = Some(self.direction.to_owned());
+        Some(finished_go::FinishedGo {
+            predicate: self.motion_predicate,
+            goal_group,
+        })
+    }
+}
+
+pub(super) fn recover(
+    before: &[Atom],
+    trip: &[Atom],
+    doc: &Document,
+    chars: &[char],
+) -> Option<RecoveredTrip> {
+    let mut lexical_words = Vec::new();
+    let mut wide = [None, None];
+    for ((part, kind, markers), covered) in [
+        (before, LOCKED_OBJECT_ATOM, &['を'][..]),
+        (trip, LOCKED_PLACE_ATOM, &['に', 'へ'][..]),
+    ]
+    .into_iter()
+    .zip(&mut wide)
+    {
+        let mut locks = part.iter().filter(|atom| atom.is_locked);
+        if let Some(lock) = locks.next() {
+            if locks.next().is_some() || lock.lemma.as_deref() != Some(kind) {
+                return None;
+            }
+            let word = chars.get(lock.span.start_char..lock.span.end_char)?;
+            let (last, prefix) = word.split_last()?;
+            let noun = if markers.contains(last) && !prefix.is_empty() {
+                *covered = Some(lock.span);
+                prefix
+            } else {
+                word
+            };
+            lexical_words.push(noun.iter().collect::<String>());
+        }
+    }
+    let [wide_meal, wide_place] = wide;
+    // An analysis supplied by the caller can lack the glossary's noun hints.
+    if wide_meal.is_none()
+        && wide_place.is_none()
+        && lexical_words
+            .iter()
+            .all(|word| doc.options.lexicon.contains(word))
+    {
+        return None;
+    }
+    let [.., eat, _] = before else { return None };
+    let go = trip.iter().find(|atom| atom.upos == Some(Upos::Verb))?;
+    let meal = source_link(eat, doc)?;
+    let motion = source_link(go, doc)?;
+    if eat.lemma.as_deref() != Some("食べる")
+        || go.lemma.as_deref() != Some("行く")
+        || meal.sentence != motion.sentence
+        || meal.deprel != "advcl"
+        || meal.head != Some(motion.token)
+        || motion.deprel != "root"
+    {
+        return None;
+    }
+
+    let span = doc.segmentation.sentences.get(motion.sentence)?.span;
+    let local = chars.get(span.start_char..span.end_char)?;
+    let analysis = analyze_document(
+        &local.iter().collect::<String>(),
+        &Options {
+            normalize_traditional: true,
+            enrich_morphology: true,
+            cpu_syntax: true,
+            lexicon: lexical_words,
+            ..Default::default()
+        },
+    );
+    if analysis.segmentation.sentences.len() != 1 {
+        return None;
+    }
+    let tokens: Vec<_> = analysis.tokens.iter().collect();
+    let atoms = build_sentence_atoms(0, local, &analysis, &tokens, &SpanLockTable::default());
+    let absolute = |range: Span| Span {
+        start_char: span.start_char + range.start_char,
+        end_char: span.start_char + range.end_char,
+    };
+    let part = |source: &[Atom]| -> Option<Vec<Atom>> {
+        let start = source.first()?.span.start_char;
+        let end = source.last()?.span.end_char;
+        Some(
+            atoms
+                .iter()
+                .filter(|atom| {
+                    let range = absolute(atom.span);
+                    start <= range.start_char && range.end_char <= end
+                })
+                .cloned()
+                .collect(),
+        )
+    };
+    let original_meal = part(before)?;
+    let original_trip = part(trip)?;
+    let original_meal_predicate = prior_meal(&original_meal, &original_trip, &analysis, local)?;
+    let [.., meal_noun, meal_case, original_eat, _] = original_meal.as_slice() else {
+        return None;
+    };
+    let [place, marker, original_go, ..] = original_trip.as_slice() else {
+        return None;
+    };
+    let matches_lock = |lock: Option<Span>, noun: &Atom, case: &Atom| {
+        lock.is_none_or(|lock| {
+            lock.start_char == absolute(noun.span).start_char
+                && lock.end_char == absolute(case.span).end_char
+        })
+    };
+    if absolute(original_eat.span) != eat.span
+        || absolute(original_go.span) != go.span
+        || !matches_lock(wide_meal, meal_noun, meal_case)
+        || !matches_lock(wide_place, place, marker)
+    {
+        return None;
+    }
+    let groups = group_into_bunsetsus(&original_trip, &analysis, 0);
+    finished_go::resolve(
+        &groups,
+        &original_trip,
+        &analysis,
+        local,
+        Some(original_meal_predicate),
+    )?;
+    let direction = if marker.surface == "へ" {
+        "へ"
+    } else {
+        "に"
+    };
+    Some(RecoveredTrip {
+        meal_predicate: meal.token,
+        motion_predicate: motion.token,
+        wide_meal,
+        wide_place,
+        place: absolute(place.span),
+        marker: absolute(marker.span),
+        direction,
+    })
 }
 
 pub(super) fn prior_meal(
@@ -141,6 +324,61 @@ mod tests {
             Backend::Onnx,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn locks_covering_the_meal_and_destination_particles_keep_the_sequence() {
+        let source = "朝ご飯を食べて、学校へ行きました。";
+        let mut options = crate::TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        let doc = faberline_nlp::doc::analyze_document(
+            source,
+            &crate::doc_options_for_translate(&options, &TranslationGlossary::new()),
+        );
+        for (meal, place) in [
+            ("朝ご飯", "学校"),
+            ("朝ご飯を", "学校"),
+            ("朝ご飯", "学校へ"),
+            ("朝ご飯を", "学校へ"),
+        ] {
+            let entry = |surface: &str, target: &str| GlossaryEntry {
+                canonical: surface.into(),
+                surfaces: vec![surface.into()],
+                targets: [(TargetVariant::ZhHant, target.into())].into(),
+                ..GlossaryEntry::default()
+            };
+            let mut glossary = TranslationGlossary::new();
+            glossary.objects.push(entry(meal, "早餐"));
+            glossary.places.push(entry(place, "新校舍"));
+            let result = translate(source, &glossary);
+            assert_eq!(result.target_text, "吃了早餐後，去了新校舍。");
+            let direct = crate::translate_document(
+                source,
+                &doc,
+                #[cfg(feature = "narrative")]
+                None,
+                &options,
+                &glossary,
+                None,
+            )
+            .unwrap();
+            assert_eq!(direct.target_text, result.target_text, "{meal} / {place}");
+            assert_eq!(direct.glossary_hits, result.glossary_hits);
+            let [meal_hit, place_hit] = result.glossary_hits.as_slice() else {
+                panic!("expected two glossary matches");
+            };
+            assert_eq!(meal_hit.source_span.start_char, 0);
+            assert_eq!(meal_hit.source_span.end_char, meal.chars().count());
+            assert_eq!(meal_hit.target_span.start_char, 2);
+            assert_eq!(meal_hit.target_span.end_char, 4);
+            assert_eq!(place_hit.source_span.start_char, 8);
+            assert_eq!(place_hit.source_span.end_char, 8 + place.chars().count());
+            assert_eq!(place_hit.target_span.start_char, 8);
+            assert_eq!(place_hit.target_span.end_char, 11);
+
+            let omitted = translate("朝ご飯を食べないで、学校へ行きました。", &glossary);
+            assert!(!omitted.target_text.contains("吃了早餐後"));
+        }
     }
 
     #[test]

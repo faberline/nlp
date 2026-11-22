@@ -1295,7 +1295,7 @@ fn bind_month_dates(atoms: &mut Vec<Atom>) {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct DateContext {
     single: Option<(usize, u32, String)>,
 }

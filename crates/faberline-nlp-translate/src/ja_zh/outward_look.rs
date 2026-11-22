@@ -1,8 +1,12 @@
 //! Directional reading of bare 外を as the object of 見る.
 
-use faberline_nlp::doc::SyntaxToken;
+use faberline_nlp::Span;
+use faberline_nlp::doc::{Options, SyntaxToken, analyze_document};
 
-use super::{Atom, Bunsetsu, Document, Upos, dasu_case_link};
+use super::{
+    Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Upos,
+    dasu_case_link,
+};
 
 fn original_link<'a>(atom: &Atom, doc: &'a Document) -> Option<&'a SyntaxToken> {
     let id = atom.doc_tok_idx?;
@@ -17,6 +21,98 @@ fn original_link<'a>(atom: &Atom, doc: &'a Document) -> Option<&'a SyntaxToken> 
         && link.head == atom.head
         && link.deprel == atom.deprel)
         .then_some(link)
+}
+
+pub(super) fn restore_locked_object(
+    groups: &mut [Bunsetsu],
+    source: &[Atom],
+    doc: &Document,
+    chars: &[char],
+) {
+    let mut candidates = groups.iter().enumerate().filter_map(|(index, group)| {
+        let [atom] = group.atoms.as_slice() else {
+            return None;
+        };
+        (atom.is_locked
+            && matches!(
+                atom.lemma.as_deref(),
+                Some(LOCKED_OBJECT_ATOM | LOCKED_PLACE_ATOM)
+            )
+            && chars.get(atom.span.start_char..atom.span.end_char) == Some(&['外', 'を']))
+        .then_some((index, atom.span))
+    });
+    let Some((index, lock)) = candidates.next() else {
+        return;
+    };
+    if candidates.next().is_some() {
+        return;
+    }
+    let mut verbs = source.iter().filter(|atom| atom.upos == Some(Upos::Verb));
+    let Some(look) = verbs.next() else {
+        return;
+    };
+    if verbs.next().is_some()
+        || look.lemma.as_deref() != Some("見る")
+        || !original_link(look, doc)
+            .is_some_and(|link| matches!(link.deprel.as_str(), "root" | "advcl"))
+    {
+        return;
+    }
+    let Some((first, last)) = source.first().zip(source.last()) else {
+        return;
+    };
+    let start = first.span.start_char;
+    let Some(text) = chars.get(start..last.span.end_char) else {
+        return;
+    };
+    let unlocked = analyze_document(
+        &text.iter().collect::<String>(),
+        &Options {
+            normalize_traditional: true,
+            enrich_morphology: true,
+            cpu_syntax: true,
+            ..Default::default()
+        },
+    );
+    if unlocked.segmentation.sentences.len() != 1 {
+        return;
+    }
+    let absolute = |span: Span| Span {
+        start_char: start + span.start_char,
+        end_char: start + span.end_char,
+    };
+    let Some(marker) = unlocked.syntax.iter().find(|link| {
+        let span = absolute(link.span);
+        span.start_char == lock.start_char + 1
+            && span.end_char == lock.end_char
+            && link.deprel == "case"
+            && unlocked.tokens[link.token].upos == Some(Upos::Adp)
+    }) else {
+        return;
+    };
+    let Some(noun) = marker.head.and_then(|index| unlocked.syntax.get(index)) else {
+        return;
+    };
+    let Some(verb) = noun.head.and_then(|index| unlocked.syntax.get(index)) else {
+        return;
+    };
+    if noun.deprel == "obj"
+        && unlocked.tokens[noun.token].upos == Some(Upos::Noun)
+        && absolute(noun.span).start_char == lock.start_char
+        && absolute(noun.span).end_char == lock.start_char + 1
+        && absolute(verb.span) == look.span
+        && unlocked.tokens[verb.token].lemma.as_deref() == Some("見る")
+        && !unlocked.syntax.iter().any(|link| {
+            (link.head == Some(noun.token) && link.token != marker.token)
+                || (link.head == Some(verb.token)
+                    && link.deprel == "obj"
+                    && link.token != noun.token)
+        })
+    {
+        // Keep the placeholder and its full glossary span. Only recover the
+        // object position that was hidden by the locked case marker.
+        groups[index].role = BunsetsuRole::Obj;
+    }
 }
 
 pub(super) fn is_direction(source: &[Atom], predicates: &[Bunsetsu], doc: &Document) -> bool {
@@ -91,6 +187,34 @@ mod tests {
             Backend::Onnx,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn an_outside_lock_with_its_case_marker_keeps_the_object_position() {
+        let source = "窓を開けて、外を見ました。";
+        for surface in ["外", "外を"] {
+            let entry = GlossaryEntry {
+                canonical: surface.to_owned(),
+                surfaces: vec![surface.to_owned()],
+                targets: [(TargetVariant::ZhHant, "戶外".to_owned())].into(),
+                ..GlossaryEntry::default()
+            };
+            let mut object = TranslationGlossary::new();
+            object.objects.push(entry.clone());
+            let mut place = TranslationGlossary::new();
+            place.places.push(entry);
+
+            for glossary in [object, place] {
+                let result = translate(source, &glossary);
+                assert_eq!(result.target_text, "打開窗戶，看了戶外。");
+                assert_eq!(result.glossary_hits.len(), 1);
+                let hit = &result.glossary_hits[0];
+                assert_eq!(hit.source_span.start_char, 6);
+                assert_eq!(hit.source_span.end_char, 6 + surface.chars().count());
+                assert_eq!(hit.target_span.start_char, 7);
+                assert_eq!(hit.target_span.end_char, 9);
+            }
+        }
     }
 
     #[test]

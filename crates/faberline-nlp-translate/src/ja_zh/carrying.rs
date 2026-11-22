@@ -1,8 +1,115 @@
 //! Render a portable item that accompanies the same actor's movement.
 
-use faberline_nlp::doc::{Document, SyntaxToken, Upos};
+use faberline_nlp::Span;
+use faberline_nlp::doc::{Document, SyntaxToken, Upos, analyze_document};
 
-use super::{Atom, Bunsetsu, Segment};
+use super::{Atom, Bunsetsu, LOCKED_OBJECT_ATOM, Segment};
+use crate::GlossaryKind;
+use crate::lock::{LockOrigin, SpanLockTable};
+
+pub(super) fn restore_locked_object_case(
+    atoms: &[Atom],
+    chars: &[char],
+    sentence: Span,
+    doc: &Document,
+    locks: &SpanLockTable,
+    action: usize,
+) -> Option<Vec<Atom>> {
+    let [.., object, hold, _, _] = atoms else {
+        return None;
+    };
+    let word = chars.get(object.span.start_char..object.span.end_char)?;
+    if !doc.options.enrich_morphology
+        || !doc.options.cpu_syntax
+        || !object.is_locked
+        || !matches!(word, [_, .., 'を'])
+        || object.span.end_char != hold.span.start_char
+        || hold.doc_tok_idx != Some(action)
+        || hold.lemma.as_deref() != Some("持つ")
+        || !locks.locks.iter().any(|lock| {
+            lock.mandatory
+                && lock.source_span == object.span
+                && lock.placeholder == object.surface
+                && matches!(
+                    lock.origin,
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Object,
+                        ..
+                    }
+                )
+        })
+    {
+        return None;
+    }
+
+    // Inspect the sentence without the hint that joins the noun and particle.
+    let word: String = word.iter().collect();
+    let text: String = chars
+        .get(sentence.start_char..sentence.end_char)?
+        .iter()
+        .collect();
+    let mut options = doc.options.clone();
+    options.names.retain(|hint| hint != &word);
+    options.lexicon.retain(|hint| hint != &word);
+    let parsed = analyze_document(&text, &options);
+    if parsed.segmentation.sentences.len() != 1 {
+        return None;
+    }
+    let absolute = |span: Span| Span {
+        start_char: sentence.start_char + span.start_char,
+        end_char: sentence.start_char + span.end_char,
+    };
+    let case = Span {
+        start_char: object.span.end_char - 1,
+        end_char: object.span.end_char,
+    };
+    let particle = parsed.syntax.iter().find(|link| {
+        absolute(link.span) == case
+            && link.deprel == "case"
+            && parsed.tokens[link.token].upos == Some(Upos::Adp)
+    })?;
+    let noun = parsed.syntax.get(particle.head?)?;
+    let predicate = parsed.syntax.get(noun.head?)?;
+    let noun_span = absolute(noun.span);
+    if noun.deprel != "obj"
+        || noun_span.start_char != object.span.start_char
+        || noun_span.end_char != case.start_char
+        || parsed.tokens[noun.token].upos != Some(Upos::Noun)
+        || absolute(predicate.span) != hold.span
+        || parsed.tokens[predicate.token].lemma.as_deref() != Some("持つ")
+        || parsed.syntax.iter().any(|other| {
+            other.token != noun.token
+                && other.head == Some(predicate.token)
+                && other.deprel == "obj"
+        })
+    {
+        return None;
+    }
+
+    let mut restored = atoms.to_vec();
+    let index = restored.len() - 4;
+    // Only the rendering atoms split. The lock still covers the full source hit.
+    let noun = &mut restored[index];
+    noun.span.end_char = case.start_char;
+    noun.lemma = Some(LOCKED_OBJECT_ATOM.to_owned());
+    noun.doc_tok_idx = None;
+    noun.head = Some(action);
+    noun.deprel = "obj".to_owned();
+    restored.insert(
+        index + 1,
+        Atom {
+            span: case,
+            surface: "を".to_owned(),
+            lemma: None,
+            upos: Some(Upos::Adp),
+            doc_tok_idx: None,
+            head: None,
+            deprel: "case".to_owned(),
+            is_locked: false,
+        },
+    );
+    Some(restored)
+}
 
 pub(super) fn with_motion(
     source: &[Atom],

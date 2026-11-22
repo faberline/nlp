@@ -17,6 +17,38 @@ fn translate(source: &str, glossary: &TranslationGlossary) -> TranslatedDocument
 }
 
 #[test]
+fn place_locks_that_include_the_case_preserve_the_negated_trip_and_contrast() {
+    let source = "朝ご飯は食べて、学校には行きませんでした。";
+    for surface in ["学校", "学校に", "学校には"] {
+        let mut glossary = TranslationGlossary::new();
+        glossary.objects.push(GlossaryEntry {
+            canonical: "朝ご飯".into(),
+            surfaces: vec!["朝ご飯".into()],
+            targets: [(TargetVariant::ZhHant, "早餐".into())].into(),
+            ..GlossaryEntry::default()
+        });
+        glossary.places.push(GlossaryEntry {
+            canonical: surface.into(),
+            surfaces: vec![surface.into()],
+            targets: [(TargetVariant::ZhHant, "新校舍".into())].into(),
+            ..GlossaryEntry::default()
+        });
+        let result = translate(source, &glossary);
+        assert_eq!(result.target_text, "早餐有吃，但沒有去新校舍。");
+        assert_eq!(result.glossary_hits.len(), 2);
+        let hit = result
+            .glossary_hits
+            .iter()
+            .find(|hit| hit.canonical == surface)
+            .unwrap();
+        assert_eq!(hit.source_span.start_char, 8);
+        assert_eq!(hit.source_span.end_char, 8 + surface.chars().count());
+        assert_eq!(hit.target_span.start_char, 9);
+        assert_eq!(hit.target_span.end_char, 12);
+    }
+}
+
+#[test]
 fn focus_keeps_the_physical_goal_of_a_negated_go() {
     let glossary = TranslationGlossary::new();
     for (source, expected) in [

@@ -1,17 +1,55 @@
 //! Express the contrast between an acted-on topic and a negated trip.
 
-use faberline_nlp::doc::SyntaxToken;
+use faberline_nlp::Span;
+use faberline_nlp::doc::{Options, SyntaxToken, analyze_document};
 
 use super::{
-    Atom, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Token, Upos, dasu_case_link,
-    is_companion_person, source_time_head,
+    Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, SpanLockTable,
+    Token, Upos, build_sentence_atoms, dasu_case_link, focused_goal, is_companion_person,
+    source_time_head,
 };
+
+#[derive(Clone, Copy)]
+enum MealTopic {
+    Token(usize),
+    LockedSpan(Span),
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct AffirmativeMeal {
     pub(super) predicate: usize,
-    pub(super) topic: usize,
-    pub(super) time_first: bool,
+    topic: MealTopic,
+    time_first: bool,
+}
+
+impl AffirmativeMeal {
+    pub(super) fn matches_topic(self, group: &Bunsetsu) -> bool {
+        match self.topic {
+            MealTopic::Token(topic) => {
+                group.role == BunsetsuRole::Subj
+                    && group.case_particle.as_deref() == Some("は")
+                    && group
+                        .atoms
+                        .iter()
+                        .any(|atom| atom.doc_tok_idx == Some(topic))
+            }
+            MealTopic::LockedSpan(span) => matches!(
+                group.atoms.as_slice(),
+                [atom] if atom.is_locked
+                    && atom.span == span
+                    && atom.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
+            ),
+        }
+    }
+
+    pub(super) fn prepare_topic(self, group: &mut Bunsetsu) {
+        if self.time_first {
+            group.role = BunsetsuRole::Obj;
+        } else if matches!(self.topic, MealTopic::LockedSpan(_)) {
+            group.role = BunsetsuRole::Subj;
+            group.case_particle = Some("は".to_owned());
+        }
+    }
 }
 
 fn source_identity<'a>(atom: &Atom, doc: &'a Document) -> Option<(&'a SyntaxToken, &'a Token)> {
@@ -102,6 +140,16 @@ fn meal_topic(noun: &Atom, verb: &Atom, doc: &Document, chars: &[char]) -> bool 
 }
 
 pub(super) fn matches(previous: &[Atom], current: &[Atom], doc: &Document, chars: &[char]) -> bool {
+    matches_separate_topic(previous, current, doc, chars)
+        || recover_locked_meal(previous, current, doc, chars).is_some()
+}
+
+fn matches_separate_topic(
+    previous: &[Atom],
+    current: &[Atom],
+    doc: &Document,
+    chars: &[char],
+) -> bool {
     let [first_leading @ .., object, first_topic, action, connector] = previous else {
         return false;
     };
@@ -111,16 +159,7 @@ pub(super) fn matches(previous: &[Atom], current: &[Atom], doc: &Document, chars
     else {
         return false;
     };
-    let [
-        second_leading @ ..,
-        destination,
-        direction,
-        second_topic,
-        go,
-    ] = &current[..=go_index]
-    else {
-        return false;
-    };
+    let go = &current[go_index];
     let Some(first) = source_link(action, doc) else {
         return false;
     };
@@ -151,20 +190,60 @@ pub(super) fn matches(previous: &[Atom], current: &[Atom], doc: &Document, chars
         && source_link(first_topic, doc).is_some()
         && qualifies_topic(object, first, meal.then_some(LOCKED_OBJECT_ATOM), doc)
         && !is_companion_person(object)
+        && only_adverbs(first_leading, first, doc)
+        && past_negative(go, &current[go_index + 1..], doc)
+        && focused_destination(current, go_index, second, object, meal, doc, chars)
+}
+
+fn focused_destination(
+    current: &[Atom],
+    go_index: usize,
+    predicate: &SyntaxToken,
+    first_topic: &Atom,
+    meal: bool,
+    doc: &Document,
+    chars: &[char],
+) -> bool {
+    let before_go = &current[..go_index];
+    if let [leading @ .., destination, direction, topic] = before_go
         && matches!(direction.surface.as_str(), "に" | "へ")
         && dasu_case_link(destination, direction)
         && source_link(direction, doc).is_some()
-        && second_topic.surface == "は"
-        && second_topic.upos == Some(Upos::Adp)
-        && second_topic.deprel == "case"
-        && second_topic.head == destination.doc_tok_idx
-        && direction.span.end_char == second_topic.span.start_char
-        && source_link(second_topic, doc).is_some()
-        && qualifies_topic(destination, second, meal.then_some(LOCKED_PLACE_ATOM), doc)
-        && object.surface != destination.surface
-        && only_adverbs(first_leading, first, doc)
-        && only_adverbs(second_leading, second, doc)
-        && past_negative(go, &current[go_index + 1..], doc)
+        && topic.surface == "は"
+        && topic.upos == Some(Upos::Adp)
+        && topic.deprel == "case"
+        && topic.head == destination.doc_tok_idx
+        && direction.span.end_char == topic.span.start_char
+        && source_link(topic, doc).is_some()
+        && qualifies_topic(
+            destination,
+            predicate,
+            meal.then_some(LOCKED_PLACE_ATOM),
+            doc,
+        )
+    {
+        return first_topic.surface != destination.surface && only_adverbs(leading, predicate, doc);
+    }
+
+    // A whole Place lock can contain the directional case and contrast
+    // particle. The original clause must still prove the same negated trip.
+    if !meal {
+        return false;
+    }
+    let Some(goal) = focused_goal::recover(current, doc, chars) else {
+        return false;
+    };
+    let (leading, destination) = match before_go {
+        [leading @ .., lock] if goal.includes_focus => (leading, lock),
+        [leading @ .., lock, focus] if !goal.includes_focus && focus.surface == "は" => {
+            (leading, lock)
+        }
+        _ => return false,
+    };
+    destination.span == goal.span
+        && goal.predicate == predicate.token
+        && first_topic.surface != destination.surface
+        && only_adverbs(leading, predicate, doc)
 }
 
 pub(super) fn affirmative_meal(
@@ -173,17 +252,183 @@ pub(super) fn affirmative_meal(
     doc: &Document,
     chars: &[char],
 ) -> Option<AffirmativeMeal> {
-    let [leading @ .., topic, _, verb, _] = previous else {
+    if let [leading @ .., topic, _, verb, _] = previous
+        && meal_topic(topic, verb, doc, chars)
+        && matches_separate_topic(previous, current, doc, chars)
+    {
+        return Some(AffirmativeMeal {
+            predicate: verb.doc_tok_idx?,
+            topic: MealTopic::Token(topic.doc_tok_idx?),
+            time_first: leading.iter().any(source_time_head),
+        });
+    }
+    recover_locked_meal(previous, current, doc, chars)
+}
+
+fn recover_locked_meal(
+    previous: &[Atom],
+    current: &[Atom],
+    doc: &Document,
+    chars: &[char],
+) -> Option<AffirmativeMeal> {
+    let [leading @ .., lock, action, connector] = previous else {
         return None;
     };
-    if !meal_topic(topic, verb, doc, chars) || !matches(previous, current, doc, chars) {
+    if !lock.is_locked || lock.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM) {
+        return None;
+    }
+    let [noun @ .., 'は'] = chars.get(lock.span.start_char..lock.span.end_char)? else {
+        return None;
+    };
+    if noun.is_empty() {
+        return None;
+    }
+    let first = source_link(action, doc)?;
+    let go_index = current
+        .iter()
+        .position(|atom| atom.upos == Some(Upos::Verb))?;
+    let go = &current[go_index];
+    let second = source_link(go, doc)?;
+    if first.head != Some(second.token)
+        || first.deprel != "advcl"
+        || first.sentence != second.sentence
+        || second.deprel != "root"
+        || !only_adverbs(leading, first, doc)
+        || !past_negative(go, &current[go_index + 1..], doc)
+        || !focused_destination(current, go_index, second, lock, true, doc, chars)
+    {
+        return None;
+    }
+
+    // Recover the two source roles from the same sentence. The renderer
+    // still consumes one locked meal replacement over its full range.
+    let start = previous.first()?.span.start_char;
+    let text = chars.get(start..current.last()?.span.end_char)?;
+    let original = analyze_document(
+        &text.iter().collect::<String>(),
+        &Options {
+            lexicon: vec![noun.iter().collect()],
+            normalize_traditional: true,
+            enrich_morphology: true,
+            cpu_syntax: true,
+            ..Default::default()
+        },
+    );
+    if original.segmentation.sentences.len() != 1 {
+        return None;
+    }
+    let source_tokens: Vec<_> = original.tokens.iter().collect();
+    let atoms = build_sentence_atoms(
+        0,
+        text,
+        &original,
+        &source_tokens,
+        &SpanLockTable::default(),
+    );
+    let absolute = |span: Span| Span {
+        start_char: start + span.start_char,
+        end_char: start + span.end_char,
+    };
+    let meal_end =
+        atoms.partition_point(|atom| absolute(atom.span).end_char <= connector.span.end_char);
+    let trip_start =
+        atoms.partition_point(|atom| absolute(atom.span).start_char < current[0].span.start_char);
+    let [
+        ..,
+        original_noun,
+        topic,
+        original_action,
+        original_connector,
+    ] = &atoms[..meal_end]
+    else {
+        return None;
+    };
+    let trip = atoms.get(trip_start..)?;
+    let original_go = trip.iter().find(|atom| atom.upos == Some(Upos::Verb))?;
+    if meal_end > trip_start
+        || absolute(original_noun.span).start_char != lock.span.start_char
+        || absolute(topic.span).end_char != lock.span.end_char
+        || absolute(original_action.span) != action.span
+        || absolute(original_connector.span) != connector.span
+        || absolute(original_go.span) != go.span
+        || !meal_topic(original_noun, original_action, &original, text)
+        || !matches_separate_topic(&atoms[..meal_end], trip, &original, text)
+    {
         return None;
     }
     Some(AffirmativeMeal {
-        predicate: verb.doc_tok_idx?,
-        topic: topic.doc_tok_idx?,
+        predicate: first.token,
+        topic: MealTopic::LockedSpan(lock.span),
         time_first: leading.iter().any(source_time_head),
     })
+}
+
+#[cfg(test)]
+mod wide_meal_topic_tests {
+    use faberline_nlp::doc::{analyze_document, model::Backend};
+
+    use crate::{
+        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+        doc_options_for_translate, translate_document,
+    };
+
+    fn entry(surface: &str, replacement: &str) -> GlossaryEntry {
+        GlossaryEntry {
+            canonical: surface.into(),
+            surfaces: vec![surface.into()],
+            targets: [(TargetVariant::ZhHant, replacement.into())].into(),
+            ..GlossaryEntry::default()
+        }
+    }
+
+    #[test]
+    fn locked_meal_topic_keeps_the_contrast_and_full_glossary_hits() {
+        let source = "朝ご飯は食べて、学校には行きませんでした。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let mut glossary = TranslationGlossary::new();
+        let doc = analyze_document(source, &doc_options_for_translate(&options, &glossary));
+        glossary.objects.push(entry("朝ご飯は", "早餐"));
+        for (places, expected) in [
+            (vec![], "早餐有吃，但沒有去學校。"),
+            (
+                vec![entry("学校には", "新校舍")],
+                "早餐有吃，但沒有去新校舍。",
+            ),
+        ] {
+            glossary.places = places;
+            let analyzed =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            let direct = translate_document(
+                source,
+                &doc,
+                #[cfg(feature = "narrative")]
+                None,
+                &options,
+                &glossary,
+                None,
+            )
+            .unwrap();
+            assert_eq!(analyzed.target_text, expected);
+            assert_eq!(direct.target_text, expected);
+            assert_eq!(direct.glossary_hits, analyzed.glossary_hits);
+            assert_eq!(direct.glossary_hits.len(), 1 + glossary.places.len());
+            for hit in direct.glossary_hits {
+                let at = |text: &str, span: faberline_nlp::Span| -> String {
+                    text.chars()
+                        .skip(span.start_char)
+                        .take(span.end_char - span.start_char)
+                        .collect()
+                };
+                let replacement = if hit.canonical == "朝ご飯は" {
+                    "早餐"
+                } else {
+                    "新校舍"
+                };
+                assert_eq!(at(source, hit.source_span), hit.canonical);
+                assert_eq!(at(expected, hit.target_span), replacement);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

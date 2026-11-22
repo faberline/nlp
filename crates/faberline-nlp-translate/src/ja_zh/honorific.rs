@@ -28,7 +28,7 @@ pub(super) fn is_bound_person(atom: &Atom) -> bool {
         )
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct HonorificContext {
     paragraph: Option<usize>,
     closing_quotes: Vec<char>,

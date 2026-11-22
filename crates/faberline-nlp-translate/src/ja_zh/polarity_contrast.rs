@@ -1,10 +1,14 @@
 //! Express the contrast between an acted-on topic and a negated trip.
 
-use faberline_nlp::doc::SyntaxToken;
+use faberline_nlp::{Span, doc::SyntaxToken};
+
+use crate::lock::{LockOrigin, SpanLockTable};
+use crate::schema::GlossaryKind;
 
 use super::{
-    Atom, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Token, Upos, dasu_case_link,
-    is_companion_person, source_time_head,
+    Atom, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Token, Upos, classify_bunsetsu,
+    dasu_case_link, focused_physical_goal_head, is_companion_person, is_punct_atom,
+    source_time_head,
 };
 
 #[derive(Clone, Copy)]
@@ -38,7 +42,36 @@ fn qualifies_topic(
     allowed_lock: Option<&str>,
     doc: &Document,
 ) -> bool {
-    source_identity(noun, doc).is_some_and(|(link, token)| {
+    let identity = source_identity(noun, doc).or_else(|| {
+        if !noun.is_locked || allowed_lock != Some(LOCKED_OBJECT_ATOM) {
+            return None;
+        }
+        let id = noun.doc_tok_idx?;
+        let token = doc.tokens.get(id)?;
+        let before = id.checked_sub(1)?;
+        let prefix = doc.tokens.get(before)?;
+        let relation = doc.syntax.get(before)?;
+        if prefix.span.start_char != noun.span.start_char
+            || prefix.span.end_char != token.span.start_char
+            || prefix.sentence != token.sentence
+            || prefix.upos != Some(Upos::Adv)
+            || relation.token != before
+            || relation.span != prefix.span
+            || relation.sentence != prefix.sentence
+            || relation.head != Some(predicate.token)
+            || relation.deprel != "advmod"
+            || token.span.end_char != noun.span.end_char
+        {
+            return None;
+        }
+        // The locked meal can also include its native time prefix.
+        let head = Atom {
+            span: token.span,
+            ..noun.clone()
+        };
+        source_identity(&head, doc)
+    });
+    identity.is_some_and(|(link, token)| {
         let trusted = if noun.is_locked {
             allowed_lock.is_some_and(|kind| noun.lemma.as_deref() == Some(kind))
         } else {
@@ -89,16 +122,20 @@ fn meal_topic(noun: &Atom, verb: &Atom, doc: &Document, chars: &[char]) -> bool 
     verb.doc_tok_idx
         .and_then(|id| doc.tokens.get(id))
         .is_some_and(|token| token.lemma.as_deref() == Some("食べる"))
-        && matches!(
-            chars.get(noun.span.start_char..noun.span.end_char),
-            Some(
-                ['ご', '飯']
-                    | ['御', '飯']
-                    | ['朝' | '昼' | '夕', 'ご', '飯']
-                    | ['朝' | '昼' | '夕', '食']
-                    | ['食', '事']
-            )
-        )
+        && chars
+            .get(noun.span.start_char..noun.span.end_char)
+            .is_some_and(is_meal)
+}
+
+fn is_meal(word: &[char]) -> bool {
+    matches!(
+        word,
+        ['ご', '飯']
+            | ['御', '飯']
+            | ['朝' | '昼' | '夕', 'ご', '飯']
+            | ['朝' | '昼' | '夕', '食']
+            | ['食', '事']
+    )
 }
 
 pub(super) fn matches(previous: &[Atom], current: &[Atom], doc: &Document, chars: &[char]) -> bool {
@@ -184,6 +221,112 @@ pub(super) fn affirmative_meal(
         topic: topic.doc_tok_idx?,
         time_first: leading.iter().any(source_time_head),
     })
+}
+
+pub(super) fn may_restore_topics(chars: &[char], locks: &SpanLockTable) -> bool {
+    locks.locks.iter().any(|lock| {
+        let last = chars.get(lock.source_span.end_char.saturating_sub(1));
+        lock.mandatory
+            && matches!(
+                (&lock.origin, last),
+                (
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Object,
+                        ..
+                    },
+                    Some('は')
+                ) | (
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Place,
+                        ..
+                    },
+                    Some('に' | 'へ' | 'は')
+                )
+            )
+    })
+}
+
+pub(super) fn restore_topics(
+    sentence: usize,
+    doc: &Document,
+    chars: &[char],
+    locks: &SpanLockTable,
+    atoms: &[Atom],
+) -> Option<SpanLockTable> {
+    if !may_restore_topics(chars, locks) {
+        return None;
+    }
+    let [body @ .., last] = atoms else {
+        return None;
+    };
+    let body = if is_punct_atom(last) { body } else { atoms };
+    let comma = body
+        .iter()
+        .position(|atom| matches!(atom.surface.as_str(), "、" | "，" | ","))?;
+    let previous = &body[..comma];
+    let current = &body[comma + 1..];
+    affirmative_meal(previous, current, doc, chars)?;
+    let [leading @ .., meal, topic, action, _] = previous else {
+        return None;
+    };
+    let go_index = current
+        .iter()
+        .position(|atom| atom.upos == Some(Upos::Verb))?;
+    let [.., place, direction, focus, go] = &current[..=go_index] else {
+        return None;
+    };
+    let goal = classify_bunsetsu(
+        vec![place.clone(), direction.clone(), focus.clone()],
+        doc,
+        sentence,
+    );
+    if focused_physical_goal_head(&goal, doc, chars) != go.doc_tok_idx {
+        return None;
+    }
+    let meal_prefix = leading.last().filter(|prefix| {
+        prefix.span.end_char == meal.span.start_char
+            && prefix.head == action.doc_tok_idx
+            && is_meal(&chars[prefix.span.start_char..meal.span.end_char])
+    });
+    let mut render = locks.clone();
+    for lock in &mut render.locks {
+        let LockOrigin::Glossary { kind, .. } = lock.origin else {
+            return None;
+        };
+        if !lock.mandatory {
+            return None;
+        }
+        let span = lock.source_span;
+        let end_char = match kind {
+            GlossaryKind::Object
+                if (span.start_char == meal.span.start_char
+                    || meal_prefix
+                        .is_some_and(|prefix| span.start_char == prefix.span.start_char))
+                    && [meal.span.end_char, topic.span.end_char].contains(&span.end_char) =>
+            {
+                meal.span.end_char
+            }
+            GlossaryKind::Place
+                if span.start_char == place.span.start_char
+                    && [
+                        place.span.end_char,
+                        direction.span.end_char,
+                        focus.span.end_char,
+                    ]
+                    .contains(&span.end_char) =>
+            {
+                place.span.end_char
+            }
+            GlossaryKind::DomainTerm
+                if span == go.span && crate::verb_glossary::is_stem_lock(lock, doc, sentence) =>
+            {
+                span.end_char
+            }
+            _ => return None,
+        };
+        lock.source_span = Span { end_char, ..span };
+    }
+    Some(render)
 }
 
 #[cfg(test)]

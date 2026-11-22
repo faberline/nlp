@@ -6,7 +6,7 @@ use crate::schema::GlossaryKind;
 use super::{
     Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
     finished_go, group_into_bunsetsus, household_entry, is_punct_atom, naide_adverbial,
-    outward_look, physical_goal_head, polarity_contrast, trip_after_meal,
+    outward_look, physical_goal_head, polarity_contrast, polite_prohibition, trip_after_meal,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -76,6 +76,10 @@ pub(crate) fn may_restore_glossary_syntax(
     if text.contains(['「', '」', '『', '』', '"', '“', '”']) {
         return false;
     }
+    if text.contains("ないでください") && polite_prohibition::may_restore_predicate(chars, locks)
+    {
+        return true;
+    }
     if locks
         .locks
         .iter()
@@ -127,6 +131,17 @@ pub(crate) fn glossary_render_locks(
 ) -> Option<(SpanLockTable, WholeVerbLocks)> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
     omitted_render_locks(sentence, doc, chars, locks, &atoms)
+        .or_else(|| {
+            polite_prohibition::predicate_lock(&atoms, locks).map(|index| {
+                (
+                    locks.clone(),
+                    WholeVerbLocks {
+                        following: Some(index),
+                        omitted: None,
+                    },
+                )
+            })
+        })
         .or_else(|| {
             if !locks
                 .locks

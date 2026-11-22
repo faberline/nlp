@@ -2,7 +2,7 @@
 
 use faberline_nlp::doc::{Document, SyntaxToken, Upos};
 
-use super::{Atom, Bunsetsu, Segment};
+use super::{Atom, Bunsetsu, LOCKED_OBJECT_ATOM, Segment};
 
 pub(super) fn with_motion(
     source: &[Atom],
@@ -10,6 +10,7 @@ pub(super) fn with_motion(
     following: &[Segment],
     doc: &Document,
     chars: &[char],
+    omitted: bool,
 ) -> bool {
     let Some((hold, motion)) = linked_actions(predicates, following, doc) else {
         return false;
@@ -92,7 +93,7 @@ pub(super) fn with_motion(
     objects.next().is_none()
         && has_case(object, "を")
         && doc.tokens[object.token].upos == Some(Upos::Noun)
-        && object_is_portable(object, links, source, chars)
+        && object_is_portable(object, links, source, chars, omitted)
 }
 
 fn linked_actions(
@@ -152,6 +153,7 @@ fn object_is_portable(
     links: &[SyntaxToken],
     source: &[Atom],
     chars: &[char],
+    omitted: bool,
 ) -> bool {
     let mut start = object.span.start_char;
     for link in links.iter().rev().filter(|link| link.token < object.token) {
@@ -163,15 +165,22 @@ fn object_is_portable(
         }
         start = link.span.start_char;
     }
-    if !source
-        .iter()
-        .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(object.token))
-        || source.iter().any(|atom| {
-            atom.is_locked
-                && atom.span.start_char < object.span.end_char
-                && start < atom.span.end_char
-        })
-    {
+    let lock = source.iter().find(|atom| {
+        atom.is_locked && atom.span.start_char < object.span.end_char && start < atom.span.end_char
+    });
+    let available = match lock {
+        Some(atom) => {
+            omitted
+                && atom.doc_tok_idx == Some(object.token)
+                && atom.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
+                && atom.span.start_char == start
+                && atom.span.end_char == object.span.end_char
+        }
+        None => source
+            .iter()
+            .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(object.token)),
+    };
+    if !available {
         return false;
     }
     let Some(word) = chars.get(start..object.span.end_char) else {

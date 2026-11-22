@@ -12786,8 +12786,16 @@ fn translate_clause_bunsetsus(
         && verb_core == "拿著"
         && !ctx.inside_quote
         && !passive_agent_needed
+        && stem_render.is_none()
         && !pre_verb_mods.iter().any(|m| m == "讓")
-        && carrying::with_motion(source, &predicates, ctx.following, doc, ctx.source_chars)
+        && carrying::with_motion(
+            source,
+            &predicates,
+            ctx.following,
+            doc,
+            ctx.source_chars,
+            naide_adverbial.is_some(),
+        )
     {
         let negative = pre_verb_mods
             .iter()

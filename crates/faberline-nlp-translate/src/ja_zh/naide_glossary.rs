@@ -5,8 +5,8 @@ use crate::schema::GlossaryKind;
 
 use super::{
     Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
-    household_entry, is_punct_atom, naide_adverbial, outward_look, physical_goal_head,
-    polarity_contrast, trip_after_meal,
+    finished_go, group_into_bunsetsus, household_entry, is_punct_atom, naide_adverbial,
+    outward_look, physical_goal_head, polarity_contrast, trip_after_meal,
 };
 
 fn may_cover_past_predicate(lock: &LockedSpan, chars: &[char]) -> bool {
@@ -145,12 +145,24 @@ fn omitted_render_locks(
     let movement = atoms.iter().find(|a| {
         a.doc_tok_idx == Some(later) && matches!(a.lemma.as_deref(), Some("行く" | "入る"))
     });
-    let completed_entry = if omission.zuni {
+    let trip_predicate = match movement {
+        Some(motion)
+            if !omission.zuni
+                && omission.join_unstated_subject
+                && motion.lemma.as_deref() == Some("行く") =>
+        {
+            completed_trip_span(sentence, doc, chars, following, motion, omitted_action)
+        }
+        _ => None,
+    };
+    let whole_predicate = if omission.zuni {
         None
+    } else if let Some(span) = trip_predicate {
+        whole_domain_lock(locks, span)
     } else {
         whole_entry_lock(sentence, doc, chars, following, later, locks)
     };
-    if completed_entry.is_none()
+    if whole_predicate.is_none()
         && !omission.zuni
         && !locks
             .locks
@@ -169,7 +181,7 @@ fn omitted_render_locks(
             return None;
         }
         let span = lock.source_span;
-        if completed_entry == Some(lock.index) {
+        if whole_predicate == Some(lock.index) {
             continue;
         }
         // Preserve proved verb stems while exposing argument case markers.
@@ -177,7 +189,10 @@ fn omitted_render_locks(
         let entry_stem = movement.is_some_and(|entry| {
             entry.lemma.as_deref() == Some("入る") && (span == action.span || span == entry.span)
         });
-        if (carrying_stem || entry_stem) && crate::verb_glossary::is_stem_lock(lock, doc, sentence)
+        let trip_stem = trip_predicate.is_some()
+            && movement.is_some_and(|trip| span == action.span || span == trip.span);
+        if (carrying_stem || entry_stem || trip_stem)
+            && crate::verb_glossary::is_stem_lock(lock, doc, sentence)
         {
             continue;
         }
@@ -251,7 +266,39 @@ fn omitted_render_locks(
             end_char: noun.span.end_char,
         };
     }
-    Some((render, completed_entry))
+    Some((render, whole_predicate))
+}
+
+fn completed_trip_span(
+    sentence: usize,
+    doc: &Document,
+    chars: &[char],
+    following: &[Atom],
+    motion: &Atom,
+    omitted_action: usize,
+) -> Option<Span> {
+    let clause = following.split(is_punct_atom).next()?;
+    let groups = group_into_bunsetsus(clause, doc, sentence);
+    let trip = finished_go::resolve(&groups, clause, doc, chars, Some(omitted_action))?;
+    (motion.doc_tok_idx == Some(trip.predicate)).then_some(Span {
+        start_char: motion.span.start_char,
+        end_char: clause.last()?.span.end_char,
+    })
+}
+
+fn whole_domain_lock(locks: &SpanLockTable, span: Span) -> Option<usize> {
+    locks.locks.iter().find_map(|lock| {
+        (lock.mandatory
+            && lock.source_span == span
+            && matches!(
+                lock.origin,
+                LockOrigin::Glossary {
+                    kind: GlossaryKind::DomainTerm,
+                    ..
+                }
+            ))
+        .then_some(lock.index)
+    })
 }
 
 fn whole_entry_lock(
@@ -290,17 +337,7 @@ fn whole_entry_lock(
         start_char: entry.span.start_char,
         end_char: predicate.last()?.span.end_char,
     };
-    let lock = locks.locks.iter().find(|lock| {
-        lock.mandatory
-            && lock.source_span == span
-            && matches!(
-                lock.origin,
-                LockOrigin::Glossary {
-                    kind: GlossaryKind::DomainTerm,
-                    ..
-                }
-            )
-    })?;
+    let lock = whole_domain_lock(locks, span)?;
     let mut goals = arguments.windows(2).filter(|pair| {
         let [noun, marker] = pair else { return false };
         noun.head == Some(governor)
@@ -316,5 +353,84 @@ fn whole_entry_lock(
         && goals.next().is_none()
         && physical_goal_head(&goal) == Some(governor)
         && household_entry::allows_physical_entry(doc, chars, governor))
-    .then_some(lock.index)
+    .then_some(lock)
+}
+
+#[cfg(test)]
+mod tests {
+    use faberline_nlp::doc::model::Backend;
+
+    use crate::{
+        GlossaryEntry, TargetVariant, TranslateOptions, TranslatedDocument, TranslationGlossary,
+        analyze_and_translate,
+    };
+
+    fn translate(source: &str, glossary: &TranslationGlossary) -> TranslatedDocument {
+        analyze_and_translate(
+            source,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap()
+    }
+
+    fn entry(surface: &str, target: &str) -> GlossaryEntry {
+        GlossaryEntry {
+            canonical: surface.into(),
+            surfaces: vec![surface.into()],
+            targets: [(TargetVariant::ZhHant, target.into())].into(),
+            ..GlossaryEntry::default()
+        }
+    }
+
+    #[test]
+    fn preserves_omission_and_destination_with_completed_trip_locks() {
+        let source = "朝ご飯を食べないで、学校へ行きました。";
+        for (term, replacement, expected) in [
+            ("行き", "前往", "沒有享用早餐就前往了新校舍。"),
+            ("行きました", "已前往", "沒有享用早餐就已前往新校舍。"),
+        ] {
+            let glossary = TranslationGlossary {
+                objects: vec![entry("朝ご飯を", "早餐")],
+                places: vec![entry("学校へ", "新校舍")],
+                domain_terms: vec![entry("食べ", "享用"), entry(term, replacement)],
+                ..TranslationGlossary::new()
+            };
+            let output = translate(source, &glossary);
+            assert_eq!(output.target_text, expected);
+            assert_eq!(output.glossary_hits.len(), 4);
+            let hit = output
+                .glossary_hits
+                .iter()
+                .find(|hit| hit.canonical == term)
+                .unwrap();
+            let source_slice: String = source
+                .chars()
+                .skip(hit.source_span.start_char)
+                .take(hit.source_span.end_char - hit.source_span.start_char)
+                .collect();
+            let target_slice: String = output
+                .target_text
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect();
+            assert_eq!(source_slice, term);
+            assert_eq!(target_slice, replacement);
+        }
+    }
+
+    #[test]
+    fn a_completed_trip_lock_does_not_assert_a_trip_in_a_question() {
+        let glossary = TranslationGlossary {
+            domain_terms: vec![entry("行きました", "已前往")],
+            ..TranslationGlossary::new()
+        };
+        let output = translate("朝ご飯を食べないで、学校へ行きましたか。", &glossary);
+        assert!(!output.target_text.contains('就'));
+        assert_eq!(output.target_text.matches("已前往").count(), 1);
+        assert_eq!(output.glossary_hits.len(), 1);
+    }
 }

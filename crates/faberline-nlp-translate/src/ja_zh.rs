@@ -23,6 +23,7 @@ mod homework_relative;
 mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
+mod outward_look;
 mod payment_potential;
 mod reception;
 mod return_endpoint;
@@ -12814,6 +12815,16 @@ fn translate_clause_bunsetsus(
         } else {
             format!("向{office}{verb_core}")
         };
+    }
+    if target == TargetVariant::ZhHant
+        && verb_core == "看"
+        && !passive_agent_needed
+        && !pre_verb_mods.iter().any(|modifier| modifier == "讓")
+        && matches!(objs.as_slice(), [object] if object == "外面")
+        && outward_look::is_direction(source, &predicates, doc)
+    {
+        objs.clear();
+        verb_core = "往外看".to_owned();
     }
     if let Some((span, action)) = daylight_meeting
         && matches!(verb_core.as_str(), "開" | "舉辦")

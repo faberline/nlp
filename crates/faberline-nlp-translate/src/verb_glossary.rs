@@ -146,6 +146,49 @@ mod tests {
     use super::analyze_document;
 
     #[test]
+    fn smoking_stem_gloss_keeps_the_prohibition_and_tobacco_object() {
+        let text = "ここでたばこを吸わないでください。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let entry = |surface: &str, target: &str| GlossaryEntry {
+            canonical: surface.into(),
+            surfaces: vec![surface.into()],
+            targets: [(TargetVariant::ZhHant, target.into())].into(),
+            ..GlossaryEntry::default()
+        };
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(entry("吸わ", "吸"));
+        let mut doc_options = doc_options_for_translate(&options, &glossary);
+        doc_options.lexicon.push("たばこ".into());
+        let doc = analyze_document(text, &doc_options);
+        let hinted = translate_document(
+            text,
+            &doc,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            &glossary,
+            None,
+        )
+        .unwrap();
+        assert_eq!(hinted.target_text, "請不要在這裡吸菸。");
+        assert_eq!(hinted.glossary_hits.len(), 1);
+
+        glossary.objects.push(entry("たばこを", "香菸"));
+        let locked = analyze_and_translate(text, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_eq!(locked.target_text, "請不要在這裡吸香菸。");
+        assert_eq!(locked.glossary_hits.len(), 2);
+        for (canonical, source, target) in [("吸わ", 7..9, 6..7), ("たばこを", 3..7, 7..9)] {
+            let hit = locked
+                .glossary_hits
+                .iter()
+                .find(|hit| hit.canonical == canonical)
+                .unwrap();
+            assert_eq!(hit.source_span.start_char..hit.source_span.end_char, source);
+            assert_eq!(hit.target_span.start_char..hit.target_span.end_char, target);
+        }
+    }
+
+    #[test]
     fn stem_glosses_keep_linked_endings_and_their_own_source_span() {
         let options = TranslateOptions::new(TargetVariant::ZhHant);
         let meal_contrast = match faberline_nlp::lexicon::ja::lookup_ja_gloss(

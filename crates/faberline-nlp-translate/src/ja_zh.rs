@@ -14,6 +14,7 @@ mod carrying;
 mod copular_time;
 mod counted_object;
 mod daytime;
+mod direct_smoking;
 mod finished_go;
 mod finite_adjective;
 mod handover;
@@ -27,6 +28,7 @@ mod order_noun;
 mod outward_look;
 mod payment_potential;
 mod polarity_contrast;
+mod polite_prohibition;
 mod reception;
 mod return_endpoint;
 mod trip_after_meal;
@@ -995,6 +997,7 @@ fn translate_ja_sentence_with_stems(
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
                     verb_stems,
+                    locks: &lock_table.locks,
                     following: &segments[seg_idx + 1..],
                     affirmative_meal: match (trailing_punct.as_deref(), segments.get(seg_idx + 1)) {
                         (Some("、" | "，"), Some(Segment::Clause { atoms: trip, .. }))
@@ -5851,6 +5854,7 @@ struct ClauseDiscourseCtx<'a> {
     contrasts_recurrence: bool,
     source_chars: &'a [char],
     verb_stems: &'a [&'a LockedSpan],
+    locks: &'a [LockedSpan],
     following: &'a [Segment],
     affirmative_meal: Option<polarity_contrast::AffirmativeMeal>,
     preceding_activity: &'a [Atom],
@@ -11666,6 +11670,13 @@ fn translate_clause_bunsetsus(
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> (String, bool) {
+    let restored_tobacco = if target == TargetVariant::ZhHant && !ctx.inside_quote {
+        polite_prohibition::restore_argument_cases(&mut bunsetsus, source, doc, ctx);
+        direct_smoking::restore_locked_object(&mut bunsetsus, source, doc, ctx.source_chars)
+    } else {
+        None
+    };
+
     let affirmative_meal = ctx.affirmative_meal.and_then(|meal| {
         let topic = bunsetsus.iter().position(|group| {
             group.role == BunsetsuRole::Subj
@@ -12871,9 +12882,9 @@ fn translate_clause_bunsetsus(
                     if head.upos == Some(Upos::Verb)
                         && !head.is_locked
                         && !ending.is_empty()
-                        && ending.iter().all(|atom| {
+                        && (ending.iter().all(|atom| {
                             !atom.is_locked && matches!(atom.upos, Some(Upos::Aux | Upos::Sconj))
-                        })
+                        }) || is_polite_prohibition_ending(head, ending))
                         && verb_core
                             == translate_single_ja_term(
                                 &head.surface,
@@ -12989,6 +13000,21 @@ fn translate_clause_bunsetsus(
             .any(|a| a.span.start_char <= span.start_char && span.end_char <= a.span.end_char)
     {
         verb_core = action.to_owned();
+    }
+    if target == TargetVariant::ZhHant
+        && verb_core == "吮吸"
+        && let [object] = objs.as_mut_slice()
+        && let Some(tobacco) = restored_tobacco
+            .or_else(|| direct_smoking::tobacco_object(source, &predicates, doc, ctx.source_chars))
+    {
+        if !tobacco.is_locked
+            && let Some(modifiers) = object.strip_suffix(&tobacco.surface)
+        {
+            *object = format!("{modifiers}菸");
+        }
+        if stem_render.is_none() {
+            verb_core = "抽".to_owned();
+        }
     }
     if elapsed_progressive_relative && !elapsed_progressive_negative {
         pre_verb_mods.retain(|m| m != "正在");
@@ -18412,37 +18438,38 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
 }
 
 fn is_place_location_bunsetsu(atoms: &[Atom]) -> bool {
-    atoms.iter().any(|a| {
-        if is_building_floor(a) {
-            return true;
-        }
-        matches!(
-            a.surface.as_str(),
-            "部屋"
-                | "学校"
-                | "図書館"
-                | "公園"
-                | "駅"
-                | "東京駅"
-                | "東京"
-                | "家"
-                | "会社"
-                | "病院"
-                | "中"
-                | "上"
-                | "下"
-                | "前"
-                | "後"
-                | "奥"
-                | "ここ"
-                | "そこ"
-                | "あそこ"
-                | "ベッド"
-                | "椅子"
-                | "机"
-                | "風呂"
-        )
-    })
+    atoms
+        .iter()
+        .any(|atom| is_building_floor(atom) || is_place_location_surface(&atom.surface))
+}
+
+fn is_place_location_surface(surface: &str) -> bool {
+    matches!(
+        surface,
+        "部屋"
+            | "学校"
+            | "図書館"
+            | "公園"
+            | "駅"
+            | "東京駅"
+            | "東京"
+            | "家"
+            | "会社"
+            | "病院"
+            | "中"
+            | "上"
+            | "下"
+            | "前"
+            | "後"
+            | "奥"
+            | "ここ"
+            | "そこ"
+            | "あそこ"
+            | "ベッド"
+            | "椅子"
+            | "机"
+            | "風呂"
+    )
 }
 
 fn is_instrument_bunsetsu(atoms: &[Atom]) -> bool {
@@ -25976,6 +26003,34 @@ fn localize_honorific(name: &str, suffix: &str) -> String {
         "様" | "さま" => format!("{name}大人"),
         _ => format!("{name}{suffix}"),
     }
+}
+
+fn is_polite_prohibition_ending(action: &Atom, ending: &[Atom]) -> bool {
+    let [negative, connective, request] = ending else {
+        return false;
+    };
+    action.doc_tok_idx.is_some()
+        && request.doc_tok_idx.is_some()
+        && action.deprel == "advcl"
+        && action.head == request.doc_tok_idx
+        && [negative, connective, request]
+            .iter()
+            .all(|atom| !atom.is_locked)
+        && negative.surface == "ない"
+        && negative.upos == Some(Upos::Aux)
+        && negative.deprel == "aux"
+        && negative.head == action.doc_tok_idx
+        && connective.surface == "で"
+        && connective.upos == Some(Upos::Sconj)
+        && connective.deprel == "mark"
+        && connective.head == action.doc_tok_idx
+        && request.surface == "ください"
+        && request.lemma.as_deref() == Some("くださる")
+        && request.upos == Some(Upos::Verb)
+        && request.deprel == "root"
+        && action.span.end_char == negative.span.start_char
+        && negative.span.end_char == connective.span.start_char
+        && connective.span.end_char == request.span.start_char
 }
 
 fn predicate_is_imperative(b: &Bunsetsu, subordinate_naide: bool) -> bool {

@@ -229,6 +229,19 @@ fn omitted_render_locks(
             .and_then(|_| omission.omitted_predicate_span(doc))
             .and_then(|span| whole_domain_lock(locks, span)),
     };
+    // A term that also covers で owns the connector. Keep it opaque while
+    // recovering the arguments and the completed predicate that follow it.
+    let covered_connector = completed.and_then(|_| {
+        let predicate = omission.omitted_predicate_span(doc)?;
+        let connective = doc.tokens.get(omission.connective)?;
+        whole_domain_lock(
+            locks,
+            Span {
+                start_char: predicate.start_char,
+                end_char: connective.span.end_char,
+            },
+        )
+    });
     if whole_verbs.following.is_none()
         && whole_verbs.omitted.is_none()
         && !omission.zuni
@@ -249,7 +262,7 @@ fn omitted_render_locks(
             return None;
         }
         let span = lock.source_span;
-        if whole_verbs.contains(lock.index) {
+        if whole_verbs.contains(lock.index) || covered_connector == Some(lock.index) {
             continue;
         }
         // Preserve proved verb stems while exposing argument case markers.
@@ -332,6 +345,11 @@ fn omitted_render_locks(
             (GlossaryKind::Place, "を", "obj")
                 if omission.zuni && noun.head == Some(later) && first == head_index => {}
             _ => return None,
+        }
+        // Keep the omitted object in the caller's opaque clause. Moving it
+        // behind a replacement that ends in a connector would split the two.
+        if covered_connector.is_some() && kind == GlossaryKind::Object {
+            continue;
         }
         lock.source_span = Span {
             start_char: span.start_char,
@@ -597,6 +615,45 @@ mod tests {
             assert!(!result.target_text.contains('就'));
             assert_eq!(result.target_text.matches("未攜帶").count(), 1);
             assert_eq!(result.glossary_hits.len(), 1);
+        }
+    }
+
+    #[test]
+    fn keeps_the_household_destination_after_a_caller_covered_connector() {
+        let source = "靴を脱がないで、家に入りました。";
+        let glossary = TranslationGlossary {
+            objects: vec![entry("靴を", "鞋履")],
+            places: vec![entry("家に", "舊屋")],
+            domain_terms: vec![entry("脱がないで", "未脫掉"), entry("入りました", "踏進了")],
+            ..TranslationGlossary::new()
+        };
+        let result = translate(source, &glossary);
+        assert_eq!(result.target_text, "鞋履未脫掉，踏進了舊屋。");
+        assert_eq!(result.glossary_hits.len(), 4);
+        for (original, replacement) in [
+            ("靴を", "鞋履"),
+            ("家に", "舊屋"),
+            ("脱がないで", "未脫掉"),
+            ("入りました", "踏進了"),
+        ] {
+            let hit = result
+                .glossary_hits
+                .iter()
+                .find(|hit| hit.canonical == original)
+                .unwrap();
+            let captured_source: String = source
+                .chars()
+                .skip(hit.source_span.start_char)
+                .take(hit.source_span.end_char - hit.source_span.start_char)
+                .collect();
+            let captured_target: String = result
+                .target_text
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect();
+            assert_eq!(captured_source, original);
+            assert_eq!(captured_target, replacement);
         }
     }
 }

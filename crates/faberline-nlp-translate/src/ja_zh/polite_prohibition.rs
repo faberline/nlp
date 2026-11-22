@@ -8,13 +8,116 @@ use crate::schema::GlossaryKind;
 use super::{
     Atom, Bunsetsu, BunsetsuRole, ClauseDiscourseCtx, Document, LOCKED_OBJECT_ATOM,
     LOCKED_PLACE_ATOM, SemanticClass, Span, Upos, build_sentence_atoms, core_non_punct,
-    dasu_case_link, is_place_location_surface, is_polite_prohibition_ending,
+    dasu_case_link, is_place_location_surface, is_polite_prohibition_ending, is_punct_atom,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CoveredCase {
     Object,
     Venue,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CoveredPredicate {
+    Negative,
+    Request,
+}
+
+pub(super) fn predicate_scope(
+    action: &Atom,
+    ending: &[Atom],
+    span: Span,
+) -> Option<CoveredPredicate> {
+    let [negative, connective, request] = ending else {
+        return None;
+    };
+    if span.start_char != action.span.start_char || !is_polite_prohibition_ending(action, ending) {
+        return None;
+    }
+    if span.end_char == request.span.end_char {
+        Some(CoveredPredicate::Request)
+    } else if [negative.span.end_char, connective.span.end_char].contains(&span.end_char) {
+        Some(CoveredPredicate::Negative)
+    } else {
+        None
+    }
+}
+
+pub(super) fn may_restore_predicate(chars: &[char], locks: &SpanLockTable) -> bool {
+    locks.locks.iter().any(|lock| {
+        lock.mandatory
+            && matches!(
+                lock.origin,
+                LockOrigin::Glossary {
+                    kind: GlossaryKind::DomainTerm,
+                    ..
+                }
+            )
+            && matches!(
+                chars.get(lock.source_span.end_char.saturating_sub(1)),
+                Some('い' | 'で')
+            )
+    })
+}
+
+pub(super) fn predicate_lock(atoms: &[Atom], locks: &SpanLockTable) -> Option<usize> {
+    let core = core_non_punct(atoms);
+    let [arguments @ .., action, _, _, _] = core else {
+        return None;
+    };
+    if action.upos != Some(Upos::Verb)
+        || arguments
+            .iter()
+            .any(|atom| is_punct_atom(atom) || atom.upos == Some(Upos::Verb))
+        || atoms[core.len()..]
+            .iter()
+            .any(|atom| !matches!(atom.surface.as_str(), "。" | "." | "！" | "!"))
+    {
+        return None;
+    }
+    let ending = &core[arguments.len() + 1..];
+    let predicate = locks.locks.iter().find(|lock| {
+        lock.mandatory
+            && matches!(
+                lock.origin,
+                LockOrigin::Glossary {
+                    kind: GlossaryKind::DomainTerm,
+                    ..
+                }
+            )
+            && predicate_scope(action, ending, lock.source_span).is_some()
+    })?;
+    if !locks.locks.iter().all(|lock| {
+        lock.index == predicate.index
+            || (lock.mandatory
+                && matches!(lock.origin, LockOrigin::Glossary { .. })
+                && arguments
+                    .iter()
+                    .any(|atom| atom.span.start_char == lock.source_span.start_char)
+                && arguments
+                    .iter()
+                    .any(|atom| atom.span.end_char == lock.source_span.end_char))
+    }) {
+        return None;
+    }
+    // A glossary object can hide spurious auxiliary tokens from an
+    // unrecognized noun. Keep the old path if those tokens stay visible.
+    if arguments.iter().any(|atom| {
+        matches!(atom.upos, Some(Upos::Aux | Upos::Sconj))
+            && !locks.locks.iter().any(|lock| {
+                matches!(
+                    lock.origin,
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Object,
+                        ..
+                    }
+                ) && lock.source_span.start_char <= atom.span.start_char
+                    && atom.span.end_char <= lock.source_span.end_char
+            })
+    }) {
+        return None;
+    }
+    Some(predicate.index)
 }
 
 pub(super) fn restore_argument_cases(
@@ -380,6 +483,74 @@ mod tests {
                     _ => panic!("unexpected kind"),
                 };
                 assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn a_locked_negative_or_request_keeps_the_venue_and_object() {
+        for (source, object, name, verb, action_start, action) in [
+            (
+                "ここで写真を撮らないでください。",
+                "写真を",
+                "相片",
+                "撮ら",
+                6,
+                "拍攝",
+            ),
+            (
+                "ここでたばこを吸わないでください。",
+                "たばこを",
+                "香菸",
+                "吸わ",
+                7,
+                "抽",
+            ),
+        ] {
+            for (suffix, caller_has_request) in [
+                ("ない", false),
+                ("ないで", false),
+                ("ない", true),
+                ("ないで", true),
+                ("ないでください", true),
+            ] {
+                let term = format!("{verb}{suffix}");
+                let (alias, expected) = if caller_has_request {
+                    (
+                        format!("請勿{action}"),
+                        format!("在此處請勿{action}{name}。"),
+                    )
+                } else {
+                    (
+                        format!("不要{action}"),
+                        format!("請在此處不要{action}{name}。"),
+                    )
+                };
+                let glossary = TranslationGlossary {
+                    places: vec![entry("ここで", "此處")],
+                    objects: vec![entry(object, name)],
+                    domain_terms: vec![entry(&term, &alias)],
+                    ..TranslationGlossary::new()
+                };
+                let output = translated(source, &glossary);
+                assert_eq!(output.target_text, expected);
+                assert_eq!(output.glossary_hits.len(), 3);
+                let hit = output
+                    .glossary_hits
+                    .iter()
+                    .find(|hit| hit.canonical == term)
+                    .unwrap();
+                assert_eq!(
+                    hit.source_span.start_char..hit.source_span.end_char,
+                    action_start..action_start + term.chars().count()
+                );
+                let rendered: String = output
+                    .target_text
+                    .chars()
+                    .skip(hit.target_span.start_char)
+                    .take(hit.target_span.end_char - hit.target_span.start_char)
+                    .collect();
+                assert_eq!(rendered, alias);
             }
         }
     }

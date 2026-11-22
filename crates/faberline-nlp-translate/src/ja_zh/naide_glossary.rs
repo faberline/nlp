@@ -86,7 +86,7 @@ pub(crate) fn may_restore_glossary_syntax(
     if text.matches('は').nth(1).is_some() && polarity_contrast::may_restore_topics(chars, locks) {
         return true;
     }
-    if text.contains('て')
+    if (text.contains('て') || text.contains("外を"))
         && locks
             .locks
             .iter()
@@ -159,8 +159,18 @@ pub(crate) fn glossary_render_locks(
             )
         })
         .or_else(|| {
-            outward_look::restore_case(doc, chars, locks, &atoms)
-                .map(|locks| (locks, WholeVerbLocks::default()))
+            let following = outward_look::gaze_predicate(doc, &atoms)
+                .and_then(|predicate| simple_past_span(predicate, predicate.first()?.doc_tok_idx?))
+                .and_then(|span| whole_domain_lock(locks, span));
+            outward_look::restore_case(doc, chars, locks, &atoms, following).map(|render| {
+                (
+                    render,
+                    WholeVerbLocks {
+                        following,
+                        omitted: None,
+                    },
+                )
+            })
         })
 }
 

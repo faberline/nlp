@@ -19,7 +19,9 @@ mod finished_go;
 mod finite_adjective;
 mod handover;
 mod naide_glossary;
-pub(crate) use naide_glossary::{glossary_render_locks, may_restore_glossary_syntax};
+pub(crate) use naide_glossary::{
+    WholeVerbLocks, glossary_render_locks, may_restore_glossary_syntax,
+};
 mod homework_desire;
 mod homework_relative;
 mod household_entry;
@@ -222,7 +224,7 @@ pub(crate) fn translate_ja_sentence(
     verb_grammar: Option<&Document>,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
-    whole_predicate: Option<usize>,
+    whole_verbs: WholeVerbLocks,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -250,7 +252,7 @@ pub(crate) fn translate_ja_sentence(
             .locks
             .iter()
             .filter(|lock| {
-                whole_predicate == Some(lock.index)
+                whole_verbs.contains(lock.index)
                     || crate::verb_glossary::is_stem_lock(lock, grammar, sentence_idx)
             })
             .collect();
@@ -1386,7 +1388,7 @@ pub(crate) fn translate_ja_fragment(
             None,
             &sent_tokens,
             &lock_table,
-            None,
+            WholeVerbLocks::default(),
             &cond,
             target,
             None,
@@ -4783,6 +4785,16 @@ struct NaideAdverbial {
 }
 
 impl NaideAdverbial {
+    fn omitted_predicate_span(self, doc: &Document) -> Option<Span> {
+        if self.zuni || !self.join_unstated_subject {
+            return None;
+        }
+        Some(Span {
+            start_char: doc.tokens.get(self.action)?.span.start_char,
+            end_char: doc.tokens.get(self.negative)?.span.end_char,
+        })
+    }
+
     fn matches_predicate(self, predicate: &Bunsetsu) -> bool {
         [self.action, self.negative, self.connective]
             .into_iter()
@@ -12886,6 +12898,12 @@ fn translate_clause_bunsetsus(
             transfer,
             naide_adverbial.map(|adverbial| adverbial.past),
         );
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum CoveredVerb {
+        Stem,
+        Finite,
+        Omission,
+    }
     let verb_render = match predicates.as_slice() {
         [predicate] if !ctx.verb_locks.is_empty() && transfer.is_none() => {
             match predicate.atoms.as_slice() {
@@ -12907,18 +12925,20 @@ fn translate_clause_bunsetsus(
                         start_char: head.span.start_char,
                         end_char: ending.last().unwrap().span.end_char,
                     };
-                    ctx.verb_locks
-                        .iter()
-                        .find(|lock| {
-                            lock.source_span == head.span || lock.source_span == predicate_span
-                        })
-                        .map(|lock| {
-                            (
-                                verb_core.clone(),
-                                lock.placeholder.as_str(),
-                                lock.source_span == predicate_span,
-                            )
-                        })
+                    let omitted_span =
+                        naide_adverbial.and_then(|omission| omission.omitted_predicate_span(doc));
+                    ctx.verb_locks.iter().find_map(|lock| {
+                        let coverage = if lock.source_span == head.span {
+                            CoveredVerb::Stem
+                        } else if omitted_span == Some(lock.source_span) {
+                            CoveredVerb::Omission
+                        } else if lock.source_span == predicate_span {
+                            CoveredVerb::Finite
+                        } else {
+                            return None;
+                        };
+                        Some((verb_core.clone(), lock.placeholder.as_str(), coverage))
+                    })
                 }
                 _ => None,
             }
@@ -13700,7 +13720,7 @@ fn translate_clause_bunsetsus(
                 && household_entry::allows_physical_entry(doc, ctx.source_chars, predicate)
         });
     let seated_until = past_until && verb_core == "坐";
-    let whole_predicate = verb_render.as_ref().is_some_and(|(_, _, whole)| *whole);
+    let whole_predicate = matches!(verb_render, Some((_, _, CoveredVerb::Finite)));
     let format_directional_goal = |arg: &PlacedArg, raw_np: &str| {
         if household_entry && arg.household_goal_head == household_entry_head {
             if whole_predicate { "屋裡" } else { "屋" }.to_owned()
@@ -14273,7 +14293,12 @@ fn translate_clause_bunsetsus(
         && verb_core == "去"
         && inner_pre_mods == ["沒有"]
         && post_verb_mods.is_empty();
-    if !whole_negative_go {
+    // The caller owns the negative predicate. Its following connector still
+    // participates in the verified omitted-action relation.
+    let whole_omission = matches!(&verb_render, Some((core, _, CoveredVerb::Omission)) if core == &verb_core)
+        && inner_pre_mods == ["沒有"]
+        && post_verb_mods.is_empty();
+    if !whole_negative_go && !whole_omission {
         parts.extend(inner_pre_mods);
     }
     if let Some(partner) = meeting_partner {
@@ -14451,12 +14476,16 @@ fn translate_clause_bunsetsus(
     if !verb_core.is_empty() {
         // Native morphology and syntax still determine clause roles.
         // A whole lock already owns the ending of its finite predicate.
-        if let Some((_, placeholder, whole)) = verb_render.filter(|(core, _, whole)| {
+        if let Some((_, placeholder, coverage)) = verb_render.filter(|(core, _, coverage)| {
             core == &verb_core
                 && !parts.iter().any(|item| item == core)
-                && (!whole || whole_negative_go || post_verb_mods == ["了"])
+                && match coverage {
+                    CoveredVerb::Stem => true,
+                    CoveredVerb::Finite => whole_negative_go || post_verb_mods == ["了"],
+                    CoveredVerb::Omission => whole_omission,
+                }
         }) {
-            if whole {
+            if coverage == CoveredVerb::Finite {
                 post_verb_mods.clear();
             }
             parts.push(placeholder.to_owned());

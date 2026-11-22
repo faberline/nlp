@@ -9,7 +9,19 @@ use super::{
     outward_look, physical_goal_head, polarity_contrast, trip_after_meal,
 };
 
-fn may_cover_past_predicate(lock: &LockedSpan, chars: &[char]) -> bool {
+#[derive(Clone, Copy, Default)]
+pub(crate) struct WholeVerbLocks {
+    following: Option<usize>,
+    omitted: Option<usize>,
+}
+
+impl WholeVerbLocks {
+    pub(crate) fn contains(self, index: usize) -> bool {
+        self.following == Some(index) || self.omitted == Some(index)
+    }
+}
+
+fn mandatory_domain_term(lock: &LockedSpan) -> bool {
     lock.mandatory
         && matches!(
             lock.origin,
@@ -18,7 +30,20 @@ fn may_cover_past_predicate(lock: &LockedSpan, chars: &[char]) -> bool {
                 ..
             }
         )
+}
+
+fn may_cover_past_predicate(lock: &LockedSpan, chars: &[char]) -> bool {
+    mandatory_domain_term(lock)
         && chars.get(lock.source_span.end_char.saturating_sub(1)) == Some(&'た')
+}
+
+fn may_cover_omitted_predicate(lock: &LockedSpan, chars: &[char]) -> bool {
+    let end = lock.source_span.end_char;
+    mandatory_domain_term(lock)
+        && end.checked_sub(2).is_some_and(|start| {
+            lock.source_span.start_char < start
+                && chars.get(start..=end) == Some(&['な', 'い', 'で'])
+        })
 }
 
 fn covers_case_marker(lock: &LockedSpan, chars: &[char]) -> bool {
@@ -85,11 +110,13 @@ pub(crate) fn may_restore_glossary_syntax(
                 } else {
                     false
                 } || naide
-                    && (covers_case_marker(lock, chars) || may_cover_past_predicate(lock, chars)))
+                    && (covers_case_marker(lock, chars)
+                        || may_cover_past_predicate(lock, chars)
+                        || may_cover_omitted_predicate(lock, chars)))
         })
 }
 
-/// Expose verified case tokens and identify a full predicate kept verbatim.
+/// Expose verified case tokens and identify whole predicates kept verbatim.
 /// The original glossary table owns the source matches and replacements.
 pub(crate) fn glossary_render_locks(
     sentence: usize,
@@ -97,7 +124,7 @@ pub(crate) fn glossary_render_locks(
     tokens: &[&Token],
     chars: &[char],
     locks: &SpanLockTable,
-) -> Option<(SpanLockTable, Option<usize>)> {
+) -> Option<(SpanLockTable, WholeVerbLocks)> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
     omitted_render_locks(sentence, doc, chars, locks, &atoms)
         .or_else(|| {
@@ -108,12 +135,32 @@ pub(crate) fn glossary_render_locks(
             {
                 return None;
             }
-            trip_after_meal::whole_trip_lock(sentence, &atoms, doc, chars, locks)
-                .map(|index| (locks.clone(), Some(index)))
+            trip_after_meal::whole_trip_lock(sentence, &atoms, doc, chars, locks).map(|index| {
+                (
+                    locks.clone(),
+                    WholeVerbLocks {
+                        following: Some(index),
+                        omitted: None,
+                    },
+                )
+            })
         })
-        .or_else(|| polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms))
         .or_else(|| {
-            outward_look::restore_case(doc, chars, locks, &atoms).map(|locks| (locks, None))
+            polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms).map(
+                |(render, following)| {
+                    (
+                        render,
+                        WholeVerbLocks {
+                            following,
+                            omitted: None,
+                        },
+                    )
+                },
+            )
+        })
+        .or_else(|| {
+            outward_look::restore_case(doc, chars, locks, &atoms)
+                .map(|locks| (locks, WholeVerbLocks::default()))
         })
 }
 
@@ -123,7 +170,7 @@ fn omitted_render_locks(
     chars: &[char],
     locks: &SpanLockTable,
     atoms: &[Atom],
-) -> Option<(SpanLockTable, Option<usize>)> {
+) -> Option<(SpanLockTable, WholeVerbLocks)> {
     let mut omitted = (3..atoms.len()).filter_map(|end| {
         let remaining = &atoms[end..];
         let following = if matches!(remaining[0].surface.as_str(), "、" | "，" | ",") {
@@ -161,14 +208,19 @@ fn omitted_render_locks(
             }
             _ => None,
         });
-    let whole_predicate = if omission.zuni {
+    let completed = if omission.zuni {
         None
-    } else if let Some(span) = completed_motion {
-        whole_domain_lock(locks, span)
     } else {
-        whole_entry_lock(sentence, doc, chars, following, later, locks)
+        completed_motion.or_else(|| whole_entry_span(sentence, doc, chars, following, later))
     };
-    if whole_predicate.is_none()
+    let whole_verbs = WholeVerbLocks {
+        following: completed.and_then(|span| whole_domain_lock(locks, span)),
+        omitted: completed
+            .and_then(|_| omission.omitted_predicate_span(doc))
+            .and_then(|span| whole_domain_lock(locks, span)),
+    };
+    if whole_verbs.following.is_none()
+        && whole_verbs.omitted.is_none()
         && !omission.zuni
         && !locks
             .locks
@@ -187,7 +239,7 @@ fn omitted_render_locks(
             return None;
         }
         let span = lock.source_span;
-        if whole_predicate == Some(lock.index) {
+        if whole_verbs.contains(lock.index) {
             continue;
         }
         // Preserve proved verb stems while exposing argument case markers.
@@ -276,7 +328,7 @@ fn omitted_render_locks(
             end_char: noun.span.end_char,
         };
     }
-    Some((render, whole_predicate))
+    Some((render, whole_verbs))
 }
 
 fn completed_trip_span(
@@ -298,16 +350,7 @@ fn completed_trip_span(
 
 fn whole_domain_lock(locks: &SpanLockTable, span: Span) -> Option<usize> {
     locks.locks.iter().find_map(|lock| {
-        (lock.mandatory
-            && lock.source_span == span
-            && matches!(
-                lock.origin,
-                LockOrigin::Glossary {
-                    kind: GlossaryKind::DomainTerm,
-                    ..
-                }
-            ))
-        .then_some(lock.index)
+        (mandatory_domain_term(lock) && lock.source_span == span).then_some(lock.index)
     })
 }
 
@@ -337,20 +380,19 @@ fn simple_past_span(predicate: &[Atom], governor: usize) -> Option<Span> {
     })
 }
 
-fn whole_entry_lock(
+fn whole_entry_span(
     sentence: usize,
     doc: &Document,
     chars: &[char],
     following: &[Atom],
     governor: usize,
-    locks: &SpanLockTable,
-) -> Option<usize> {
+) -> Option<Span> {
     let clause = following.split(is_punct_atom).next()?;
     let head = clause.iter().position(|atom| {
         atom.doc_tok_idx == Some(governor) && atom.lemma.as_deref() == Some("入る")
     })?;
     let (arguments, predicate) = clause.split_at(head);
-    let lock = whole_domain_lock(locks, simple_past_span(predicate, governor)?)?;
+    let span = simple_past_span(predicate, governor)?;
     let mut goals = arguments.windows(2).filter(|pair| {
         let [noun, marker] = pair else { return false };
         noun.head == Some(governor)
@@ -366,7 +408,7 @@ fn whole_entry_lock(
         && goals.next().is_none()
         && physical_goal_head(&goal) == Some(governor)
         && household_entry::allows_physical_entry(doc, chars, governor))
-    .then_some(lock)
+    .then_some(span)
 }
 
 #[cfg(test)]
@@ -493,6 +535,58 @@ mod tests {
             assert!(!output.target_text.contains('就'));
             assert_eq!(output.target_text.matches("已經出門").count(), 1);
             assert_eq!(output.glossary_hits.len(), 1);
+        }
+    }
+
+    #[test]
+    fn preserves_two_whole_locks_and_the_connector_between_them() {
+        let source = "傘を持たないで、出かけました。";
+        let glossary = TranslationGlossary {
+            objects: vec![entry("傘を", "雨具")],
+            domain_terms: vec![
+                entry("持たない", "未攜帶"),
+                entry("出かけました", "已經出門"),
+            ],
+            ..TranslationGlossary::new()
+        };
+        let result = translate(source, &glossary);
+        assert_eq!(result.target_text, "未攜帶雨具就已經出門。");
+        assert_eq!(result.glossary_hits.len(), 3);
+        let negative = result
+            .glossary_hits
+            .iter()
+            .find(|hit| hit.canonical == "持たない")
+            .unwrap();
+        assert_eq!(negative.source_span.start_char, 2);
+        assert_eq!(negative.source_span.end_char, 6);
+        let [first, following] = result.clause_alignments.as_slice() else {
+            panic!("expected the omitted and completed actions to align separately");
+        };
+        assert_eq!(first.target_span.end_char, following.target_span.start_char);
+        assert_eq!(
+            negative.target_span.start_char,
+            first.target_span.start_char
+        );
+        assert_eq!(
+            negative.target_span.end_char - negative.target_span.start_char,
+            3
+        );
+    }
+
+    #[test]
+    fn leaves_caller_covered_connectors_and_questions_separate() {
+        for (source, term) in [
+            ("傘を持たないで、出かけました。", "持たないで"),
+            ("傘を持たないで、出かけましたか。", "持たない"),
+        ] {
+            let glossary = TranslationGlossary {
+                domain_terms: vec![entry(term, "未攜帶")],
+                ..TranslationGlossary::new()
+            };
+            let result = translate(source, &glossary);
+            assert!(!result.target_text.contains('就'));
+            assert_eq!(result.target_text.matches("未攜帶").count(), 1);
+            assert_eq!(result.glossary_hits.len(), 1);
         }
     }
 }

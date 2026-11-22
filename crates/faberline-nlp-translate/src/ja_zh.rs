@@ -24,6 +24,7 @@ mod homework_relative;
 mod household_entry;
 mod meeting_voice;
 mod nominal_possession;
+mod nominal_receiving_glossary;
 mod order_noun;
 mod outward_look;
 mod payment_potential;
@@ -32,6 +33,7 @@ mod polarity_contrast;
 mod reception;
 mod recipient_scope;
 mod return_endpoint;
+mod te_help_glossary;
 mod trip_after_meal;
 
 #[cfg(test)]
@@ -387,6 +389,9 @@ fn translate_ja_sentence_with_stems(
         homework_relative::mark_argument_commas(&mut atoms, doc);
         finished_go::mark_reading_pause(&mut atoms, doc, chars);
         place_goal_glossary::restore_destination(&mut atoms, chars, sent_span, doc, lock_table);
+        if let Some(restored) = te_help_glossary::restore_object(&atoms, doc, chars, target) {
+            atoms = restored;
+        }
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
@@ -1067,7 +1072,17 @@ fn translate_ja_sentence_with_stems(
                 let receiving_request = if target == TargetVariant::ZhHant
                     && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
                 {
-                    try_translate_nominal_receiving_request(trimmed_atoms, doc, sentence_idx)
+                    if trimmed_atoms.iter().any(|atom| atom.is_locked) {
+                        nominal_receiving_glossary::render(trimmed_atoms, chars)
+                    } else {
+                        render_nominal_receiving_request(
+                            trimmed_atoms,
+                            doc,
+                            sentence_idx,
+                            None,
+                            chars,
+                        )
+                    }
                 } else {
                     None
                 };
@@ -6711,10 +6726,12 @@ fn render_nominal_receiving_count(
     Some(quantity)
 }
 
-fn try_translate_nominal_receiving_request(
+fn render_nominal_receiving_request(
     atoms: &[Atom],
     doc: &Document,
     sentence_idx: usize,
+    lock: Option<&Atom>,
+    source: &[char],
 ) -> Option<String> {
     let [args @ .., verb, masu, neg, question] = atoms else {
         return None;
@@ -6798,11 +6815,28 @@ fn try_translate_nominal_receiving_request(
         Some(NominalReceivingAmount::Approximate(text)) => text.to_owned(),
         None => String::new(),
     };
-    let object = render_bunsetsu_np(&object, TargetVariant::ZhHant);
-    if object.is_empty() || has_kana_no_hangul(&object) {
+    let raw_object = render_bunsetsu_np(&object, TargetVariant::ZhHant);
+    if raw_object.is_empty() || has_kana_no_hangul(&raw_object) {
         return None;
     }
-    if object == "時間" {
+    let time_request = raw_object == "時間";
+    let object = if let Some(lock) = lock {
+        let qualifier = usize::from(
+            matches!(amount, Some(NominalReceivingAmount::Count { .. }))
+                && phrase.first().is_some_and(|a| a.upos == Some(Upos::Det)),
+        );
+        nominal_receiving_glossary::render_object(
+            &phrase[qualifier..],
+            lock,
+            doc,
+            sentence_idx,
+            source,
+            time_request,
+        )?
+    } else {
+        raw_object
+    };
+    if time_request {
         if matches!(amount, Some(NominalReceivingAmount::Count { .. })) {
             return None;
         }

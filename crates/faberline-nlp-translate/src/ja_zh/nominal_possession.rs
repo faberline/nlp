@@ -79,7 +79,7 @@ fn source_noun<'a>(atom: &'a Atom, doc: &Document, source: &[char]) -> Option<Co
 
 // Localize complete compound nouns after identifying a choice of possessions.
 // Keep ordinary subjects, objects and any user-supplied labels unchanged.
-fn choice_phrase(
+pub(super) fn choice_phrase(
     atoms: &[Atom],
     doc: &Document,
     sentence: usize,

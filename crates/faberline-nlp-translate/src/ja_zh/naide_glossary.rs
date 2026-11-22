@@ -143,21 +143,27 @@ fn omitted_render_locks(
         .find(|a| a.doc_tok_idx == Some(omitted_action))?;
     let later = action.head?;
     let movement = atoms.iter().find(|a| {
-        a.doc_tok_idx == Some(later) && matches!(a.lemma.as_deref(), Some("行く" | "入る"))
+        a.doc_tok_idx == Some(later)
+            && matches!(
+                a.lemma.as_deref(),
+                Some("行く" | "入る" | "出かける" | "出掛ける")
+            )
     });
-    let trip_predicate = match movement {
-        Some(motion)
-            if !omission.zuni
-                && omission.join_unstated_subject
-                && motion.lemma.as_deref() == Some("行く") =>
-        {
-            completed_trip_span(sentence, doc, chars, following, motion, omitted_action)
-        }
-        _ => None,
-    };
+    let completed_motion = movement
+        .filter(|_| !omission.zuni && omission.join_unstated_subject)
+        .and_then(|motion| match motion.lemma.as_deref() {
+            Some("行く") => {
+                completed_trip_span(sentence, doc, chars, following, motion, omitted_action)
+            }
+            Some("出かける" | "出掛ける") => {
+                let clause = following.split(is_punct_atom).next()?;
+                simple_past_span(clause, later)
+            }
+            _ => None,
+        });
     let whole_predicate = if omission.zuni {
         None
-    } else if let Some(span) = trip_predicate {
+    } else if let Some(span) = completed_motion {
         whole_domain_lock(locks, span)
     } else {
         whole_entry_lock(sentence, doc, chars, following, later, locks)
@@ -189,9 +195,9 @@ fn omitted_render_locks(
         let entry_stem = movement.is_some_and(|entry| {
             entry.lemma.as_deref() == Some("入る") && (span == action.span || span == entry.span)
         });
-        let trip_stem = trip_predicate.is_some()
-            && movement.is_some_and(|trip| span == action.span || span == trip.span);
-        if (carrying_stem || entry_stem || trip_stem)
+        let motion_stem = completed_motion.is_some()
+            && movement.is_some_and(|motion| span == action.span || span == motion.span);
+        if (carrying_stem || entry_stem || motion_stem)
             && crate::verb_glossary::is_stem_lock(lock, doc, sentence)
         {
             continue;
@@ -241,7 +247,11 @@ fn omitted_render_locks(
                 }
             }
             (GlossaryKind::Place, "に" | "へ", "obl")
-                if noun.head == Some(later) && first == head_index && movement.is_some() =>
+                if noun.head == Some(later)
+                    && first == head_index
+                    && movement.is_some_and(|motion| {
+                        matches!(motion.lemma.as_deref(), Some("行く" | "入る"))
+                    }) =>
             {
                 let goal = classify_bunsetsu(vec![noun.clone(), marker.clone()], doc, sentence);
                 if physical_goal_head(&goal) != Some(later)
@@ -301,20 +311,8 @@ fn whole_domain_lock(locks: &SpanLockTable, span: Span) -> Option<usize> {
     })
 }
 
-fn whole_entry_lock(
-    sentence: usize,
-    doc: &Document,
-    chars: &[char],
-    following: &[Atom],
-    governor: usize,
-    locks: &SpanLockTable,
-) -> Option<usize> {
-    let clause = following.split(is_punct_atom).next()?;
-    let head = clause
-        .iter()
-        .position(|atom| atom.doc_tok_idx == Some(governor))?;
-    let (arguments, predicate) = clause.split_at(head);
-    let [entry, ending @ ..] = predicate else {
+fn simple_past_span(predicate: &[Atom], governor: usize) -> Option<Span> {
+    let [head, ending @ ..] = predicate else {
         return None;
     };
     let simple_past = match ending {
@@ -322,7 +320,7 @@ fn whole_entry_lock(
         [polite, past] => polite.surface == "まし" && past.surface == "た",
         _ => false,
     };
-    if entry.lemma.as_deref() != Some("入る")
+    if head.doc_tok_idx != Some(governor)
         || !simple_past
         || !ending.iter().all(|atom| {
             atom.upos == Some(Upos::Aux) && atom.deprel == "aux" && atom.head == Some(governor)
@@ -333,11 +331,26 @@ fn whole_entry_lock(
     {
         return None;
     }
-    let span = Span {
-        start_char: entry.span.start_char,
+    Some(Span {
+        start_char: head.span.start_char,
         end_char: predicate.last()?.span.end_char,
-    };
-    let lock = whole_domain_lock(locks, span)?;
+    })
+}
+
+fn whole_entry_lock(
+    sentence: usize,
+    doc: &Document,
+    chars: &[char],
+    following: &[Atom],
+    governor: usize,
+    locks: &SpanLockTable,
+) -> Option<usize> {
+    let clause = following.split(is_punct_atom).next()?;
+    let head = clause.iter().position(|atom| {
+        atom.doc_tok_idx == Some(governor) && atom.lemma.as_deref() == Some("入る")
+    })?;
+    let (arguments, predicate) = clause.split_at(head);
+    let lock = whole_domain_lock(locks, simple_past_span(predicate, governor)?)?;
     let mut goals = arguments.windows(2).filter(|pair| {
         let [noun, marker] = pair else { return false };
         noun.head == Some(governor)
@@ -432,5 +445,54 @@ mod tests {
         assert!(!output.target_text.contains('就'));
         assert_eq!(output.target_text.matches("已前往").count(), 1);
         assert_eq!(output.glossary_hits.len(), 1);
+    }
+
+    #[test]
+    fn keeps_omitted_carrying_before_a_locked_departure() {
+        let source = "傘を持たないで、出かけました。";
+        for (term, replacement, expected) in [
+            ("出かけ", "出門", "沒有攜帶雨具就出門了。"),
+            ("出かけました", "已經出門", "沒有攜帶雨具就已經出門。"),
+        ] {
+            let glossary = TranslationGlossary {
+                objects: vec![entry("傘を", "雨具")],
+                domain_terms: vec![entry("持た", "攜帶"), entry(term, replacement)],
+                ..TranslationGlossary::new()
+            };
+            let output = translate(source, &glossary);
+            assert_eq!(output.target_text, expected);
+            assert_eq!(output.glossary_hits.len(), 3);
+            let hit = output
+                .glossary_hits
+                .iter()
+                .find(|hit| hit.canonical == term)
+                .unwrap();
+            assert_eq!(hit.source_span.start_char, 8);
+            assert_eq!(hit.source_span.end_char, 8 + term.chars().count());
+            let rendered: String = output
+                .target_text
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect();
+            assert_eq!(rendered, replacement);
+        }
+    }
+
+    #[test]
+    fn locked_departure_does_not_join_different_subjects_or_a_question() {
+        let glossary = TranslationGlossary {
+            domain_terms: vec![entry("出かけました", "已經出門")],
+            ..TranslationGlossary::new()
+        };
+        for source in [
+            "母は傘を持たないで、弟は出かけました。",
+            "傘を持たないで、出かけましたか。",
+        ] {
+            let output = translate(source, &glossary);
+            assert!(!output.target_text.contains('就'));
+            assert_eq!(output.target_text.matches("已經出門").count(), 1);
+            assert_eq!(output.glossary_hits.len(), 1);
+        }
     }
 }

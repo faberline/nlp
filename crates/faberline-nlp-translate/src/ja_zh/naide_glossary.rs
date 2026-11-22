@@ -111,10 +111,7 @@ pub(crate) fn glossary_render_locks(
             trip_after_meal::whole_trip_lock(sentence, &atoms, doc, chars, locks)
                 .map(|index| (locks.clone(), Some(index)))
         })
-        .or_else(|| {
-            polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms)
-                .map(|locks| (locks, None))
-        })
+        .or_else(|| polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms))
         .or_else(|| {
             outward_look::restore_case(doc, chars, locks, &atoms).map(|locks| (locks, None))
         })

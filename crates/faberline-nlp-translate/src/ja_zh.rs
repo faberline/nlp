@@ -14265,7 +14265,17 @@ fn translate_clause_bunsetsus(
             days
         });
     }
-    parts.extend(inner_pre_mods);
+    // The whole negated trip owns its negative ending. Keep the source-derived
+    // destination and suppress only the native predicate's single negation.
+    let whole_negative_go = whole_predicate
+        && direct_negative_physical_go
+        && goal_tails.len() == 1
+        && verb_core == "去"
+        && inner_pre_mods == ["沒有"]
+        && post_verb_mods.is_empty();
+    if !whole_negative_go {
+        parts.extend(inner_pre_mods);
+    }
     if let Some(partner) = meeting_partner {
         parts.push(format!("和{partner}"));
     }
@@ -14444,7 +14454,7 @@ fn translate_clause_bunsetsus(
         if let Some((_, placeholder, whole)) = verb_render.filter(|(core, _, whole)| {
             core == &verb_core
                 && !parts.iter().any(|item| item == core)
-                && (!whole || post_verb_mods == ["了"])
+                && (!whole || whole_negative_go || post_verb_mods == ["了"])
         }) {
             if whole {
                 post_verb_mods.clear();

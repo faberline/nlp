@@ -1,8 +1,9 @@
 //! Select the smoking sense of 吸う when its original object is tobacco.
 
-use faberline_nlp::doc::{SyntaxToken, Token};
+use faberline_nlp::Span;
+use faberline_nlp::doc::{Options, SyntaxToken, Token, analyze_document};
 
-use super::{Atom, Bunsetsu, Document, LOCKED_OBJECT_ATOM, Upos, dasu_case_link};
+use super::{Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, Upos, dasu_case_link};
 
 fn source_identity<'a>(atom: &Atom, doc: &'a Document) -> Option<(&'a SyntaxToken, &'a Token)> {
     let id = atom.doc_tok_idx?;
@@ -17,15 +18,11 @@ fn source_identity<'a>(atom: &Atom, doc: &'a Document) -> Option<(&'a SyntaxToke
         .then_some((link, token))
 }
 
-pub(super) fn tobacco_object<'a>(
-    source: &'a [Atom],
-    predicates: &[Bunsetsu],
-    doc: &Document,
-    chars: &[char],
-) -> Option<&'a Atom> {
-    let mut verbs = predicates
-        .iter()
-        .flat_map(|group| &group.atoms)
+fn smoking_verb<'a>(
+    atoms: impl Iterator<Item = &'a Atom>,
+    doc: &'a Document,
+) -> Option<&'a SyntaxToken> {
+    let mut verbs = atoms
         .filter(|atom| !atom.is_locked && atom.upos == Some(Upos::Verb))
         .filter_map(|atom| {
             let (link, token) = source_identity(atom, doc)?;
@@ -35,9 +32,90 @@ pub(super) fn tobacco_object<'a>(
             .then_some(link)
         });
     let verb = verbs.next()?;
-    if verbs.next().is_some() {
+    verbs.next().is_none().then_some(verb)
+}
+
+fn is_tobacco(word: &[char]) -> bool {
+    matches!(word, ['た', 'ば', 'こ'] | ['タ', 'バ', 'コ'] | ['煙', '草'])
+}
+
+pub(super) fn restore_locked_object<'a>(
+    groups: &mut [Bunsetsu],
+    source: &'a [Atom],
+    doc: &Document,
+    chars: &[char],
+) -> Option<&'a Atom> {
+    let mut objects = source.iter().filter_map(|atom| {
+        if !atom.is_locked || atom.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM) {
+            return None;
+        }
+        let [noun @ .., 'を'] = chars.get(atom.span.start_char..atom.span.end_char)? else {
+            return None;
+        };
+        is_tobacco(noun).then_some((atom, noun))
+    });
+    let (lock, noun) = objects.next()?;
+    if objects.next().is_some() {
         return None;
     }
+    let verb = smoking_verb(source.iter(), doc)?;
+    let start = source.first()?.span.start_char;
+    let original = chars.get(start..source.last()?.span.end_char)?;
+    let analysis = analyze_document(
+        &original.iter().collect::<String>(),
+        &Options {
+            normalize_traditional: true,
+            enrich_morphology: true,
+            cpu_syntax: true,
+            lexicon: vec![noun.iter().collect::<String>()],
+            ..Default::default()
+        },
+    );
+    if analysis.segmentation.sentences.len() != 1 {
+        return None;
+    }
+    let absolute = |span: Span| Span {
+        start_char: span.start_char + start,
+        end_char: span.end_char + start,
+    };
+    let case = analysis.syntax.iter().find(|link| {
+        let span = absolute(link.span);
+        span.end_char == lock.span.end_char
+            && span.start_char + 1 == span.end_char
+            && link.deprel == "case"
+            && analysis.tokens[link.token].upos == Some(Upos::Adp)
+    })?;
+    let object = analysis.syntax.get(case.head?)?;
+    let governor = analysis.syntax.get(object.head?)?;
+    let noun_span = absolute(object.span);
+    if noun_span.start_char != lock.span.start_char
+        || noun_span.end_char != absolute(case.span).start_char
+        || object.deprel != "obj"
+        || analysis.tokens[object.token].upos != Some(Upos::Noun)
+        || absolute(governor.span) != verb.span
+        || analysis.tokens[governor.token].lemma.as_deref() != Some("吸う")
+        || analysis.syntax.iter().any(|link| {
+            link.head == Some(governor.token) && link.deprel == "obj" && link.token != object.token
+        })
+    {
+        return None;
+    }
+    let group = groups.iter_mut().find(|group| {
+        matches!(group.atoms.as_slice(), [atom] if atom.is_locked && atom.span == lock.span)
+    })?;
+    // The exact glossary placeholder is opaque to rendering; only the
+    // attested object role is recovered here.
+    group.role = BunsetsuRole::Obj;
+    Some(lock)
+}
+
+pub(super) fn tobacco_object<'a>(
+    source: &'a [Atom],
+    predicates: &[Bunsetsu],
+    doc: &Document,
+    chars: &[char],
+) -> Option<&'a Atom> {
+    let verb = smoking_verb(predicates.iter().flat_map(|group| &group.atoms), doc)?;
     let mut objects = doc
         .syntax
         .iter()
@@ -69,10 +147,9 @@ pub(super) fn tobacco_object<'a>(
             && noun_link.sentence == verb.sentence
             && case_link.sentence == verb.sentence
             && case_token.upos == Some(Upos::Adp)
-            && matches!(
-                chars.get(noun.span.start_char..noun.span.end_char),
-                Some(['た', 'ば', 'こ'] | ['タ', 'バ', 'コ'] | ['煙', '草'])
-            )
+            && chars
+                .get(noun.span.start_char..noun.span.end_char)
+                .is_some_and(is_tobacco)
             && chars.get(marker.span.start_char..marker.span.end_char) == Some(&['を']))
         .then_some(noun)
     })
@@ -96,6 +173,28 @@ mod tests {
             Backend::Onnx,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_tobacco_object_lock_keeps_its_position_when_it_includes_the_case_marker() {
+        let source = "ここでたばこを吸わないでください。";
+        for surface in ["たばこ", "たばこを"] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.objects.push(GlossaryEntry {
+                canonical: surface.into(),
+                surfaces: vec![surface.into()],
+                targets: [(TargetVariant::ZhHant, "菸".into())].into(),
+                ..GlossaryEntry::default()
+            });
+            let result = translate(source, &glossary);
+            assert_eq!(result.target_text, "請不要在這裡抽菸。");
+            assert_eq!(result.glossary_hits.len(), 1);
+            let hit = &result.glossary_hits[0];
+            assert_eq!(hit.source_span.start_char, 3);
+            assert_eq!(hit.source_span.end_char, 3 + surface.chars().count());
+            assert_eq!(hit.target_span.start_char, 7);
+            assert_eq!(hit.target_span.end_char, 8);
+        }
     }
 
     #[test]

@@ -91,6 +91,15 @@ fn omitted_render_locks(
             return None;
         }
         let span = lock.source_span;
+        // The stem renderer uses the same unhinted document as the object
+        // repair. Keep its lock while recovering the separate object marker.
+        if kind == GlossaryKind::DomainTerm
+            && action.lemma.as_deref() == Some("持つ")
+            && span == action.span
+            && crate::verb_glossary::is_stem_lock(lock, doc, sentence)
+        {
+            continue;
+        }
         let first = atoms
             .iter()
             .position(|a| a.span.start_char == span.start_char)?;

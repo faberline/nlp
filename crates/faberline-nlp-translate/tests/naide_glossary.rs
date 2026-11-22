@@ -71,7 +71,7 @@ fn omitted_actions_keep_their_objects_and_the_later_destinations() {
         "傘を持たないで、出かけました。",
         Some(("傘を", "雨具")),
         None,
-        "沒有拿著雨具就出門了。",
+        "沒有帶雨具就出門了。",
     );
     check(
         "靴を脱がないで、家に入りました。",

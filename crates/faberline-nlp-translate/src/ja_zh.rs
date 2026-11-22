@@ -10,6 +10,7 @@ use std::collections::HashMap;
 mod application_form;
 mod calendar;
 pub(crate) use calendar::DateContext;
+mod carrying;
 mod copular_time;
 mod counted_object;
 mod daytime;
@@ -12910,6 +12911,26 @@ fn translate_clause_bunsetsus(
     if let Some(state) = bounded_state {
         verb_core = state.to_owned();
         post_verb_mods.retain(|m| m != "著");
+    }
+    if target == TargetVariant::ZhHant
+        && verb_core == "拿著"
+        && !ctx.inside_quote
+        && !passive_agent_needed
+        && stem_render.is_none()
+        && !pre_verb_mods.iter().any(|m| m == "讓")
+        && carrying::with_motion(
+            source,
+            &predicates,
+            ctx.following,
+            doc,
+            ctx.source_chars,
+            naide_adverbial.is_some(),
+        )
+    {
+        let negative = pre_verb_mods
+            .iter()
+            .any(|modifier| matches!(modifier.as_str(), "不" | "沒有" | "不要" | "請不要"));
+        verb_core = if negative { "帶" } else { "帶著" }.to_owned();
     }
     if past_until && adverbs.iter().any(|adv| adv == "一直") {
         pre_verb_mods.retain(|modifier| modifier != "一直");

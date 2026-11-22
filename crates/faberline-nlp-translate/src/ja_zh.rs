@@ -26266,13 +26266,22 @@ fn lookup_curated_ja_word(s: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod payment_instrument_tests {
     use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::Upos;
     use faberline_nlp::doc::model::Backend;
+    use faberline_nlp::lexicon::ja::lookup_ja_gloss;
 
     #[test]
     fn payment_method_follows_the_payment_predicate() {
         let mut options = TranslateOptions::new(TargetVariant::ZhHant);
         options.source_hint = Some(TargetVariant::Ja);
         let glossary = TranslationGlossary::new();
+        let counter = match lookup_ja_gloss("窓口", Some(Upos::Noun)) {
+            None => "窓口",
+            Some("窗口") => "窗口",
+            Some(gloss) => panic!("unexpected service counter gloss: {gloss}"),
+        };
+        let electronic_money_counter = format!("在電子マネー的{counter}付錢。");
+        let cash_counter = format!("在現金的{counter}結帳。");
 
         for (source, expected) in [
             ("カードで支払います。", "用卡片結帳。"),
@@ -26282,9 +26291,12 @@ mod payment_instrument_tests {
             ("私は小銭で払いました。", "我用小錢付錢了。"),
             ("受付で電子マネーで支払います。", "在櫃檯用電子マネー結帳。"),
             ("私は小 銭で払いました。", "我在小錢付錢了。"),
-            ("電子マネーの窓口で払います。", "在電子マネー的窓口付錢。"),
+            (
+                "電子マネーの窓口で払います。",
+                electronic_money_counter.as_str(),
+            ),
             ("電子マネーで困っています。", "在電子マネー正在傷腦筋。"),
-            ("現金の窓口で支払います。", "在現金的窓口結帳。"),
+            ("現金の窓口で支払います。", cash_counter.as_str()),
             ("二人で支払います。", "在二人結帳。"),
             (
                 "生徒は教室で教師に宿題を出しました。",

@@ -139,8 +139,8 @@ mod tests {
     use faberline_nlp::doc::model::Backend;
 
     use crate::{
-        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
-        doc_options_for_translate, translate_document,
+        GlossaryEntry, GlossaryKind, TargetVariant, TranslateOptions, TranslationGlossary,
+        analyze_and_translate, doc_options_for_translate, translate_document,
     };
 
     use super::analyze_document;
@@ -200,6 +200,12 @@ mod tests {
             Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
         };
         for (text, surface, target, expected) in [
+            (
+                "靴を脱がないで、家に入りました。",
+                "入り",
+                "踏進",
+                "沒有脫下鞋子就踏進屋了。",
+            ),
             (
                 "傘を持たないで、出かけました。",
                 "持た",
@@ -264,6 +270,118 @@ mod tests {
                 target_start + target.chars().count()
             );
         }
+    }
+
+    #[test]
+    fn entry_keeps_both_verb_stems_with_case_inclusive_argument_locks() {
+        let text = "靴を脱がないで、家に入りました。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let mut glossary = TranslationGlossary::new();
+        let terms = [
+            (GlossaryKind::Object, "靴を", "鞋履"),
+            (GlossaryKind::DomainTerm, "脱が", "脫掉"),
+            (GlossaryKind::Place, "家に", "舊屋"),
+            (GlossaryKind::DomainTerm, "入り", "踏進"),
+        ];
+        for (kind, source, target) in terms {
+            let entries = match kind {
+                GlossaryKind::Object => &mut glossary.objects,
+                GlossaryKind::Place => &mut glossary.places,
+                GlossaryKind::DomainTerm => &mut glossary.domain_terms,
+                _ => unreachable!(),
+            };
+            entries.push(GlossaryEntry {
+                canonical: source.into(),
+                surfaces: vec![source.into()],
+                targets: [(TargetVariant::ZhHant, target.into())].into(),
+                ..GlossaryEntry::default()
+            });
+        }
+        let result = analyze_and_translate(text, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_eq!(result.target_text, "沒有脫掉鞋履就踏進舊屋了。");
+        assert_eq!(result.glossary_hits.len(), terms.len());
+
+        let original: Vec<_> = text.chars().collect();
+        let translation: Vec<_> = result.target_text.chars().collect();
+        for (kind, source, target) in terms {
+            let hit = result
+                .glossary_hits
+                .iter()
+                .find(|hit| hit.canonical == source)
+                .unwrap();
+            assert_eq!(hit.kind, kind);
+            assert_eq!(
+                original[hit.source_span.start_char..hit.source_span.end_char]
+                    .iter()
+                    .collect::<String>(),
+                source
+            );
+            assert_eq!(
+                translation[hit.target_span.start_char..hit.target_span.end_char]
+                    .iter()
+                    .collect::<String>(),
+                target
+            );
+        }
+    }
+
+    #[test]
+    fn whole_entry_lock_owns_its_ending_and_keeps_the_omitted_action() {
+        let text = "靴を脱がないで、家に入りました。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "入りました".into(),
+            surfaces: vec!["入りました".into()],
+            targets: [(TargetVariant::ZhHant, "踏進了".into())].into(),
+            ..GlossaryEntry::default()
+        });
+        let result = analyze_and_translate(text, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_eq!(result.target_text, "沒有脫下鞋子就踏進了屋裡。");
+        assert_eq!(result.target_text.matches('了').count(), 1);
+        let [hit] = result.glossary_hits.as_slice() else {
+            panic!("expected one glossary hit");
+        };
+        assert_eq!(hit.target_span.start_char, "沒有脫下鞋子就".chars().count());
+        assert_eq!(hit.source_span.end_char + 1, text.chars().count());
+        assert_eq!(hit.source_span.end_char - hit.source_span.start_char, 5);
+        assert_eq!(hit.target_span.end_char - hit.target_span.start_char, 3);
+
+        glossary.places.push(GlossaryEntry {
+            canonical: "家に".into(),
+            surfaces: vec!["家に".into()],
+            targets: [(TargetVariant::ZhHant, "舊屋".into())].into(),
+            ..GlossaryEntry::default()
+        });
+        let locked_place =
+            analyze_and_translate(text, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_eq!(locked_place.target_text, "沒有脫下鞋子就踏進了舊屋。");
+        let [omission, entry] = locked_place.clause_alignments.as_slice() else {
+            panic!("expected alignments for the omitted action and the entry");
+        };
+        assert_eq!(omission.target_span.end_char, entry.target_span.start_char);
+        assert_eq!(
+            entry.target_span.start_char,
+            "沒有脫下鞋子就".chars().count()
+        );
+        assert_eq!(locked_place.glossary_hits.len(), 2);
+    }
+
+    #[test]
+    fn whole_entry_lock_in_a_question_does_not_assert_a_second_action() {
+        let text = "靴を脱がないで、家に入りましたか。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(GlossaryEntry {
+            canonical: "入りました".into(),
+            surfaces: vec!["入りました".into()],
+            targets: [(TargetVariant::ZhHant, "踏進了".into())].into(),
+            ..GlossaryEntry::default()
+        });
+        let result = analyze_and_translate(text, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert!(!result.target_text.contains('就'));
+        assert_eq!(result.target_text.matches("踏進了").count(), 1);
+        assert_eq!(result.glossary_hits.len(), 1);
     }
 
     #[test]

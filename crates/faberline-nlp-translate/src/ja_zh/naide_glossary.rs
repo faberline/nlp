@@ -1,12 +1,35 @@
 //! Recover argument case covered by a caller glossary in linked clauses.
 
-use crate::lock::{LockOrigin, SpanLockTable};
+use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
 use crate::schema::GlossaryKind;
 
 use super::{
     Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
-    naide_adverbial, outward_look, physical_goal_head, polarity_contrast,
+    household_entry, is_punct_atom, naide_adverbial, outward_look, physical_goal_head,
+    polarity_contrast,
 };
+
+fn covers_case_marker(lock: &LockedSpan, chars: &[char]) -> bool {
+    matches!(
+        (
+            &lock.origin,
+            chars.get(lock.source_span.end_char.saturating_sub(1))
+        ),
+        (
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Object,
+                ..
+            },
+            Some('を')
+        ) | (
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Place,
+                ..
+            },
+            Some('に' | 'へ')
+        )
+    )
+}
 
 pub(crate) fn may_restore_glossary_syntax(
     text: &str,
@@ -32,33 +55,31 @@ pub(crate) fn may_restore_glossary_syntax(
         && locks.locks.iter().any(|lock| {
             let last = chars.get(lock.source_span.end_char.saturating_sub(1));
             lock.mandatory
-                && match lock.origin {
-                    LockOrigin::Glossary {
-                        kind: GlossaryKind::Place,
-                        ..
-                    } => zuni || (naide && matches!(last, Some('に' | 'へ'))),
-                    LockOrigin::Glossary {
-                        kind: GlossaryKind::Object,
-                        ..
-                    } => naide && last == Some(&'を'),
-                    _ => false,
-                }
+                && (if zuni {
+                    matches!(lock.origin, LockOrigin::Glossary { kind: GlossaryKind::Place, .. })
+                } else {
+                    false
+                } || naide && (covers_case_marker(lock, chars)
+                    || matches!((&lock.origin, last),
+                        (LockOrigin::Glossary { kind: GlossaryKind::DomainTerm, .. }, Some('た')))))
         })
 }
 
-/// The render table exposes the case token. The original glossary table
-/// continues to own the full source match and replacement.
+/// Expose verified case tokens and identify a full predicate kept verbatim.
+/// The original glossary table owns the source matches and replacements.
 pub(crate) fn glossary_render_locks(
     sentence: usize,
     doc: &Document,
     tokens: &[&Token],
     chars: &[char],
     locks: &SpanLockTable,
-) -> Option<SpanLockTable> {
+) -> Option<(SpanLockTable, Option<usize>)> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
     omitted_render_locks(sentence, doc, chars, locks, &atoms)
-        .or_else(|| polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms))
-        .or_else(|| outward_look::restore_case(doc, chars, locks, &atoms))
+        .or_else(|| polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms)
+            .map(|locks| (locks, None)))
+        .or_else(|| outward_look::restore_case(doc, chars, locks, &atoms)
+            .map(|locks| (locks, None)))
 }
 
 fn omitted_render_locks(
@@ -67,7 +88,7 @@ fn omitted_render_locks(
     chars: &[char],
     locks: &SpanLockTable,
     atoms: &[Atom],
-) -> Option<SpanLockTable> {
+) -> Option<(SpanLockTable, Option<usize>)> {
     let mut omitted = (3..atoms.len()).filter_map(|end| {
         let remaining = &atoms[end..];
         let following = if matches!(remaining[0].surface.as_str(), "、" | "，" | ",") {
@@ -75,9 +96,9 @@ fn omitted_render_locks(
         } else {
             remaining
         };
-        naide_adverbial(&atoms[..end], following, None, chars)
+        naide_adverbial(&atoms[..end], following, None, chars).map(|omitted| (omitted, following))
     });
-    let omission = omitted.next()?;
+    let (omission, following) = omitted.next()?;
     let omitted_action = omission.action;
     if omitted.next().is_some() {
         return None;
@@ -89,6 +110,19 @@ fn omitted_render_locks(
     let movement = atoms.iter().find(|a| {
         a.doc_tok_idx == Some(later) && matches!(a.lemma.as_deref(), Some("行く" | "入る"))
     });
+    let completed_entry = if omission.zuni {
+        None
+    } else {
+        whole_entry_lock(sentence, doc, chars, following, later, locks)
+    };
+    if completed_entry.is_none() && !omission.zuni
+        && !locks
+            .locks
+            .iter()
+            .any(|lock| covers_case_marker(lock, chars))
+    {
+        return None;
+    }
 
     let mut render = locks.clone();
     for lock in &mut render.locks {
@@ -99,12 +133,15 @@ fn omitted_render_locks(
             return None;
         }
         let span = lock.source_span;
-        // The stem renderer uses the same unhinted document as the object
-        // repair. Keep its lock while recovering the separate object marker.
-        if kind == GlossaryKind::DomainTerm
-            && action.lemma.as_deref() == Some("持つ")
-            && span == action.span
-            && crate::verb_glossary::is_stem_lock(lock, doc, sentence)
+        if completed_entry == Some(lock.index) {
+            continue;
+        }
+        // Preserve proved verb stems while exposing argument case markers.
+        let carrying_stem = span == action.span && action.lemma.as_deref() == Some("持つ");
+        let entry_stem = movement.is_some_and(|entry| {
+            entry.lemma.as_deref() == Some("入る") && (span == action.span || span == entry.span)
+        });
+        if (carrying_stem || entry_stem) && crate::verb_glossary::is_stem_lock(lock, doc, sentence)
         {
             continue;
         }
@@ -178,5 +215,70 @@ fn omitted_render_locks(
             end_char: noun.span.end_char,
         };
     }
-    Some(render)
+    Some((render, completed_entry))
+}
+
+fn whole_entry_lock(
+    sentence: usize,
+    doc: &Document,
+    chars: &[char],
+    following: &[Atom],
+    governor: usize,
+    locks: &SpanLockTable,
+) -> Option<usize> {
+    let clause = following.split(is_punct_atom).next()?;
+    let head = clause
+        .iter()
+        .position(|atom| atom.doc_tok_idx == Some(governor))?;
+    let (arguments, predicate) = clause.split_at(head);
+    let [entry, ending @ ..] = predicate else {
+        return None;
+    };
+    let simple_past = match ending {
+        [past] => matches!(past.surface.as_str(), "た" | "ました"),
+        [polite, past] => polite.surface == "まし" && past.surface == "た",
+        _ => false,
+    };
+    if entry.lemma.as_deref() != Some("入る")
+        || !simple_past
+        || !ending.iter().all(|atom| {
+            atom.upos == Some(Upos::Aux) && atom.deprel == "aux" && atom.head == Some(governor)
+        })
+        || !predicate
+            .windows(2)
+            .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+    {
+        return None;
+    }
+    let span = Span {
+        start_char: entry.span.start_char,
+        end_char: predicate.last()?.span.end_char,
+    };
+    let lock = locks.locks.iter().find(|lock| {
+        lock.mandatory
+            && lock.source_span == span
+            && matches!(
+                lock.origin,
+                LockOrigin::Glossary {
+                    kind: GlossaryKind::DomainTerm,
+                    ..
+                }
+            )
+    })?;
+    let mut goals = arguments.windows(2).filter(|pair| {
+        let [noun, marker] = pair else { return false };
+        noun.head == Some(governor)
+            && noun.deprel == "obl"
+            && matches!(marker.surface.as_str(), "に" | "へ" | "まで")
+            && dasu_case_link(noun, marker)
+    });
+    let [noun, marker] = goals.next()? else {
+        return None;
+    };
+    let goal = classify_bunsetsu(vec![noun.clone(), marker.clone()], doc, sentence);
+    (marker.surface != "まで"
+        && goals.next().is_none()
+        && physical_goal_head(&goal) == Some(governor)
+        && household_entry::allows_physical_entry(doc, chars, governor))
+    .then_some(lock.index)
 }

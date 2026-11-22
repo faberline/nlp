@@ -167,7 +167,7 @@ mod tests {
                 "窓を開けて、外を見ました。",
                 "見",
                 "察看",
-                "打開窗戶，察看了外面。",
+                "打開窗戶，往外察看了。",
             ),
             (
                 "朝ご飯は食べて、学校には行きませんでした。",
@@ -236,7 +236,7 @@ mod tests {
         });
 
         let result = analyze_and_translate(text, &options, &glossary, None, Backend::Onnx).unwrap();
-        assert_eq!(result.target_text, "打開窗戶，檢視了外面。");
+        assert_eq!(result.target_text, "打開窗戶，往外檢視了。");
         let [hit] = result.glossary_hits.as_slice() else {
             panic!("expected one glossary hit")
         };

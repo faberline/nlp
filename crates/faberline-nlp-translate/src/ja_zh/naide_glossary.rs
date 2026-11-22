@@ -5,7 +5,7 @@ use crate::schema::GlossaryKind;
 
 use super::{
     Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
-    naide_adverbial, physical_goal_head, polarity_contrast,
+    naide_adverbial, outward_look, physical_goal_head, polarity_contrast,
 };
 
 pub(crate) fn may_restore_glossary_syntax(
@@ -15,6 +15,13 @@ pub(crate) fn may_restore_glossary_syntax(
 ) -> bool {
     if text.contains(['「', '」', '『', '』', '"', '“', '”']) {
         return false;
+    }
+    if locks
+        .locks
+        .iter()
+        .any(|lock| outward_look::covers_outside_case(chars, lock))
+    {
+        return true;
     }
     if text.matches('は').nth(1).is_some() && polarity_contrast::may_restore_topics(chars, locks) {
         return true;
@@ -51,6 +58,7 @@ pub(crate) fn glossary_render_locks(
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
     omitted_render_locks(sentence, doc, chars, locks, &atoms)
         .or_else(|| polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms))
+        .or_else(|| outward_look::restore_case(doc, chars, locks, &atoms))
 }
 
 fn omitted_render_locks(

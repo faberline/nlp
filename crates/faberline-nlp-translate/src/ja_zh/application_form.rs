@@ -159,6 +159,59 @@ fn filing_reading(a: &Atom, atoms: &[Atom]) -> Option<&'static str> {
     }
 }
 
+pub(super) fn filing_object_span(
+    original: &[Atom],
+    chars: &[char],
+    lock: super::Span,
+) -> Option<(super::Span, usize)> {
+    let first = original
+        .iter()
+        .position(|atom| atom.span.start_char == lock.start_char)?;
+    for (end, pair) in original.windows(2).enumerate().skip(first) {
+        let [form, case] = pair else { continue };
+        if form.span.end_char > lock.end_char {
+            break;
+        }
+        if form.deprel != "obj"
+            || case.surface != "を"
+            || !dasu_case_link(form, case)
+            || form.span.end_char != case.span.start_char
+            || ![form.span.end_char, case.span.end_char].contains(&lock.end_char)
+        {
+            continue;
+        }
+        let noun = form_start(original, end, chars)?;
+        if first != noun {
+            let (owner, _) = purpose(original, noun, form, chars)?;
+            if first > owner
+                || original[first..owner].iter().any(|modifier| {
+                    modifier.deprel != "compound" || modifier.head != original[owner].doc_tok_idx
+                })
+            {
+                return None;
+            }
+        }
+        if original[first..=end]
+            .windows(2)
+            .any(|part| part[0].span.end_char != part[1].span.start_char)
+        {
+            return None;
+        }
+        let governor = form.head?;
+        original.iter().find(|action| {
+            action.doc_tok_idx == Some(governor) && filing_reading(action, original).is_some()
+        })?;
+        return Some((
+            super::Span {
+                start_char: lock.start_char,
+                end_char: form.span.end_char,
+            },
+            governor,
+        ));
+    }
+    None
+}
+
 // An office or person receives the document only when its case belongs to this action.
 fn recipient(atoms: &[Atom], case: usize, verb: usize, chars: &[char]) -> bool {
     let Some(i) = case.checked_sub(1) else {

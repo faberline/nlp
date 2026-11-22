@@ -7,9 +7,9 @@ use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, Token};
 
 use super::super::{
-    build_sentence_atoms, dasu_case_link, daytime, deadline_weekday, is_clock_atom,
-    is_daypart_surface, is_named_event_time, normalize_clock_atoms, render_clock_surface,
-    render_temporal_made_atom, selects_time_value,
+    application_form, build_sentence_atoms, dasu_case_link, daytime, deadline_weekday,
+    is_clock_atom, is_daypart_surface, is_named_event_time, normalize_clock_atoms,
+    render_clock_surface, render_temporal_made_atom, selects_time_value,
 };
 
 const CLOCK: &str = "__ja_protected_event_clock";
@@ -255,6 +255,7 @@ pub(in crate::ja_zh) fn time_render_locks(
     let clocks = normalize_clock_atoms(&original);
     let mut table = locks.clone();
     let mut labels = Vec::new();
+    let mut composite_objects = Vec::new();
     for lock in &mut table.locks {
         let LockOrigin::Glossary { kind, .. } = lock.origin else {
             return None;
@@ -266,9 +267,24 @@ pub(in crate::ja_zh) fn time_render_locks(
             lock.source_span = label.span;
             labels.push(label);
         } else if !tokens.iter().any(|t| t.span == lock.source_span) {
-            // A second, unrelated composite lock may hide its own syntax.
-            return None;
+            if kind != GlossaryKind::Object {
+                return None;
+            }
+            composite_objects.push(lock);
         }
     }
-    (!labels.is_empty()).then_some(TimeRenderLocks { table, labels })
+    if labels.is_empty() {
+        return None;
+    }
+    for lock in composite_objects {
+        // The original lock still owns the full glossary hit. Render the native
+        // object marker only for a filing action joined to a verified time label.
+        let (span, governor) =
+            application_form::filing_object_span(&original, chars, lock.source_span)?;
+        if !labels.iter().any(|label| label.governor == governor) {
+            return None;
+        }
+        lock.source_span = span;
+    }
+    Some(TimeRenderLocks { table, labels })
 }

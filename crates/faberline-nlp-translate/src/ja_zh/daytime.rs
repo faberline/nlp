@@ -385,7 +385,7 @@ fn course_time_labels(noun: &Atom) -> Option<(&'static str, &'static str)> {
     }
 }
 
-fn course_time<'a>(
+pub(super) fn course_time<'a>(
     noun: &Atom,
     tail: &'a [Atom],
     source: &[Atom],
@@ -441,6 +441,12 @@ fn course_time<'a>(
                 && last.span.end_char <= verb.span.start_char
         })
         .then_some((last, owner, label))
+}
+
+pub(super) fn mark_locked_course_time(atom: &mut Atom, governor: usize) {
+    let mut time = time_modifier(atom, atom.span.end_char, governor, false);
+    time.lemma = Some(COURSE_TIME.to_owned());
+    *atom = time;
 }
 
 fn bind_course_time(atoms: &mut Vec<Atom>, source: &[Atom]) {

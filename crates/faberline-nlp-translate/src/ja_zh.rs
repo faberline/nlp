@@ -16,6 +16,7 @@ mod daytime;
 mod finished_go;
 mod finite_adjective;
 mod handover;
+pub(crate) use handover::{handover_render_locks, has_handover_glossary};
 mod homework_desire;
 mod homework_relative;
 mod meeting_voice;
@@ -215,9 +216,13 @@ pub(crate) fn translate_ja_sentence(
     dates: &mut DateContext,
     prior_letter_distribution: Option<PriorLetterDistribution>,
     honorifics: &mut HonorificContext,
+    handover_locks: Option<&handover::HandoverRenderLocks>,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
-    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    if let Some(locks) = handover_locks {
+        locks.apply(&mut atoms);
+    }
     honorifics.enter_sentence(doc.segmentation.sentences[sentence_idx].paragraph, &atoms);
     if let Some(definition) = honorifics.definition(&atoms, lock_table) {
         return definition.render(doc, sentence_idx, target);
@@ -1203,6 +1208,7 @@ pub(crate) fn translate_ja_fragment(
             &mut dates,
             None,
             &mut honorifics,
+            None,
         );
         out.push_str(&tr);
         cursor = sent.span.end_char;

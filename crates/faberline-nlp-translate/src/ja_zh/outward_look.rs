@@ -2,6 +2,9 @@
 
 use faberline_nlp::doc::SyntaxToken;
 
+use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
+use crate::schema::GlossaryKind;
+
 use super::{Atom, Bunsetsu, Document, Upos, dasu_case_link};
 
 fn original_link<'a>(atom: &Atom, doc: &'a Document) -> Option<&'a SyntaxToken> {
@@ -27,30 +30,36 @@ pub(super) fn is_direction(source: &[Atom], predicates: &[Bunsetsu], doc: &Docum
         .atoms
         .iter()
         .filter(|atom| atom.upos == Some(Upos::Verb));
-    let Some(look_link) = verbs.next().and_then(|look| original_link(look, doc)) else {
+    let Some(look) = verbs.next() else {
         return false;
     };
-    if verbs.next().is_some()
-        || doc.tokens[look_link.token].lemma.as_deref() != Some("見る")
+    verbs.next().is_none() && outside_object(source, look, doc).is_some()
+}
+
+fn outside_object<'a>(
+    source: &'a [Atom],
+    verb: &Atom,
+    doc: &Document,
+) -> Option<(&'a Atom, &'a Atom)> {
+    let look_link = original_link(verb, doc)?;
+    if doc.tokens[look_link.token].lemma.as_deref() != Some("見る")
         || !matches!(look_link.deprel.as_str(), "root" | "advcl")
     {
-        return false;
+        return None;
     }
 
     let mut objects = doc
         .syntax
         .iter()
         .filter(|link| link.head == Some(look_link.token) && link.deprel == "obj");
-    let Some(object) = objects.next() else {
-        return false;
-    };
+    let object = objects.next()?;
     if objects.next().is_some() {
-        return false;
+        return None;
     }
 
-    source.windows(2).any(|pair| {
+    source.windows(2).find_map(|pair| {
         let [outside, marker] = pair else {
-            return false;
+            return None;
         };
         if outside.surface != "外"
             || outside.upos != Some(Upos::Noun)
@@ -59,18 +68,63 @@ pub(super) fn is_direction(source: &[Atom], predicates: &[Bunsetsu], doc: &Docum
             || !dasu_case_link(outside, marker)
             || !original_link(outside, doc).is_some_and(|link| link.sentence == look_link.sentence)
         {
-            return false;
+            return None;
         }
-        let Some(case_link) = original_link(marker, doc) else {
-            return false;
-        };
+        let case_link = original_link(marker, doc)?;
         // A modifier or coordinated noun can make 外 refer to a specific exterior.
-        case_link.sentence == look_link.sentence
+        (case_link.sentence == look_link.sentence
             && !doc
                 .syntax
                 .iter()
-                .any(|link| link.head == Some(object.token) && link.token != case_link.token)
+                .any(|link| link.head == Some(object.token) && link.token != case_link.token))
+        .then_some((outside, marker))
     })
+}
+
+pub(super) fn covers_outside_case(chars: &[char], lock: &LockedSpan) -> bool {
+    lock.mandatory
+        && matches!(
+            lock.origin,
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Object | GlossaryKind::Place,
+                ..
+            }
+        )
+        && chars.get(lock.source_span.start_char..lock.source_span.end_char) == Some(&['外', 'を'])
+}
+
+pub(super) fn restore_case(
+    doc: &Document,
+    chars: &[char],
+    locks: &SpanLockTable,
+    atoms: &[Atom],
+) -> Option<SpanLockTable> {
+    if !locks
+        .locks
+        .iter()
+        .any(|lock| covers_outside_case(chars, lock))
+    {
+        return None;
+    }
+    let mut render = locks.clone();
+    for lock in &mut render.locks {
+        if covers_outside_case(chars, lock) {
+            let span = lock.source_span;
+            let (_, marker) = atoms
+                .iter()
+                .filter(|atom| atom.upos == Some(Upos::Verb))
+                .filter_map(|verb| outside_object(atoms, verb, doc))
+                .find(|(noun, marker)| {
+                    noun.span.start_char == span.start_char && marker.span.end_char == span.end_char
+                })?;
+            // Expose the native particle to rendering while the original
+            // lock retains the full caller match.
+            lock.source_span.end_char = marker.span.start_char;
+        } else if !atoms.iter().any(|atom| atom.span == lock.source_span) {
+            return None;
+        }
+    }
+    Some(render)
 }
 
 #[cfg(test)]

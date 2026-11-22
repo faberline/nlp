@@ -12824,7 +12824,11 @@ fn translate_clause_bunsetsus(
         && outward_look::is_direction(source, &predicates, doc)
     {
         objs.clear();
-        verb_core = "往外看".to_owned();
+        if stem_render.is_some() {
+            pre_verb_mods.push("往外".to_owned());
+        } else {
+            verb_core = "往外看".to_owned();
+        }
     }
     if let Some((span, action)) = daylight_meeting
         && matches!(verb_core.as_str(), "開" | "舉辦")

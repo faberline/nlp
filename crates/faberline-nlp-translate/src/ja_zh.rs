@@ -18967,9 +18967,17 @@ mod naide_adverbial_tests {
         {
             assert_eq!(translate(text), "沒有喝水就跑了。");
         }
+        let expected = match faberline_nlp::lexicon::ja::lookup_ja_gloss(
+            "朝ご飯",
+            Some(faberline_nlp::doc::Upos::Noun),
+        ) {
+            None => "早上沒有吃飯就去了學校。",
+            Some("早餐") => "沒有吃早餐就去了學校。",
+            Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+        };
         assert_eq!(
             translate("朝ご飯を食べないで、学校へ行きました。"),
-            "早上沒有吃飯就去了學校。"
+            expected
         );
     }
 

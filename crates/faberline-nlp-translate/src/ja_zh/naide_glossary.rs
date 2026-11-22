@@ -1,12 +1,34 @@
-//! Recover argument case covered by a caller glossary in an omitted action.
+//! Recover the source grammar of an omitted action under caller glossary locks.
 
-use crate::lock::{LockOrigin, SpanLockTable};
+use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
 use crate::schema::GlossaryKind;
 
 use super::{
-    Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
-    naide_adverbial, physical_goal_head,
+    Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
+    household_entry, is_punct_atom, naide_adverbial, physical_goal_head,
 };
+
+fn covers_case_marker(lock: &LockedSpan, chars: &[char]) -> bool {
+    matches!(
+        (
+            &lock.origin,
+            chars.get(lock.source_span.end_char.saturating_sub(1))
+        ),
+        (
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Object,
+                ..
+            },
+            Some('を')
+        ) | (
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Place,
+                ..
+            },
+            Some('に' | 'へ')
+        )
+    )
+}
 
 pub(crate) fn may_restore_glossary_syntax(
     text: &str,
@@ -18,34 +40,29 @@ pub(crate) fn may_restore_glossary_syntax(
         && locks.locks.iter().any(|lock| {
             let last = chars.get(lock.source_span.end_char.saturating_sub(1));
             lock.mandatory
-                && matches!(
-                    (&lock.origin, last),
-                    (
-                        LockOrigin::Glossary {
-                            kind: GlossaryKind::Object,
-                            ..
-                        },
-                        Some('を')
-                    ) | (
-                        LockOrigin::Glossary {
-                            kind: GlossaryKind::Place,
-                            ..
-                        },
-                        Some('に' | 'へ')
-                    )
-                )
+                && (covers_case_marker(lock, chars)
+                    || matches!(
+                        (&lock.origin, last),
+                        (
+                            LockOrigin::Glossary {
+                                kind: GlossaryKind::DomainTerm,
+                                ..
+                            },
+                            Some('た')
+                        )
+                    ))
         })
 }
 
-/// The render table exposes the case token. The original glossary table
-/// continues to own the full source match and replacement.
+/// Expose verified case tokens and identify a full predicate kept verbatim.
+/// The original glossary table owns the source matches and replacements.
 pub(crate) fn glossary_render_locks(
     sentence: usize,
     doc: &Document,
     tokens: &[&Token],
     chars: &[char],
     locks: &SpanLockTable,
-) -> Option<SpanLockTable> {
+) -> Option<(SpanLockTable, Option<usize>)> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
     let mut omitted = (3..atoms.len()).filter_map(|end| {
         let remaining = &atoms[end..];
@@ -54,9 +71,10 @@ pub(crate) fn glossary_render_locks(
         } else {
             remaining
         };
-        naide_adverbial(&atoms[..end], following, None)
+        naide_adverbial(&atoms[..end], following, None).map(|omitted| (omitted, following))
     });
-    let omitted_action = omitted.next()?.action;
+    let (omitted_clause, following) = omitted.next()?;
+    let omitted_action = omitted_clause.action;
     if omitted.next().is_some() {
         return None;
     }
@@ -67,6 +85,15 @@ pub(crate) fn glossary_render_locks(
     let movement = atoms.iter().find(|a| {
         a.doc_tok_idx == Some(later) && matches!(a.lemma.as_deref(), Some("行く" | "入る"))
     });
+    let completed_entry = whole_entry_lock(sentence, doc, chars, following, later, locks);
+    if completed_entry.is_none()
+        && !locks
+            .locks
+            .iter()
+            .any(|lock| covers_case_marker(lock, chars))
+    {
+        return None;
+    }
 
     let mut render = locks.clone();
     for lock in &mut render.locks {
@@ -77,6 +104,9 @@ pub(crate) fn glossary_render_locks(
             return None;
         }
         let span = lock.source_span;
+        if completed_entry == Some(lock.index) {
+            continue;
+        }
         // Keep the linked verb stems while exposing the separate case markers.
         if movement.is_some_and(|entry| {
             entry.lemma.as_deref() == Some("入る") && (span == action.span || span == entry.span)
@@ -152,5 +182,70 @@ pub(crate) fn glossary_render_locks(
             end_char: noun.span.end_char,
         };
     }
-    Some(render)
+    Some((render, completed_entry))
+}
+
+fn whole_entry_lock(
+    sentence: usize,
+    doc: &Document,
+    chars: &[char],
+    following: &[Atom],
+    governor: usize,
+    locks: &SpanLockTable,
+) -> Option<usize> {
+    let clause = following.split(is_punct_atom).next()?;
+    let head = clause
+        .iter()
+        .position(|atom| atom.doc_tok_idx == Some(governor))?;
+    let (arguments, predicate) = clause.split_at(head);
+    let [entry, ending @ ..] = predicate else {
+        return None;
+    };
+    let simple_past = match ending {
+        [past] => matches!(past.surface.as_str(), "た" | "ました"),
+        [polite, past] => polite.surface == "まし" && past.surface == "た",
+        _ => false,
+    };
+    if entry.lemma.as_deref() != Some("入る")
+        || !simple_past
+        || !ending.iter().all(|atom| {
+            atom.upos == Some(Upos::Aux) && atom.deprel == "aux" && atom.head == Some(governor)
+        })
+        || !predicate
+            .windows(2)
+            .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+    {
+        return None;
+    }
+    let span = Span {
+        start_char: entry.span.start_char,
+        end_char: predicate.last()?.span.end_char,
+    };
+    let lock = locks.locks.iter().find(|lock| {
+        lock.mandatory
+            && lock.source_span == span
+            && matches!(
+                lock.origin,
+                LockOrigin::Glossary {
+                    kind: GlossaryKind::DomainTerm,
+                    ..
+                }
+            )
+    })?;
+    let mut goals = arguments.windows(2).filter(|pair| {
+        let [noun, marker] = pair else { return false };
+        noun.head == Some(governor)
+            && noun.deprel == "obl"
+            && matches!(marker.surface.as_str(), "に" | "へ" | "まで")
+            && dasu_case_link(noun, marker)
+    });
+    let [noun, marker] = goals.next()? else {
+        return None;
+    };
+    let goal = classify_bunsetsu(vec![noun.clone(), marker.clone()], doc, sentence);
+    (marker.surface != "まで"
+        && goals.next().is_none()
+        && physical_goal_head(&goal) == Some(governor)
+        && household_entry::allows_physical_entry(doc, chars, governor))
+    .then_some(lock.index)
 }

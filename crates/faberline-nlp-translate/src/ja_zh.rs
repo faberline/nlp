@@ -281,7 +281,12 @@ pub(crate) fn translate_ja_sentence(
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
-    let segments = split_ja_atoms(&atoms, doc, sent_span, target == TargetVariant::ZhHant);
+    let segments = split_ja_atoms(
+        &atoms,
+        doc,
+        sent_span,
+        (target == TargetVariant::ZhHant).then_some(chars),
+    );
     let prior_letter_distribution = prior_letter_distribution.filter(|_| {
         direct_quote.is_none() && matches!(segments.as_slice(), [Segment::Clause { .. }])
     });
@@ -891,7 +896,7 @@ pub(crate) fn translate_ja_sentence(
                                 ..
                             }),
                         ) if target == TargetVariant::ZhHant && !inside_quote => {
-                            naide_adverbial(trimmed_atoms, next, next_punct.as_deref())
+                            naide_adverbial(trimmed_atoms, next, next_punct.as_deref(), chars)
                         }
                         _ => None,
                     },
@@ -4631,6 +4636,7 @@ fn naide_adverbial(
     before: &[Atom],
     following: &[Atom],
     following_punct: Option<&str>,
+    chars: &[char],
 ) -> Option<NaideAdverbial> {
     let [.., action, negative, connective] = before else {
         return None;
@@ -4688,7 +4694,7 @@ fn naide_adverbial(
             )
     };
     if main.is_locked
-        || (zuni && completed_departure(clause) != Some(governor))
+        || (zuni && completed_departure(clause, chars) != Some(governor))
         || clause.first().is_some_and(|first| {
             matches!(first.surface.as_str(), "と" | "って")
                 || (first.doc_tok_idx == Some(governor)
@@ -4755,14 +4761,14 @@ fn naide_adverbial(
 }
 
 fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) -> Vec<Segment> {
-    split_ja_atoms(atoms, doc, parent_span, false)
+    split_ja_atoms(atoms, doc, parent_span, None)
 }
 
 fn split_ja_atoms(
     atoms: &[Atom],
     doc: &Document,
     parent_span: Span,
-    split_naide: bool,
+    naide_chars: Option<&[char]>,
 ) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<Atom> = Vec::new();
@@ -5107,10 +5113,10 @@ fn split_ja_atoms(
             continue;
         }
 
-        if split_naide
+        if let Some(chars) = naide_chars
             && matches!(a.surface.as_str(), "で" | "に")
             && atoms.get(i + 1).is_some_and(|next| !is_punct_atom(next))
-            && naide_adverbial(&current, &atoms[i + 1..], None).is_some()
+            && naide_adverbial(&current, &atoms[i + 1..], None, chars).is_some()
         {
             flush_clause(&mut current, Some("，".to_owned()), &mut segments);
             i += 1;
@@ -12665,7 +12671,7 @@ fn translate_clause_bunsetsus(
     let departure = target == TargetVariant::ZhHant
         && !ctx.inside_quote
         && verb_core == "出去"
-        && completed_departure(source).is_some();
+        && completed_departure(source, ctx.source_chars).is_some();
     if departure {
         verb_core = "離開".to_owned();
     }
@@ -19022,7 +19028,7 @@ mod naide_adverbial_tests {
             &crate::lock::SpanLockTable::default(),
         );
         assert!((1..atoms.len()).all(|split| {
-            super::naide_adverbial(&atoms[..split], &atoms[split..], None).is_none()
+            super::naide_adverbial(&atoms[..split], &atoms[split..], None, &chars).is_none()
         }));
     }
 
@@ -24765,31 +24771,47 @@ fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {
 }
 
 fn is_existing_spatial_head(a: &Atom) -> bool {
-    !a.is_locked
-        && matches!(
-            a.surface.as_str(),
-            "部屋"
-                | "学校"
-                | "図書館"
-                | "公園"
-                | "駅"
-                | "東京駅"
-                | "東京"
-                | "家"
-                | "会社"
-                | "病院"
-                | "ここ"
-                | "そこ"
-                | "あそこ"
-                | "ベッド"
-                | "椅子"
-                | "机"
-                | "風呂"
-        )
+    !a.is_locked && is_existing_spatial_label(&a.surface)
+}
+
+fn is_existing_spatial_label(surface: &str) -> bool {
+    matches!(
+        surface,
+        "部屋"
+            | "学校"
+            | "図書館"
+            | "公園"
+            | "駅"
+            | "東京駅"
+            | "東京"
+            | "家"
+            | "会社"
+            | "病院"
+            | "ここ"
+            | "そこ"
+            | "あそこ"
+            | "ベッド"
+            | "椅子"
+            | "机"
+            | "風呂"
+    )
+}
+
+fn is_departure_source(place: &Atom, chars: &[char]) -> bool {
+    let is_spatial = |surface: &str| {
+        is_existing_spatial_label(surface) || spatial_route_marker(surface).is_some()
+    };
+    if place.is_locked {
+        return place.lemma.as_deref() == Some(LOCKED_PLACE_ATOM)
+            && chars
+                .get(place.span.start_char..place.span.end_char)
+                .is_some_and(|raw| is_spatial(&raw.iter().collect::<String>()));
+    }
+    place.upos == Some(Upos::Noun) && is_spatial(&place.surface)
 }
 
 /// Find a completed physical departure with one source marked by を.
-fn completed_departure(source: &[Atom]) -> Option<usize> {
+fn completed_departure(source: &[Atom], chars: &[char]) -> Option<usize> {
     let mut roots = source.iter().filter(|atom| atom.deprel == "root");
     let verb = roots.next()?;
     if roots.next().is_some()
@@ -24811,11 +24833,7 @@ fn completed_departure(source: &[Atom]) -> Option<usize> {
         .iter()
         .filter(|atom| atom.head == Some(governor) && atom.deprel == "obj");
     let place = objects.next()?;
-    if objects.next().is_some()
-        || place.is_locked
-        || place.upos != Some(Upos::Noun)
-        || !(is_existing_spatial_head(place) || spatial_route_marker(&place.surface).is_some())
-    {
+    if objects.next().is_some() || !is_departure_source(place, chars) {
         return None;
     }
     let place_id = place.doc_tok_idx?;

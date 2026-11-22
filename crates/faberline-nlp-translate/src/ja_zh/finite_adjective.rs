@@ -548,6 +548,83 @@ fn locked_colour_noun(subject: &Atom, doc: &Document, chars: &[char]) -> Option<
     Some(original)
 }
 
+// The caller lexicon can merge a noun and its topic particle into a verb.
+// Consult the ordinary clause analysis for the colour sense only. Rendering
+// still uses the original lock and its whole source span.
+fn locked_colour_topic(
+    before: &[Atom],
+    body: &[Atom],
+    predicate: &Atom,
+    chars: &[char],
+) -> Option<String> {
+    let topic = before.iter().rev().find(|a| {
+        a.is_locked
+            && a.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
+            && (a.head == predicate.doc_tok_idx || a.deprel == "case")
+            && a.span.end_char > a.span.start_char
+            && chars.get(a.span.end_char - 1) == Some(&'は')
+    })?;
+    if body.iter().any(|a| a.is_locked && a.span != topic.span) {
+        return None;
+    }
+    let start = body.first()?.span.start_char;
+    let end = body.last()?.span.end_char;
+    let text: String = chars.get(start..end)?.iter().collect();
+    let raw = faberline_nlp::doc::analyze_document(
+        &text,
+        &faberline_nlp::doc::Options {
+            normalize_traditional: true,
+            enrich_morphology: true,
+            cpu_syntax: true,
+            ..Default::default()
+        },
+    );
+    if raw.segmentation.sentences.len() != 1
+        || !raw
+            .tokens
+            .iter()
+            .any(|t| t.span.start_char + start == topic.span.start_char)
+    {
+        return None;
+    }
+    let same_span = |s: Span, original: Span| {
+        s.start_char + start == original.start_char && s.end_char + start == original.end_char
+    };
+    let adj = raw.syntax.iter().find(|s| {
+        s.deprel == "root"
+            && same_span(s.span, predicate.span)
+            && raw
+                .tokens
+                .get(s.token)
+                .is_some_and(|t| t.upos == Some(Upos::Adj))
+    })?;
+    let marker = raw.syntax.iter().find(|s| {
+        s.deprel == "case"
+            && s.span.start_char + start == topic.span.end_char - 1
+            && s.span.end_char + start == topic.span.end_char
+            && raw
+                .tokens
+                .get(s.token)
+                .is_some_and(|t| t.upos == Some(Upos::Adp))
+    })?;
+    let noun = raw.tokens.get(marker.head?)?;
+    if noun.upos != Some(Upos::Noun)
+        || noun.span.start_char + start < topic.span.start_char
+        || noun.span.end_char != marker.span.start_char
+        || !raw.syntax.iter().any(|s| {
+            Some(s.token) == marker.head && s.head == Some(adj.token) && s.deprel == "nsubj"
+        })
+    {
+        return None;
+    }
+    Some(
+        chars
+            .get(noun.span.start_char + start..noun.span.end_char + start)?
+            .iter()
+            .collect(),
+    )
+}
+
 pub(super) fn bind_locked_colour_subject(
     atoms: &mut Vec<Atom>,
     doc: &Document,
@@ -1404,23 +1481,29 @@ pub(super) fn render(
         .rfind(|a| a.deprel == "nsubj" && a.head == Some(id));
     let previous_range = ctx.adjective.preceding_until == Some(id);
     let bounded = previous_range || interval.is_some_and(|period| period.head == id);
-    if subject.is_none() && !bounded {
-        return None;
-    }
     let lemma = predicate.lemma.as_deref().unwrap_or(&predicate.surface);
     let colour = hue(lemma);
     if let Some(c) = colour {
-        let subject = subject?;
-        let has_hue = if subject.is_locked {
-            locked_colour_noun(subject, doc, ctx.source_chars)
-                .is_some_and(|noun| noun.surface != "色" && literal_colour(&noun.surface, c))
-        } else {
-            has_surface_colour(subject, before, c)
-        };
+        let literal = |noun: &str| noun != "色" && literal_colour(noun, c);
+        let has_hue = subject.map_or_else(
+            || {
+                locked_colour_topic(before, body, predicate, ctx.source_chars)
+                    .is_some_and(|noun| literal(&noun))
+            },
+            |subject| {
+                if subject.is_locked {
+                    locked_colour_noun(subject, doc, ctx.source_chars)
+                        .is_some_and(|noun| literal(&noun.surface))
+                } else {
+                    has_surface_colour(subject, before, c)
+                }
+            },
+        );
         if !has_hue {
             return None;
         }
-    } else if !(gradable(lemma) || bounded && matches!(lemma, "強い" | "弱い" | "忙しい"))
+    } else if subject.is_none() && !bounded
+        || !(gradable(lemma) || bounded && matches!(lemma, "強い" | "弱い" | "忙しい"))
         || uncertain_sense(lemma, subject.map_or("", |s| s.surface.as_str()))
     {
         return None;
@@ -1583,6 +1666,12 @@ mod tests {
                 "這輛測試車是白色的。",
             ),
             (
+                "この車は白いです。",
+                "この車は",
+                "這輛測試車",
+                "這輛測試車是白色的。",
+            ),
+            (
                 "先生の車は白いです。",
                 "車",
                 "測試車",
@@ -1591,6 +1680,12 @@ mod tests {
             (
                 "先生の車は白いです。",
                 "先生の車",
+                "老師的配車",
+                "老師的配車是白色的。",
+            ),
+            (
+                "先生の車は白いです。",
+                "先生の車は",
                 "老師的配車",
                 "老師的配車是白色的。",
             ),

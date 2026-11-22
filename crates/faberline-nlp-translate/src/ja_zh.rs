@@ -383,7 +383,12 @@ fn translate_ja_sentence_with_stems(
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
-    let segments = split_ja_atoms(&atoms, doc, sent_span, target == TargetVariant::ZhHant);
+    let segments = split_ja_atoms(
+        &atoms,
+        doc,
+        sent_span,
+        (target == TargetVariant::ZhHant).then_some(chars),
+    );
     let recovered_meal_trip = match segments.as_slice() {
         [
             Segment::Clause {
@@ -1026,7 +1031,7 @@ fn translate_ja_sentence_with_stems(
                                 ..
                             }),
                         ) if target == TargetVariant::ZhHant && !inside_quote => {
-                            naide_adverbial(trimmed_atoms, next, next_punct.as_deref())
+                            naide_adverbial(trimmed_atoms, next, next_punct.as_deref(), chars)
                         }
                         _ => None,
                     },
@@ -4760,6 +4765,7 @@ struct NaideAdverbial {
     negative: usize,
     connective: usize,
     past: bool,
+    zuni: bool,
     join_unstated_subject: bool,
 }
 
@@ -4768,10 +4774,11 @@ impl NaideAdverbial {
         [self.action, self.negative, self.connective]
             .into_iter()
             .all(|index| {
-                predicate
-                    .atoms
-                    .iter()
-                    .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(index))
+                (self.zuni && index == self.connective)
+                    || predicate
+                        .atoms
+                        .iter()
+                        .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(index))
             })
     }
 }
@@ -4780,24 +4787,32 @@ fn naide_adverbial(
     before: &[Atom],
     following: &[Atom],
     following_punct: Option<&str>,
+    chars: &[char],
 ) -> Option<NaideAdverbial> {
     let [.., action, negative, connective] = before else {
         return None;
     };
     let action_id = action.doc_tok_idx?;
     let governor = action.head?;
+    let naide = negative.surface == "ない"
+        && connective.surface == "で"
+        && connective.upos == Some(Upos::Sconj)
+        && connective.deprel == "mark"
+        && action.deprel == "advcl";
+    // The parser treats the particle in ずに as case on the omitted action.
+    let zuni = negative.surface == "ず"
+        && connective.surface == "に"
+        && connective.upos == Some(Upos::Adp)
+        && connective.deprel == "case"
+        && action.deprel == "obl";
     if action.is_locked
         || negative.is_locked
         || connective.is_locked
         || action.upos != Some(Upos::Verb)
-        || action.deprel != "advcl"
-        || negative.surface != "ない"
+        || !(naide || zuni)
         || negative.upos != Some(Upos::Aux)
         || negative.deprel != "aux"
         || negative.head != Some(action_id)
-        || connective.surface != "で"
-        || connective.upos != Some(Upos::Sconj)
-        || connective.deprel != "mark"
         || connective.head != Some(action_id)
         || action.span.end_char != negative.span.start_char
         || negative.span.end_char != connective.span.start_char
@@ -4830,6 +4845,7 @@ fn naide_adverbial(
             )
     };
     if main.is_locked
+        || (zuni && completed_departure(clause, chars) != Some(governor))
         || clause.first().is_some_and(|first| {
             matches!(first.surface.as_str(), "と" | "って")
                 || (first.doc_tok_idx == Some(governor)
@@ -4890,19 +4906,20 @@ fn naide_adverbial(
         negative: negative.doc_tok_idx?,
         connective: connective.doc_tok_idx?,
         past,
+        zuni,
         join_unstated_subject,
     })
 }
 
 fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) -> Vec<Segment> {
-    split_ja_atoms(atoms, doc, parent_span, false)
+    split_ja_atoms(atoms, doc, parent_span, None)
 }
 
 fn split_ja_atoms(
     atoms: &[Atom],
     doc: &Document,
     parent_span: Span,
-    split_naide: bool,
+    naide_chars: Option<&[char]>,
 ) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<Atom> = Vec::new();
@@ -5247,10 +5264,10 @@ fn split_ja_atoms(
             continue;
         }
 
-        if split_naide
-            && a.surface == "で"
+        if let Some(chars) = naide_chars
+            && matches!(a.surface.as_str(), "で" | "に")
             && atoms.get(i + 1).is_some_and(|next| !is_punct_atom(next))
-            && naide_adverbial(&current, &atoms[i + 1..], None).is_some()
+            && naide_adverbial(&current, &atoms[i + 1..], None, chars).is_some()
         {
             flush_clause(&mut current, Some("，".to_owned()), &mut segments);
             i += 1;
@@ -7134,6 +7151,10 @@ fn translate_clause_atoms(
         std::borrow::Cow::Borrowed(phrases)
     };
     let mut merged_atoms = apply_phrase_matches(&attributed);
+    if let Some(adverbial) = ctx.naide_adverbial.filter(|adverbial| adverbial.zuni) {
+        // The linked に belongs to the omission marker, not a place phrase.
+        merged_atoms.retain(|atom| atom.doc_tok_idx != Some(adverbial.connective));
+    }
     if target == TargetVariant::ZhHant {
         bind_tidied_tabletops(&mut merged_atoms);
         localize_sufficiency(&mut merged_atoms);
@@ -12868,6 +12889,13 @@ fn translate_clause_bunsetsus(
         }
         _ => None,
     };
+    let departure = target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && verb_core == "出去"
+        && completed_departure(source, ctx.source_chars).is_some();
+    if departure {
+        verb_core = "離開".to_owned();
+    }
     if meeting_partner.is_some() {
         passive_agent_needed = false;
     }
@@ -14315,14 +14343,16 @@ fn translate_clause_bunsetsus(
     parts.extend(result_value);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
-    let trailing_change_le =
-        if (is_change_of_state_you || purpose.is_some() || !route_endpoints.is_empty())
-            && post_verb_mods.last().is_some_and(|m| m == "了")
-        {
-            post_verb_mods.pop()
-        } else {
-            None
-        };
+    let trailing_change_le = if (departure
+        || is_change_of_state_you
+        || purpose.is_some()
+        || !route_endpoints.is_empty())
+        && post_verb_mods.last().is_some_and(|m| m == "了")
+    {
+        post_verb_mods.pop()
+    } else {
+        None
+    };
     // A temporal continuation endpoint already bounds the activity. Omit the
     // ordinary perfective marker rather than break up the activity and endpoint.
     if !temporal_made_tails.is_empty() {
@@ -19214,6 +19244,45 @@ mod naide_adverbial_tests {
         )
         .expect("translate Japanese without a model")
         .target_text
+    }
+
+    #[test]
+    fn zuni_retains_the_omitted_action_and_the_departure_source() {
+        let breakfast = faberline_nlp::lexicon::ja::lookup_ja_gloss(
+            "朝ご飯",
+            Some(faberline_nlp::doc::Upos::Noun),
+        );
+        let expected = match breakfast {
+            None => "早上沒有吃飯就離開家了。",
+            Some("早餐") => "沒有吃早餐就離開家了。",
+            Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+        };
+        assert_eq!(translate("朝ご飯を食べずに家を出た。"), expected);
+    }
+
+    #[test]
+    fn zuni_with_sumu_does_not_denote_a_departure() {
+        let text = "資料を先に共有しておけば、会議では細部の確認に時間をかけずに済む。";
+        let doc = faberline_nlp::doc::analyze_document(
+            text,
+            &faberline_nlp::doc::Options {
+                enrich_morphology: true,
+                cpu_syntax: true,
+                ..Default::default()
+            },
+        );
+        let chars: Vec<_> = text.chars().collect();
+        let tokens: Vec<_> = doc.tokens.iter().collect();
+        let atoms = super::normalized_sentence_atoms(
+            0,
+            &chars,
+            &doc,
+            &tokens,
+            &crate::lock::SpanLockTable::default(),
+        );
+        assert!((1..atoms.len()).all(|split| {
+            super::naide_adverbial(&atoms[..split], &atoms[split..], None, &chars).is_none()
+        }));
     }
 
     #[test]
@@ -25015,27 +25084,83 @@ fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {
 }
 
 fn is_existing_spatial_head(a: &Atom) -> bool {
-    !a.is_locked
-        && matches!(
-            a.surface.as_str(),
-            "部屋"
-                | "学校"
-                | "図書館"
-                | "公園"
-                | "駅"
-                | "東京駅"
-                | "東京"
-                | "家"
-                | "会社"
-                | "病院"
-                | "ここ"
-                | "そこ"
-                | "あそこ"
-                | "ベッド"
-                | "椅子"
-                | "机"
-                | "風呂"
-        )
+    !a.is_locked && is_existing_spatial_label(&a.surface)
+}
+
+fn is_existing_spatial_label(surface: &str) -> bool {
+    matches!(
+        surface,
+        "部屋"
+            | "学校"
+            | "図書館"
+            | "公園"
+            | "駅"
+            | "東京駅"
+            | "東京"
+            | "家"
+            | "会社"
+            | "病院"
+            | "ここ"
+            | "そこ"
+            | "あそこ"
+            | "ベッド"
+            | "椅子"
+            | "机"
+            | "風呂"
+    )
+}
+
+fn is_departure_source(place: &Atom, chars: &[char]) -> bool {
+    let is_spatial = |surface: &str| {
+        is_existing_spatial_label(surface) || spatial_route_marker(surface).is_some()
+    };
+    if place.is_locked {
+        return place.lemma.as_deref() == Some(LOCKED_PLACE_ATOM)
+            && chars
+                .get(place.span.start_char..place.span.end_char)
+                .is_some_and(|raw| is_spatial(&raw.iter().collect::<String>()));
+    }
+    place.upos == Some(Upos::Noun) && is_spatial(&place.surface)
+}
+
+/// Find a completed physical departure with one source marked by を.
+fn completed_departure(source: &[Atom], chars: &[char]) -> Option<usize> {
+    let mut roots = source.iter().filter(|atom| atom.deprel == "root");
+    let verb = roots.next()?;
+    if roots.next().is_some()
+        || verb.is_locked
+        || verb.upos != Some(Upos::Verb)
+        || verb.lemma.as_deref() != Some("出る")
+    {
+        return None;
+    }
+    let governor = verb.doc_tok_idx?;
+    let mut endings = source.iter().filter(|atom| {
+        atom.head == Some(governor) && atom.deprel == "aux" && atom.upos == Some(Upos::Aux)
+    });
+    let past = endings.next()?;
+    if endings.next().is_some() || past.is_locked || past.surface != "た" {
+        return None;
+    }
+    let mut objects = source
+        .iter()
+        .filter(|atom| atom.head == Some(governor) && atom.deprel == "obj");
+    let place = objects.next()?;
+    if objects.next().is_some() || !is_departure_source(place, chars) {
+        return None;
+    }
+    let place_id = place.doc_tok_idx?;
+    source
+        .iter()
+        .any(|particle| {
+            !particle.is_locked
+                && particle.surface == "を"
+                && particle.upos == Some(Upos::Adp)
+                && particle.deprel == "case"
+                && particle.head == Some(place_id)
+                && place.span.end_char == particle.span.start_char
+        })
+        .then_some(governor)
 }
 
 // Intransitive manner verbs can take a traversed space with を. Verbs such
@@ -25908,7 +26033,8 @@ fn synthesize_predicate_complex(
                 && pair[0].span.end_char == pair[1].span.start_char
         })
     });
-    let has_neg = !has_neg_past
+    let has_neg = subordinate_naide_past.is_none()
+        && !has_neg_past
         && !has_naide
         && !has_naide_kudasai
         && !has_obligation

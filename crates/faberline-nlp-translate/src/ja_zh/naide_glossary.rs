@@ -19,26 +19,23 @@ pub(crate) fn may_restore_glossary_syntax(
     if text.matches('は').nth(1).is_some() && polarity_contrast::may_restore_topics(chars, locks) {
         return true;
     }
-    text.contains("ないで")
+    let naide = text.contains("ないで");
+    let zuni = text.contains("ずに");
+    (naide || zuni)
         && locks.locks.iter().any(|lock| {
             let last = chars.get(lock.source_span.end_char.saturating_sub(1));
             lock.mandatory
-                && matches!(
-                    (&lock.origin, last),
-                    (
-                        LockOrigin::Glossary {
-                            kind: GlossaryKind::Object,
-                            ..
-                        },
-                        Some('を')
-                    ) | (
-                        LockOrigin::Glossary {
-                            kind: GlossaryKind::Place,
-                            ..
-                        },
-                        Some('に' | 'へ')
-                    )
-                )
+                && match lock.origin {
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Place,
+                        ..
+                    } => zuni || (naide && matches!(last, Some('に' | 'へ'))),
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Object,
+                        ..
+                    } => naide && last == Some(&'を'),
+                    _ => false,
+                }
         })
 }
 
@@ -52,13 +49,14 @@ pub(crate) fn glossary_render_locks(
     locks: &SpanLockTable,
 ) -> Option<SpanLockTable> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
-    omitted_render_locks(sentence, doc, locks, &atoms)
+    omitted_render_locks(sentence, doc, chars, locks, &atoms)
         .or_else(|| polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms))
 }
 
 fn omitted_render_locks(
     sentence: usize,
     doc: &Document,
+    chars: &[char],
     locks: &SpanLockTable,
     atoms: &[Atom],
 ) -> Option<SpanLockTable> {
@@ -69,9 +67,10 @@ fn omitted_render_locks(
         } else {
             remaining
         };
-        naide_adverbial(&atoms[..end], following, None)
+        naide_adverbial(&atoms[..end], following, None, chars)
     });
-    let omitted_action = omitted.next()?.action;
+    let omission = omitted.next()?;
+    let omitted_action = omission.action;
     if omitted.next().is_some() {
         return None;
     }
@@ -153,6 +152,8 @@ fn omitted_render_locks(
                     return None;
                 }
             }
+            (GlossaryKind::Place, "を", "obj")
+                if omission.zuni && noun.head == Some(later) && first == head_index => {}
             _ => return None,
         }
         lock.source_span = Span {

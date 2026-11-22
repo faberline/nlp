@@ -4870,6 +4870,7 @@ struct NaideAdverbial {
     negative: usize,
     connective: usize,
     past: bool,
+    zuni: bool,
     join_unstated_subject: bool,
 }
 
@@ -4878,10 +4879,11 @@ impl NaideAdverbial {
         [self.action, self.negative, self.connective]
             .into_iter()
             .all(|index| {
-                predicate
-                    .atoms
-                    .iter()
-                    .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(index))
+                (self.zuni && index == self.connective)
+                    || predicate
+                        .atoms
+                        .iter()
+                        .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(index))
             })
     }
 }
@@ -4896,18 +4898,25 @@ fn naide_adverbial(
     };
     let action_id = action.doc_tok_idx?;
     let governor = action.head?;
+    let naide = negative.surface == "ない"
+        && connective.surface == "で"
+        && connective.upos == Some(Upos::Sconj)
+        && connective.deprel == "mark"
+        && action.deprel == "advcl";
+    // The parser treats the particle in ずに as case on the omitted action.
+    let zuni = negative.surface == "ず"
+        && connective.surface == "に"
+        && connective.upos == Some(Upos::Adp)
+        && connective.deprel == "case"
+        && action.deprel == "obl";
     if action.is_locked
         || negative.is_locked
         || connective.is_locked
         || action.upos != Some(Upos::Verb)
-        || action.deprel != "advcl"
-        || negative.surface != "ない"
+        || !(naide || zuni)
         || negative.upos != Some(Upos::Aux)
         || negative.deprel != "aux"
         || negative.head != Some(action_id)
-        || connective.surface != "で"
-        || connective.upos != Some(Upos::Sconj)
-        || connective.deprel != "mark"
         || connective.head != Some(action_id)
         || action.span.end_char != negative.span.start_char
         || negative.span.end_char != connective.span.start_char
@@ -4940,6 +4949,7 @@ fn naide_adverbial(
             )
     };
     if main.is_locked
+        || (zuni && completed_departure(clause) != Some(governor))
         || clause.first().is_some_and(|first| {
             matches!(first.surface.as_str(), "と" | "って")
                 || (first.doc_tok_idx == Some(governor)
@@ -5000,6 +5010,7 @@ fn naide_adverbial(
         negative: negative.doc_tok_idx?,
         connective: connective.doc_tok_idx?,
         past,
+        zuni,
         join_unstated_subject,
     })
 }
@@ -5358,7 +5369,7 @@ fn split_ja_atoms(
         }
 
         if split_naide
-            && a.surface == "で"
+            && matches!(a.surface.as_str(), "で" | "に")
             && atoms.get(i + 1).is_some_and(|next| !is_punct_atom(next))
             && naide_adverbial(&current, &atoms[i + 1..], None).is_some()
         {
@@ -7270,6 +7281,10 @@ fn translate_clause_atoms(
         std::borrow::Cow::Borrowed(phrases)
     };
     let mut merged_atoms = apply_phrase_matches(&attributed);
+    if let Some(adverbial) = ctx.naide_adverbial.filter(|adverbial| adverbial.zuni) {
+        // The linked に belongs to the omission marker, not a place phrase.
+        merged_atoms.retain(|atom| atom.doc_tok_idx != Some(adverbial.connective));
+    }
     if target == TargetVariant::ZhHant {
         bind_tidied_tabletops(&mut merged_atoms);
         localize_sufficiency(&mut merged_atoms);
@@ -13110,6 +13125,14 @@ fn translate_clause_bunsetsus(
         }
         _ => None,
     };
+    let departure = target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && stem_render.is_none()
+        && verb_core == "出去"
+        && completed_departure(source).is_some();
+    if departure {
+        verb_core = "離開".to_owned();
+    }
     if meeting_partner.is_some() {
         passive_agent_needed = false;
     }
@@ -14659,14 +14682,16 @@ fn translate_clause_bunsetsus(
     parts.extend(result_value);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
-    let trailing_change_le =
-        if (is_change_of_state_you || purpose.is_some() || !route_endpoints.is_empty())
-            && post_verb_mods.last().is_some_and(|m| m == "了")
-        {
-            post_verb_mods.pop()
-        } else {
-            None
-        };
+    let trailing_change_le = if (departure
+        || is_change_of_state_you
+        || purpose.is_some()
+        || !route_endpoints.is_empty())
+        && post_verb_mods.last().is_some_and(|m| m == "了")
+    {
+        post_verb_mods.pop()
+    } else {
+        None
+    };
     // A temporal continuation endpoint already bounds the activity. Omit the
     // ordinary perfective marker rather than break up the activity and endpoint.
     if !temporal_made_tails.is_empty() {
@@ -19802,6 +19827,45 @@ mod naide_adverbial_tests {
         )
         .expect("translate Japanese without a model")
         .target_text
+    }
+
+    #[test]
+    fn zuni_retains_the_omitted_action_and_the_departure_source() {
+        let breakfast = faberline_nlp::lexicon::ja::lookup_ja_gloss(
+            "朝ご飯",
+            Some(faberline_nlp::doc::Upos::Noun),
+        );
+        let expected = match breakfast {
+            None => "早上沒有吃飯就離開家了。",
+            Some("早餐") => "沒有吃早餐就離開家了。",
+            Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+        };
+        assert_eq!(translate("朝ご飯を食べずに家を出た。"), expected);
+    }
+
+    #[test]
+    fn zuni_with_sumu_does_not_denote_a_departure() {
+        let text = "資料を先に共有しておけば、会議では細部の確認に時間をかけずに済む。";
+        let doc = faberline_nlp::doc::analyze_document(
+            text,
+            &faberline_nlp::doc::Options {
+                enrich_morphology: true,
+                cpu_syntax: true,
+                ..Default::default()
+            },
+        );
+        let chars: Vec<_> = text.chars().collect();
+        let tokens: Vec<_> = doc.tokens.iter().collect();
+        let atoms = super::normalized_sentence_atoms(
+            0,
+            &chars,
+            &doc,
+            &tokens,
+            &crate::lock::SpanLockTable::default(),
+        );
+        assert!((1..atoms.len()).all(|split| {
+            super::naide_adverbial(&atoms[..split], &atoms[split..], None).is_none()
+        }));
     }
 
     #[test]
@@ -25752,6 +25816,50 @@ fn is_existing_spatial_head(a: &Atom) -> bool {
         )
 }
 
+/// Find a completed physical departure with one source marked by を.
+fn completed_departure(source: &[Atom]) -> Option<usize> {
+    let mut roots = source.iter().filter(|atom| atom.deprel == "root");
+    let verb = roots.next()?;
+    if roots.next().is_some()
+        || verb.is_locked
+        || verb.upos != Some(Upos::Verb)
+        || verb.lemma.as_deref() != Some("出る")
+    {
+        return None;
+    }
+    let governor = verb.doc_tok_idx?;
+    let mut endings = source.iter().filter(|atom| {
+        atom.head == Some(governor) && atom.deprel == "aux" && atom.upos == Some(Upos::Aux)
+    });
+    let past = endings.next()?;
+    if endings.next().is_some() || past.is_locked || past.surface != "た" {
+        return None;
+    }
+    let mut objects = source
+        .iter()
+        .filter(|atom| atom.head == Some(governor) && atom.deprel == "obj");
+    let place = objects.next()?;
+    if objects.next().is_some()
+        || place.is_locked
+        || place.upos != Some(Upos::Noun)
+        || !(is_existing_spatial_head(place) || spatial_route_marker(&place.surface).is_some())
+    {
+        return None;
+    }
+    let place_id = place.doc_tok_idx?;
+    source
+        .iter()
+        .any(|particle| {
+            !particle.is_locked
+                && particle.surface == "を"
+                && particle.upos == Some(Upos::Adp)
+                && particle.deprel == "case"
+                && particle.head == Some(place_id)
+                && place.span.end_char == particle.span.start_char
+        })
+        .then_some(governor)
+}
+
 // Intransitive manner verbs can take a traversed space with を. Verbs such
 // as 渡る and 通る already express that relation in their Chinese gloss.
 #[derive(Clone, Copy)]
@@ -26677,7 +26785,8 @@ fn synthesize_predicate_complex(
                 && pair[0].span.end_char == pair[1].span.start_char
         })
     });
-    let has_neg = !has_neg_past
+    let has_neg = subordinate_naide_past.is_none()
+        && !has_neg_past
         && !has_naide
         && !has_naide_kudasai
         && !has_obligation

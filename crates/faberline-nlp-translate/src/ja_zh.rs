@@ -23,6 +23,7 @@ mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
 mod payment_potential;
+mod prohibition_venue;
 mod reception;
 mod return_endpoint;
 
@@ -969,6 +970,7 @@ fn translate_ja_sentence_with_stems(
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
                     verb_stems,
+                    locks: &lock_table.locks,
                     following: &segments[seg_idx + 1..],
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
@@ -5779,6 +5781,7 @@ struct ClauseDiscourseCtx<'a> {
     contrasts_recurrence: bool,
     source_chars: &'a [char],
     verb_stems: &'a [&'a LockedSpan],
+    locks: &'a [LockedSpan],
     following: &'a [Segment],
     preceding_activity: &'a [Atom],
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
@@ -11588,6 +11591,7 @@ fn translate_clause_bunsetsus(
     target: TargetVariant,
 ) -> (String, bool) {
     let restored_tobacco = if target == TargetVariant::ZhHant && !ctx.inside_quote {
+        prohibition_venue::restore(&mut bunsetsus, source, doc, ctx);
         direct_smoking::restore_locked_object(&mut bunsetsus, source, doc, ctx.source_chars)
     } else {
         None
@@ -18244,37 +18248,38 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
 }
 
 fn is_place_location_bunsetsu(atoms: &[Atom]) -> bool {
-    atoms.iter().any(|a| {
-        if is_building_floor(a) {
-            return true;
-        }
-        matches!(
-            a.surface.as_str(),
-            "部屋"
-                | "学校"
-                | "図書館"
-                | "公園"
-                | "駅"
-                | "東京駅"
-                | "東京"
-                | "家"
-                | "会社"
-                | "病院"
-                | "中"
-                | "上"
-                | "下"
-                | "前"
-                | "後"
-                | "奥"
-                | "ここ"
-                | "そこ"
-                | "あそこ"
-                | "ベッド"
-                | "椅子"
-                | "机"
-                | "風呂"
-        )
-    })
+    atoms
+        .iter()
+        .any(|atom| is_building_floor(atom) || is_place_location_surface(&atom.surface))
+}
+
+fn is_place_location_surface(surface: &str) -> bool {
+    matches!(
+        surface,
+        "部屋"
+            | "学校"
+            | "図書館"
+            | "公園"
+            | "駅"
+            | "東京駅"
+            | "東京"
+            | "家"
+            | "会社"
+            | "病院"
+            | "中"
+            | "上"
+            | "下"
+            | "前"
+            | "後"
+            | "奥"
+            | "ここ"
+            | "そこ"
+            | "あそこ"
+            | "ベッド"
+            | "椅子"
+            | "机"
+            | "風呂"
+    )
 }
 
 fn is_instrument_bunsetsu(atoms: &[Atom]) -> bool {

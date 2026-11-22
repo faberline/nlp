@@ -107,14 +107,14 @@ impl RecoveredTrip {
     }
 }
 
-/// Use source evidence for the meal-to-trip link before removing a whole verb lock from the render parse.
-pub(super) fn whole_trip_lock(
+/// Keep the verified meal-to-trip link when a glossary covers either predicate.
+pub(super) fn restore_trip_locks(
     sentence: usize,
     atoms: &[Atom],
     doc: &Document,
     chars: &[char],
     locks: &SpanLockTable,
-) -> Option<usize> {
+) -> Option<(SpanLockTable, Option<usize>)> {
     let span = doc.segmentation.sentences.get(sentence)?.span;
     let segments = split_ja_atoms(atoms, doc, span, Some(chars));
     let [
@@ -132,27 +132,38 @@ pub(super) fn whole_trip_lock(
         return None;
     }
     let before = prior_meal(meal, trip, doc, chars)?;
-    let [.., meal_noun, object_case, eat, _] = meal.as_slice() else {
+    let [.., meal_noun, object_case, eat, connector] = meal.as_slice() else {
         return None;
     };
     let [place, direction, go, ..] = trip.as_slice() else {
         return None;
     };
-    let verb_span = Span {
+    let trip_span = Span {
         start_char: go.span.start_char,
         end_char: trip.last()?.span.end_char,
     };
-    let verb = locks.locks.iter().find(|lock| {
-        lock.mandatory
-            && lock.source_span == verb_span
-            && matches!(
-                lock.origin,
-                LockOrigin::Glossary {
-                    kind: GlossaryKind::DomainTerm,
-                    ..
-                }
-            )
-    })?;
+    let meal_span = Span {
+        start_char: eat.span.start_char,
+        end_char: connector.span.end_char,
+    };
+    let domain_lock_at = |span| {
+        locks.locks.iter().find(|lock| {
+            lock.mandatory
+                && lock.source_span == span
+                && matches!(
+                    lock.origin,
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::DomainTerm,
+                        ..
+                    }
+                )
+        })
+    };
+    let whole_trip = domain_lock_at(trip_span);
+    let whole_meal = domain_lock_at(meal_span);
+    if whole_trip.is_none() && whole_meal.is_none() {
+        return None;
+    }
     if !locks.locks.iter().all(|lock| {
         if !lock.mandatory {
             return false;
@@ -185,8 +196,10 @@ pub(super) fn whole_trip_lock(
                 kind: GlossaryKind::DomainTerm,
                 ..
             } => {
-                lock.index == verb.index
-                    || (span == eat.span && crate::verb_glossary::is_stem_lock(lock, doc, sentence))
+                whole_trip.is_some_and(|verb| lock.index == verb.index)
+                    || whole_meal.is_some_and(|verb| lock.index == verb.index)
+                    || ([eat.span, go.span].contains(&span)
+                        && crate::verb_glossary::is_stem_lock(lock, doc, sentence))
             }
             _ => false,
         }
@@ -195,7 +208,17 @@ pub(super) fn whole_trip_lock(
     }
     let groups = group_into_bunsetsus(trip, doc, sentence);
     finished_go::resolve(&groups, trip, doc, chars, Some(before))?;
-    Some(verb.index)
+    let mut render = locks.clone();
+    if let Some(meal) = whole_meal {
+        // Preserve the connector for rendering. The original lock retains
+        // the full caller match and replacement.
+        render
+            .locks
+            .iter_mut()
+            .find(|lock| lock.index == meal.index)?
+            .source_span = eat.span;
+    }
+    Some((render, whole_trip.map(|verb| verb.index)))
 }
 
 pub(super) fn recover(
@@ -517,6 +540,70 @@ mod tests {
     }
 
     #[test]
+    fn a_whole_meal_lock_keeps_the_completed_meal_and_destination() {
+        let source = "朝ご飯を食べて、学校へ行きました。";
+        for (trip, expected) in [
+            (None, "享用了早餐後，去了新校舍。"),
+            (Some(("行き", "前往")), "享用了早餐後，前往了新校舍。"),
+            (
+                Some(("行きました", "已前往")),
+                "享用了早餐後，已前往新校舍。",
+            ),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.objects.push(entry("朝ご飯を", "早餐"));
+            glossary.places.push(entry("学校へ", "新校舍"));
+            glossary.domain_terms.push(entry("食べて", "享用"));
+            if let Some((term, replacement)) = trip {
+                glossary.domain_terms.push(entry(term, replacement));
+            }
+            let output = translate(source, &glossary);
+            assert_eq!(output.target_text, expected);
+            assert_eq!(output.glossary_hits.len(), 3 + usize::from(trip.is_some()));
+            let meal = output
+                .glossary_hits
+                .iter()
+                .find(|hit| hit.canonical == "食べて")
+                .unwrap();
+            assert_eq!(meal.source_span.start_char..meal.source_span.end_char, 4..7);
+            assert_eq!(meal.target_span.start_char..meal.target_span.end_char, 0..2);
+            let [meal_clause, trip_clause] = output.clause_alignments.as_slice() else {
+                panic!("expected separate meal and trip clauses");
+            };
+            assert_eq!(
+                meal_clause.target_span.end_char,
+                trip_clause.target_span.start_char
+            );
+        }
+    }
+
+    #[test]
+    fn a_whole_meal_lock_can_supply_its_own_aspect_or_connector() {
+        let source = "朝ご飯を食べて、学校へ行きました。";
+        for (replacement, expected, target_range) in [
+            ("吃了", "吃了早餐後，去了新校舍。", 0..2),
+            ("吃完後", "早餐吃完後，去了新校舍。", 2..5),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.objects.push(entry("朝ご飯を", "早餐"));
+            glossary.places.push(entry("学校へ", "新校舍"));
+            glossary.domain_terms.push(entry("食べて", replacement));
+            let output = translate(source, &glossary);
+            assert_eq!(output.target_text, expected);
+            let meal = output
+                .glossary_hits
+                .iter()
+                .find(|hit| hit.canonical == "食べて")
+                .unwrap();
+            assert_eq!(meal.source_span.start_char..meal.source_span.end_char, 4..7);
+            assert_eq!(
+                meal.target_span.start_char..meal.target_span.end_char,
+                target_range
+            );
+        }
+    }
+
+    #[test]
     fn a_whole_trip_lock_in_a_question_does_not_assert_a_completed_meal() {
         let source = "朝ご飯を食べて、学校へ行きましたか。";
         let mut glossary = TranslationGlossary::new();
@@ -525,6 +612,12 @@ mod tests {
         assert!(!result.target_text.contains('後'));
         assert_eq!(result.target_text.matches("已前往").count(), 1);
         assert_eq!(result.glossary_hits.len(), 1);
+        glossary.domain_terms.push(entry("食べて", "享用"));
+        let result = translate(source, &glossary);
+        assert!(!result.target_text.contains('後'));
+        assert_eq!(result.target_text.matches("已前往").count(), 1);
+        assert_eq!(result.target_text.matches("享用").count(), 1);
+        assert_eq!(result.glossary_hits.len(), 2);
     }
 
     #[test]

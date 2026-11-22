@@ -16,6 +16,8 @@ mod daytime;
 mod finished_go;
 mod finite_adjective;
 mod handover;
+mod naide_glossary;
+pub(crate) use naide_glossary::{glossary_render_locks, may_restore_glossary_syntax};
 mod homework_desire;
 mod homework_relative;
 mod meeting_voice;

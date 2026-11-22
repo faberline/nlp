@@ -11305,6 +11305,11 @@ fn translate_clause_bunsetsus(
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> (String, bool) {
+    let restored_tobacco = if target == TargetVariant::ZhHant && !ctx.inside_quote {
+        direct_smoking::restore_locked_object(&mut bunsetsus, source, doc, ctx.source_chars)
+    } else {
+        None
+    };
     let focused_days = if target == TargetVariant::ZhHant {
         calendar::take_focused_days(&mut bunsetsus, source)
     } else {
@@ -12500,8 +12505,8 @@ fn translate_clause_bunsetsus(
     if target == TargetVariant::ZhHant
         && verb_core == "吮吸"
         && let [object] = objs.as_mut_slice()
-        && let Some(tobacco) =
-            direct_smoking::tobacco_object(source, &predicates, doc, ctx.source_chars)
+        && let Some(tobacco) = restored_tobacco
+            .or_else(|| direct_smoking::tobacco_object(source, &predicates, doc, ctx.source_chars))
     {
         if !tobacco.is_locked
             && let Some(modifiers) = object.strip_suffix(&tobacco.surface)

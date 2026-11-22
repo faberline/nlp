@@ -318,7 +318,8 @@ pub(super) fn restore_topics(
                 place.span.end_char
             }
             GlossaryKind::DomainTerm
-                if span == go.span && crate::verb_glossary::is_stem_lock(lock, doc, sentence) =>
+                if (span == action.span || span == go.span)
+                    && crate::verb_glossary::is_stem_lock(lock, doc, sentence) =>
             {
                 span.end_char
             }
@@ -433,6 +434,47 @@ mod tests {
                 .target_text
                 .contains("有吃")
         );
+    }
+
+    #[test]
+    fn paired_glossary_topics_preserve_both_verified_verb_stems() {
+        let source = "朝ご飯は食べて、学校には行きませんでした。";
+        let entry = |canonical: &str, alias: &str| GlossaryEntry {
+            canonical: canonical.into(),
+            surfaces: vec![canonical.into()],
+            targets: [(TargetVariant::ZhHant, alias.into())].into(),
+            ..GlossaryEntry::default()
+        };
+        let mut glossary = TranslationGlossary::new();
+        glossary.objects.push(entry("朝ご飯は", "早餐"));
+        glossary.places.push(entry("学校には", "新校舍"));
+        glossary.domain_terms.push(entry("食べ", "享用"));
+        glossary.domain_terms.push(entry("行き", "前往"));
+        let result = translate(source, &glossary);
+        assert_eq!(result.target_text, "早餐有享用，但沒有前往新校舍。");
+        let expected = [
+            ("朝ご飯は", "早餐"),
+            ("食べ", "享用"),
+            ("学校には", "新校舍"),
+            ("行き", "前往"),
+        ];
+        assert_eq!(result.glossary_hits.len(), expected.len());
+        let text_at = |text: &str, span: faberline_nlp::Span| -> String {
+            text.chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect()
+        };
+        for (hit, (term, alias)) in result.glossary_hits.iter().zip(expected) {
+            assert_eq!(hit.canonical, term);
+            assert_eq!(text_at(source, hit.source_span), term);
+            assert_eq!(text_at(&result.target_text, hit.target_span), alias);
+        }
+
+        glossary.domain_terms[0] = entry("食べて", "享用過");
+        let complete = translate(source, &glossary);
+        assert_eq!(complete.target_text.matches("享用過").count(), 1);
+        assert!(!complete.target_text.contains("有享用過"));
     }
 
     #[test]

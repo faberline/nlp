@@ -159,18 +159,23 @@ pub(crate) fn glossary_render_locks(
             )
         })
         .or_else(|| {
-            let following = outward_look::gaze_predicate(doc, &atoms)
-                .and_then(|predicate| simple_past_span(predicate, predicate.first()?.doc_tok_idx?))
-                .and_then(|span| whole_domain_lock(locks, span));
-            outward_look::restore_case(doc, chars, locks, &atoms, following).map(|render| {
-                (
-                    render,
-                    WholeVerbLocks {
-                        following,
-                        omitted: None,
-                    },
-                )
-            })
+            let past_gaze = outward_look::gaze_predicate(doc, &atoms).and_then(|predicate| {
+                let head = predicate.first()?.doc_tok_idx?;
+                Some((head, simple_past_span(predicate, head)?))
+            });
+            let following = past_gaze.and_then(|(_, span)| whole_domain_lock(locks, span));
+            let gaze_head = past_gaze.map(|(head, _)| head);
+            outward_look::restore_case(doc, chars, locks, &atoms, gaze_head, following).map(
+                |render| {
+                    (
+                        render,
+                        WholeVerbLocks {
+                            following,
+                            omitted: None,
+                        },
+                    )
+                },
+            )
         })
 }
 

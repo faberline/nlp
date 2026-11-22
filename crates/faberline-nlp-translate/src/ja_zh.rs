@@ -23,7 +23,7 @@ mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
 mod payment_potential;
-mod prohibition_venue;
+mod polite_prohibition;
 mod reception;
 mod return_endpoint;
 
@@ -11591,7 +11591,7 @@ fn translate_clause_bunsetsus(
     target: TargetVariant,
 ) -> (String, bool) {
     let restored_tobacco = if target == TargetVariant::ZhHant && !ctx.inside_quote {
-        prohibition_venue::restore(&mut bunsetsus, source, doc, ctx);
+        polite_prohibition::restore_argument_cases(&mut bunsetsus, source, doc, ctx);
         direct_smoking::restore_locked_object(&mut bunsetsus, source, doc, ctx.source_chars)
     } else {
         None

@@ -61,8 +61,17 @@ pub(crate) fn structural_document(
     doc: &Document,
     glossary: &TranslationGlossary,
 ) -> Option<Document> {
-    if !doc.options.enrich_morphology || !doc.options.cpu_syntax || glossary.domain_terms.is_empty()
-    {
+    if !doc.options.enrich_morphology || !doc.options.cpu_syntax {
+        return None;
+    }
+    let homework = "宿題を";
+    let homework_hint = text.contains(homework)
+        && doc.options.lexicon.iter().any(|hint| hint == homework)
+        && !doc.options.names.iter().any(|hint| hint == homework)
+        && glossary.objects.iter().any(|entry| {
+            entry.canonical == homework || entry.surfaces.iter().any(|term| term == homework)
+        });
+    if glossary.domain_terms.is_empty() && !homework_hint {
         return None;
     }
     // The compiled glossary can resolve sibling variants and source-surface fallbacks.
@@ -91,14 +100,14 @@ pub(crate) fn structural_document(
                 && text.contains(*term)
         })
         .collect();
-    if candidates.is_empty() {
+    if candidates.is_empty() && !homework_hint {
         return None;
     }
 
     let mut options = doc.options.clone();
     options
         .lexicon
-        .retain(|word| !candidates.contains(word.as_str()));
+        .retain(|word| !(candidates.contains(word.as_str()) || homework_hint && word == homework));
     let plain = analyze_document(text, &options);
     let matched: HashSet<_> = plain
         .tokens
@@ -121,7 +130,7 @@ pub(crate) fn structural_document(
                 && occurrences.all(|(start, _)| known(start))
         })
         .collect();
-    if eligible.is_empty() {
+    if eligible.is_empty() && !homework_hint {
         return None;
     }
     if candidates == eligible {
@@ -130,7 +139,7 @@ pub(crate) fn structural_document(
     let mut options = doc.options.clone();
     options
         .lexicon
-        .retain(|word| !eligible.contains(word.as_str()));
+        .retain(|word| !(eligible.contains(word.as_str()) || homework_hint && word == homework));
     Some(analyze_document(text, &options))
 }
 

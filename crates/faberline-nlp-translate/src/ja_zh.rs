@@ -221,7 +221,7 @@ pub(crate) fn translate_ja_sentence(
     sentence_idx: usize,
     chars: &[char],
     doc: &Document,
-    verb_grammar: Option<&Document>,
+    glossary_grammar: Option<&Document>,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
     conditioning: &SentenceConditioning,
@@ -236,7 +236,7 @@ pub(crate) fn translate_ja_sentence(
         && direct_quote.is_none()
         && written_form_continuation.is_none()
     {
-        let structural = verb_grammar.filter(|analysis| {
+        let structural = glossary_grammar.filter(|analysis| {
             analysis
                 .segmentation
                 .sentences
@@ -252,11 +252,22 @@ pub(crate) fn translate_ja_sentence(
             .iter()
             .filter(|lock| crate::verb_glossary::is_stem_lock(lock, grammar, sentence_idx))
             .collect();
-        if !stems.is_empty() {
+        let homework: Vec<_> = lock_table
+            .locks
+            .iter()
+            .filter(|lock| locked_homework_with_case(lock, grammar, sentence_idx, chars))
+            .collect();
+        if !stems.is_empty() || !homework.is_empty() {
             let mut grammar_locks = lock_table.clone();
             grammar_locks
                 .locks
                 .retain(|lock| !stems.iter().any(|stem| stem.index == lock.index));
+            // The original table restores the full glossary hit after rendering.
+            for lock in &mut grammar_locks.locks {
+                if homework.iter().any(|object| object.index == lock.index) {
+                    lock.source_span.end_char -= 1;
+                }
+            }
             let grammar_tokens;
             let tokens = if structural.is_some() {
                 grammar_tokens = grammar
@@ -287,6 +298,7 @@ pub(crate) fn translate_ja_sentence(
             );
             if stems
                 .iter()
+                .chain(&homework)
                 .all(|lock| result.0.matches(&lock.placeholder).count() == 1)
             {
                 *dates = trial_dates;
@@ -310,6 +322,63 @@ pub(crate) fn translate_ja_sentence(
         prior_letter_distribution,
         honorifics,
     )
+}
+
+fn locked_homework_with_case(
+    lock: &LockedSpan,
+    grammar: &Document,
+    sentence_idx: usize,
+    chars: &[char],
+) -> bool {
+    if !lock.mandatory
+        || !matches!(
+            lock.origin,
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Object,
+                ..
+            }
+        )
+        || chars.get(lock.source_span.start_char..lock.source_span.end_char)
+            != Some(&['宿', '題', 'を'])
+    {
+        return false;
+    }
+    let index = grammar
+        .tokens
+        .partition_point(|token| token.span.start_char < lock.source_span.start_char);
+    let Some([noun, particle]) = grammar.tokens.get(index..index + 2) else {
+        return false;
+    };
+    let Some([object, case]) = grammar.syntax.get(index..index + 2) else {
+        return false;
+    };
+    let Some(head) = object.head else {
+        return false;
+    };
+    noun.sentence == sentence_idx
+        && particle.sentence == sentence_idx
+        && noun.upos == Some(Upos::Noun)
+        && particle.upos == Some(Upos::Adp)
+        && noun.span.start_char == lock.source_span.start_char
+        && noun.span.end_char == particle.span.start_char
+        && particle.span.end_char == lock.source_span.end_char
+        && particle.span.start_char + 1 == particle.span.end_char
+        && object.token == index
+        && object.span == noun.span
+        && object.deprel == "obj"
+        && case.token == index + 1
+        && case.span == particle.span
+        && case.deprel == "case"
+        && case.head == Some(index)
+        && grammar.tokens.get(head).is_some_and(|verb| {
+            verb.sentence == sentence_idx
+                && verb.upos == Some(Upos::Verb)
+                && verb.lemma.as_deref() == Some("出す")
+        })
+        && !grammar
+            .syntax
+            .iter()
+            .any(|other| other.head == Some(head) && other.deprel == "obj" && other.token != index)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2174,7 +2243,16 @@ fn normalize_drawer_extraction(atoms: &mut [Atom], doc: &Document) {
         let after_start = index + 2;
         let clause_end = atoms[after_start..]
             .iter()
-            .position(|atom| is_punct_atom(atom) || atom.is_locked)
+            .enumerate()
+            .position(|(offset, atom)| {
+                let extraction_object = atom.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
+                    && atom.deprel == "obj"
+                    && atom.head == predicate
+                    && atoms.get(after_start + offset + 1).is_some_and(|marker| {
+                        marker.surface == "を" && dasu_case_link(atom, marker)
+                    });
+                is_punct_atom(atom) || (atom.is_locked && !extraction_object)
+            })
             .map_or(atoms.len(), |boundary| after_start + boundary);
         let after = &atoms[after_start..clause_end];
         if !after.iter().any(|atom| {
@@ -7264,15 +7342,8 @@ fn translate_clause_atoms(
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
-        && let Some(homework) = render_homework_transfer(
-            &bunsetsus,
-            body,
-            doc,
-            target,
-            None,
-            None,
-            ctx.preceding_activity,
-        )
+        && let Some(homework) =
+            render_homework_transfer(&bunsetsus, body, doc, target, None, None, Some(ctx))
     {
         return (homework, false);
     }
@@ -7601,7 +7672,80 @@ fn try_translate_homework_transfer(
     desire: Option<homework_desire::Desire<'_>>,
     relative: Option<ClassroomRole>,
 ) -> Option<String> {
-    render_homework_transfer(bunsetsus, source, doc, target, desire, relative, &[])
+    render_homework_transfer(bunsetsus, source, doc, target, desire, relative, None)
+}
+
+#[cfg(test)]
+mod homework_object_glossary_tests {
+    use crate::{
+        TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+        doc_options_for_translate, translate_document,
+    };
+    use faberline_nlp::doc::analyze_document;
+    use faberline_nlp::doc::model::Backend;
+
+    #[test]
+    fn locked_homework_keeps_submission_assignment_and_extraction_distinct() {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        for (source, expected) in [
+            ("生徒は先生に宿題を出します。", "學生把課後作業交給老師。"),
+            ("先生は生徒に宿題を出します。", "老師出課後作業給學生。"),
+            (
+                "私は机の引き出しから宿題を出します。",
+                "我從書桌的抽屜拿出課後作業。",
+            ),
+        ] {
+            let doc = analyze_document(
+                source,
+                &doc_options_for_translate(&options, &TranslationGlossary::new()),
+            );
+            for term in ["宿題", "宿題を"] {
+                let glossary: TranslationGlossary = serde_json::from_value(serde_json::json!({
+                    "schema": "nlp.translate.glossary.v1",
+                    "objects": [{
+                        "canonical": term,
+                        "surfaces": [term],
+                        "targets": {"zh-Hant": "課後作業"}
+                    }]
+                }))
+                .unwrap();
+                let translated =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                let direct = translate_document(
+                    source,
+                    &doc,
+                    #[cfg(feature = "narrative")]
+                    None,
+                    &options,
+                    &glossary,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(translated.target_text, expected, "{source}");
+                assert_eq!(direct.target_text, expected, "{source}");
+                assert_eq!(direct.glossary_hits, translated.glossary_hits);
+                let [hit] = direct.glossary_hits.as_slice() else {
+                    panic!("expected one homework glossary hit");
+                };
+                let source_start = source[..source.find(term).unwrap()].chars().count();
+                let target_start = expected[..expected.find("課後作業").unwrap()]
+                    .chars()
+                    .count();
+                assert_eq!(hit.source_span.start_char, source_start);
+                assert_eq!(
+                    hit.source_span.end_char,
+                    source_start + term.chars().count()
+                );
+                assert_eq!(hit.target_span.start_char, target_start);
+                assert_eq!(
+                    hit.target_span.end_char,
+                    target_start + "課後作業".chars().count()
+                );
+            }
+        }
+    }
 }
 
 /// A conjunctive movement verb and its classroom subject must both be linked
@@ -7676,13 +7820,23 @@ fn render_homework_transfer(
     target: TargetVariant,
     desire: Option<homework_desire::Desire<'_>>,
     relative: Option<ClassroomRole>,
-    previous: &[Atom],
+    context: Option<&ClauseDiscourseCtx<'_>>,
 ) -> Option<String> {
     // Inspect the source before nominal groups render protected atoms.
-    // Normalized dates and clocks retain their source heads. A glossary
-    // placeholder cannot supply a time or a classroom participant.
+    // A complete homework Object lock preserves the original role and renders
+    // through its placeholder, so the caller still supplies the target text.
+    let locked_homework = |atom: &Atom| {
+        atom.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
+            && atom.deprel == "obj"
+            && context.is_some_and(|ctx| {
+                ctx.source_chars
+                    .get(atom.span.start_char..atom.span.end_char)
+                    .is_some_and(|word| word == ['宿', '題'])
+            })
+    };
     if source.iter().any(|atom| {
         atom.is_locked
+            && !locked_homework(atom)
             && (atom.surface.contains("[[PH")
                 || (atom.lemma.as_deref() != Some(CLOCK_ATOM) && !calendar::is_date(atom)))
     }) {
@@ -7727,6 +7881,7 @@ fn render_homework_transfer(
     {
         return None;
     }
+    let previous = context.map_or(&[][..], |ctx| ctx.preceding_activity);
     let shared_actor = preceding_homework_actor(previous, verb)
         .filter(|_| !source.iter().any(|a| a.deprel == "nsubj" && a.head == head));
     let mut deadline = None;
@@ -7931,9 +8086,9 @@ fn render_homework_transfer(
                 adjuncts.push(render_bunsetsu_obl(bunsetsu, target, false));
             }
             ("obj", "を")
-                if noun.upos == Some(Upos::Noun)
-                    && noun.surface == "宿題"
-                    && homework.is_none() =>
+                if homework.is_none()
+                    && ((noun.upos == Some(Upos::Noun) && noun.surface == "宿題")
+                        || locked_homework(noun)) =>
             {
                 homework = Some(render_bunsetsu_np(bunsetsu, target));
             }

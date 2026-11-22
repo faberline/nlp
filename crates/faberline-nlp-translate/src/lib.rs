@@ -189,7 +189,7 @@ pub fn translate_document(
     let compiled_glossary = CompiledGlossary::compile(glossary, options.target, |frag, tgt| {
         convert_fragment_variant(frag, tgt)
     });
-    let verb_grammar = if options.target == TargetVariant::ZhHant && seq2seq.is_none() {
+    let glossary_grammar = if options.target == TargetVariant::ZhHant && seq2seq.is_none() {
         verb_glossary::structural_document(text, &chars, doc, glossary)
     } else {
         None
@@ -367,7 +367,7 @@ pub fn translate_document(
                     si,
                     &chars,
                     doc,
-                    verb_grammar.as_ref(),
+                    glossary_grammar.as_ref(),
                     narrative,
                     &tokens_by_sent[si],
                     &sent_inline_opaques,
@@ -759,7 +759,7 @@ fn translate_single_sentence(
     sentence_idx: usize,
     chars: &[char],
     doc: &Document,
-    verb_grammar: Option<&Document>,
+    glossary_grammar: Option<&Document>,
     #[cfg(feature = "narrative")] narrative: Option<&ChapterNarrative>,
     #[cfg(not(feature = "narrative"))] narrative: Option<&()>,
     sent_tokens: &[&Token],
@@ -941,7 +941,7 @@ fn translate_single_sentence(
             sentence_idx,
             chars,
             doc,
-            verb_grammar,
+            glossary_grammar,
             sent_tokens,
             &lock_table,
             &conditioning,

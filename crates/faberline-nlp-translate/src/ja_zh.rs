@@ -12937,7 +12937,7 @@ fn translate_clause_bunsetsus(
                         } else {
                             return None;
                         };
-                        Some((verb_core.clone(), lock.placeholder.as_str(), coverage))
+                        Some((verb_core.clone(), *lock, coverage))
                     })
                 }
                 _ => None,
@@ -13864,7 +13864,13 @@ fn translate_clause_bunsetsus(
             && post_verb_mods.is_empty()
             && !passive_agent_needed
     });
-    if completed_prior_meal {
+    let locked_meal_ending = verb_render
+        .as_ref()
+        .filter(|(core, _, _)| core == &verb_core)
+        .and_then(|(_, lock, _)| lock.replacement.trim_end().chars().next_back());
+    let meal_lock_has_connector =
+        completed_prior_meal && matches!(locked_meal_ending, Some('後' | '后'));
+    if completed_prior_meal && !matches!(locked_meal_ending, Some('了' | '後' | '后')) {
         post_verb_mods.push("了".to_owned());
     }
     for m in pre_verb_mods.drain(..) {
@@ -14476,7 +14482,7 @@ fn translate_clause_bunsetsus(
     if !verb_core.is_empty() {
         // Native morphology and syntax still determine clause roles.
         // A whole lock already owns the ending of its finite predicate.
-        if let Some((_, placeholder, coverage)) = verb_render.filter(|(core, _, coverage)| {
+        if let Some((_, lock, coverage)) = verb_render.filter(|(core, _, coverage)| {
             core == &verb_core
                 && !parts.iter().any(|item| item == core)
                 && match coverage {
@@ -14488,7 +14494,10 @@ fn translate_clause_bunsetsus(
             if coverage == CoveredVerb::Finite {
                 post_verb_mods.clear();
             }
-            parts.push(placeholder.to_owned());
+            if meal_lock_has_connector {
+                parts.append(&mut objs);
+            }
+            parts.push(lock.placeholder.clone());
         } else {
             parts.push(verb_core);
         }
@@ -14555,7 +14564,7 @@ fn translate_clause_bunsetsus(
     parts.extend(event_counts);
     parts.extend(counted_arrival);
     parts.extend(objs);
-    if completed_prior_meal {
+    if completed_prior_meal && !meal_lock_has_connector {
         parts.push("後".to_owned());
     }
     parts.extend(elapsed_duration);

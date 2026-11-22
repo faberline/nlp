@@ -213,6 +213,7 @@ pub(crate) fn translate_ja_sentence(
     verb_grammar: Option<&Document>,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
+    whole_predicate: Option<usize>,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -236,16 +237,19 @@ pub(crate) fn translate_ja_sentence(
                 })
         });
         let grammar = structural.unwrap_or(doc);
-        let stems: Vec<_> = lock_table
+        let verb_locks: Vec<_> = lock_table
             .locks
             .iter()
-            .filter(|lock| crate::verb_glossary::is_stem_lock(lock, grammar, sentence_idx))
+            .filter(|lock| {
+                whole_predicate == Some(lock.index)
+                    || crate::verb_glossary::is_stem_lock(lock, grammar, sentence_idx)
+            })
             .collect();
-        if !stems.is_empty() {
+        if !verb_locks.is_empty() {
             let mut grammar_locks = lock_table.clone();
             grammar_locks
                 .locks
-                .retain(|lock| !stems.iter().any(|stem| stem.index == lock.index));
+                .retain(|lock| !verb_locks.iter().any(|verb| verb.index == lock.index));
             let grammar_tokens;
             let tokens = if structural.is_some() {
                 grammar_tokens = grammar
@@ -259,13 +263,13 @@ pub(crate) fn translate_ja_sentence(
             };
             let mut trial_dates = dates.clone();
             let mut trial_honorifics = honorifics.clone();
-            let result = translate_ja_sentence_with_stems(
+            let result = translate_ja_sentence_with_verb_locks(
                 sentence_idx,
                 chars,
                 grammar,
                 tokens,
                 &grammar_locks,
-                &stems,
+                &verb_locks,
                 conditioning,
                 target,
                 None,
@@ -274,7 +278,7 @@ pub(crate) fn translate_ja_sentence(
                 prior_letter_distribution,
                 &mut trial_honorifics,
             );
-            if stems
+            if verb_locks
                 .iter()
                 .all(|lock| result.0.matches(&lock.placeholder).count() == 1)
             {
@@ -284,7 +288,7 @@ pub(crate) fn translate_ja_sentence(
             }
         }
     }
-    translate_ja_sentence_with_stems(
+    translate_ja_sentence_with_verb_locks(
         sentence_idx,
         chars,
         doc,
@@ -302,13 +306,13 @@ pub(crate) fn translate_ja_sentence(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn translate_ja_sentence_with_stems(
+fn translate_ja_sentence_with_verb_locks(
     sentence_idx: usize,
     chars: &[char],
     doc: &Document,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
-    verb_stems: &[&LockedSpan],
+    verb_locks: &[&LockedSpan],
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -972,7 +976,7 @@ fn translate_ja_sentence_with_stems(
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
-                    verb_stems,
+                    verb_locks,
                     following: &segments[seg_idx + 1..],
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
@@ -1320,6 +1324,7 @@ pub(crate) fn translate_ja_fragment(
             None,
             &sent_tokens,
             &lock_table,
+            None,
             &cond,
             target,
             None,
@@ -5782,7 +5787,7 @@ struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
     contrasts_recurrence: bool,
     source_chars: &'a [char],
-    verb_stems: &'a [&'a LockedSpan],
+    verb_locks: &'a [&'a LockedSpan],
     following: &'a [Segment],
     preceding_activity: &'a [Atom],
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
@@ -12753,8 +12758,8 @@ fn translate_clause_bunsetsus(
             transfer,
             naide_adverbial.map(|adverbial| adverbial.past),
         );
-    let stem_render = match predicates.as_slice() {
-        [predicate] if !ctx.verb_stems.is_empty() && transfer.is_none() => {
+    let verb_render = match predicates.as_slice() {
+        [predicate] if !ctx.verb_locks.is_empty() && transfer.is_none() => {
             match predicate.atoms.as_slice() {
                 [head, ending @ ..]
                     if head.upos == Some(Upos::Verb)
@@ -12770,10 +12775,22 @@ fn translate_clause_bunsetsus(
                                 head.upos,
                             ) =>
                 {
-                    ctx.verb_stems
+                    let predicate_span = Span {
+                        start_char: head.span.start_char,
+                        end_char: ending.last().unwrap().span.end_char,
+                    };
+                    ctx.verb_locks
                         .iter()
-                        .find(|lock| lock.source_span == head.span)
-                        .map(|lock| (verb_core.clone(), lock.placeholder.as_str()))
+                        .find(|lock| {
+                            lock.source_span == head.span || lock.source_span == predicate_span
+                        })
+                        .map(|lock| {
+                            (
+                                verb_core.clone(),
+                                lock.placeholder.as_str(),
+                                lock.source_span == predicate_span,
+                            )
+                        })
                 }
                 _ => None,
             }
@@ -13488,9 +13505,10 @@ fn translate_clause_bunsetsus(
                 && household_entry::allows_physical_entry(doc, ctx.source_chars, predicate)
         });
     let seated_until = past_until && verb_core == "坐";
+    let whole_predicate = verb_render.as_ref().is_some_and(|(_, _, whole)| *whole);
     let format_directional_goal = |arg: &PlacedArg, raw_np: &str| {
         if household_entry && arg.household_goal_head == household_entry_head {
-            "屋".to_owned()
+            if whole_predicate { "屋裡" } else { "屋" }.to_owned()
         } else if direct_negative_physical_go && arg.physical_goal_head == negative_go_head {
             raw_np.to_owned()
         } else if seated_until && arg.case_particle.as_deref() == Some("に") {
@@ -13546,7 +13564,7 @@ fn translate_clause_bunsetsus(
 
     if !goal_tails.is_empty() {
         // The household shorthand supplies its own verb only without a caller stem.
-        if household_entry && stem_render.is_none() {
+        if household_entry && verb_render.is_none() {
             verb_core = "進".to_owned();
         } else if verb_core == "回去" {
             verb_core = "回".to_owned();
@@ -14214,12 +14232,20 @@ fn translate_clause_bunsetsus(
         parts.push(objs.remove(0));
     }
     if !verb_core.is_empty() {
-        // Classification, polarity and argument placement used the native
-        // verb. Replace only the lexical core that survived assembly intact.
-        let rendered = stem_render
-            .filter(|(core, _)| core == &verb_core && !parts.iter().any(|item| item == core))
-            .map_or(verb_core, |(_, placeholder)| placeholder.to_owned());
-        parts.push(rendered);
+        // Native morphology and syntax still determine clause roles.
+        // A whole lock already owns the ending of its finite predicate.
+        if let Some((_, placeholder, whole)) = verb_render.filter(|(core, _, whole)| {
+            core == &verb_core
+                && !parts.iter().any(|item| item == core)
+                && (!whole || post_verb_mods == ["了"])
+        }) {
+            if whole {
+                post_verb_mods.clear();
+            }
+            parts.push(placeholder.to_owned());
+        } else {
+            parts.push(verb_core);
+        }
     }
     if keep_go {
         for endpoint in &mut made_endpoints {

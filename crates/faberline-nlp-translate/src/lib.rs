@@ -262,6 +262,7 @@ pub fn translate_document(
     let mut consumed_direct_reports = HashMap::new();
     let mut dates = ja_zh::DateContext::default();
     let mut honorifics = ja_zh::HonorificContext::default();
+    let handover_source = std::cell::OnceCell::new();
 
     for (span, item) in items {
         if span.start_char > cursor {
@@ -373,6 +374,7 @@ pub fn translate_document(
                     &written_quotes,
                     &mut dates,
                     &mut honorifics,
+                    &handover_source,
                 );
 
                 let start = target_char_pos;
@@ -765,6 +767,7 @@ fn translate_single_sentence(
     written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
     dates: &mut ja_zh::DateContext,
     honorifics: &mut ja_zh::HonorificContext,
+    handover_source: &std::cell::OnceCell<Option<Document>>,
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
@@ -929,12 +932,51 @@ fn translate_single_sentence(
             );
             ja_zh::prior_letter_distribution(idx, chars, doc, &locks)
         });
+        let repaired = if options.target == TargetVariant::ZhHant
+            && direct_quote.is_none()
+            && written_quotes.is_empty()
+            && ja_zh::has_handover_glossary(&raw_sent, &lock_table)
+        {
+            let source = handover_source.get_or_init(|| {
+                let text: String = chars.iter().collect();
+                let source = analyze_document(
+                    &text,
+                    &DocOptions {
+                        names: Vec::new(),
+                        lexicon: Vec::new(),
+                        enrich_morphology: true,
+                        cpu_syntax: true,
+                        ..doc.options.clone()
+                    },
+                );
+                (doc.segmentation.sentences == source.segmentation.sentences
+                    && doc.segmentation.clauses == source.segmentation.clauses)
+                    .then_some(source)
+            });
+            source.as_ref().and_then(|source| {
+                let first = source
+                    .tokens
+                    .partition_point(|token| token.sentence < sentence_idx);
+                let last = source
+                    .tokens
+                    .partition_point(|token| token.sentence <= sentence_idx);
+                let tokens = source.tokens[first..last].iter().collect::<Vec<_>>();
+                ja_zh::handover_render_locks(sentence_idx, source, &tokens, chars, &lock_table)
+                    .map(|locks| (source, tokens, locks))
+            })
+        } else {
+            None
+        };
+        let (render_doc, render_tokens, render_locks) = match &repaired {
+            Some((source, tokens, locks)) => (*source, tokens.as_slice(), &locks.table),
+            None => (doc, sent_tokens, &lock_table),
+        };
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
-            doc,
-            sent_tokens,
-            &lock_table,
+            render_doc,
+            render_tokens,
+            render_locks,
             &conditioning,
             options.target,
             direct_quote,
@@ -945,6 +987,7 @@ fn translate_single_sentence(
             dates,
             prior_letter_distribution,
             honorifics,
+            repaired.as_ref().map(|(_, _, locks)| locks),
         );
         let mut clause_spans: Vec<Span> = clause_alignments
             .iter()

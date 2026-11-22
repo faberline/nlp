@@ -1,11 +1,11 @@
-//! Recover argument case covered by a caller glossary in an omitted action.
+//! Recover argument case covered by a caller glossary in linked clauses.
 
 use crate::lock::{LockOrigin, SpanLockTable};
 use crate::schema::GlossaryKind;
 
 use super::{
-    Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
-    naide_adverbial, physical_goal_head,
+    Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
+    naide_adverbial, physical_goal_head, polarity_contrast,
 };
 
 pub(crate) fn may_restore_glossary_syntax(
@@ -13,8 +13,13 @@ pub(crate) fn may_restore_glossary_syntax(
     chars: &[char],
     locks: &SpanLockTable,
 ) -> bool {
+    if text.contains(['「', '」', '『', '』', '"', '“', '”']) {
+        return false;
+    }
+    if text.matches('は').nth(1).is_some() && polarity_contrast::may_restore_topics(chars, locks) {
+        return true;
+    }
     text.contains("ないで")
-        && !text.contains(['「', '」', '『', '』', '"', '“', '”'])
         && locks.locks.iter().any(|lock| {
             let last = chars.get(lock.source_span.end_char.saturating_sub(1));
             lock.mandatory
@@ -47,6 +52,16 @@ pub(crate) fn glossary_render_locks(
     locks: &SpanLockTable,
 ) -> Option<SpanLockTable> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
+    omitted_render_locks(sentence, doc, locks, &atoms)
+        .or_else(|| polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms))
+}
+
+fn omitted_render_locks(
+    sentence: usize,
+    doc: &Document,
+    locks: &SpanLockTable,
+    atoms: &[Atom],
+) -> Option<SpanLockTable> {
     let mut omitted = (3..atoms.len()).filter_map(|end| {
         let remaining = &atoms[end..];
         let following = if matches!(remaining[0].surface.as_str(), "、" | "，" | ",") {

@@ -262,7 +262,7 @@ pub fn translate_document(
     let mut consumed_direct_reports = HashMap::new();
     let mut dates = ja_zh::DateContext::default();
     let mut honorifics = ja_zh::HonorificContext::default();
-    let handover_source = std::cell::OnceCell::new();
+    let glossary_source = std::cell::OnceCell::new();
 
     for (span, item) in items {
         if span.start_char > cursor {
@@ -374,7 +374,7 @@ pub fn translate_document(
                     &written_quotes,
                     &mut dates,
                     &mut honorifics,
-                    &handover_source,
+                    &glossary_source,
                 );
 
                 let start = target_char_pos;
@@ -767,7 +767,7 @@ fn translate_single_sentence(
     written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
     dates: &mut ja_zh::DateContext,
     honorifics: &mut ja_zh::HonorificContext,
-    handover_source: &std::cell::OnceCell<Option<Document>>,
+    glossary_source: &std::cell::OnceCell<Option<Document>>,
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
@@ -935,9 +935,9 @@ fn translate_single_sentence(
         let repaired = if options.target == TargetVariant::ZhHant
             && direct_quote.is_none()
             && written_quotes.is_empty()
-            && ja_zh::has_handover_glossary(&raw_sent, &lock_table)
+            && ja_zh::may_restore_glossary_syntax(&raw_sent, chars, &lock_table)
         {
-            let source = handover_source.get_or_init(|| {
+            let source = glossary_source.get_or_init(|| {
                 let text: String = chars.iter().collect();
                 let source = analyze_document(
                     &text,
@@ -961,14 +961,14 @@ fn translate_single_sentence(
                     .tokens
                     .partition_point(|token| token.sentence <= sentence_idx);
                 let tokens = source.tokens[first..last].iter().collect::<Vec<_>>();
-                ja_zh::handover_render_locks(sentence_idx, source, &tokens, chars, &lock_table)
+                ja_zh::glossary_render_locks(sentence_idx, source, &tokens, chars, &lock_table)
                     .map(|locks| (source, tokens, locks))
             })
         } else {
             None
         };
         let (render_doc, render_tokens, render_locks) = match &repaired {
-            Some((source, tokens, locks)) => (*source, tokens.as_slice(), &locks.table),
+            Some((source, tokens, locks)) => (*source, tokens.as_slice(), locks.table()),
             None => (doc, sent_tokens, &lock_table),
         };
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(

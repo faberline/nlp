@@ -15,8 +15,11 @@ mod counted_object;
 mod daytime;
 mod finished_go;
 mod finite_adjective;
+mod glossary_syntax;
 mod handover;
-pub(crate) use handover::{handover_render_locks, has_handover_glossary};
+pub(crate) use glossary_syntax::{
+    GlossaryRenderLocks, glossary_render_locks, may_restore_glossary_syntax,
+};
 mod homework_desire;
 mod homework_relative;
 mod meeting_voice;
@@ -216,11 +219,11 @@ pub(crate) fn translate_ja_sentence(
     dates: &mut DateContext,
     prior_letter_distribution: Option<PriorLetterDistribution>,
     honorifics: &mut HonorificContext,
-    handover_locks: Option<&handover::HandoverRenderLocks>,
+    recovered_locks: Option<&GlossaryRenderLocks>,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
-    if let Some(locks) = handover_locks {
+    if let Some(locks) = recovered_locks {
         locks.apply(&mut atoms);
     }
     honorifics.enter_sentence(doc.segmentation.sentences[sentence_idx].paragraph, &atoms);
@@ -12251,7 +12254,9 @@ fn translate_clause_bunsetsus(
                         } else if b.atoms.iter().any(|a| deadline_time_question(a).is_some()) {
                             DeadlineEndpoint::Question { calendar: false }
                         } else if b.atoms.iter().any(|a| {
-                            is_clock_atom(a) || !a.is_locked && is_daypart_surface(&a.surface)
+                            is_clock_atom(a)
+                                || calendar::glossary::is_clock_or_daypart(a)
+                                || !a.is_locked && is_daypart_surface(&a.surface)
                         }) {
                             DeadlineEndpoint::ClockOrDaypart
                         } else {
@@ -12261,7 +12266,9 @@ fn translate_clause_bunsetsus(
                             == BunsetsuRole::DeadlineWithDetachedNegation,
                         is_event_time_ni: is_plain_clock_ni(&b)
                             || (b.case_particle.as_deref() == Some("に")
-                                && b.atoms.iter().any(calendar::is_date)),
+                                && b.atoms.iter().any(|a| {
+                                    calendar::is_date(a) || calendar::glossary::is_time(a)
+                                })),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
@@ -17388,6 +17395,7 @@ fn has_temporal_deadline(atoms: &[Atom], doc: &Document) -> bool {
         }
     });
     is_clock_atom(time)
+        || calendar::glossary::is_time(time)
         || calendar::is_date(time)
         || deadline_time_question(time).is_some()
         || (!time.is_locked
@@ -18027,7 +18035,7 @@ fn is_payment_medium(method: &Atom, modifier: Option<&Atom>) -> bool {
 fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
     atoms
         .iter()
-        .any(|a| is_clock_atom(a) || calendar::is_date(a))
+        .any(|a| is_clock_atom(a) || calendar::is_date(a) || calendar::glossary::is_time(a))
         || is_place_location_bunsetsu(atoms)
         || atoms.iter().any(|a| {
             matches!(
@@ -24368,6 +24376,9 @@ fn temporal_made_time(b: &Bunsetsu) -> Option<String> {
 }
 
 fn render_temporal_made_atom(time: &Atom) -> Option<String> {
+    if calendar::glossary::is_time(time) {
+        return Some(time.surface.clone());
+    }
     if matches!(
         time.lemma.as_deref(),
         Some(CLOCK_ATOM | TEMPORAL_MADE_COMPOUND_ATOM)
@@ -24387,10 +24398,18 @@ fn render_temporal_made_atom(time: &Atom) -> Option<String> {
     ) {
         return Some(translate_single_ja_term(weekday, None, time.upos));
     }
-    // These date and daypart heads are unambiguous as standalone time words.
-    let is_time = is_daypart_surface(&time.surface)
+    is_named_event_time(&time.surface).then(|| {
+        after_daypart(time).unwrap_or_else(|| {
+            translate_single_ja_term(&time.surface, time.lemma.as_deref(), time.upos)
+        })
+    })
+}
+
+// These date and daypart heads are unambiguous as standalone time words.
+fn is_named_event_time(surface: &str) -> bool {
+    is_daypart_surface(surface)
         || matches!(
-            time.surface.as_str(),
+            surface,
             "今" | "昨日"
                 | "今日"
                 | "明日"
@@ -24409,14 +24428,9 @@ fn render_temporal_made_atom(time: &Atom) -> Option<String> {
                 | "来年"
                 | "年末"
         )
-        || faberline_nlp::lexicon::lookup_ja(&time.surface).is_some_and(|entry| {
+        || faberline_nlp::lexicon::lookup_ja(surface).is_some_and(|entry| {
             entry.sem_class == Some(faberline_nlp::lexicon::SemanticClass::Time)
-        });
-    is_time.then(|| {
-        after_daypart(time).unwrap_or_else(|| {
-            translate_single_ja_term(&time.surface, time.lemma.as_deref(), time.upos)
         })
-    })
 }
 
 fn is_spatial_made_bunsetsu(b: &Bunsetsu) -> bool {

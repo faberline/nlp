@@ -6,8 +6,20 @@ use crate::schema::GlossaryKind;
 use super::{
     Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
     household_entry, is_punct_atom, naide_adverbial, outward_look, physical_goal_head,
-    polarity_contrast,
+    polarity_contrast, trip_after_meal,
 };
+
+fn may_cover_past_predicate(lock: &LockedSpan, chars: &[char]) -> bool {
+    lock.mandatory
+        && matches!(
+            lock.origin,
+            LockOrigin::Glossary {
+                kind: GlossaryKind::DomainTerm,
+                ..
+            }
+        )
+        && chars.get(lock.source_span.end_char.saturating_sub(1)) == Some(&'た')
+}
 
 fn covers_case_marker(lock: &LockedSpan, chars: &[char]) -> bool {
     matches!(
@@ -49,11 +61,18 @@ pub(crate) fn may_restore_glossary_syntax(
     if text.matches('は').nth(1).is_some() && polarity_contrast::may_restore_topics(chars, locks) {
         return true;
     }
+    if text.contains('て')
+        && locks
+            .locks
+            .iter()
+            .any(|lock| may_cover_past_predicate(lock, chars))
+    {
+        return true;
+    }
     let naide = text.contains("ないで");
     let zuni = text.contains("ずに");
     (naide || zuni)
         && locks.locks.iter().any(|lock| {
-            let last = chars.get(lock.source_span.end_char.saturating_sub(1));
             lock.mandatory
                 && (if zuni {
                     matches!(
@@ -66,17 +85,7 @@ pub(crate) fn may_restore_glossary_syntax(
                 } else {
                     false
                 } || naide
-                    && (covers_case_marker(lock, chars)
-                        || matches!(
-                            (&lock.origin, last),
-                            (
-                                LockOrigin::Glossary {
-                                    kind: GlossaryKind::DomainTerm,
-                                    ..
-                                },
-                                Some('た')
-                            )
-                        )))
+                    && (covers_case_marker(lock, chars) || may_cover_past_predicate(lock, chars)))
         })
 }
 
@@ -91,6 +100,17 @@ pub(crate) fn glossary_render_locks(
 ) -> Option<(SpanLockTable, Option<usize>)> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
     omitted_render_locks(sentence, doc, chars, locks, &atoms)
+        .or_else(|| {
+            if !locks
+                .locks
+                .iter()
+                .any(|lock| may_cover_past_predicate(lock, chars))
+            {
+                return None;
+            }
+            trip_after_meal::whole_trip_lock(sentence, &atoms, doc, chars, locks)
+                .map(|index| (locks.clone(), Some(index)))
+        })
         .or_else(|| {
             polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms)
                 .map(|locks| (locks, None))

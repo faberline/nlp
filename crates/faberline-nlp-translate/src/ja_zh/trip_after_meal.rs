@@ -3,9 +3,13 @@
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Options, SyntaxToken, analyze_document};
 
+use crate::lock::LockOrigin;
+use crate::schema::GlossaryKind;
+
 use super::{
-    Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, SpanLockTable,
-    Token, Upos, build_sentence_atoms, dasu_case_link, finished_go, group_into_bunsetsus,
+    Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Segment,
+    SpanLockTable, Token, Upos, build_sentence_atoms, dasu_case_link, finished_go,
+    group_into_bunsetsus, split_ja_atoms,
 };
 
 fn source_identity<'a>(atom: &Atom, doc: &'a Document) -> Option<(&'a SyntaxToken, &'a Token)> {
@@ -101,6 +105,97 @@ impl RecoveredTrip {
             goal_group,
         })
     }
+}
+
+/// Use source evidence for the meal-to-trip link before removing a whole verb lock from the render parse.
+pub(super) fn whole_trip_lock(
+    sentence: usize,
+    atoms: &[Atom],
+    doc: &Document,
+    chars: &[char],
+    locks: &SpanLockTable,
+) -> Option<usize> {
+    let span = doc.segmentation.sentences.get(sentence)?.span;
+    let segments = split_ja_atoms(atoms, doc, span, Some(chars));
+    let [
+        Segment::Clause {
+            atoms: meal,
+            trailing_punct: Some(comma),
+            ..
+        },
+        Segment::Clause { atoms: trip, .. },
+    ] = segments.as_slice()
+    else {
+        return None;
+    };
+    if !matches!(comma.as_str(), "、" | "，") {
+        return None;
+    }
+    let before = prior_meal(meal, trip, doc, chars)?;
+    let [.., meal_noun, object_case, eat, _] = meal.as_slice() else {
+        return None;
+    };
+    let [place, direction, go, ..] = trip.as_slice() else {
+        return None;
+    };
+    let verb_span = Span {
+        start_char: go.span.start_char,
+        end_char: trip.last()?.span.end_char,
+    };
+    let verb = locks.locks.iter().find(|lock| {
+        lock.mandatory
+            && lock.source_span == verb_span
+            && matches!(
+                lock.origin,
+                LockOrigin::Glossary {
+                    kind: GlossaryKind::DomainTerm,
+                    ..
+                }
+            )
+    })?;
+    if !locks.locks.iter().all(|lock| {
+        if !lock.mandatory {
+            return false;
+        }
+        let span = lock.source_span;
+        match lock.origin {
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Object,
+                ..
+            } => {
+                (span.end_char == meal_noun.span.end_char
+                    || span.end_char == object_case.span.end_char)
+                    && meal
+                        .iter()
+                        .take_while(|atom| atom.span.start_char <= meal_noun.span.start_char)
+                        .any(|atom| atom.span.start_char == span.start_char)
+                    && chars
+                        .get(span.start_char..meal_noun.span.end_char)
+                        .is_some_and(is_meal_noun)
+            }
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Place,
+                ..
+            } => {
+                span.start_char == place.span.start_char
+                    && (span.end_char == place.span.end_char
+                        || span.end_char == direction.span.end_char)
+            }
+            LockOrigin::Glossary {
+                kind: GlossaryKind::DomainTerm,
+                ..
+            } => {
+                lock.index == verb.index
+                    || (span == eat.span && crate::verb_glossary::is_stem_lock(lock, doc, sentence))
+            }
+            _ => false,
+        }
+    }) {
+        return None;
+    }
+    let groups = group_into_bunsetsus(trip, doc, sentence);
+    finished_go::resolve(&groups, trip, doc, chars, Some(before))?;
+    Some(verb.index)
 }
 
 pub(super) fn recover(
@@ -326,6 +421,15 @@ mod tests {
         .unwrap()
     }
 
+    fn entry(surface: &str, target: &str) -> GlossaryEntry {
+        GlossaryEntry {
+            canonical: surface.into(),
+            surfaces: vec![surface.into()],
+            targets: [(TargetVariant::ZhHant, target.into())].into(),
+            ..GlossaryEntry::default()
+        }
+    }
+
     #[test]
     fn locks_covering_the_meal_and_destination_particles_keep_the_sequence() {
         let source = "朝ご飯を食べて、学校へ行きました。";
@@ -341,12 +445,6 @@ mod tests {
             ("朝ご飯", "学校へ"),
             ("朝ご飯を", "学校へ"),
         ] {
-            let entry = |surface: &str, target: &str| GlossaryEntry {
-                canonical: surface.into(),
-                surfaces: vec![surface.into()],
-                targets: [(TargetVariant::ZhHant, target.into())].into(),
-                ..GlossaryEntry::default()
-            };
             let mut glossary = TranslationGlossary::new();
             glossary.objects.push(entry(meal, "早餐"));
             glossary.places.push(entry(place, "新校舍"));
@@ -379,6 +477,54 @@ mod tests {
             let omitted = translate("朝ご飯を食べないで、学校へ行きました。", &glossary);
             assert!(!omitted.target_text.contains("吃了早餐後"));
         }
+    }
+
+    #[test]
+    fn a_whole_trip_lock_keeps_the_completed_meal_and_destination() {
+        let source = "朝ご飯を食べて、学校へ行きました。";
+        let mut glossary = TranslationGlossary::new();
+        glossary.objects.push(entry("朝ご飯を", "早餐"));
+        glossary.places.push(entry("学校へ", "新校舍"));
+        glossary.domain_terms.push(entry("食べ", "享用"));
+        glossary.domain_terms.push(entry("行きました", "已前往"));
+        let result = translate(source, &glossary);
+        assert_eq!(result.target_text, "享用了早餐後，已前往新校舍。");
+        assert_eq!(result.glossary_hits.len(), 4);
+        let trip = result
+            .glossary_hits
+            .iter()
+            .find(|hit| hit.canonical == "行きました")
+            .unwrap();
+        assert_eq!(
+            trip.source_span,
+            faberline_nlp::Span {
+                start_char: 11,
+                end_char: 16
+            }
+        );
+        let [meal_clause, trip_clause] = result.clause_alignments.as_slice() else {
+            panic!("expected separate meal and trip clauses");
+        };
+        assert_eq!(
+            meal_clause.target_span.end_char,
+            trip_clause.target_span.start_char
+        );
+        assert_eq!(
+            trip.target_span.start_char,
+            trip_clause.target_span.start_char
+        );
+        assert_eq!(trip.target_span.end_char - trip.target_span.start_char, 3);
+    }
+
+    #[test]
+    fn a_whole_trip_lock_in_a_question_does_not_assert_a_completed_meal() {
+        let source = "朝ご飯を食べて、学校へ行きましたか。";
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(entry("行きました", "已前往"));
+        let result = translate(source, &glossary);
+        assert!(!result.target_text.contains('後'));
+        assert_eq!(result.target_text.matches("已前往").count(), 1);
+        assert_eq!(result.glossary_hits.len(), 1);
     }
 
     #[test]

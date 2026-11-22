@@ -228,7 +228,7 @@ mod tests {
                 "窓を開けて、外を見ました。",
                 "見ました",
                 "察看了",
-                "打開窗戶，察看了外面。",
+                "打開窗戶，往外察看了。",
             ),
         ] {
             let mut glossary = TranslationGlossary::new();

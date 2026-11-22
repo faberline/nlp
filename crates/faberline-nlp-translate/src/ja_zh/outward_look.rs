@@ -5,7 +5,7 @@ use faberline_nlp::doc::SyntaxToken;
 use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
 use crate::schema::GlossaryKind;
 
-use super::{Atom, Bunsetsu, Document, Upos, dasu_case_link};
+use super::{Atom, Bunsetsu, Document, Upos, dasu_case_link, is_punct_atom};
 
 fn original_link<'a>(atom: &Atom, doc: &'a Document) -> Option<&'a SyntaxToken> {
     let id = atom.doc_tok_idx?;
@@ -93,16 +93,41 @@ pub(super) fn covers_outside_case(chars: &[char], lock: &LockedSpan) -> bool {
         && chars.get(lock.source_span.start_char..lock.source_span.end_char) == Some(&['外', 'を'])
 }
 
+/// Return the final predicate of a direct gaze at bare 外を.
+/// The caller checks the attached tense ending and the exact glossary span.
+pub(super) fn gaze_predicate<'a>(doc: &Document, atoms: &'a [Atom]) -> Option<&'a [Atom]> {
+    let mut roots = atoms
+        .iter()
+        .enumerate()
+        .filter(|(_, atom)| atom.deprel == "root");
+    let (index, head) = roots.next()?;
+    if roots.next().is_some()
+        || head.upos != Some(Upos::Verb)
+        || head.head.is_some()
+        || atoms
+            .iter()
+            .any(|atom| matches!(atom.surface.as_str(), "?" | "？"))
+    {
+        return None;
+    }
+    outside_object(atoms, head, doc)?;
+    let predicate = &atoms[index..];
+    let last = predicate.iter().rposition(|atom| !is_punct_atom(atom))?;
+    Some(&predicate[..=last])
+}
+
 pub(super) fn restore_case(
     doc: &Document,
     chars: &[char],
     locks: &SpanLockTable,
     atoms: &[Atom],
+    whole: Option<usize>,
 ) -> Option<SpanLockTable> {
-    if !locks
-        .locks
-        .iter()
-        .any(|lock| covers_outside_case(chars, lock))
+    if whole.is_none()
+        && !locks
+            .locks
+            .iter()
+            .any(|lock| covers_outside_case(chars, lock))
     {
         return None;
     }
@@ -120,7 +145,9 @@ pub(super) fn restore_case(
             // Expose the native particle to rendering while the original
             // lock retains the full caller match.
             lock.source_span.end_char = marker.span.start_char;
-        } else if !atoms.iter().any(|atom| atom.span == lock.source_span) {
+        } else if whole != Some(lock.index)
+            && !atoms.iter().any(|atom| atom.span == lock.source_span)
+        {
             return None;
         }
     }

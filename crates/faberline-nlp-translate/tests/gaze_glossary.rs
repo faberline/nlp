@@ -39,9 +39,14 @@ fn gaze_keeps_the_caller_marker_and_verb_in_source_order() {
         Some((GlossaryKind::Place, "外", "庭院")),
         Some((GlossaryKind::Place, "外を", "庭院")),
     ] {
-        for stem in [None, Some((GlossaryKind::DomainTerm, "見", "察看"))] {
+        for predicate in [
+            None,
+            Some((GlossaryKind::DomainTerm, "見", "察看")),
+            Some((GlossaryKind::DomainTerm, "見ました", "察看了")),
+        ] {
             for window in [None, Some((GlossaryKind::Object, "窓", "側窗"))] {
-                let expected_hits: Vec<_> = [outside, stem, window].into_iter().flatten().collect();
+                let expected_hits: Vec<_> =
+                    [outside, predicate, window].into_iter().flatten().collect();
                 let mut glossary = TranslationGlossary::new();
                 for &(kind, term, alias) in &expected_hits {
                     let group = match kind {
@@ -70,10 +75,14 @@ fn gaze_keeps_the_caller_marker_and_verb_in_source_order() {
                 } else {
                     "打開窗戶"
                 };
-                let action = if stem.is_some() { "察看" } else { "看" };
+                let action = if predicate.is_some() {
+                    "察看了"
+                } else {
+                    "看了"
+                };
                 let tail = match outside {
-                    Some((_, _, alias)) => format!("{action}了{alias}"),
-                    None => format!("往外{action}了"),
+                    Some((_, _, alias)) => format!("{action}{alias}"),
+                    None => format!("往外{action}"),
                 };
                 let expected = format!("{first}，{tail}。");
                 assert_eq!(result.target_text, expected);
@@ -91,5 +100,23 @@ fn gaze_keeps_the_caller_marker_and_verb_in_source_order() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn a_whole_gaze_lock_does_not_change_a_qualified_exterior_or_a_question() {
+    let glossary = TranslationGlossary {
+        domain_terms: vec![entry("見ました", "察看了")],
+        ..Default::default()
+    };
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    for (source, expected) in [
+        ("窓を開けて、家の外を見ました。", "打開窗戶，察看了家外面。"),
+        ("窓を開けて、外を見ましたか。", "打開窗戶，察看了外面嗎。"),
+    ] {
+        let result =
+            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_eq!(result.target_text, expected);
+        assert_eq!(result.glossary_hits.len(), 1);
     }
 }

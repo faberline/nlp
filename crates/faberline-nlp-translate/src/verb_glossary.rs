@@ -148,6 +148,14 @@ mod tests {
     #[test]
     fn stem_glosses_keep_linked_endings_and_their_own_source_span() {
         let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let meal_contrast = match faberline_nlp::lexicon::ja::lookup_ja_gloss(
+            "朝ご飯",
+            Some(faberline_nlp::doc::Upos::Noun),
+        ) {
+            None => "早上有吃飯，但沒有前往學校。",
+            Some("早餐") => "早餐有吃，但沒有前往學校。",
+            Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+        };
         for (text, surface, target, expected) in [
             (
                 "傘を持たないで、出かけました。",
@@ -165,7 +173,7 @@ mod tests {
                 "朝ご飯は食べて、学校には行きませんでした。",
                 "行き",
                 "前往",
-                "早上有吃飯，但沒有前往學校。",
+                meal_contrast,
             ),
             (
                 "窓を開けて、外を見ました。",

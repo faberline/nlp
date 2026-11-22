@@ -27,6 +27,14 @@ fn span_text(text: &str, span: Span) -> String {
 fn paired_topics_keep_their_polarity_under_glossary_locks() {
     // Adopted D08 in naide_clause_dev_v1.
     let source = "朝ご飯は食べて、学校には行きませんでした。";
+    let native_meal = match faberline_nlp::lexicon::ja::lookup_ja_gloss(
+        "朝ご飯",
+        Some(faberline_nlp::doc::Upos::Noun),
+    ) {
+        None => "早上有吃飯",
+        Some("早餐") => "早餐有吃",
+        Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+    };
     let options = TranslateOptions::new(TargetVariant::ZhHant);
     let doc = analyze_document(
         source,
@@ -61,7 +69,7 @@ fn paired_topics_keep_their_polarity_under_glossary_locks() {
                 let first = if meal.is_some() {
                     "早餐有吃"
                 } else {
-                    "早上有吃飯"
+                    native_meal
                 };
                 let action = if stem.is_some() { "前往" } else { "去" };
                 let destination = if place.is_some() {

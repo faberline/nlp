@@ -138,7 +138,7 @@ pub fn analyze_and_translate(
         None => None,
     };
 
-    translate_document(
+    translate_analyzed_document(
         text,
         &doc,
         #[cfg(feature = "narrative")]
@@ -146,6 +146,7 @@ pub fn analyze_and_translate(
         options,
         glossary,
         loaded_seq2seq.as_ref(),
+        models_dir.is_none(),
     )
 }
 
@@ -159,6 +160,27 @@ pub fn translate_document(
     options: &TranslateOptions,
     glossary: &TranslationGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
+) -> anyhow::Result<TranslatedDocument> {
+    translate_analyzed_document(
+        text,
+        doc,
+        #[cfg(feature = "narrative")]
+        narrative,
+        options,
+        glossary,
+        seq2seq,
+        false,
+    )
+}
+
+fn translate_analyzed_document(
+    text: &str,
+    doc: &Document,
+    #[cfg(feature = "narrative")] narrative: Option<&ChapterNarrative>,
+    options: &TranslateOptions,
+    glossary: &TranslationGlossary,
+    seq2seq: Option<&LoadedTranslateModel>,
+    owns_cpu_analysis: bool,
 ) -> anyhow::Result<TranslatedDocument> {
     #[cfg(not(feature = "narrative"))]
     let narrative: Option<&()> = None;
@@ -373,6 +395,7 @@ pub fn translate_document(
                     &written_quotes,
                     &mut dates,
                     &mut honorifics,
+                    owns_cpu_analysis,
                 );
 
                 let start = target_char_pos;
@@ -765,6 +788,7 @@ fn translate_single_sentence(
     written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
     dates: &mut ja_zh::DateContext,
     honorifics: &mut ja_zh::HonorificContext,
+    owns_cpu_analysis: bool,
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
@@ -935,6 +959,11 @@ fn translate_single_sentence(
             doc,
             sent_tokens,
             &lock_table,
+            (direct_quote.is_none() && written_quotes.is_empty()).then_some(if owns_cpu_analysis {
+                ja_zh::NominalRequestAnalysis::OwnedCpu
+            } else {
+                ja_zh::NominalRequestAnalysis::Provided
+            }),
             &conditioning,
             options.target,
             direct_quote,

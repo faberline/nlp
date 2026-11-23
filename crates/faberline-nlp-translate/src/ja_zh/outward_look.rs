@@ -5,7 +5,7 @@ use faberline_nlp::doc::SyntaxToken;
 use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
 use crate::schema::GlossaryKind;
 
-use super::{Atom, Bunsetsu, Document, Upos, dasu_case_link, is_punct_atom};
+use super::{Atom, Bunsetsu, Document, Span, Upos, dasu_case_link, is_punct_atom};
 
 fn original_link<'a>(atom: &Atom, doc: &'a Document) -> Option<&'a SyntaxToken> {
     let id = atom.doc_tok_idx?;
@@ -116,11 +116,52 @@ pub(super) fn gaze_predicate<'a>(doc: &Document, atoms: &'a [Atom]) -> Option<&'
     Some(&predicate[..=last])
 }
 
+fn linked_verb_stem(
+    doc: &Document,
+    atoms: &[Atom],
+    lock: &LockedSpan,
+    gaze_head: usize,
+) -> Option<Span> {
+    if !lock.mandatory
+        || !matches!(
+            lock.origin,
+            LockOrigin::Glossary {
+                kind: GlossaryKind::DomainTerm,
+                ..
+            }
+        )
+    {
+        return None;
+    }
+    let gaze = doc.syntax.get(gaze_head)?;
+    atoms.windows(2).find_map(|pair| {
+        let [verb, ending] = pair else {
+            return None;
+        };
+        let first = original_link(verb, doc)?;
+        let connector = original_link(ending, doc)?;
+        (verb.span.start_char == lock.source_span.start_char
+            && ending.span.end_char == lock.source_span.end_char
+            && verb.span.end_char == ending.span.start_char
+            && verb.upos == Some(Upos::Verb)
+            && matches!(first.deprel.as_str(), "advcl" | "conj")
+            && first.head == Some(gaze.token)
+            && first.sentence == gaze.sentence
+            && connector.sentence == gaze.sentence
+            && connector.head == Some(first.token)
+            && connector.deprel == "mark"
+            && ending.upos == Some(Upos::Sconj)
+            && matches!(ending.surface.as_str(), "て" | "で"))
+        .then_some(verb.span)
+    })
+}
+
 pub(super) fn restore_case(
     doc: &Document,
     chars: &[char],
     locks: &SpanLockTable,
     atoms: &[Atom],
+    gaze_head: Option<usize>,
     whole: Option<usize>,
 ) -> Option<SpanLockTable> {
     if whole.is_none()
@@ -148,7 +189,9 @@ pub(super) fn restore_case(
         } else if whole != Some(lock.index)
             && !atoms.iter().any(|atom| atom.span == lock.source_span)
         {
-            return None;
+            // Render the caller's linked action as a verb while the native
+            // connector still joins the two clauses. The original match is kept.
+            lock.source_span = linked_verb_stem(doc, atoms, lock, gaze_head?)?;
         }
     }
     Some(render)
@@ -220,5 +263,56 @@ mod tests {
         let result = translate("外を見ました。", &glossary);
         assert_eq!(result.target_text, "看了外面。");
         assert_eq!(result.glossary_hits[0].canonical, "外");
+    }
+
+    #[test]
+    fn keeps_the_gaze_after_a_glossary_lock_on_the_linked_verb() {
+        let source = "窓を開けて、外を見ました。";
+        let entry = |term: &str, rendering: &str| GlossaryEntry {
+            canonical: term.into(),
+            surfaces: vec![term.into()],
+            targets: [(TargetVariant::ZhHant, rendering.into())].into(),
+            ..GlossaryEntry::default()
+        };
+        for (look, place, expected) in [
+            (None, true, "推開窗戶，看了門外。"),
+            (Some(("見", "察看")), true, "推開窗戶，察看了門外。"),
+            (Some(("見ました", "察看了")), true, "推開窗戶，察看了門外。"),
+            (
+                Some(("見ました", "察看了")),
+                false,
+                "推開窗戶，往外察看了。",
+            ),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(entry("開けて", "推開"));
+            if let Some((term, rendering)) = look {
+                glossary.domain_terms.push(entry(term, rendering));
+            }
+            if place {
+                glossary.places.push(entry("外を", "門外"));
+            }
+            let output = translate(source, &glossary);
+            assert_eq!(output.target_text, expected);
+            assert_eq!(
+                output.glossary_hits.len(),
+                1 + usize::from(look.is_some()) + usize::from(place)
+            );
+            let hit = output
+                .glossary_hits
+                .iter()
+                .find(|hit| hit.canonical == "開けて")
+                .unwrap();
+            assert_eq!(hit.source_span.start_char..hit.source_span.end_char, 2..5);
+            assert_eq!(hit.target_span.start_char..hit.target_span.end_char, 0..2);
+        }
+
+        let glossary = TranslationGlossary {
+            domain_terms: vec![entry("窓を開けて", "開窗"), entry("見ました", "察看了")],
+            ..TranslationGlossary::new()
+        };
+        let unchanged = translate(source, &glossary);
+        assert_eq!(unchanged.target_text, "開窗，察看了外面。");
+        assert_eq!(unchanged.glossary_hits.len(), 2);
     }
 }

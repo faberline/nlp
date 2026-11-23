@@ -6,9 +6,9 @@ use crate::lock::{LockOrigin, SpanLockTable};
 use crate::schema::GlossaryKind;
 
 use super::{
-    Atom, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Token, Upos, classify_bunsetsu,
-    dasu_case_link, focused_physical_goal_head, is_companion_person, is_punct_atom,
-    source_time_head,
+    Atom, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Segment, Token, Upos, classify_bunsetsu,
+    dasu_case_link, focused_physical_goal_head, is_companion_person, source_time_head,
+    split_ja_atoms,
 };
 
 #[derive(Clone, Copy)]
@@ -116,6 +116,21 @@ fn past_negative(verb: &Atom, tail: &[Atom], doc: &Document) -> bool {
                 && atom.head == verb.doc_tok_idx
                 && source_link(atom, doc).is_some()
         })
+}
+
+pub(super) fn negative_question_body<'a>(atoms: &'a [Atom], doc: &Document) -> Option<&'a [Atom]> {
+    let (particle, body) = atoms.split_last()?;
+    let go_index = body.iter().position(|atom| atom.upos == Some(Upos::Verb))?;
+    let go = &body[go_index];
+    (go.lemma.as_deref() == Some("行く")
+        && go.deprel == "root"
+        && particle.surface == "か"
+        && particle.upos == Some(Upos::Part)
+        && source_link(particle, doc)
+            .is_some_and(|link| link.deprel == "discourse" && link.head == go.doc_tok_idx)
+        && body.last()?.span.end_char == particle.span.start_char
+        && past_negative(go, &body[go_index + 1..], doc))
+    .then_some(body)
 }
 
 fn meal_topic(noun: &Atom, verb: &Atom, doc: &Document, chars: &[char]) -> bool {
@@ -262,23 +277,38 @@ pub(super) fn restore_topics(
     if !may_restore_topics(chars, locks) {
         return None;
     }
-    let [body @ .., last] = atoms else {
+    let sentence_span = doc.segmentation.sentences.get(sentence)?.span;
+    let segments = split_ja_atoms(atoms, doc, sentence_span, Some(chars));
+    let [
+        Segment::Clause {
+            atoms: previous,
+            trailing_punct: Some(separator),
+            ..
+        },
+        Segment::Clause {
+            atoms: current,
+            trailing_punct,
+            ..
+        },
+    ] = segments.as_slice()
+    else {
         return None;
     };
-    let body = if is_punct_atom(last) { body } else { atoms };
-    let comma = body
-        .iter()
-        .position(|atom| matches!(atom.surface.as_str(), "、" | "，" | ","))?;
-    let previous = &body[..comma];
-    let current = &body[comma + 1..];
-    affirmative_meal(previous, current, doc, chars)?;
-    let [leading @ .., meal, topic, action, connector] = previous else {
+    if !matches!(separator.as_str(), "、" | "，") {
+        return None;
+    }
+    // The question particle belongs to the clause and stays outside the glossary match.
+    let trip = if matches!(trailing_punct.as_deref(), Some("?" | "？")) {
+        negative_question_body(current, doc).unwrap_or(current)
+    } else {
+        current
+    };
+    affirmative_meal(previous, trip, doc, chars)?;
+    let [leading @ .., meal, topic, action, connector] = previous.as_slice() else {
         return None;
     };
-    let go_index = current
-        .iter()
-        .position(|atom| atom.upos == Some(Upos::Verb))?;
-    let [.., place, direction, focus, go] = &current[..=go_index] else {
+    let go_index = trip.iter().position(|atom| atom.upos == Some(Upos::Verb))?;
+    let [.., place, direction, focus, go] = &trip[..=go_index] else {
         return None;
     };
     let goal = classify_bunsetsu(
@@ -291,13 +321,12 @@ pub(super) fn restore_topics(
     }
     let finite_trip = Span {
         start_char: go.span.start_char,
-        end_char: current.last()?.span.end_char,
+        end_char: trip.last()?.span.end_char,
     };
     let linked_meal = Span {
         start_char: action.span.start_char,
         end_char: connector.span.end_char,
     };
-    let declarative = !matches!(last.surface.as_str(), "？" | "?");
     let meal_prefix = leading.last().filter(|prefix| {
         prefix.span.end_char == meal.span.start_char
             && prefix.head == action.doc_tok_idx
@@ -339,12 +368,12 @@ pub(super) fn restore_topics(
             {
                 span.end_char
             }
-            GlossaryKind::DomainTerm if span == linked_meal && declarative => {
+            GlossaryKind::DomainTerm if span == linked_meal => {
                 // Use the native connector for rendering. The original lock
                 // retains the full caller match and replacement.
                 action.span.end_char
             }
-            GlossaryKind::DomainTerm if span == finite_trip && declarative => {
+            GlossaryKind::DomainTerm if span == finite_trip => {
                 whole_trip = Some(lock.index);
                 span.end_char
             }

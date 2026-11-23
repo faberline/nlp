@@ -30,6 +30,7 @@ mod household_entry;
 mod letter_deadline;
 mod meeting_voice;
 mod nominal_possession;
+mod nominal_receiving_glossary;
 mod order_noun;
 mod outward_look;
 mod payment_potential;
@@ -1088,7 +1089,19 @@ fn translate_ja_sentence_with_verb_locks(
                 let receiving_request = if target == TargetVariant::ZhHant
                     && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
                 {
-                    try_translate_nominal_receiving_request(trimmed_atoms, doc, sentence_idx)
+                    if trimmed_atoms.iter().any(|atom| atom.is_locked) {
+                        glossary_syntax
+                            .nominal_request(trimmed_atoms)
+                            .map(str::to_owned)
+                    } else {
+                        render_nominal_receiving_request(
+                            trimmed_atoms,
+                            doc,
+                            sentence_idx,
+                            None,
+                            chars,
+                        )
+                    }
                 } else {
                     None
                 };
@@ -6669,21 +6682,23 @@ fn nominal_receiving_request_position(
             },
         ] if matches!(comma.as_str(), "、" | "，" | ",") => match atoms.as_slice() {
             [time] => direct_quote_time(time, doc).is_some(),
-            [date, no, period] => {
-                !date.is_locked
-                    && !no.is_locked
-                    && !period.is_locked
-                    && matches!(date.surface.as_str(), "今日" | "明日" | "昨日")
-                    && no.surface == "の"
-                    && matches!(
-                        period.surface.as_str(),
-                        "朝" | "午前" | "午後" | "昼" | "夜"
-                    )
-            }
+            [date, no, period] => nominal_receiving_daypart(date, no, period),
             _ => false,
         },
         _ => false,
     }
+}
+
+fn nominal_receiving_daypart(date: &Atom, no: &Atom, period: &Atom) -> bool {
+    !date.is_locked
+        && !no.is_locked
+        && !period.is_locked
+        && matches!(date.surface.as_str(), "今日" | "明日" | "昨日")
+        && no.surface == "の"
+        && matches!(
+            period.surface.as_str(),
+            "朝" | "午前" | "午後" | "昼" | "夜"
+        )
 }
 
 #[derive(Clone, Copy)]
@@ -6755,10 +6770,12 @@ fn render_nominal_receiving_count(
     Some(quantity)
 }
 
-fn try_translate_nominal_receiving_request(
+fn render_nominal_receiving_request(
     atoms: &[Atom],
     doc: &Document,
     sentence_idx: usize,
+    lock: Option<&LockedSpan>,
+    source: &[char],
 ) -> Option<String> {
     let [args @ .., verb, masu, neg, question] = atoms else {
         return None;
@@ -6786,6 +6803,26 @@ fn try_translate_nominal_receiving_request(
     {
         return None;
     }
+
+    let (args, time) = if let [date, no, period, rest @ ..] = args
+        && nominal_receiving_daypart(date, no, period)
+        && dasu_case_link(date, no)
+        && no.span.end_char == period.span.start_char
+        && period.deprel == "advmod"
+        && (period.head == Some(predicate)
+            || rest.first().is_some_and(|amount| {
+                period.head == amount.doc_tok_idx
+                    && matches!(
+                        nominal_receiving_amount(std::slice::from_ref(amount), predicate),
+                        Some(NominalReceivingAmount::Approximate(_))
+                    )
+            })) {
+        let date = render_temporal_made_atom(date)?;
+        let period = render_temporal_made_atom(period)?;
+        (rest, format!("{date}{period}，"))
+    } else {
+        (args, String::new())
+    };
 
     let case_index = args
         .iter()
@@ -6842,11 +6879,28 @@ fn try_translate_nominal_receiving_request(
         Some(NominalReceivingAmount::Approximate(text)) => text.to_owned(),
         None => String::new(),
     };
-    let object = render_bunsetsu_np(&object, TargetVariant::ZhHant);
-    if object.is_empty() || has_kana_no_hangul(&object) {
+    let raw_object = render_bunsetsu_np(&object, TargetVariant::ZhHant);
+    if raw_object.is_empty() || has_kana_no_hangul(&raw_object) {
         return None;
     }
-    if object == "時間" {
+    let time_request = raw_object == "時間";
+    let object = if let Some(lock) = lock {
+        let qualifier = usize::from(
+            matches!(amount, Some(NominalReceivingAmount::Count { .. }))
+                && phrase.first().is_some_and(|a| a.upos == Some(Upos::Det)),
+        );
+        nominal_receiving_glossary::render_object(
+            &phrase[qualifier..],
+            lock,
+            doc,
+            sentence_idx,
+            source,
+            time_request,
+        )?
+    } else {
+        raw_object
+    };
+    if time_request {
         if matches!(amount, Some(NominalReceivingAmount::Count { .. })) {
             return None;
         }
@@ -6855,9 +6909,9 @@ fn try_translate_nominal_receiving_request(
         } else {
             &amount_text
         };
-        return Some(format!("可以占用您{quantity}{object}嗎"));
+        return Some(format!("{time}可以占用您{quantity}{object}嗎"));
     }
-    Some(format!("可以給我{amount_text}{object}嗎"))
+    Some(format!("{time}可以給我{amount_text}{object}嗎"))
 }
 
 // A final yes/no question can ask whether someone asked an embedded duration

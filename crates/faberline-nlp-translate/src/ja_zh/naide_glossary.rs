@@ -8,7 +8,7 @@ use super::{
     classify_bunsetsu, dasu_case_link, finished_go, first_step, group_into_bunsetsus, handover,
     homework_glossary, household_entry, is_punct_atom, letter_deadline, naide_adverbial,
     nominal_receiving_glossary, outward_look, physical_goal_head, polarity_contrast, polite_joint,
-    te_help_glossary, trip_after_meal, written_opening,
+    recipient_scope, te_help_glossary, trip_after_meal, written_opening,
 };
 
 #[derive(Default)]
@@ -19,6 +19,7 @@ pub(crate) struct GlossarySyntax {
     time: calendar::glossary::TimeSyntax,
     nominal_request: Option<nominal_receiving_glossary::NominalRequest>,
     assistance_object: Option<te_help_glossary::AssistanceObject>,
+    eligibility: recipient_scope::EligibilitySyntax,
 }
 
 impl GlossarySyntax {
@@ -32,6 +33,14 @@ impl GlossarySyntax {
 
     pub(super) fn assistance_object(&self, atoms: &[Atom], doc: &Document) -> Option<Vec<Atom>> {
         self.assistance_object.as_ref()?.restore(atoms, doc)
+    }
+
+    pub(super) fn pickup_predicate(&self) -> Option<Span> {
+        self.eligibility.pickup
+    }
+
+    pub(super) fn restore_eligibility_object(&self, atoms: &mut Vec<Atom>) {
+        self.eligibility.restore_object(atoms);
     }
 
     pub(super) fn apply(&self, atoms: &mut Vec<Atom>) {
@@ -122,6 +131,7 @@ pub(crate) fn may_restore_glossary_syntax(
     }
     if nominal_receiving_glossary::may_restore(text, locks)
         || te_help_glossary::may_restore(text, locks)
+        || recipient_scope::may_restore(text, locks)
     {
         return true;
     }
@@ -284,7 +294,12 @@ pub(crate) fn glossary_render_locks(
         });
     let nominal_request = nominal_receiving_glossary::prove(&atoms, chars, doc, sentence, locks);
     let assistance_object = te_help_glossary::prove(&atoms, doc, locks);
-    if repaired.is_none() && nominal_request.is_none() && assistance_object.is_none() {
+    let eligibility = recipient_scope::prove(&atoms, sentence, doc, chars, locks);
+    if repaired.is_none()
+        && nominal_request.is_none()
+        && assistance_object.is_none()
+        && eligibility.is_none()
+    {
         return prior;
     }
     let (mut render, mut syntax) =
@@ -295,6 +310,7 @@ pub(crate) fn glossary_render_locks(
     }
     syntax.nominal_request = nominal_request;
     syntax.assistance_object = assistance_object;
+    syntax.eligibility = eligibility.unwrap_or_default();
     Some((render, syntax))
 }
 

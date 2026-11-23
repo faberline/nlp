@@ -85,6 +85,11 @@ fn may_cover_past_predicate(lock: &LockedSpan, chars: &[char]) -> bool {
         && chars.get(lock.source_span.end_char.saturating_sub(1)) == Some(&'た')
 }
 
+fn may_cover_meal_connector(lock: &LockedSpan, chars: &[char]) -> bool {
+    mandatory_domain_term(lock)
+        && chars.get(lock.source_span.end_char.saturating_sub(1)) == Some(&'て')
+}
+
 fn may_cover_omitted_predicate(lock: &LockedSpan, chars: &[char]) -> bool {
     let end = lock.source_span.end_char;
     mandatory_domain_term(lock)
@@ -170,6 +175,13 @@ pub(crate) fn may_restore_glossary_syntax(
     if text.matches('は').nth(1).is_some() && polarity_contrast::may_restore_topics(chars, locks) {
         return true;
     }
+    if locks
+        .locks
+        .iter()
+        .any(|lock| may_cover_meal_connector(lock, chars))
+    {
+        return true;
+    }
     if (text.contains('て') || text.contains("外を"))
         && locks
             .locks
@@ -222,22 +234,22 @@ pub(crate) fn glossary_render_locks(
     }
     let prior = omitted_render_locks(sentence, doc, chars, locks, &atoms)
         .or_else(|| {
-            if !locks
-                .locks
-                .iter()
-                .any(|lock| may_cover_past_predicate(lock, chars))
-            {
+            if !locks.locks.iter().any(|lock| {
+                may_cover_past_predicate(lock, chars) || may_cover_meal_connector(lock, chars)
+            }) {
                 return None;
             }
-            trip_after_meal::whole_trip_lock(sentence, &atoms, doc, chars, locks).map(|index| {
-                (
-                    locks.clone(),
-                    GlossarySyntax {
-                        following: Some(index),
-                        ..GlossarySyntax::default()
-                    },
-                )
-            })
+            trip_after_meal::restore_trip_locks(sentence, &atoms, doc, chars, locks).map(
+                |(render, following)| {
+                    (
+                        render,
+                        GlossarySyntax {
+                            following,
+                            ..GlossarySyntax::default()
+                        },
+                    )
+                },
+            )
         })
         .or_else(|| {
             polarity_contrast::restore_topics(sentence, doc, chars, locks, &atoms).map(

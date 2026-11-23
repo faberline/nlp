@@ -61,7 +61,7 @@ pub(super) fn prove(
                 _ => {
                     let translated =
                         translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
-                    demonstrative_classifier(&translated, noun)
+                    demonstrative_classifier(&translated, noun, TargetVariant::ZhHant)
                 }
             };
             if classifier.is_empty() && !with_case {

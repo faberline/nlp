@@ -24439,7 +24439,7 @@ mod motion_endpoint_tests {
 
     #[test]
     fn reported_subjects_and_other_speech_acts_keep_their_scope() {
-        assert_eq!(translate("この犬は泳ぎませんか。"), "這狗不游泳嗎？");
+        assert_eq!(translate("この犬は泳ぎませんか。"), "這隻狗不游泳嗎？");
         assert_eq!(
             translate("このバスは空港へ行きませんか。"),
             "這輛公車不去機場嗎？"
@@ -26395,9 +26395,10 @@ fn place_companion(source: &[Atom], predicate: usize, known_place: Option<usize>
     person.filter(|_| has_place)
 }
 
-fn demonstrative_classifier(word: &str, noun: &Atom) -> &'static str {
+fn demonstrative_classifier(word: &str, noun: &Atom, target: TargetVariant) -> &'static str {
     match word {
         "書" | "小說" | "雜誌" | "字典" => "本",
+        "狗" if target == TargetVariant::ZhHant => "隻",
         "車" | "公車" | "電車" | "汽車" | "卡車" | "腳踏車" | "自行車" => "輛",
         _ if takes_document_counter(word) => "份",
         "商店" | "餐廳" | "公司" => "家",
@@ -26409,7 +26410,28 @@ fn demonstrative_classifier(word: &str, noun: &Atom) -> &'static str {
     }
 }
 
-fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
+#[cfg(test)]
+#[test]
+fn counts_the_demonstrative_dog_without_changing_the_car_classifier() {
+    let options = crate::TranslateOptions::new(TargetVariant::ZhHant);
+    let glossary = crate::TranslationGlossary::new();
+    for (source, expected) in [
+        ("この犬は泳ぎませんか。", "這隻狗不游泳嗎？"),
+        ("この車は白いです。", "這輛車是白色的。"),
+    ] {
+        let translated = crate::analyze_and_translate(
+            source,
+            &options,
+            &glossary,
+            None,
+            faberline_nlp::doc::model::Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(translated.target_text, expected);
+    }
+}
+
+fn render_bunsetsu_np(b: &Bunsetsu, target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;
     while i < b.atoms.len() {
@@ -26465,7 +26487,7 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
                 continue;
             }
             let word = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
-            out.push_str(demonstrative_classifier(&word, noun));
+            out.push_str(demonstrative_classifier(&word, noun, target));
             out.push_str(if word == "箱" { "箱子" } else { &word });
             i += 2;
             continue;

@@ -884,7 +884,7 @@ fn render_glossary_choice(atoms: &[Atom], target: TargetVariant, chars: &[char])
         super::build_sentence_atoms(0, source, &doc, &tokens, &super::SpanLockTable::default());
     let question = raw
         .split_last()
-        .is_some_and(|(end, clause)| super::direct_ka_before_period(clause, end, &doc));
+        .is_some_and(|(end, clause)| super::direct_ka_before_period(clause, end, &doc, false));
     raw.retain(|a| {
         a.span.end_char <= end - start
             && (!matches!(a.surface.as_str(), "、" | "，")

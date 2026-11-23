@@ -179,7 +179,7 @@ pub(super) fn adjacent_report(
         .filter(|t| t.sentence == sentence_idx + 1)
         .collect::<Vec<_>>();
     let atoms = normalized_sentence_atoms(sentence_idx + 1, chars, doc, &tokens, locks);
-    Some(split_atoms_into_segments(&atoms, doc, next))
+    Some(split_atoms_into_segments(&atoms, doc, next, true))
 }
 
 fn reported_content(word: &Atom, previous: Option<&Segment>, after: &[Segment]) -> bool {

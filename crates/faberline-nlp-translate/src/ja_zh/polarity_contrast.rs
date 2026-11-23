@@ -246,7 +246,7 @@ pub(super) fn may_restore_topics(chars: &[char], locks: &SpanLockTable) -> bool 
                         kind: GlossaryKind::DomainTerm,
                         ..
                     },
-                    Some('た')
+                    Some('た' | 'て')
                 )
             )
     })
@@ -272,7 +272,7 @@ pub(super) fn restore_topics(
     let previous = &body[..comma];
     let current = &body[comma + 1..];
     affirmative_meal(previous, current, doc, chars)?;
-    let [leading @ .., meal, topic, action, _] = previous else {
+    let [leading @ .., meal, topic, action, connector] = previous else {
         return None;
     };
     let go_index = current
@@ -292,6 +292,10 @@ pub(super) fn restore_topics(
     let finite_trip = Span {
         start_char: go.span.start_char,
         end_char: current.last()?.span.end_char,
+    };
+    let linked_meal = Span {
+        start_char: action.span.start_char,
+        end_char: connector.span.end_char,
     };
     let declarative = !matches!(last.surface.as_str(), "？" | "?");
     let meal_prefix = leading.last().filter(|prefix| {
@@ -334,6 +338,11 @@ pub(super) fn restore_topics(
                     && crate::verb_glossary::is_stem_lock(lock, doc, sentence) =>
             {
                 span.end_char
+            }
+            GlossaryKind::DomainTerm if span == linked_meal && declarative => {
+                // Use the native connector for rendering. The original lock
+                // retains the full caller match and replacement.
+                action.span.end_char
             }
             GlossaryKind::DomainTerm if span == finite_trip && declarative => {
                 whole_trip = Some(lock.index);
@@ -542,6 +551,61 @@ mod tests {
         assert!(question.target_text.ends_with('？'));
         assert_eq!(question.target_text.matches("沒有前往").count(), 1);
         assert!(!question.target_text.contains('但'));
+    }
+
+    #[test]
+    fn the_whole_meal_term_keeps_both_topics_and_its_own_affirmation() {
+        let source = "朝ご飯は食べて、学校には行きませんでした。";
+        let entry = |canonical: &str, alias: &str| GlossaryEntry {
+            canonical: canonical.into(),
+            surfaces: vec![canonical.into()],
+            targets: [(TargetVariant::ZhHant, alias.into())].into(),
+            ..GlossaryEntry::default()
+        };
+        for (replacement, first, target_start) in [
+            ("享用", "早餐有享用", 3),
+            ("有吃", "早餐有吃", 2),
+            ("吃過", "早餐吃過", 2),
+        ] {
+            for (go, second) in [
+                (None, "但沒有去新校舍。"),
+                (Some(("行き", "前往")), "但沒有前往新校舍。"),
+                (Some(("行きませんでした", "沒有前往")), "但沒有前往新校舍。"),
+            ] {
+                let mut glossary = TranslationGlossary::new();
+                glossary.objects.push(entry("朝ご飯は", "早餐"));
+                glossary.places.push(entry("学校には", "新校舍"));
+                glossary.domain_terms.push(entry("食べて", replacement));
+                if let Some((term, alias)) = go {
+                    glossary.domain_terms.push(entry(term, alias));
+                }
+                let output = translate(source, &glossary);
+                assert_eq!(output.target_text, format!("{first}，{second}"));
+                assert_eq!(output.glossary_hits.len(), 3 + usize::from(go.is_some()));
+                let meal = output
+                    .glossary_hits
+                    .iter()
+                    .find(|hit| hit.canonical == "食べて")
+                    .unwrap();
+                assert_eq!(meal.source_span.start_char..meal.source_span.end_char, 4..7);
+                assert_eq!(
+                    meal.target_span.start_char..meal.target_span.end_char,
+                    target_start..target_start + replacement.chars().count()
+                );
+            }
+        }
+
+        let glossary = TranslationGlossary {
+            domain_terms: vec![
+                entry("食べて", "享用"),
+                entry("行きませんでした", "沒有前往"),
+            ],
+            ..TranslationGlossary::new()
+        };
+        let question = translate("朝ご飯は食べて、学校には行きませんでした？", &glossary);
+        assert!(question.target_text.ends_with('？'));
+        assert!(!question.target_text.contains('但'));
+        assert_eq!(question.glossary_hits.len(), 2);
     }
 
     #[test]

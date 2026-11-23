@@ -8,7 +8,7 @@ use super::{
     classify_bunsetsu, dasu_case_link, finished_go, first_step, group_into_bunsetsus, handover,
     homework_glossary, household_entry, is_punct_atom, letter_deadline, naide_adverbial,
     nominal_receiving_glossary, outward_look, physical_goal_head, polarity_contrast, polite_joint,
-    trip_after_meal, written_opening,
+    te_help_glossary, trip_after_meal, written_opening,
 };
 
 #[derive(Default)]
@@ -18,6 +18,7 @@ pub(crate) struct GlossarySyntax {
     handover: Option<handover::HandoverSyntax>,
     time: calendar::glossary::TimeSyntax,
     nominal_request: Option<nominal_receiving_glossary::NominalRequest>,
+    assistance_object: Option<te_help_glossary::AssistanceObject>,
 }
 
 impl GlossarySyntax {
@@ -29,12 +30,31 @@ impl GlossarySyntax {
         self.nominal_request.as_ref()?.render(atoms)
     }
 
+    pub(super) fn assistance_object(&self, atoms: &[Atom], doc: &Document) -> Option<Vec<Atom>> {
+        self.assistance_object.as_ref()?.restore(atoms, doc)
+    }
+
     pub(super) fn apply(&self, atoms: &mut Vec<Atom>) {
         if let Some(handover) = &self.handover {
             handover.apply(atoms);
         }
         self.time.apply(atoms);
     }
+}
+
+pub(super) fn sole_object_lock(locks: &SpanLockTable) -> Option<&LockedSpan> {
+    let [lock] = locks.locks.as_slice() else {
+        return None;
+    };
+    (lock.mandatory
+        && matches!(
+            lock.origin,
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Object,
+                ..
+            }
+        ))
+    .then_some(lock)
 }
 
 fn mandatory_domain_term(lock: &LockedSpan) -> bool {
@@ -100,7 +120,9 @@ pub(crate) fn may_restore_glossary_syntax(
     if text.contains(['「', '」', '『', '』', '"', '“', '”']) {
         return false;
     }
-    if nominal_receiving_glossary::may_restore(text, locks) {
+    if nominal_receiving_glossary::may_restore(text, locks)
+        || te_help_glossary::may_restore(text, locks)
+    {
         return true;
     }
     if text.contains('渡') && handover::may_restore(locks)
@@ -261,7 +283,8 @@ pub(crate) fn glossary_render_locks(
                 .map(|render| (render, calendar::glossary::TimeSyntax::default()))
         });
     let nominal_request = nominal_receiving_glossary::prove(&atoms, chars, doc, sentence, locks);
-    if repaired.is_none() && nominal_request.is_none() {
+    let assistance_object = te_help_glossary::prove(&atoms, doc, locks);
+    if repaired.is_none() && nominal_request.is_none() && assistance_object.is_none() {
         return prior;
     }
     let (mut render, mut syntax) =
@@ -271,6 +294,7 @@ pub(crate) fn glossary_render_locks(
         syntax.time = time;
     }
     syntax.nominal_request = nominal_request;
+    syntax.assistance_object = assistance_object;
     Some((render, syntax))
 }
 

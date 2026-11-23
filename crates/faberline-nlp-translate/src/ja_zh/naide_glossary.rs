@@ -7,8 +7,8 @@ use super::{
     Atom, Document, Span, Token, Upos, application_form, build_sentence_atoms, calendar,
     classify_bunsetsu, dasu_case_link, finished_go, first_step, group_into_bunsetsus, handover,
     homework_glossary, household_entry, is_punct_atom, letter_deadline, naide_adverbial,
-    outward_look, physical_goal_head, polarity_contrast, polite_joint, trip_after_meal,
-    written_opening,
+    nominal_receiving_glossary, outward_look, physical_goal_head, polarity_contrast, polite_joint,
+    trip_after_meal, written_opening,
 };
 
 #[derive(Default)]
@@ -17,11 +17,16 @@ pub(crate) struct GlossarySyntax {
     omitted: Option<usize>,
     handover: Option<handover::HandoverSyntax>,
     time: calendar::glossary::TimeSyntax,
+    nominal_request: Option<nominal_receiving_glossary::NominalRequest>,
 }
 
 impl GlossarySyntax {
     pub(super) fn protects_verb(&self, index: usize) -> bool {
         self.following == Some(index) || self.omitted == Some(index)
+    }
+
+    pub(super) fn nominal_request(&self, atoms: &[Atom]) -> Option<&str> {
+        self.nominal_request.as_ref()?.render(atoms)
     }
 
     pub(super) fn apply(&self, atoms: &mut Vec<Atom>) {
@@ -94,6 +99,9 @@ pub(crate) fn may_restore_glossary_syntax(
 ) -> bool {
     if text.contains(['「', '」', '『', '』', '"', '“', '”']) {
         return false;
+    }
+    if nominal_receiving_glossary::may_restore(text, locks) {
+        return true;
     }
     if text.contains('渡') && handover::may_restore(locks)
         || calendar::glossary::may_cover_time(chars, locks)
@@ -252,11 +260,17 @@ pub(crate) fn glossary_render_locks(
             application_form::restore_case(&atoms, chars, previous)
                 .map(|render| (render, calendar::glossary::TimeSyntax::default()))
         });
-    let Some((render, time)) = repaired else {
+    let nominal_request = nominal_receiving_glossary::prove(&atoms, chars, doc, sentence, locks);
+    if repaired.is_none() && nominal_request.is_none() {
         return prior;
-    };
-    let mut syntax = prior.map_or_else(GlossarySyntax::default, |(_, syntax)| syntax);
-    syntax.time = time;
+    }
+    let (mut render, mut syntax) =
+        prior.unwrap_or_else(|| (locks.clone(), GlossarySyntax::default()));
+    if let Some((new_render, time)) = repaired {
+        render = new_render;
+        syntax.time = time;
+    }
+    syntax.nominal_request = nominal_request;
     Some((render, syntax))
 }
 

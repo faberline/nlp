@@ -1,27 +1,12 @@
 //! Recover a nominal request from the shared unlocked source analysis.
 
+use super::naide_glossary::sole_object_lock;
 use super::*;
-use crate::schema::GlossaryKind;
-
-fn object_lock(locks: &SpanLockTable) -> Option<&LockedSpan> {
-    let [lock] = locks.locks.as_slice() else {
-        return None;
-    };
-    (lock.mandatory
-        && matches!(
-            lock.origin,
-            LockOrigin::Glossary {
-                kind: GlossaryKind::Object,
-                ..
-            }
-        ))
-    .then_some(lock)
-}
 
 pub(super) fn may_restore(text: &str, locks: &SpanLockTable) -> bool {
     text.trim_end_matches(|ch: char| ch.is_whitespace() || matches!(ch, '。' | '？' | '?'))
         .ends_with("いただけませんか")
-        && object_lock(locks).is_some()
+        && sole_object_lock(locks).is_some()
 }
 
 pub(super) struct NominalRequest {
@@ -56,7 +41,7 @@ pub(super) fn prove(
     sentence: usize,
     locks: &SpanLockTable,
 ) -> Option<NominalRequest> {
-    let lock = object_lock(locks)?;
+    let lock = sole_object_lock(locks)?;
     if !matches!(core_non_punct(atoms), [.., verb, masu, neg, question]
         if verb.surface == "いただけ" && masu.surface == "ませ"
             && neg.surface == "ん" && question.surface == "か")

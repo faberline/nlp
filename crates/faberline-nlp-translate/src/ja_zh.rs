@@ -40,6 +40,7 @@ mod polite_joint;
 mod polite_prohibition;
 mod reception;
 mod return_endpoint;
+mod te_help_glossary;
 mod trip_after_meal;
 mod written_opening;
 
@@ -403,6 +404,9 @@ fn translate_ja_sentence_with_verb_locks(
         homework_relative::mark_argument_commas(&mut atoms, doc);
         finished_go::mark_reading_pause(&mut atoms, doc, chars);
         place_goal_glossary::restore_destination(&mut atoms, chars, sent_span, doc, lock_table);
+        if let Some(restored) = glossary_syntax.assistance_object(&atoms, doc) {
+            atoms = restored;
+        }
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.

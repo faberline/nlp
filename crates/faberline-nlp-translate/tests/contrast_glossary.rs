@@ -112,12 +112,13 @@ fn paired_topics_keep_their_polarity_under_glossary_locks() {
 #[test]
 fn whole_meal_and_trip_locks_keep_polarity_across_source_boundaries() {
     let options = TranslateOptions::new(TargetVariant::ZhHant);
-    for clause_boundary in ["、", ""] {
+    for clause_boundary in ["、", "，", ",", ""] {
         for (source_end, first_clause, target_end) in [
             ("。", "早餐有享用，但", "。"),
             ("？", "早餐享用，", "？"),
             ("?", "早餐享用，", "？"),
             ("か。", "早餐享用，", "嗎？"),
+            ("か", "早餐享用，", "嗎？"),
         ] {
             let source =
                 format!("朝ご飯は食べて{clause_boundary}学校には行きませんでした{source_end}");
@@ -154,20 +155,25 @@ fn whole_meal_and_trip_locks_keep_polarity_across_source_boundaries() {
                 assert_eq!(direct.target_text, expected);
                 assert_eq!(direct.glossary_hits, result.glossary_hits);
                 assert_eq!(direct.clause_alignments, result.clause_alignments);
-                match (clause_boundary, result.clause_alignments.as_slice()) {
-                    ("", [sentence]) => {
-                        assert_eq!(span_text(&source, sentence.source_span), source);
-                        assert_eq!(span_text(&expected, sentence.target_span), expected);
-                    }
-                    ("、", [meal, trip]) => {
-                        assert_eq!(span_text(&source, meal.source_span), "朝ご飯は食べて");
-                        assert_eq!(
-                            trip.source_span.start_char,
-                            "朝ご飯は食べて、".chars().count()
-                        );
-                        assert_eq!(meal.target_span.end_char, trip.target_span.start_char);
-                    }
-                    _ => panic!("expected source clause alignments for {source}"),
+                let alignments = &result.clause_alignments;
+                assert_eq!(
+                    alignments
+                        .iter()
+                        .map(|clause| clause.source_span)
+                        .collect::<Vec<_>>(),
+                    doc.segmentation
+                        .clauses
+                        .iter()
+                        .map(|clause| clause.span)
+                        .collect::<Vec<_>>(),
+                    "{source}"
+                );
+                let first = alignments.first().unwrap();
+                let last = alignments.last().unwrap();
+                assert_eq!(first.target_span.start_char, 0);
+                assert_eq!(last.target_span.end_char, expected.chars().count());
+                for pair in alignments.windows(2) {
+                    assert_eq!(pair[0].target_span.end_char, pair[1].target_span.start_char);
                 }
                 let terms = [
                     ("朝ご飯は", "早餐"),

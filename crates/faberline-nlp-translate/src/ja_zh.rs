@@ -5098,6 +5098,18 @@ fn split_ja_atoms(
             continue;
         }
 
+        // An ASCII comma can also separate the two verified meal and trip topics.
+        if !a.is_locked
+            && a.surface == ","
+            && segments.is_empty()
+            && let Some(chars) = naide_chars
+            && polarity_contrast::ascii_meal_comma(&current, &atoms[i + 1..], doc, chars)
+        {
+            flush_clause(&mut current, Some("，".to_owned()), &mut segments);
+            i += 1;
+            continue;
+        }
+
         // Clause-ending comma `、` / `，` or sentence-ending punctuation `。` / `！` / `？`
         if !a.is_locked
             && matches!(
@@ -5377,7 +5389,10 @@ fn split_ja_atoms(
         i += 1;
     }
 
-    flush_clause(&mut current, None, &mut segments);
+    let question = naide_chars
+        .is_some_and(|chars| polarity_contrast::ends_meal_question(&segments, &current, doc, chars))
+        .then(|| "？".to_owned());
+    flush_clause(&mut current, question, &mut segments);
     segments
 }
 

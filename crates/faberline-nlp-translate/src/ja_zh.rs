@@ -17,6 +17,7 @@ mod daytime;
 mod direct_smoking;
 mod finished_go;
 mod finite_adjective;
+mod focused_goal_glossary;
 mod handover;
 mod homework_desire;
 mod homework_relative;
@@ -27,9 +28,13 @@ mod order_noun;
 mod outward_look;
 mod payment_potential;
 mod place_goal_glossary;
+pub(crate) mod polarity_contrast;
 mod reception;
 mod return_endpoint;
 mod trip_after_meal;
+
+#[cfg(test)]
+mod focused_negative_go_tests;
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
@@ -231,6 +236,11 @@ pub(crate) fn translate_ja_sentence(
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
     let glossary_carry = if target == TargetVariant::ZhHant && direct_quote.is_none() {
         carrying::restore_case(&mut atoms, chars, sent_span, doc, lock_table)
+    } else {
+        Vec::new()
+    };
+    let glossary_goals = if target == TargetVariant::ZhHant && direct_quote.is_none() {
+        focused_goal_glossary::restore(&mut atoms, chars, sent_span, doc, lock_table)
     } else {
         Vec::new()
     };
@@ -899,6 +909,15 @@ pub(crate) fn translate_ja_sentence(
                     source_locks: Some(lock_table),
                     following: &segments[seg_idx + 1..],
                     glossary_carry: &glossary_carry,
+                    glossary_goals: &glossary_goals,
+                    affirmative_meal: match (trailing_punct.as_deref(), segments.get(seg_idx + 1)) {
+                        (Some("、" | "，"), Some(Segment::Clause { atoms: trip, .. }))
+                            if target == TargetVariant::ZhHant && !inside_quote =>
+                        {
+                            polarity_contrast::affirmative_meal(trimmed_atoms, trip, doc, chars)
+                        }
+                        _ => None,
+                    },
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
                             if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
@@ -1080,6 +1099,21 @@ pub(crate) fn translate_ja_sentence(
                     tgt_start = out.chars().count();
                     aligned_target.end_char = tgt_start;
                     rendered.insert_str(0, "接著");
+                }
+                if target == TargetVariant::ZhHant
+                    && !inside_quote
+                    && !rendered.is_empty()
+                    && !rendered.starts_with(['但', '卻'])
+                    && let Some((previous_index, _, byte_end, char_end)) = previous_clause_comma
+                    && previous_index.checked_add(1) == Some(seg_idx)
+                    && out.len() == byte_end
+                    && tgt_start == char_end
+                    && let Some(Segment::Clause {
+                        atoms: previous, ..
+                    }) = segments.get(previous_index)
+                    && polarity_contrast::matches(previous, trimmed_atoms, doc, chars)
+                {
+                    rendered.insert(0, '但');
                 }
                 let byte_start = out.len();
                 out.push_str(&rendered);
@@ -5720,6 +5754,8 @@ struct ClauseDiscourseCtx<'a> {
     source_locks: Option<&'a SpanLockTable>,
     following: &'a [Segment],
     glossary_carry: &'a [carrying::GlossaryCarry],
+    glossary_goals: &'a [focused_goal_glossary::FocusedGoal],
+    affirmative_meal: Option<polarity_contrast::AffirmativeMeal>,
     preceding_activity: &'a [Atom],
     prior_meal: Option<usize>,
     recovered_meal_trip: Option<trip_after_meal::RecoveredTrip>,
@@ -11540,6 +11576,30 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
+    let affirmative_meal = ctx.affirmative_meal.and_then(|meal| {
+        let topic = bunsetsus.iter().position(|group| {
+            group.role == BunsetsuRole::Subj
+                && group.case_particle.as_deref() == Some("は")
+                && group
+                    .atoms
+                    .iter()
+                    .any(|atom| atom.doc_tok_idx == Some(meal.topic))
+        })?;
+        bunsetsus
+            .iter()
+            .filter(|group| group.role == BunsetsuRole::Predicate)
+            .flat_map(|group| &group.atoms)
+            .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(meal.predicate))
+            .then_some((meal, topic))
+    });
+    // An explicit time can lead the clause. Keep a bare meal topic in front.
+    if let Some((meal, topic)) = affirmative_meal
+        && meal.time_first
+    {
+        bunsetsus[topic].role = BunsetsuRole::Obj;
+    }
+    let allow_pro_drop_inject = allow_pro_drop_inject && affirmative_meal.is_none();
+
     let focused_days = if target == TargetVariant::ZhHant {
         calendar::take_focused_days(&mut bunsetsus, source)
     } else {
@@ -11637,8 +11697,18 @@ fn translate_clause_bunsetsus(
         transfer_dative: bool,
         physical_goal_head: Option<usize>,
         household_goal_head: Option<usize>,
+        focused_goal_head: Option<usize>,
         completed_go_place: Option<String>,
     }
+
+    let focused_goal = |group: &Bunsetsu| {
+        if target == TargetVariant::ZhHant {
+            focused_physical_goal_head(group, doc, ctx.source_chars)
+                .or_else(|| focused_goal_glossary::restored_head(group, ctx.glossary_goals))
+        } else {
+            None
+        }
+    };
 
     struct PlacedSubj {
         text: String,
@@ -12505,6 +12575,7 @@ fn translate_clause_bunsetsus(
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
                         household_goal_head: bare_household_goal_head(&b),
+                        focused_goal_head: focused_goal(&b),
                         completed_go_place,
                     });
                 }
@@ -12554,6 +12625,7 @@ fn translate_clause_bunsetsus(
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
                         household_goal_head: bare_household_goal_head(&b),
+                        focused_goal_head: focused_goal(&b),
                         completed_go_place,
                     });
                 }
@@ -12706,6 +12778,14 @@ fn translate_clause_bunsetsus(
         );
     if meeting_partner.is_some() {
         passive_agent_needed = false;
+    }
+    if affirmative_meal.is_some()
+        && verb_core == "吃"
+        && pre_verb_mods.is_empty()
+        && post_verb_mods.is_empty()
+        && !passive_agent_needed
+    {
+        pre_verb_mods.push("有".to_owned());
     }
     if let Some(state) = bounded_state {
         verb_core = state.to_owned();
@@ -13173,6 +13253,7 @@ fn translate_clause_bunsetsus(
                     transfer_dative: false,
                     physical_goal_head: None,
                     household_goal_head: None,
+                    focused_goal_head: None,
                     completed_go_place: None,
                 });
             }
@@ -13433,12 +13514,15 @@ fn translate_clause_bunsetsus(
         .chain(&iobjs)
         .filter(|o| matches!(o.case_particle.as_deref(), Some("に" | "へ")) && !o.is_event_time_ni);
     let only_goal = marked_goals.next();
+    let goes_to_arg = |arg: &PlacedArg| {
+        negative_go_head
+            .is_some_and(|head| arg.physical_goal_head.or(arg.focused_goal_head) == Some(head))
+    };
     let single_goal = marked_goals.next().is_none();
     let has_until = obliques
         .iter()
         .any(|o| o.case_particle.as_deref() == Some("まで"));
-    let direct_negative_physical_go = negative_go_head.is_some()
-        && only_goal.is_some_and(|o| o.physical_goal_head == negative_go_head)
+    let direct_negative_physical_go = only_goal.is_some_and(goes_to_arg)
         && single_goal
         && !has_until;
     let household_entry = single_goal
@@ -13456,7 +13540,7 @@ fn translate_clause_bunsetsus(
     let format_directional_goal = |arg: &PlacedArg, raw_np: &str| {
         if household_entry && arg.household_goal_head == household_entry_head {
             "屋".to_owned()
-        } else if direct_negative_physical_go && arg.physical_goal_head == negative_go_head {
+        } else if direct_negative_physical_go && goes_to_arg(arg) {
             raw_np.to_owned()
         } else if seated_until && arg.case_particle.as_deref() == Some("に") {
             let place = raw_np.strip_prefix('到').unwrap_or(raw_np);
@@ -13975,7 +14059,7 @@ fn translate_clause_bunsetsus(
             parts.push(format!("連{raw_np}都"));
         } else if direct_negative_physical_go
             && o.case_particle.as_deref() == Some("へ")
-            && o.physical_goal_head == negative_go_head
+            && goes_to_arg(&o)
         {
             if let Some(place) = o.text.strip_prefix('往') {
                 goal_tails.push(place.to_owned());
@@ -24707,6 +24791,66 @@ fn bare_household_goal_head(b: &Bunsetsu) -> Option<usize> {
 
 fn physical_goal_head(b: &Bunsetsu) -> Option<usize> {
     let (particle, content) = b.atoms.split_last()?;
+    physical_goal_head_for_case(b, particle, content)
+}
+
+fn focused_physical_goal_head(b: &Bunsetsu, doc: &Document, chars: &[char]) -> Option<usize> {
+    let [content @ .., case, focus] = b.atoms.as_slice() else {
+        return None;
+    };
+    let noun = content.last()?;
+    if noun.is_locked && (content.len() != 1 || noun.lemma.as_deref() != Some(LOCKED_PLACE_ATOM)) {
+        return None;
+    }
+    if !matches!(case.surface.as_str(), "に" | "へ")
+        || focus.surface != "は"
+        || focus.upos != Some(Upos::Adp)
+        || focus.deprel != "case"
+        || focus.head != noun.doc_tok_idx
+        || focus.is_locked
+        || case.span.end_char != focus.span.start_char
+        || !dasu_case_link(noun, case)
+        || !matches!(noun.deprel.as_str(), "nsubj" | "obl")
+    {
+        return None;
+    }
+
+    // The parser can mark the focused place as a subject. Keep the original
+    // case links so only the place attached to the negated verb qualifies.
+    for atom in [noun, case, focus] {
+        let id = atom.doc_tok_idx?;
+        let token = doc.tokens.get(id)?;
+        let link = doc.syntax.get(id)?;
+        if token.span != atom.span
+            || (!atom.is_locked && token.upos != atom.upos)
+            || link.token != id
+            || link.span != atom.span
+            || link.sentence != token.sentence
+            || link.head != atom.head
+            || link.deprel != atom.deprel
+        {
+            return None;
+        }
+    }
+    if !noun.is_locked {
+        return physical_goal_head_for_case(b, case, content);
+    }
+
+    // The whole lock preserves rendering, but the original noun must still
+    // pass the same physical-place check as an unlocked argument.
+    let token = doc.tokens.get(noun.doc_tok_idx?)?;
+    let source = chars.get(noun.span.start_char..noun.span.end_char)?;
+    let original = Atom {
+        surface: source.iter().collect(),
+        lemma: token.lemma.clone(),
+        upos: token.upos,
+        is_locked: false,
+        ..noun.clone()
+    };
+    physical_goal_head_for_case(b, case, std::slice::from_ref(&original))
+}
+
+fn physical_goal_head_for_case(b: &Bunsetsu, particle: &Atom, content: &[Atom]) -> Option<usize> {
     if !matches!(b.case_particle.as_deref(), Some("に" | "へ" | "まで"))
         || Some(particle.surface.as_str()) != b.case_particle.as_deref()
         || particle.upos != Some(Upos::Adp)

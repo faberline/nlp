@@ -15,7 +15,7 @@ pub mod render;
 pub mod schema;
 pub mod variant;
 
-use std::{collections::HashMap, path::Path};
+use std::{cell::OnceCell, collections::HashMap, path::Path};
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::model::{Backend, ModelError};
@@ -260,6 +260,7 @@ pub fn translate_document(
         Vec::with_capacity(doc.segmentation.opaque.len());
     let mut out_unknown: Vec<TranslateUnknown> = Vec::new();
     let mut consumed_direct_reports = HashMap::new();
+    let original_topic_source = OnceCell::new();
     let mut dates = ja_zh::DateContext::default();
     let mut honorifics = ja_zh::HonorificContext::default();
 
@@ -371,6 +372,7 @@ pub fn translate_document(
                     seq2seq,
                     direct_quote_placements.get(&si),
                     &written_quotes,
+                    &original_topic_source,
                     &mut dates,
                     &mut honorifics,
                 );
@@ -763,6 +765,7 @@ fn translate_single_sentence(
     seq2seq: Option<&LoadedTranslateModel>,
     direct_quote: Option<&ja_zh::DirectQuotePlacement>,
     written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
+    original_topic_source: &OnceCell<Option<Document>>,
     dates: &mut ja_zh::DateContext,
     honorifics: &mut ja_zh::HonorificContext,
 ) -> SentenceOutcome {
@@ -929,12 +932,58 @@ fn translate_single_sentence(
             );
             ja_zh::prior_letter_distribution(idx, chars, doc, &locks)
         });
+        let repaired = if options.target == TargetVariant::ZhHant
+            && doc.options.enrich_morphology
+            && doc.options.cpu_syntax
+            && direct_quote.is_none()
+            && written_quotes.is_empty()
+            && ja_zh::polarity_contrast::may_restore_topics(&raw_sent, chars, &lock_table)
+        {
+            let source = original_topic_source.get_or_init(|| {
+                let text: String = chars.iter().collect();
+                let (names, terms) = glossary.surface_terms();
+                let mut source_options = doc.options.clone();
+                source_options
+                    .names
+                    .retain(|name| names.binary_search(name).is_err());
+                source_options
+                    .lexicon
+                    .retain(|term| terms.binary_search(term).is_err());
+                let source = analyze_document(&text, &source_options);
+                (doc.segmentation.sentences == source.segmentation.sentences
+                    && doc.segmentation.clauses == source.segmentation.clauses)
+                    .then_some(source)
+            });
+            source.as_ref().and_then(|source| {
+                let first = source
+                    .tokens
+                    .partition_point(|token| token.sentence < sentence_idx);
+                let last = source
+                    .tokens
+                    .partition_point(|token| token.sentence <= sentence_idx);
+                let tokens = source.tokens[first..last].iter().collect::<Vec<_>>();
+                ja_zh::polarity_contrast::restore_topics(
+                    sentence_idx,
+                    source,
+                    &tokens,
+                    chars,
+                    &lock_table,
+                )
+                .map(|locks| (source, tokens, locks))
+            })
+        } else {
+            None
+        };
+        let (render_doc, render_tokens, render_locks) = match &repaired {
+            Some((source, tokens, locks)) => (*source, tokens.as_slice(), locks),
+            None => (doc, sent_tokens, &lock_table),
+        };
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
-            doc,
-            sent_tokens,
-            &lock_table,
+            render_doc,
+            render_tokens,
+            render_locks,
             &conditioning,
             options.target,
             direct_quote,

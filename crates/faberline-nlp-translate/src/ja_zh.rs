@@ -7463,12 +7463,13 @@ fn translate_clause_atoms(
     }
     if target == TargetVariant::ZhHant
         && grouped.iter().any(|group| {
-            group.atoms.first().is_some_and(|atom| {
-                atom.is_locked && atom.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
-            })
+            group
+                .atoms
+                .first()
+                .is_some_and(|atom| may_be_locked_document_noun(atom, ctx.locks))
         })
     {
-        grouped = fold_locked_document_demonstratives(grouped, doc, ctx.source_chars);
+        grouped = fold_locked_document_demonstratives(grouped, doc, ctx.source_chars, ctx.locks);
     }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target, Some(ctx));
     if target == TargetVariant::ZhHant
@@ -17618,13 +17619,24 @@ fn source_demonstrative(det: &Atom, noun_index: usize, nominal_start: usize) -> 
     }
 }
 
+fn may_be_locked_document_noun(atom: &Atom, locks: &[LockedSpan]) -> bool {
+    atom.is_locked
+        && (atom.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
+            || locks.iter().any(|lock| {
+                lock.source_span == atom.span
+                    && lock.placeholder == atom.surface
+                    && naide_glossary::mandatory_domain_term(lock)
+            }))
+}
+
 fn locked_document_demonstrative(
     det: &Atom,
     noun: &Atom,
     doc: &Document,
     source_chars: &[char],
+    locks: &[LockedSpan],
 ) -> Option<String> {
-    if !noun.is_locked || noun.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM) {
+    if !may_be_locked_document_noun(noun, locks) {
         return None;
     }
     let noun_index = noun.doc_tok_idx?;
@@ -17645,8 +17657,13 @@ fn locked_document_demonstrative(
         .get(noun.span.start_char..noun.span.end_char)?
         .iter()
         .collect();
-    let word = translate_single_ja_term(&source, token.lemma.as_deref(), token.upos);
-    takes_document_counter(&word).then(|| format!("{pointer}份"))
+    original_document_noun(&source, token.lemma.as_deref(), token.upos)
+        .then(|| format!("{pointer}份"))
+}
+
+fn original_document_noun(surface: &str, lemma: Option<&str>, pos: Option<Upos>) -> bool {
+    pos == Some(Upos::Noun)
+        && takes_document_counter(&translate_single_ja_term(surface, lemma, pos))
 }
 
 fn takes_document_counter(word: &str) -> bool {
@@ -17657,13 +17674,14 @@ fn fold_locked_document_demonstratives(
     groups: Vec<Bunsetsu>,
     doc: &Document,
     source_chars: &[char],
+    locks: &[LockedSpan],
 ) -> Vec<Bunsetsu> {
     let mut merged: Vec<Bunsetsu> = Vec::with_capacity(groups.len());
     for mut group in groups {
         if let Some(previous) = merged.last()
             && let [det] = previous.atoms.as_slice()
             && let Some(noun) = group.atoms.first()
-            && let Some(prefix) = locked_document_demonstrative(det, noun, doc, source_chars)
+            && let Some(prefix) = locked_document_demonstrative(det, noun, doc, source_chars, locks)
         {
             merged.pop();
             prepend_locked_atom(&mut group, prefix);

@@ -70,7 +70,16 @@ pub(super) fn sole_object_lock(locks: &SpanLockTable) -> Option<&LockedSpan> {
     .then_some(lock)
 }
 
-fn mandatory_domain_term(lock: &LockedSpan) -> bool {
+pub(super) fn sole_object_or_term_lock(locks: &SpanLockTable) -> Option<&LockedSpan> {
+    sole_object_lock(locks).or_else(|| {
+        let [lock] = locks.locks.as_slice() else {
+            return None;
+        };
+        mandatory_domain_term(lock).then_some(lock)
+    })
+}
+
+pub(super) fn mandatory_domain_term(lock: &LockedSpan) -> bool {
     lock.mandatory
         && matches!(
             lock.origin,
@@ -376,6 +385,7 @@ pub(crate) fn glossary_render_locks(
     syntax.nominal_request = nominal_request;
     syntax.assistance_object = assistance_object;
     syntax.eligibility = eligibility.unwrap_or_default();
+    syntax.eligibility.restore_render_role(&mut render);
     syntax.prohibition = prohibition;
     Some((render, syntax))
 }

@@ -3,9 +3,12 @@
 use faberline_nlp::Span;
 use faberline_nlp::doc::Document;
 
-use super::naide_glossary::sole_object_lock;
-use super::{Atom, LOCKED_OBJECT_ATOM, Upos, build_sentence_atoms, core_non_punct};
-use crate::lock::SpanLockTable;
+use super::naide_glossary::{mandatory_domain_term, sole_object_or_term_lock};
+use super::{
+    Atom, LOCKED_OBJECT_ATOM, Upos, build_sentence_atoms, core_non_punct, original_document_noun,
+};
+use crate::GlossaryKind;
+use crate::lock::{LockOrigin, SpanLockTable};
 
 pub(super) const EXCLUSION_OUTSIDE: &str = "__ja_group_exclusion_outside";
 
@@ -55,7 +58,7 @@ pub(super) fn mark_exclusions(atoms: &mut [Atom]) {
 pub(super) fn may_restore(text: &str, locks: &SpanLockTable) -> bool {
     text.contains("以外")
         && text.contains("いただけませんか")
-        && (locks.is_empty() || sole_object_lock(locks).is_some())
+        && (locks.is_empty() || sole_object_or_term_lock(locks).is_some())
 }
 
 struct CoveredObject {
@@ -68,10 +71,21 @@ struct CoveredObject {
 #[derive(Default)]
 pub(super) struct EligibilitySyntax {
     object: Option<CoveredObject>,
+    document_term: Option<usize>,
     pub(super) pickup: Option<Span>,
 }
 
 impl EligibilitySyntax {
+    pub(super) fn restore_render_role(&self, render: &mut SpanLockTable) {
+        if let Some(index) = self.document_term
+            && let Some(lock) = render.locks.iter_mut().find(|lock| lock.index == index)
+            && let LockOrigin::Glossary { kind, .. } = &mut lock.origin
+        {
+            // Keep the caller's category and offsets in the original table.
+            *kind = GlossaryKind::Object;
+        }
+    }
+
     pub(super) fn restore_object(&self, atoms: &mut Vec<Atom>) {
         let Some(covered) = &self.object else { return };
         let body = core_non_punct(atoms);
@@ -122,7 +136,7 @@ pub(super) fn prove(
     let lock = if locks.is_empty() {
         None
     } else {
-        Some(sole_object_lock(locks)?)
+        Some(sole_object_or_term_lock(locks)?)
     };
     let start = request.item.first()?.span.start_char;
     let case_end = request.case.span.end_char;
@@ -130,6 +144,20 @@ pub(super) fn prove(
         entry.source_span.start_char < start || entry.source_span.end_char > case_end
     }) {
         return None;
+    }
+    let pickup = matches_distribution(&request, sentence, doc, chars).then_some(request.root.span);
+    let mut document_term = None;
+    if let Some(term) = lock.filter(|lock| mandatory_domain_term(lock)) {
+        let noun = request.item.last()?;
+        if pickup.is_none()
+            || term.source_span.start_char != start
+            || (term.source_span.end_char != noun.span.end_char
+                && term.source_span.end_char != case_end)
+            || !original_document_noun(&noun.surface, noun.lemma.as_deref(), noun.upos)
+        {
+            return None;
+        }
+        document_term = Some(term.index);
     }
     let object = lock
         .filter(|entry| {
@@ -141,8 +169,11 @@ pub(super) fn prove(
             verb: request.root.span,
             particle: request.case.clone(),
         });
-    let pickup = matches_distribution(&request, sentence, doc, chars).then_some(request.root.span);
-    (object.is_some() || pickup.is_some()).then_some(EligibilitySyntax { object, pickup })
+    (object.is_some() || pickup.is_some()).then_some(EligibilitySyntax {
+        object,
+        document_term,
+        pickup,
+    })
 }
 
 pub(super) fn matches_pickup_predicate(atoms: &[Atom], proof: Option<Span>) -> bool {
@@ -335,7 +366,8 @@ mod tests {
     use faberline_nlp::doc::model::Backend;
 
     use crate::{
-        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+        GlossaryEntry, GlossaryKind, TargetVariant, TranslateOptions, TranslationGlossary,
+        analyze_and_translate, doc_options_for_translate, translate_document,
     };
 
     #[test]
@@ -410,20 +442,47 @@ mod tests {
             ),
         ] {
             let mut glossary = TranslationGlossary::new();
-            glossary.objects.push(GlossaryEntry {
+            let entry = GlossaryEntry {
                 canonical: term.to_owned(),
                 surfaces: vec![term.to_owned()],
                 targets: [(TargetVariant::ZhHant, gloss.to_owned())].into(),
                 ..GlossaryEntry::default()
-            });
-            let translated =
-                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
-            assert_eq!(translated.target_text, expected);
-            assert_eq!(translated.glossary_hits.len(), count);
-            for hit in &translated.glossary_hits {
-                assert_eq!(hit.kind, crate::GlossaryKind::Object);
-                assert_eq!(slice(source, hit.source_span), term);
-                assert_eq!(slice(expected, hit.target_span), gloss);
+            };
+            let doc = faberline_nlp::doc::analyze_document(
+                source,
+                &doc_options_for_translate(&options, &TranslationGlossary::new()),
+            );
+            for kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+                glossary.objects = matches!(kind, GlossaryKind::Object)
+                    .then(|| entry.clone())
+                    .into_iter()
+                    .collect();
+                glossary.domain_terms = matches!(kind, GlossaryKind::DomainTerm)
+                    .then(|| entry.clone())
+                    .into_iter()
+                    .collect();
+                let analyzed =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                let supplied = translate_document(
+                    source,
+                    &doc,
+                    #[cfg(feature = "narrative")]
+                    None,
+                    &options,
+                    &glossary,
+                    None,
+                )
+                .unwrap();
+                for translated in [analyzed, supplied] {
+                    assert_eq!(translated.target_text, expected, "{term} {kind:?}");
+                    assert_eq!(translated.glossary_hits.len(), count);
+                    for hit in &translated.glossary_hits {
+                        assert_eq!(hit.kind, kind);
+                        assert_eq!(slice(source, hit.source_span), term);
+                        assert_eq!(slice(expected, hit.target_span), gloss);
+                    }
+                }
             }
         }
     }

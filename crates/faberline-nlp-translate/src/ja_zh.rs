@@ -199,7 +199,7 @@ pub(crate) struct DirectQuotePlacement {
     pub(crate) detached_from: Option<usize>,
 }
 
-pub(crate) fn companion_place_render_locks(
+pub(crate) fn companion_render_locks(
     sentence: usize,
     chars: &[char],
     doc: &Document,
@@ -207,7 +207,7 @@ pub(crate) fn companion_place_render_locks(
     locks: &SpanLockTable,
 ) -> Option<SpanLockTable> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
-    finished_go::restore_companion_place(sentence, &atoms, doc, chars, locks)
+    finished_go::restore_companion_locks(sentence, &atoms, doc, chars, locks)
 }
 
 /// Translate a single Japanese (or Ja-dominant Mixed) sentence into `target` (`zh-Hant` / `zh-Hans`),

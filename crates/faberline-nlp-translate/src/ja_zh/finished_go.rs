@@ -2,13 +2,16 @@
 
 use faberline_nlp::doc::{EntityKind, Token};
 
-use crate::lock::SpanLockTable;
+use crate::{
+    GlossaryKind,
+    lock::{LockOrigin, SpanLockTable},
+};
 
 use super::{
-    Atom, Bunsetsu, BunsetsuRole, CLOCK_ATOM, Document, LOCKED_PLACE_ATOM, Segment, SemanticClass,
-    Span, Upos, clock_case_governor, dasu_case_link, group_into_bunsetsus, is_clock_atom,
-    is_companion_person, physical_goal_head, return_companion_owner, source_time_head,
-    split_atoms_into_segments,
+    Atom, Bunsetsu, BunsetsuRole, CLOCK_ATOM, Document, LOCKED_PLACE_ATOM, LOCKED_RESIDENT_ATOM,
+    Segment, SemanticClass, Span, Upos, clock_case_governor, dasu_case_link, group_into_bunsetsus,
+    is_clock_atom, is_companion_person, physical_goal_head, return_companion_owner,
+    source_time_head, split_atoms_into_segments,
 };
 
 #[cfg(test)]
@@ -312,6 +315,47 @@ fn has_local_subject(groups: &[Bunsetsu], predicate: usize, doc: &Document) -> b
     })
 }
 
+fn original_actor(atom: &Atom, doc: &Document, source: &[char]) -> Option<Atom> {
+    if !atom.is_locked || atom.lemma.as_deref() != Some(LOCKED_RESIDENT_ATOM) {
+        return None;
+    }
+    let token = source_head(atom, doc)?;
+    if token.span != atom.span {
+        return None;
+    }
+    let mut original = atom.clone();
+    original.surface = raw(source, atom.span)?.iter().collect();
+    original.upos = token.upos;
+    original.lemma.clone_from(&token.lemma);
+    original.is_locked = false;
+    Some(original)
+}
+
+fn companion_owner(
+    noun: &Atom,
+    marker: &Atom,
+    atoms: &[Atom],
+    doc: &Document,
+    source: &[char],
+) -> Option<usize> {
+    let original = original_actor(noun, doc, source);
+    if !is_companion_person(original.as_ref().unwrap_or(noun)) {
+        return None;
+    }
+    let position = atoms
+        .iter()
+        .position(|atom| atom.doc_tok_idx == marker.doc_tok_idx)?;
+    if original.is_none() {
+        return return_companion_owner(atoms, position);
+    }
+    // Check the original actor roles while keeping placeholders in the render atoms.
+    let evidence: Vec<_> = atoms
+        .iter()
+        .map(|atom| original_actor(atom, doc, source).unwrap_or_else(|| atom.clone()))
+        .collect();
+    return_companion_owner(&evidence, position)
+}
+
 pub(super) fn mark_companions(
     groups: &mut [Bunsetsu],
     atoms: &[Atom],
@@ -329,7 +373,6 @@ pub(super) fn mark_companions(
         };
         if noun.head != Some(predicate)
             || noun.deprel != "obl"
-            || noun.is_locked
             || source_head(noun, doc).is_none_or(|original| original.span != noun.span)
             || source_head(marker, doc).is_none_or(|original| original.span != marker.span)
             || !dasu_case_link(noun, marker)
@@ -339,16 +382,11 @@ pub(super) fn mark_companions(
         let candidate = (index, marker.doc_tok_idx);
         let previous = match (raw(source, noun.span), raw(source, marker.span)) {
             (_, Some(['と']))
-                if is_companion_person(noun)
-                    && atoms
-                        .iter()
-                        .position(|atom| atom.doc_tok_idx == marker.doc_tok_idx)
-                        .and_then(|position| return_companion_owner(atoms, position))
-                        == Some(predicate) =>
+                if companion_owner(noun, marker, atoms, doc, source) == Some(predicate) =>
             {
                 person.replace(candidate)
             }
-            (Some(['一', '緒']), Some(['に'])) => together.replace(candidate),
+            (Some(['一', '緒']), Some(['に'])) if !noun.is_locked => together.replace(candidate),
             _ => continue,
         };
         if previous.is_some() {
@@ -420,17 +458,14 @@ fn is_companion_group(group: &Bunsetsu) -> bool {
     )
 }
 
-/// Expose a proven goal's case marker while keeping the caller's replacement.
-pub(super) fn restore_companion_place(
+/// Expose the original role markers while keeping the caller's replacements.
+pub(super) fn restore_companion_locks(
     sentence: usize,
     atoms: &[Atom],
     doc: &Document,
     source: &[char],
     locks: &SpanLockTable,
 ) -> Option<SpanLockTable> {
-    let [place_lock] = locks.locks.as_slice() else {
-        return None;
-    };
     let span = doc.segmentation.sentences.get(sentence)?.span;
     let clauses = split_atoms_into_segments(atoms, doc, span);
     let [Segment::Clause { atoms, .. }] = clauses.as_slice() else {
@@ -442,17 +477,48 @@ pub(super) fn restore_companion_place(
         return None;
     }
     let going = resolve(&groups, atoms, doc, source)?;
-    let [place, marker] = groups[going.goal_group].atoms.as_slice() else {
-        return None;
-    };
-    if place_lock.source_span.start_char != place.span.start_char
-        || place_lock.source_span.end_char != marker.span.end_char
-    {
-        return None;
-    }
     let mut render = locks.clone();
-    render.locks.first_mut()?.source_span = place.span;
-    Some(render)
+    let mut actor = false;
+    let mut place = false;
+    let mut exposed_marker = false;
+    for lock in render.locks.iter_mut().filter(|lock| {
+        lock.source_span.start_char < span.end_char && span.start_char < lock.source_span.end_char
+    }) {
+        if !lock.mandatory {
+            return None;
+        }
+        let group = match lock.origin {
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Actor,
+                ..
+            } if !actor => {
+                actor = true;
+                groups
+                    .iter()
+                    .find(|group| group.role == BunsetsuRole::TravelCompanion)?
+            }
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Place,
+                ..
+            } if !place => {
+                place = true;
+                &groups[going.goal_group]
+            }
+            _ => return None,
+        };
+        let [noun, marker] = group.atoms.as_slice() else {
+            return None;
+        };
+        let end = lock.source_span.end_char;
+        if lock.source_span.start_char != noun.span.start_char
+            || (end != noun.span.end_char && end != marker.span.end_char)
+        {
+            return None;
+        }
+        exposed_marker |= lock.source_span != noun.span;
+        lock.source_span = noun.span;
+    }
+    (actor || exposed_marker).then_some(render)
 }
 
 /// A reading comma after a source-linked time can keep all arguments of the

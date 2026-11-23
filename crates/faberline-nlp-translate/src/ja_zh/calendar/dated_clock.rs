@@ -200,6 +200,17 @@ fn bind_case(
         if !whole && start_clock > clock.span.start_char {
             continue;
         }
+        // A glossary can split に from its clock and give the date and clock
+        // separate links to the same event.
+        let protected_clock = marker.surface == "に"
+            && clock.span.start_char == start_clock
+            && clock.span.end_char == end
+            && locks.locks.iter().any(|lock| {
+                lock.mandatory
+                    && lock.source_span.start_char == start_clock
+                    && lock.source_span.end_char == end
+                    && matches!(lock.origin, LockOrigin::Glossary { .. })
+            });
         let attached = doc.syntax.iter().any(|day| {
             day.span.end_char == after_day
                 && day.sentence == clock.sentence
@@ -208,10 +219,16 @@ fn bind_case(
                 } else {
                     day.deprel == "advmod"
                 })
-                && day
-                    .head
-                    .and_then(|h| doc.tokens.get(h))
-                    .is_some_and(|h| start_clock <= h.span.start_char && h.span.end_char <= end)
+                && (day.head.is_some_and(|head| {
+                    doc.tokens.get(head).is_some_and(|token| {
+                        // The verified fused clock host also contains its case particle.
+                        start_clock <= token.span.start_char
+                            && (token.span.end_char <= end || fused_ni && head == clock_id)
+                    })
+                }) || (!genitive
+                    && protected_clock
+                    && clock.head.is_some()
+                    && day.head == clock.head))
         });
         if !whole && !attached {
             continue;

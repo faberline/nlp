@@ -8,8 +8,9 @@ use super::{
     classify_bunsetsu, completed_departure, dasu_case_link, finished_go, first_step,
     group_into_bunsetsus, handover, homework_glossary, household_entry,
     is_departure_source_surface, is_punct_atom, lesson_start, letter_deadline, naide_adverbial,
-    nominal_receiving_glossary, outward_look, physical_goal_head, polarity_contrast, polite_joint,
-    polite_prohibition, recipient_scope, te_help_glossary, trip_after_meal, written_opening,
+    nominal_receiving_glossary, outward_look, partitive, physical_goal_head, polarity_contrast,
+    polite_joint, polite_prohibition, recipient_scope, te_help_glossary, trip_after_meal,
+    written_opening,
 };
 
 #[derive(Default)]
@@ -22,6 +23,7 @@ pub(crate) struct GlossarySyntax {
     nominal_request: Option<nominal_receiving_glossary::NominalRequest>,
     assistance_object: Option<te_help_glossary::AssistanceObject>,
     eligibility: recipient_scope::EligibilitySyntax,
+    halves: Vec<partitive::Repair>,
     pub(super) lesson_start: Option<lesson_start::PredicateLock>,
 }
 
@@ -54,6 +56,9 @@ impl GlossarySyntax {
             handover.apply(atoms);
         }
         self.time.apply(atoms);
+        for half in &self.halves {
+            half.apply(atoms);
+        }
     }
 }
 
@@ -168,6 +173,7 @@ pub(crate) fn may_restore_glossary_syntax(
         || te_help_glossary::may_restore(text, locks)
         || recipient_scope::may_restore(text, locks)
         || lesson_start::may_restore(text, chars, locks)
+        || partitive::may_repair(text, chars, locks)
         || text.contains("ないでください")
             && polite_prohibition::may_restore_predicate(chars, locks)
     {
@@ -273,10 +279,12 @@ pub(crate) fn glossary_render_locks(
 ) -> Option<(SpanLockTable, GlossarySyntax)> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
     if let Some((render, handover)) = handover::restore_case(sentence, doc, &atoms, chars, locks) {
+        let halves = partitive::prove(&atoms, &render);
         return Some((
             render,
             GlossarySyntax {
                 handover: Some(handover),
+                halves,
                 ..GlossarySyntax::default()
             },
         ));
@@ -376,12 +384,19 @@ pub(crate) fn glossary_render_locks(
         chars,
         repaired.as_ref().map_or(previous, |(render, _)| render),
     );
+    let partitive_locks = lesson
+        .as_ref()
+        .map(|(render, _)| render)
+        .or_else(|| repaired.as_ref().map(|(render, _)| render))
+        .unwrap_or(previous);
+    let halves = partitive::prove(&atoms, partitive_locks);
     if repaired.is_none()
         && nominal_request.is_none()
         && assistance_object.is_none()
         && eligibility.is_none()
         && prohibition.is_none()
         && lesson.is_none()
+        && halves.is_empty()
     {
         return prior;
     }
@@ -395,6 +410,7 @@ pub(crate) fn glossary_render_locks(
     syntax.assistance_object = assistance_object;
     syntax.eligibility = eligibility.unwrap_or_default();
     syntax.prohibition = prohibition;
+    syntax.halves = halves;
     if let Some((repaired, predicate)) = lesson {
         render = repaired;
         syntax.lesson_start = predicate;

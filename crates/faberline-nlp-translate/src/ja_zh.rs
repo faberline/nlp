@@ -4490,7 +4490,7 @@ fn direct_ka_before_period(clause: &[Atom], end: &Atom, doc: &Document) -> bool 
                 && head.span.end_char <= a.span.end_char
                 && body.windows(2).any(|p| {
                     !p[0].is_locked
-                        && p[0].surface == "まで"
+                        && matches!(p[0].surface.as_str(), "まで" | "から")
                         && p[0].head == ka.head
                         && !p[1].is_locked
                         && p[1].deprel == "cop"
@@ -5272,8 +5272,8 @@ fn split_ja_atoms(
             && atoms[i + 1..]
                 .iter()
                 .any(|later| !later.is_locked && later.surface == "過言");
-        // Keep source-plus-copula endings on the boundary path. Grouping `からです`
-        // into one bunsetsu would classify the source phrase as a predicate and lose `從`.
+        // A verified schedule reads からです as one temporal predicate.
+        // Keep the existing boundary for a spatial source followed by a copula.
         let next_is_copula = atoms.get(i + 1).is_some_and(|next| {
             !next.is_locked
                 && matches!(
@@ -5284,7 +5284,14 @@ fn split_ja_atoms(
         let is_source_kara = a.surface == "から"
             && a.upos == Some(Upos::Adp)
             && i > 0
-            && !next_is_copula
+            && (!next_is_copula
+                || naide_chars.is_some()
+                    && copular_time::keeps_start_with_copula(
+                        &current[..current.len() - 1],
+                        a,
+                        &atoms[i + 1],
+                        doc,
+                    ))
             && !has_temporal_te_kara_tail(&current)
             && !matches!(atoms[i - 1].upos, Some(Upos::Verb | Upos::Adj | Upos::Aux));
         if !a.is_locked

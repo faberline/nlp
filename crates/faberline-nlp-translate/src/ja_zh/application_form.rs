@@ -217,12 +217,12 @@ pub(super) fn filing_object_span(
     None
 }
 
-fn case_inclusive_object(lock: &LockedSpan, chars: &[char]) -> bool {
+fn case_inclusive_form(lock: &LockedSpan, chars: &[char]) -> bool {
     if !lock.mandatory
         || !matches!(
             lock.origin,
             LockOrigin::Glossary {
-                kind: GlossaryKind::Object,
+                kind: GlossaryKind::Object | GlossaryKind::DomainTerm,
                 ..
             }
         )
@@ -241,7 +241,7 @@ pub(super) fn may_restore_case(chars: &[char], locks: &SpanLockTable) -> bool {
     locks
         .locks
         .iter()
-        .any(|lock| case_inclusive_object(lock, chars))
+        .any(|lock| case_inclusive_form(lock, chars))
 }
 
 pub(super) fn restore_case(
@@ -251,7 +251,7 @@ pub(super) fn restore_case(
 ) -> Option<SpanLockTable> {
     let mut render = None;
     for (index, lock) in locks.locks.iter().enumerate() {
-        if case_inclusive_object(lock, chars)
+        if case_inclusive_form(lock, chars)
             && let Some((span, _)) = filing_object_span(original, chars, lock.source_span)
         {
             // Expose the case marker in the render copy. The original lock

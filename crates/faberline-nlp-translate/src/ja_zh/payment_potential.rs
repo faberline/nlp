@@ -2,6 +2,98 @@
 
 use super::*;
 
+fn method_part<'a>(
+    atom: &'a Atom,
+    chars: &[char],
+    source: &[char],
+    gloss: &'static str,
+    locks: Option<&SpanLockTable>,
+) -> Option<&'a str> {
+    if chars.get(atom.span.start_char..atom.span.end_char)? != source {
+        return None;
+    }
+    if !atom.is_locked {
+        return atom
+            .surface
+            .chars()
+            .eq(source.iter().copied())
+            .then_some(gloss);
+    }
+    locks?
+        .locks
+        .iter()
+        .any(|lock| {
+            lock.mandatory
+                && lock.source_span == atom.span
+                && lock.placeholder == atom.surface
+                && matches!(
+                    lock.origin,
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Object | GlossaryKind::DomainTerm,
+                        ..
+                    }
+                )
+        })
+        .then_some(atom.surface.as_str())
+}
+
+// Treat the bare compound as one noun. Keep separate placeholders for its
+// two parts so each glossary hit retains its own source and target span.
+pub(super) fn bind_method(
+    atoms: &mut Vec<Atom>,
+    doc: &Document,
+    chars: &[char],
+    locks: Option<&SpanLockTable>,
+) {
+    for end in (1..atoms.len()).rev() {
+        let payment = &atoms[end - 1];
+        let method = &atoms[end];
+        if payment.span.end_char != method.span.start_char {
+            continue;
+        }
+        let (Some(left), Some(right)) = (
+            method_part(payment, chars, &['支', '払', 'い'], "付款", locks),
+            method_part(method, chars, &['方', '法'], "方式", locks),
+        ) else {
+            continue;
+        };
+        let (Some(payment_idx), Some(method_idx)) = (payment.doc_tok_idx, method.doc_tok_idx)
+        else {
+            continue;
+        };
+        let (Some(payment_token), Some(method_token)) =
+            (doc.tokens.get(payment_idx), doc.tokens.get(method_idx))
+        else {
+            continue;
+        };
+        // A caller's lexicon entry can tag 支払い as an adjectival modifier.
+        // Its link to 方法 must still be present in the supplied analysis.
+        let describes_method = match payment.deprel.as_str() {
+            "acl" => {
+                payment_token.upos == Some(Upos::Verb)
+                    && payment_token.lemma.as_deref() == Some("支払う")
+            }
+            "amod" => payment.is_locked && payment_token.upos == Some(Upos::Adj),
+            _ => false,
+        };
+        if !describes_method
+            || method_token.upos != Some(Upos::Noun)
+            || payment_token.span != payment.span
+            || method_token.span != method.span
+            || payment.head != Some(method_idx)
+            || atoms.iter().any(|atom| atom.head == Some(payment_idx))
+        {
+            continue;
+        }
+        let mut compound = method.clone();
+        compound.span.start_char = payment.span.start_char;
+        compound.surface = format!("{left}{right}");
+        compound.upos = Some(Upos::Noun);
+        compound.is_locked = true;
+        atoms.splice(end - 1..=end, [compound]);
+    }
+}
+
 fn potential(atom: &Atom) -> bool {
     !atom.is_locked
         && atom.upos == Some(Upos::Verb)
@@ -732,7 +824,10 @@ pub(super) fn render(source: &[Atom], target: TargetVariant, reported: bool) -> 
 
 #[cfg(test)]
 mod tests {
-    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use crate::{
+        GlossaryEntry, Span, TargetVariant, TranslateOptions, TranslationGlossary,
+        analyze_and_translate,
+    };
     use faberline_nlp::doc::model::Backend;
 
     fn translate(jp: &str) -> String {
@@ -747,6 +842,68 @@ mod tests {
         )
         .unwrap()
         .target_text
+    }
+
+    #[test]
+    fn payment_method_keeps_the_store_and_question_polarity() {
+        for (source, expected) in [
+            (
+                "この店の支払い方法を調べています。お客さんはスマホで支払えますか。",
+                "正在調查這家商店的付款方式。客人能用智慧型手機付款嗎？",
+            ),
+            (
+                "この店の支払い方法を調べています。お客さんはスマホで支払えませんか。",
+                "正在調查這家商店的付款方式。客人不能用智慧型手機付款嗎？",
+            ),
+            (
+                "この店の支払う方法を調べています。",
+                "正在調查這家商店的結帳的方法。",
+            ),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn payment_method_keeps_whole_and_split_glossary_matches() {
+        let source = "この店の支払い方法を調べています。お客さんはスマホで支払えますか。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let slice = |text: &str, span: Span| {
+            text.chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect::<String>()
+        };
+        for (terms, expected) in [
+            (vec![("支払い方法", "支付管道")], "支付管道"),
+            (vec![("支払い", "結清")], "結清方式"),
+            (vec![("方法", "途徑")], "付款途徑"),
+            (vec![("支払い", "結清"), ("方法", "途徑")], "結清途徑"),
+        ] {
+            let glossary = TranslationGlossary {
+                domain_terms: terms
+                    .iter()
+                    .map(|&(term, replacement)| GlossaryEntry {
+                        canonical: term.to_owned(),
+                        surfaces: vec![term.to_owned()],
+                        targets: [(TargetVariant::ZhHant, replacement.to_owned())].into(),
+                        ..GlossaryEntry::default()
+                    })
+                    .collect(),
+                ..TranslationGlossary::new()
+            };
+            let result =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(
+                result.target_text,
+                format!("正在調查這家商店的{expected}。客人能用智慧型手機付款嗎？")
+            );
+            assert_eq!(result.glossary_hits.len(), terms.len());
+            for (hit, (term, replacement)) in result.glossary_hits.iter().zip(terms) {
+                assert_eq!(slice(source, hit.source_span), term);
+                assert_eq!(slice(&result.target_text, hit.target_span), replacement);
+            }
+        }
     }
 
     #[test]

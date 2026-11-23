@@ -105,12 +105,12 @@ pub(crate) fn handover_render_locks(
         teacher: None,
     };
     for lock in &mut render.table.locks {
-        let LockOrigin::Glossary { kind, .. } = lock.origin else {
+        let LockOrigin::Glossary { kind, .. } = &mut lock.origin else {
             return None;
         };
         let span = lock.source_span;
-        if kind == GlossaryKind::DomainTerm {
-            let full = original.iter().enumerate().find_map(|(i, noun)| {
+        if *kind == GlossaryKind::DomainTerm
+            && let Some(full) = original.iter().enumerate().find_map(|(i, noun)| {
                 if noun.span.start_char != span.start_char {
                     return None;
                 }
@@ -121,7 +121,8 @@ pub(crate) fn handover_render_locks(
                     start_char: span.start_char,
                     end_char: end.span.end_char,
                 })
-            })?;
+            })
+        {
             if render.course_time.replace((full, verb)).is_some() {
                 return None;
             }
@@ -165,14 +166,29 @@ pub(crate) fn handover_render_locks(
                     && node.span.start_char == head.span.end_char
             })
         })?;
-        if head.span.end_char != case.span.start_char
-            || !matches!(
-                (kind, head.deprel.as_str(), written_case(chars, case.span)),
-                (GlossaryKind::Object, "obj", Some('を'))
-                    | (GlossaryKind::Actor, "nsubj", Some('は' | 'が'))
-                    | (GlossaryKind::Actor, "obl" | "iobj", Some('に' | 'へ'))
-            )
-        {
+        if head.span.end_char != case.span.start_char {
+            return None;
+        }
+        let role = match (head.deprel.as_str(), written_case(chars, case.span)) {
+            ("obj", Some('を')) => GlossaryKind::Object,
+            ("nsubj", Some('は' | 'が')) | ("obl" | "iobj", Some('に' | 'へ')) => {
+                GlossaryKind::Actor
+            }
+            _ => return None,
+        };
+        if *kind == GlossaryKind::DomainTerm {
+            if !lock.mandatory {
+                return None;
+            }
+            if role == GlossaryKind::Actor {
+                let argument = original
+                    .iter()
+                    .find(|atom| atom.doc_tok_idx == Some(head.token))?;
+                if !human_recipient(span.start_char, argument, token, source) {
+                    return None;
+                }
+            }
+        } else if *kind != role {
             return None;
         }
         // The caller may wrap a whole relative clause, name, or compound.
@@ -193,6 +209,9 @@ pub(crate) fn handover_render_locks(
                 return None;
             }
         }
+        // Only the render copy uses the proven source role. The caller still
+        // receives the original glossary kind and span.
+        *kind = role;
         lock.source_span.end_char = head.span.end_char;
         if head.deprel == "nsubj"
             && let Some(pause) = teacher_pause
@@ -316,7 +335,7 @@ fn finite_handover(groups: &[Bunsetsu], doc: &Document) -> Option<(usize, &'stat
     }
 }
 
-fn human_recipient(group: &Bunsetsu, head: &Atom, token: &Token, doc: &Document) -> bool {
+fn human_recipient(start_char: usize, head: &Atom, token: &Token, doc: &Document) -> bool {
     if head.is_locked && head.surface.starts_with("[[PH") {
         return whole_glossary_atom(head, LOCKED_RESIDENT_ATOM, doc);
     }
@@ -326,7 +345,7 @@ fn human_recipient(group: &Bunsetsu, head: &Atom, token: &Token, doc: &Document)
         entity.kind == EntityKind::Name
             && entity.sentence == token.sentence
             && entity.span.end_char == head.span.end_char
-            && entity.span.start_char >= group.atoms[0].span.start_char
+            && entity.span.start_char >= start_char
             && entity.span.start_char <= token.span.start_char
     });
     if head.is_locked {
@@ -585,9 +604,17 @@ pub(super) fn before_travel(
     let mover = nominal(speaker, topic, BunsetsuRole::Subj);
     let recipient = nominal(receiver, dative, BunsetsuRole::IObj);
     let item = nominal(object, wo, BunsetsuRole::Obj);
-    if !human_recipient(&mover, speaker, written_head(speaker, doc)?, doc)
-        || !human_recipient(&recipient, receiver, written_head(receiver, doc)?, doc)
-    {
+    if !human_recipient(
+        mover.atoms[0].span.start_char,
+        speaker,
+        written_head(speaker, doc)?,
+        doc,
+    ) || !human_recipient(
+        recipient.atoms[0].span.start_char,
+        receiver,
+        written_head(receiver, doc)?,
+        doc,
+    ) {
         return None;
     }
     let render_person = |group, atom: &Atom| {
@@ -721,7 +748,7 @@ pub(super) fn resolve(
             }
         } else if !matches!(head.deprel.as_str(), "obl" | "iobj") {
             return None;
-        } else if human_recipient(group, head, token, doc) {
+        } else if human_recipient(group.atoms[0].span.start_char, head, token, doc) {
             if recipient_group.replace(index).is_some() {
                 return None;
             }

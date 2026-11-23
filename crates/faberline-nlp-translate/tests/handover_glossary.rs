@@ -7,6 +7,10 @@ use faberline_nlp_translate::{
 const HS_12: &str = "授業を担当する先生は、授業後に佐藤さんへ資料を渡しました。";
 
 fn check_glossary(terms: &[(GlossaryKind, &str, &str)], expected: &str) {
+    check_source(HS_12, terms, expected);
+}
+
+fn check_source(source: &str, terms: &[(GlossaryKind, &str, &str)], expected: &str) {
     let mut glossary = TranslationGlossary::new();
     for &(kind, term, target) in terms {
         let entries = match kind {
@@ -24,7 +28,7 @@ fn check_glossary(terms: &[(GlossaryKind, &str, &str)], expected: &str) {
     }
     let options = TranslateOptions::new(TargetVariant::ZhHant);
     let translated =
-        analyze_and_translate(HS_12, &options, &glossary, None, Backend::Onnx).unwrap();
+        analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
     assert_eq!(translated.target_text, expected);
     assert_eq!(translated.glossary_hits.len(), terms.len());
     for &(kind, term, target) in terms {
@@ -33,7 +37,7 @@ fn check_glossary(terms: &[(GlossaryKind, &str, &str)], expected: &str) {
             .iter()
             .find(|hit| hit.kind == kind && hit.canonical == term)
             .unwrap();
-        let source_slice: String = HS_12
+        let source_slice: String = source
             .chars()
             .skip(hit.source_span.start_char)
             .take(hit.source_span.end_char - hit.source_span.start_char)
@@ -71,5 +75,43 @@ fn complete_subject_replacement_does_not_repeat_its_relative_clause() {
             &[(GlossaryKind::Actor, teacher, "任課老師")],
             "任課老師下課後把資料交給佐藤。",
         );
+    }
+}
+
+#[test]
+fn domain_terms_keep_their_linked_handover_roles_and_original_spans() {
+    let domain = GlossaryKind::DomainTerm;
+    let terms = [
+        (domain, "先生は", "任課老師"),
+        (domain, "佐藤さんへ", "佐藤同學"),
+        (domain, "資料を", "指定資料"),
+        (domain, "授業後に", "下課之後"),
+    ];
+    for (term, expected) in [
+        (terms[0], "負責授課的任課老師下課後把資料交給佐藤。"),
+        (terms[1], "負責授課的老師下課後把資料交給佐藤同學。"),
+        (terms[2], "負責授課的老師下課後把指定資料交給佐藤。"),
+    ] {
+        check_glossary(&[term], expected);
+    }
+    check_glossary(&terms, "負責授課的任課老師下課之後把指定資料交給佐藤同學。");
+    check_glossary(
+        &[(domain, "授業を担当する先生は", "任課老師")],
+        "任課老師下課後把資料交給佐藤。",
+    );
+}
+
+#[test]
+fn domain_terms_do_not_make_places_or_motion_into_handover_roles() {
+    for (source, term, label, expected) in [
+        (
+            "先生は教室へ資料を渡しました。",
+            "教室へ",
+            "指定教室",
+            "老師遞給了指定教室的資料。",
+        ),
+        ("先生は橋を渡りました。", "橋を", "石橋", "老師石橋渡過了。"),
+    ] {
+        check_source(source, &[(GlossaryKind::DomainTerm, term, label)], expected);
     }
 }

@@ -7113,6 +7113,13 @@ fn translate_clause_atoms(
     {
         return (text, false);
     }
+    if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let Some(text) =
+            payment_potential::render_fare_statement(core_non_punct(atoms), doc, ctx.source_chars)
+    {
+        return (text, false);
+    }
 
     if let Some(request) =
         te_help_request(core_non_punct(atoms), doc, ctx.prior_letter_distribution)

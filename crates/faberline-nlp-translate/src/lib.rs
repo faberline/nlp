@@ -975,16 +975,12 @@ fn translate_single_sentence(
         } else {
             None
         };
+        let default_syntax = ja_zh::GlossarySyntax::default();
         let (render_doc, render_tokens, render_locks, glossary_syntax) = match &repaired {
             Some((source, tokens, locks, glossary_syntax)) => {
-                (*source, tokens.as_slice(), locks, *glossary_syntax)
+                (*source, tokens.as_slice(), locks, glossary_syntax)
             }
-            None => (
-                doc,
-                sent_tokens,
-                &lock_table,
-                ja_zh::GlossarySyntax::default(),
-            ),
+            None => (doc, sent_tokens, &lock_table, &default_syntax),
         };
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,

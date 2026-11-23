@@ -1,4 +1,4 @@
-//! Keep the noun role of a genitive half portion when a glossary splits it.
+//! Keep the noun role of a genitive half portion under glossary locks.
 
 use super::{Atom, Upos, dasu_case_link};
 use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
@@ -45,17 +45,19 @@ pub(super) fn may_repair(text: &str, chars: &[char], locks: &SpanLockTable) -> b
             is_caller_term(lock)
                 && matches!(
                     chars.get(lock.source_span.start_char..lock.source_span.end_char),
-                    Some(['半'] | ['分'])
+                    Some(['半'] | ['分'] | ['の', '半'] | ['の', '半', '分'])
                 )
         })
 }
 
 pub(super) struct Repair {
+    genitive: Option<Atom>,
     portion: Atom,
     markers: Vec<String>,
 }
 
-fn repair(half: &Atom, locks: &SpanLockTable) -> Option<Repair> {
+fn repair(genitive: &Atom, half: &Atom, locks: &SpanLockTable) -> Option<Repair> {
+    let boundary = genitive.span.start_char;
     let start = half.span.start_char;
     let end = half.span.end_char;
     let mut first = None;
@@ -69,6 +71,9 @@ fn repair(half: &Atom, locks: &SpanLockTable) -> Option<Repair> {
             return None;
         }
         match (span.start_char, span.end_char) {
+            (a, b) if a == boundary && (b == start + 1 || b == end) && first.is_none() => {
+                first = Some(lock);
+            }
             (a, b) if a == start && b == start + 1 && first.is_none() => first = Some(lock),
             (a, b) if a == start + 1 && b == end && last.is_none() => last = Some(lock),
             _ => return None,
@@ -85,12 +90,19 @@ fn repair(half: &Atom, locks: &SpanLockTable) -> Option<Repair> {
     let mut portion = half.clone();
     portion.surface = surface;
     portion.is_locked = true;
+    let genitive = first
+        .is_some_and(|lock| lock.source_span.start_char == boundary)
+        .then(|| genitive.clone());
     let markers = first
         .into_iter()
         .chain(last)
         .map(|lock| lock.placeholder.clone())
         .collect();
-    Some(Repair { portion, markers })
+    Some(Repair {
+        genitive,
+        portion,
+        markers,
+    })
 }
 
 pub(super) fn prove(source: &[Atom], locks: &SpanLockTable) -> Vec<Repair> {
@@ -103,21 +115,43 @@ pub(super) fn prove(source: &[Atom], locks: &SpanLockTable) -> Vec<Repair> {
             if !linked_half(whole, genitive, half) {
                 return None;
             }
-            repair(half, locks)
+            repair(genitive, half, locks)
         })
         .collect()
 }
 
+/// A recovered の still carries the noun relation. Its marker can supply 的.
+pub(super) fn supplies_genitive(half: &Atom, modifier: &[Atom], locks: &[LockedSpan]) -> bool {
+    let Some(genitive) = modifier.last() else {
+        return false;
+    };
+    let start = half.span.start_char;
+    half.is_locked
+        && half.upos == Some(Upos::Noun)
+        && genitive.surface == "の"
+        && genitive.span.end_char == start
+        && locks.iter().any(|lock| {
+            is_caller_term(lock)
+                && lock.source_span.start_char == genitive.span.start_char
+                && [start + 1, half.span.end_char].contains(&lock.source_span.end_char)
+                && half.surface.starts_with(&lock.placeholder)
+                && lock.replacement.trim_start().starts_with('的')
+        })
+}
+
 impl Repair {
     pub(super) fn apply(&self, atoms: &mut Vec<Atom>) {
-        let span = self.portion.span;
-        let start = atoms.partition_point(|atom| atom.span.end_char <= span.start_char);
-        let end =
-            start + atoms[start..].partition_point(|atom| atom.span.start_char < span.end_char);
+        let source_start = self
+            .genitive
+            .as_ref()
+            .map_or(self.portion.span.start_char, |atom| atom.span.start_char);
+        let source_end = self.portion.span.end_char;
+        let start = atoms.partition_point(|atom| atom.span.end_char <= source_start);
+        let end = start + atoms[start..].partition_point(|atom| atom.span.start_char < source_end);
         let parts = &atoms[start..end];
         if parts.iter().any(|a| {
-            a.span.start_char < span.start_char
-                || a.span.end_char > span.end_char
+            a.span.start_char < source_start
+                || a.span.end_char > source_end
                 || a.is_locked && !self.markers.contains(&a.surface)
         }) || self.markers.iter().any(|marker| {
             parts
@@ -129,7 +163,10 @@ impl Repair {
             return;
         }
         // The original lock table still supplies each hit's exact source span.
-        atoms.splice(start..end, [self.portion.clone()]);
+        atoms.splice(
+            start..end,
+            self.genitive.iter().cloned().chain([self.portion.clone()]),
+        );
     }
 }
 
@@ -141,7 +178,7 @@ mod tests {
     };
 
     #[test]
-    fn split_glossary_keeps_the_portion_and_exact_hits() {
+    fn glossary_keeps_the_portion_and_exact_hits() {
         let options = TranslateOptions::new(TargetVariant::ZhHant);
         for (source, entries, expected) in [
             (
@@ -158,6 +195,26 @@ mod tests {
                 "ケーキの半分を食べました。",
                 &[("半", "半"), ("分", "份")][..],
                 "吃了蛋糕的半份。",
+            ),
+            (
+                "ケーキの半分を食べました。",
+                &[("の半", "的半"), ("分", "份")][..],
+                "吃了蛋糕的半份。",
+            ),
+            (
+                "ケーキの半分を食べました。",
+                &[("ケーキ", "點心"), ("の半", "50%")][..],
+                "吃了點心的50%。",
+            ),
+            (
+                "この本の半分を読みました。",
+                &[("の半分", "前半")][..],
+                "讀了這本書的前半。",
+            ),
+            (
+                "この本の半分を読みました。",
+                &[("の半分", "的一半")][..],
+                "讀了這本書的一半。",
             ),
             (
                 "ケーキの半分とパンの半分を食べました。",

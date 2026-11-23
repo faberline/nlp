@@ -238,6 +238,45 @@ pub(super) fn affirmative_meal(
     })
 }
 
+pub(super) fn ascii_meal_comma(
+    meal: &[Atom],
+    following: &[Atom],
+    doc: &Document,
+    chars: &[char],
+) -> bool {
+    let trip = match following.split_last() {
+        Some((end, trip))
+            if !end.is_locked && matches!(end.surface.as_str(), "。" | "？" | "?" | "！" | "!") =>
+        {
+            trip
+        }
+        _ => following,
+    };
+    let trip = negative_question_body(trip, doc).unwrap_or(trip);
+    affirmative_meal(meal, trip, doc, chars).is_some()
+}
+
+pub(super) fn ends_meal_question(
+    prefix: &[Segment],
+    current: &[Atom],
+    doc: &Document,
+    chars: &[char],
+) -> bool {
+    let [
+        Segment::Clause {
+            atoms: meal,
+            trailing_punct: Some(separator),
+            ..
+        },
+    ] = prefix
+    else {
+        return false;
+    };
+    matches!(separator.as_str(), "、" | "，")
+        && negative_question_body(current, doc)
+            .is_some_and(|trip| affirmative_meal(meal, trip, doc, chars).is_some())
+}
+
 pub(super) fn may_restore_topics(chars: &[char], locks: &SpanLockTable) -> bool {
     locks.locks.iter().any(|lock| {
         let last = chars.get(lock.source_span.end_char.saturating_sub(1));

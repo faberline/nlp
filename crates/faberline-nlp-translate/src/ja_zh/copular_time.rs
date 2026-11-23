@@ -1,4 +1,4 @@
-//! Render a schedule ending at a time: 会議は五時までです.
+//! Render a schedule with a starting or ending time.
 use super::{
     Atom, CLOCK_ATOM, Document, TargetVariant, Upos, deadline_weekday, group_into_bunsetsus,
     is_daypart_surface, merge_adnominal_bunsetsus, render_bunsetsu_np, render_clock_surface,
@@ -20,13 +20,18 @@ fn time_question(source: &str) -> Option<&'static str> {
 // The caller supplies the display text. Preserve the question only when the
 // complete source question word was protected by a glossary entry.
 pub(super) fn mark_questions(atoms: &mut [Atom], chars: &[char], locks: &super::SpanLockTable) {
-    if locks.locks.is_empty() || !atoms.iter().any(|a| a.surface == "まで") {
+    if locks.locks.is_empty() {
         return;
     }
+    let has_end = atoms.iter().any(|a| a.surface == "まで");
     for i in 1..atoms.len() {
         if !atoms[i].is_locked
             && atoms[i].deprel == "case"
             && matches!(atoms[i].surface.as_str(), "まで" | "から")
+            && (has_end
+                || atoms.get(i + 1).is_some_and(|copula| {
+                    !copula.is_locked && copula.deprel == "cop" && copula.head == atoms[i].head
+                }))
             && atoms[i - 1].is_locked
             && atoms[i - 1].doc_tok_idx == atoms[i].head
             && let Some(lock) = locks
@@ -57,7 +62,12 @@ fn clock_label(label: String) -> String {
 fn clock(words: &[Atom], doc: &Document) -> Option<(String, bool)> {
     let first = words.first()?;
     let last = words.last()?;
-    if words.len() == 1 && first.lemma.as_deref() == Some(LOCKED_QUESTION) {
+    if words.len() == 1
+        && matches!(
+            first.lemma.as_deref(),
+            Some(LOCKED_QUESTION | super::calendar::CLOCK_QUESTION)
+        )
+    {
         return Some((first.surface.clone(), true));
     }
     if words.len() == 1 && first.lemma.as_deref() == Some(CLOCK_ATOM) {
@@ -144,6 +154,31 @@ fn linked_time(words: &[Atom], case: &Atom, doc: &Document) -> Option<(String, b
     clock(words, doc)
 }
 
+fn subject_marker(prefix: &[Atom]) -> Option<usize> {
+    prefix.iter().position(|a| {
+        !a.is_locked && a.deprel == "case" && matches!(a.surface.as_str(), "は" | "も" | "が")
+    })
+}
+
+pub(super) fn keeps_start_with_copula(
+    prefix: &[Atom],
+    case: &Atom,
+    copula: &Atom,
+    doc: &Document,
+) -> bool {
+    case.surface == "から"
+        && !copula.is_locked
+        && copula.deprel == "cop"
+        && copula.head == case.head
+        && case.span.end_char == copula.span.start_char
+        && linked_time(
+            &prefix[subject_marker(prefix).map_or(0, |i| i + 1)..],
+            case,
+            doc,
+        )
+        .is_some()
+}
+
 fn subject(
     words: &[Atom],
     doc: &Document,
@@ -207,9 +242,9 @@ pub(super) fn render(
 ) -> Option<String> {
     let at = atoms
         .iter()
-        .rposition(|a| !a.is_locked && a.surface == "まで")?;
+        .rposition(|a| !a.is_locked && matches!(a.surface.as_str(), "まで" | "から"))?;
     let (prefix, suffix) = atoms.split_at(at);
-    let (made, suffix) = suffix.split_first()?;
+    let (boundary, suffix) = suffix.split_first()?;
     let (suffix, ending) = match suffix {
         [words @ .., yo, ne]
             if !yo.is_locked
@@ -260,13 +295,11 @@ pub(super) fn render(
     };
     let mut text = String::new();
     let mut wh = false;
-    let time_words = if let Some(i) = prefix.iter().position(|a| {
-        !a.is_locked && a.deprel == "case" && matches!(a.surface.as_str(), "は" | "も" | "が")
-    }) {
+    let time_words = if let Some(i) = subject_marker(prefix) {
         let head = prefix.get(i.checked_sub(1)?)?;
         if head.deprel != "nsubj"
             || prefix[i].head != head.doc_tok_idx
-            || !(head.head == made.head || suffix.iter().any(|a| a.doc_tok_idx == head.head))
+            || !(head.head == boundary.head || suffix.iter().any(|a| a.doc_tok_idx == head.head))
         {
             return None;
         }
@@ -289,19 +322,26 @@ pub(super) fn render(
         prefix
     };
     text.push_str(tense);
-    let end_words = if let Some(i) = time_words
-        .iter()
-        .position(|a| !a.is_locked && a.surface == "から")
-    {
-        let (start, asks) = linked_time(&time_words[..i], &time_words[i], doc)?;
-        text.push_str(&format!("從{start}"));
-        wh |= asks;
-        &time_words[i + 1..]
+    let asks = if boundary.surface == "から" {
+        let (time, asks) = linked_time(time_words, boundary, doc)?;
+        text.push_str(&format!("從{time}開始"));
+        asks
     } else {
-        time_words
+        let end_words = if let Some(i) = time_words
+            .iter()
+            .position(|a| !a.is_locked && a.surface == "から")
+        {
+            let (start, asks) = linked_time(&time_words[..i], &time_words[i], doc)?;
+            text.push_str(&format!("從{start}"));
+            wh |= asks;
+            &time_words[i + 1..]
+        } else {
+            time_words
+        };
+        let (time, asks) = linked_time(end_words, boundary, doc)?;
+        text.push_str(&format!("到{time}"));
+        asks
     };
-    let (time, asks) = linked_time(end_words, made, doc)?;
-    text.push_str(&format!("到{time}"));
     if ending != "嗎" || !(wh || asks) {
         text.push_str(ending);
     }
@@ -362,6 +402,72 @@ mod tests {
     }
 
     #[test]
+    fn copular_schedule_start_preserves_its_time_and_polarity() {
+        let glossary = TranslationGlossary::new();
+        for (jp, zh) in [
+            (
+                "会議は三月五日の午後二時からです。",
+                "會議從三月五日下午兩點開始。",
+            ),
+            ("会議は三時からです。", "會議從三點開始。"),
+            ("会議は何時からですか。", "會議從幾點開始？"),
+            ("会議は三時からでした。", "會議當時從三點開始。"),
+            (
+                "会議は三時からではありませんでした。",
+                "會議當時不是從三點開始。",
+            ),
+            ("この電車は東京からです。", "這輛電車從東京，是。"),
+            ("私は家から駅まで歩きます。", "我從家走到車站。"),
+        ] {
+            assert_eq!(translate(jp, &glossary), zh, "{jp}");
+        }
+    }
+
+    #[test]
+    fn dated_schedule_start_restores_the_exact_time_glossary_span() {
+        let source = "会議は三月五日の午後二時からです。";
+        for (term, preferred, expected) in [
+            (
+                "三月五日の午後二時",
+                "約定日期與時間",
+                "會議從約定日期與時間開始。",
+            ),
+            ("三月五日", "約定日期", "會議從約定日期下午兩點開始。"),
+            ("二時", "約定鐘點", "會議從三月五日下午約定鐘點開始。"),
+        ] {
+            let glossary = TranslationGlossary {
+                domain_terms: vec![GlossaryEntry {
+                    canonical: term.to_owned(),
+                    surfaces: vec![term.to_owned()],
+                    targets: [(TargetVariant::ZhHant, preferred.to_owned())].into(),
+                    ..GlossaryEntry::default()
+                }],
+                ..TranslationGlossary::new()
+            };
+            let translated = analyze_and_translate(
+                source,
+                &TranslateOptions::new(TargetVariant::ZhHant),
+                &glossary,
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(translated.target_text, expected);
+            let [hit] = translated.glossary_hits.as_slice() else {
+                panic!("expected one hit for {term}");
+            };
+            let text_at = |text: &str, span: crate::Span| {
+                text.chars()
+                    .skip(span.start_char)
+                    .take(span.end_char - span.start_char)
+                    .collect::<String>()
+            };
+            assert_eq!(text_at(source, hit.source_span), term);
+            assert_eq!(text_at(expected, hit.target_span), preferred);
+        }
+    }
+
+    #[test]
     fn opaque_subject_times_and_questions_preserve_the_user_spelling() {
         let mut glossary = TranslationGlossary::new();
         for (source, text) in [
@@ -385,6 +491,10 @@ mod tests {
         assert_eq!(
             translate("会議は何時までですか。", &glossary),
             "會議到指定疑時？"
+        );
+        assert_eq!(
+            translate("会議は何時からですか。", &glossary),
+            "會議從指定疑時開始？"
         );
     }
 }

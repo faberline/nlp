@@ -279,7 +279,8 @@ pub(crate) fn translate_ja_sentence(
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
-    let segments = split_atoms_into_segments(&atoms, doc, sent_span);
+    let schedule_starts = target == TargetVariant::ZhHant;
+    let segments = split_atoms_into_segments(&atoms, doc, sent_span, schedule_starts);
     let prior_letter_distribution = prior_letter_distribution.filter(|_| {
         direct_quote.is_none() && matches!(segments.as_slice(), [Segment::Clause { .. }])
     });
@@ -414,7 +415,8 @@ pub(crate) fn translate_ja_sentence(
                 let open_zh = localize_open_quote(*open_q, target);
                 let close_zh = localize_close_quote(*close_q, target);
                 out.push(open_zh);
-                let inner_segs = split_atoms_into_segments(inner_atoms, doc, *span);
+                let inner_segs =
+                    split_atoms_into_segments(inner_atoms, doc, *span, schedule_starts);
                 let after_quote = &segments[seg_idx + 1..];
                 let adjacent = if target == TargetVariant::ZhHant && after_quote.is_empty() {
                     payment_potential::adjacent_report(
@@ -527,7 +529,8 @@ pub(crate) fn translate_ja_sentence(
                     out.push_str(&prefix.text);
                 }
                 out.push(localize_open_quote(*open_q, target));
-                let inner_segs = split_atoms_into_segments(inner_atoms, doc, *span);
+                let inner_segs =
+                    split_atoms_into_segments(inner_atoms, doc, *span, schedule_starts);
                 for (idx, iseg) in inner_segs.iter().enumerate() {
                     if let Segment::Clause {
                         atoms: catoms,
@@ -4216,7 +4219,12 @@ fn reservation_record_object(atoms: &[Atom], owner: usize) -> bool {
 // Japanese can write a full stop after the question particle. Only replace
 // the stop belonging to this clause. A quoted or embedded か cannot change
 // the punctuation of a later clause.
-fn direct_ka_before_period(clause: &[Atom], end: &Atom, doc: &Document) -> bool {
+fn direct_ka_before_period(
+    clause: &[Atom],
+    end: &Atom,
+    doc: &Document,
+    schedule_starts: bool,
+) -> bool {
     let Some((ka, body)) = clause.split_last() else {
         return false;
     };
@@ -4235,7 +4243,7 @@ fn direct_ka_before_period(clause: &[Atom], end: &Atom, doc: &Document) -> bool 
                 && head.span.end_char <= a.span.end_char
                 && body.windows(2).any(|p| {
                     !p[0].is_locked
-                        && p[0].surface == "まで"
+                        && (p[0].surface == "まで" || schedule_starts && p[0].surface == "から")
                         && p[0].head == ka.head
                         && !p[1].is_locked
                         && p[1].deprel == "cop"
@@ -4581,7 +4589,12 @@ fn return_trip_at(atoms: &[Atom], link: usize, doc: &Document) -> Option<ReturnT
     })
 }
 
-fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) -> Vec<Segment> {
+fn split_atoms_into_segments(
+    atoms: &[Atom],
+    doc: &Document,
+    parent_span: Span,
+    schedule_starts: bool,
+) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<Atom> = Vec::new();
     let mut i = 0usize;
@@ -4694,7 +4707,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
                 "、" | "，" | "。" | "！" | "？" | "!" | "?" | "…" | "……"
             )
         {
-            let punctuation = if direct_ka_before_period(&current, a, doc) {
+            let punctuation = if direct_ka_before_period(&current, a, doc, schedule_starts) {
                 "？".to_owned()
             } else {
                 a.surface.clone()
@@ -4744,8 +4757,7 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
             && atoms[i + 1..]
                 .iter()
                 .any(|later| !later.is_locked && later.surface == "過言");
-        // Keep source-plus-copula endings on the boundary path. Grouping `からです`
-        // into one bunsetsu would classify the source phrase as a predicate and lose `從`.
+        // Keep a temporal start and its copula together for schedule rendering.
         let next_is_copula = atoms.get(i + 1).is_some_and(|next| {
             !next.is_locked
                 && matches!(
@@ -4756,7 +4768,14 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
         let is_source_kara = a.surface == "から"
             && a.upos == Some(Upos::Adp)
             && i > 0
-            && !next_is_copula
+            && (!next_is_copula
+                || schedule_starts
+                    && copular_time::keeps_start_with_copula(
+                        &current[..current.len() - 1],
+                        a,
+                        &atoms[i + 1],
+                        doc,
+                    ))
             && !has_temporal_te_kara_tail(&current)
             && !matches!(atoms[i - 1].upos, Some(Upos::Verb | Upos::Adj | Upos::Aux));
         if !a.is_locked
@@ -5393,8 +5412,12 @@ pub(crate) fn direct_quote_opening(
     locks: &SpanLockTable,
 ) -> Option<DirectQuoteOpening> {
     let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, tokens, locks);
-    let segments =
-        split_atoms_into_segments(&atoms, doc, doc.segmentation.sentences[sentence_idx].span);
+    let segments = split_atoms_into_segments(
+        &atoms,
+        doc,
+        doc.segmentation.sentences[sentence_idx].span,
+        true,
+    );
     let (quote, before) = segments.split_last()?;
     let (inner_atoms, span, close) = match quote {
         Segment::OpenQuote {
@@ -5451,7 +5474,7 @@ pub(crate) fn direct_quote_end(
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let Some(close_quote) = opening.close else {
         if let Some(Segment::Clause { atoms, span, .. }) =
-            split_atoms_into_segments(&atoms, doc, sent_span).first()
+            split_atoms_into_segments(&atoms, doc, sent_span, true).first()
             && let Some(prefix) = complete_cross_sentence_direct_quote(opening, atoms, doc, locks)
         {
             return DirectQuoteEnd::Reports(*span, prefix);
@@ -5464,7 +5487,7 @@ pub(crate) fn direct_quote_end(
     if !delimiter.surface.starts_with(close_quote) {
         return DirectQuoteEnd::Other;
     }
-    let segments = split_atoms_into_segments(&atoms, doc, sent_span);
+    let segments = split_atoms_into_segments(&atoms, doc, sent_span, true);
     for segments in segments.windows(2) {
         if let [
             Segment::CloseQuote(_, close_span),

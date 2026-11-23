@@ -5008,7 +5008,8 @@ fn naide_adverbial(
             )
     };
     if main.is_locked
-        || (zuni && completed_departure(clause, chars) != Some(governor))
+        || (zuni
+            && completed_departure(clause, chars).map(|departure| departure.head) != Some(governor))
         || clause.first().is_some_and(|first| {
             matches!(first.surface.as_str(), "と" | "って")
                 || (first.doc_tok_idx == Some(governor)
@@ -5189,12 +5190,14 @@ fn split_ja_atoms(
             continue;
         }
 
-        // An ASCII comma can also separate the two verified meal and trip topics.
+        // A plain comma can mark a verified clause break in these constructions.
         if !a.is_locked
             && a.surface == ","
-            && segments.is_empty()
             && let Some(chars) = naide_chars
-            && polarity_contrast::ascii_meal_comma(&current, &atoms[i + 1..], doc, chars)
+            && ((segments.is_empty()
+                && polarity_contrast::ascii_meal_comma(&current, &atoms[i + 1..], doc, chars))
+                || naide_adverbial(&current, &atoms[i + 1..], None, chars)
+                    .is_some_and(|omission| omission.zuni && omission.join_unstated_subject))
         {
             flush_clause(&mut current, Some("，".to_owned()), &mut segments);
             i += 1;
@@ -13231,8 +13234,15 @@ fn translate_clause_bunsetsus(
         Stem,
         Finite,
         Omission,
+        Departure { includes_source: bool },
         Polite { add_request: bool },
     }
+    let departure = if target == TargetVariant::ZhHant && !ctx.inside_quote && verb_core == "出去"
+    {
+        completed_departure(source, ctx.source_chars)
+    } else {
+        None
+    };
     let joint_subject = matches!(joint_manner, Some((JointManner::Everyone, false, _)));
     let verb_render = match predicates.as_slice() {
         [predicate] if !ctx.verb_locks.is_empty() && transfer.is_none() => {
@@ -13287,6 +13297,13 @@ fn translate_clause_bunsetsus(
                                     == polite_prohibition::CoveredPredicate::Negative
                                     && !lock.replacement.trim_start().starts_with(['請', '请']),
                             }
+                        } else if let Some(departure) = &departure
+                            && (departure.predicate == Some(lock.source_span)
+                                || departure.with_source == Some(lock.source_span))
+                        {
+                            CoveredVerb::Departure {
+                                includes_source: departure.with_source == Some(lock.source_span),
+                            }
                         } else if lock.source_span == predicate_span {
                             CoveredVerb::Finite
                         } else {
@@ -13309,11 +13326,7 @@ fn translate_clause_bunsetsus(
             pre_verb_mods.remove(command);
         }
     }
-    let departure = target == TargetVariant::ZhHant
-        && !ctx.inside_quote
-        && verb_core == "出去"
-        && completed_departure(source, ctx.source_chars).is_some();
-    if departure {
+    if departure.is_some() && !matches!(verb_render, Some((_, _, CoveredVerb::Departure { .. }))) {
         verb_core = "離開".to_owned();
     }
     if target == TargetVariant::ZhHant
@@ -14916,10 +14929,18 @@ fn translate_clause_bunsetsus(
                     CoveredVerb::Stem => true,
                     CoveredVerb::Finite => whole_negative_go || post_verb_mods == ["了"],
                     CoveredVerb::Omission => whole_omission,
+                    CoveredVerb::Departure { .. } => objs.len() == 1 && post_verb_mods == ["了"],
                     CoveredVerb::Polite { .. } => true,
                 }
         }) {
             if coverage == CoveredVerb::Finite {
+                post_verb_mods.clear();
+            }
+            if let CoveredVerb::Departure { includes_source } = coverage {
+                if !includes_source {
+                    parts.push(format!("從{}", objs[0]));
+                }
+                objs.clear();
                 post_verb_mods.clear();
             }
             if meal_lock_has_connector {
@@ -14941,7 +14962,7 @@ fn translate_clause_bunsetsus(
     parts.extend(result_value);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
-    let trailing_change_le = if (departure
+    let trailing_change_le = if (departure.is_some()
         || is_change_of_state_you
         || purpose.is_some()
         || !route_endpoints.is_empty())
@@ -26010,8 +26031,14 @@ fn is_departure_source(place: &Atom, chars: &[char]) -> bool {
     place.upos == Some(Upos::Noun) && is_departure_source_surface(&place.surface)
 }
 
+struct CompletedDeparture {
+    head: usize,
+    predicate: Option<Span>,
+    with_source: Option<Span>,
+}
+
 /// Find a completed physical departure with one source marked by を.
-fn completed_departure(source: &[Atom], chars: &[char]) -> Option<usize> {
+fn completed_departure(source: &[Atom], chars: &[char]) -> Option<CompletedDeparture> {
     let mut roots = source.iter().filter(|atom| atom.deprel == "root");
     let verb = roots.next()?;
     if roots.next().is_some()
@@ -26037,17 +26064,36 @@ fn completed_departure(source: &[Atom], chars: &[char]) -> Option<usize> {
         return None;
     }
     let place_id = place.doc_tok_idx?;
-    source
-        .iter()
-        .any(|particle| {
-            !particle.is_locked
-                && particle.surface == "を"
-                && particle.upos == Some(Upos::Adp)
-                && particle.deprel == "case"
-                && particle.head == Some(place_id)
-                && place.span.end_char == particle.span.start_char
+    let marker = source.iter().find(|particle| {
+        !particle.is_locked
+            && particle.surface == "を"
+            && particle.upos == Some(Upos::Adp)
+            && particle.deprel == "case"
+            && particle.head == Some(place_id)
+            && place.span.end_char == particle.span.start_char
+    })?;
+    let predicate = (verb.span.end_char == past.span.start_char).then_some(Span {
+        start_char: verb.span.start_char,
+        end_char: past.span.end_char,
+    });
+    // A phrase lock can consume the source only if it also covers all of
+    // the source noun's modifiers. The contiguous noun + を span has none.
+    let with_source = predicate
+        .filter(|span| {
+            marker.span.end_char == span.start_char
+                && !source
+                    .iter()
+                    .any(|atom| atom.head == Some(place_id) && atom.span != marker.span)
         })
-        .then_some(governor)
+        .map(|span| Span {
+            start_char: place.span.start_char,
+            end_char: span.end_char,
+        });
+    Some(CompletedDeparture {
+        head: governor,
+        predicate,
+        with_source,
+    })
 }
 
 // Intransitive manner verbs can take a traversed space with を. Verbs such

@@ -5,11 +5,11 @@ use crate::schema::GlossaryKind;
 
 use super::{
     Atom, Document, Span, Token, Upos, application_form, build_sentence_atoms, calendar,
-    classify_bunsetsu, dasu_case_link, finished_go, first_step, group_into_bunsetsus, handover,
-    homework_glossary, household_entry, is_departure_source_surface, is_punct_atom,
-    letter_deadline, naide_adverbial, nominal_receiving_glossary, outward_look, physical_goal_head,
-    polarity_contrast, polite_joint, polite_prohibition, recipient_scope, te_help_glossary,
-    trip_after_meal, written_opening,
+    classify_bunsetsu, completed_departure, dasu_case_link, finished_go, first_step,
+    group_into_bunsetsus, handover, homework_glossary, household_entry,
+    is_departure_source_surface, is_punct_atom, letter_deadline, naide_adverbial,
+    nominal_receiving_glossary, outward_look, physical_goal_head, polarity_contrast, polite_joint,
+    polite_prohibition, recipient_scope, te_help_glossary, trip_after_meal, written_opening,
 };
 
 #[derive(Default)]
@@ -130,13 +130,18 @@ fn covers_household_goal(lock: &LockedSpan, chars: &[char]) -> bool {
         )
 }
 
-fn may_cover_departure_source(lock: &LockedSpan, chars: &[char]) -> bool {
+fn may_cover_departure(lock: &LockedSpan, chars: &[char]) -> bool {
     mandatory_domain_term(lock)
         && chars
             .get(lock.source_span.start_char..lock.source_span.end_char)
             .is_some_and(|raw| {
                 let raw: String = raw.iter().collect();
-                is_departure_source_surface(raw.strip_suffix('を').unwrap_or(&raw))
+                raw == "出た"
+                    || is_departure_source_surface(
+                        raw.strip_suffix("を出た")
+                            .or_else(|| raw.strip_suffix('を'))
+                            .unwrap_or(&raw),
+                    )
             })
 }
 
@@ -234,7 +239,7 @@ pub(crate) fn may_restore_glossary_syntax(
                             kind: GlossaryKind::Place,
                             ..
                         }
-                    ) || may_cover_departure_source(lock, chars)
+                    ) || may_cover_departure(lock, chars)
                 } else {
                     false
                 } || naide
@@ -426,8 +431,20 @@ fn omitted_render_locks(
     };
     let restore_household_domain_goal = omission.join_unstated_subject && completed_entry.is_some();
     let completed = completed_motion.or(completed_entry);
+    let departure_lock = if omission.zuni && omission.join_unstated_subject {
+        let clause = following.split(is_punct_atom).next()?;
+        completed_departure(clause, chars).and_then(|departure| {
+            [departure.predicate, departure.with_source]
+                .into_iter()
+                .flatten()
+                .find_map(|span| whole_domain_lock(locks, span))
+        })
+    } else {
+        None
+    };
     let whole_verbs = GlossarySyntax {
-        following: completed.and_then(|span| whole_domain_lock(locks, span)),
+        following: departure_lock
+            .or_else(|| completed.and_then(|span| whole_domain_lock(locks, span))),
         omitted: completed
             .and_then(|_| omission.omitted_predicate_span(doc))
             .and_then(|span| whole_domain_lock(locks, span)),

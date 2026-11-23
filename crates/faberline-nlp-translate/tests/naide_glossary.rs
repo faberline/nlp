@@ -193,3 +193,41 @@ fn a_negated_departure_does_not_recover_the_source_role() {
         ["沒有喝在舊屋出去水。", "不喝在水的舊屋沒有出去。"],
     );
 }
+
+#[test]
+fn complete_departure_terms_keep_the_omitted_action_and_the_source() {
+    let source = "朝ご飯を食べずに家を出た。";
+    for (term, replacement, expected) in [
+        ("出た", "離開了", "沒有吃早餐就從家離開了。"),
+        ("家を出た", "離開住處了", "沒有吃早餐就離開住處了。"),
+    ] {
+        for text in [
+            source,
+            "朝ご飯を食べずに、家を出た。",
+            "朝ご飯を食べずに，家を出た。",
+            "朝ご飯を食べずに,家を出た。",
+        ] {
+            check_locks(
+                text,
+                Some(("朝ご飯を", "早餐")),
+                None,
+                &[(term, replacement)],
+                expected,
+            );
+        }
+    }
+    check_locks(
+        "水を飲まずに部屋を出た。",
+        None,
+        None,
+        &[("部屋を", "書房"), ("出た", "啟程了")],
+        "沒有喝水就從書房啟程了。",
+    );
+    check_locks(
+        "水を飲まずに兄の家を出た。",
+        None,
+        None,
+        &[("出た", "離開了")],
+        "沒有喝水就從哥哥的家離開了。",
+    );
+}

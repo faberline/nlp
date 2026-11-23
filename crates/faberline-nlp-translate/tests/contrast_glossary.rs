@@ -108,3 +108,79 @@ fn paired_topics_keep_their_polarity_under_glossary_locks() {
         }
     }
 }
+
+#[test]
+fn whole_meal_and_trip_locks_keep_polarity_across_source_boundaries() {
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    for clause_boundary in ["、", ""] {
+        for (source_end, first_clause, target_end) in [
+            ("。", "早餐有享用，但", "。"),
+            ("？", "早餐享用，", "？"),
+            ("?", "早餐享用，", "？"),
+            ("か。", "早餐享用，", "嗎？"),
+        ] {
+            let source =
+                format!("朝ご飯は食べて{clause_boundary}学校には行きませんでした{source_end}");
+            let doc = analyze_document(
+                &source,
+                &doc_options_for_translate(&options, &TranslationGlossary::new()),
+            );
+            for (alias, negative) in [
+                ("前往", "沒有前往"),
+                ("沒有前往", "沒有前往"),
+                ("未曾前往", "未曾前往"),
+            ] {
+                let glossary = TranslationGlossary {
+                    objects: vec![entry("朝ご飯は", "早餐")],
+                    places: vec![entry("学校には", "新校舍")],
+                    domain_terms: vec![entry("食べて", "享用"), entry("行きませんでした", alias)],
+                    ..Default::default()
+                };
+                let expected = format!("{first_clause}{negative}新校舍{target_end}");
+                let result =
+                    analyze_and_translate(&source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                let direct = translate_document(
+                    &source,
+                    &doc,
+                    #[cfg(feature = "narrative")]
+                    None,
+                    &options,
+                    &glossary,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(result.target_text, expected, "{source}");
+                assert_eq!(direct.target_text, expected);
+                assert_eq!(direct.glossary_hits, result.glossary_hits);
+                assert_eq!(direct.clause_alignments, result.clause_alignments);
+                match (clause_boundary, result.clause_alignments.as_slice()) {
+                    ("", [sentence]) => {
+                        assert_eq!(span_text(&source, sentence.source_span), source);
+                        assert_eq!(span_text(&expected, sentence.target_span), expected);
+                    }
+                    ("、", [meal, trip]) => {
+                        assert_eq!(span_text(&source, meal.source_span), "朝ご飯は食べて");
+                        assert_eq!(
+                            trip.source_span.start_char,
+                            "朝ご飯は食べて、".chars().count()
+                        );
+                        assert_eq!(meal.target_span.end_char, trip.target_span.start_char);
+                    }
+                    _ => panic!("expected source clause alignments for {source}"),
+                }
+                let terms = [
+                    ("朝ご飯は", "早餐"),
+                    ("食べて", "享用"),
+                    ("学校には", "新校舍"),
+                    ("行きませんでした", alias),
+                ];
+                assert_eq!(result.glossary_hits.len(), terms.len());
+                for (hit, (term, replacement)) in result.glossary_hits.iter().zip(terms) {
+                    assert_eq!(span_text(&source, hit.source_span), term);
+                    assert_eq!(span_text(&expected, hit.target_span), replacement);
+                }
+            }
+        }
+    }
+}

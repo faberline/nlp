@@ -1026,8 +1026,16 @@ fn translate_ja_sentence_with_verb_locks(
                     locks: &lock_table.locks,
                     following: &segments[seg_idx + 1..],
                     affirmative_meal: match (trailing_punct.as_deref(), segments.get(seg_idx + 1)) {
-                        (Some("、" | "，"), Some(Segment::Clause { atoms: trip, .. }))
-                            if target == TargetVariant::ZhHant && !inside_quote =>
+                        (
+                            Some("、" | "，"),
+                            Some(Segment::Clause {
+                                atoms: trip,
+                                trailing_punct: trip_punct,
+                                ..
+                            }),
+                        ) if target == TargetVariant::ZhHant
+                            && !inside_quote
+                            && !matches!(trip_punct.as_deref(), Some("?" | "？")) =>
                         {
                             polarity_contrast::affirmative_meal(trimmed_atoms, trip, doc, chars)
                         }
@@ -1231,6 +1239,7 @@ fn translate_ja_sentence_with_verb_locks(
                     && !inside_quote
                     && !rendered.is_empty()
                     && !rendered.starts_with(['但', '卻'])
+                    && !matches!(trailing_punct, Some("?" | "？"))
                     && let Some((previous_index, _, byte_end, char_end)) = previous_clause_comma
                     && previous_index.checked_add(1) == Some(seg_idx)
                     && out.len() == byte_end
@@ -13096,7 +13105,17 @@ fn translate_clause_bunsetsus(
     let joint_subject = matches!(joint_manner, Some((JointManner::Everyone, false, _)));
     let verb_render = match predicates.as_slice() {
         [predicate] if !ctx.verb_locks.is_empty() && transfer.is_none() => {
-            match predicate.atoms.as_slice() {
+            let atoms = polarity_contrast::negative_question_body(&predicate.atoms, doc)
+                .filter(|body| {
+                    body.first().zip(body.last()).is_some_and(|(head, last)| {
+                        ctx.verb_locks.iter().any(|lock| {
+                            lock.source_span.start_char == head.span.start_char
+                                && lock.source_span.end_char == last.span.end_char
+                        })
+                    })
+                })
+                .unwrap_or(&predicate.atoms);
+            match atoms {
                 [head, ending @ ..]
                     if head.upos == Some(Upos::Verb)
                         && !head.is_locked
@@ -14553,8 +14572,7 @@ fn translate_clause_bunsetsus(
             days
         });
     }
-    // The whole negated trip owns its negative ending. Keep the source-derived
-    // destination and suppress only the native predicate's single negation.
+    // Keep the source-derived destination when rendering the whole trip.
     let whole_negative_go = whole_predicate
         && direct_negative_physical_go
         && goal_tails.len() == 1
@@ -14566,7 +14584,16 @@ fn translate_clause_bunsetsus(
     let whole_omission = matches!(&verb_render, Some((core, _, CoveredVerb::Omission)) if core == &verb_core)
         && inner_pre_mods == ["沒有"]
         && post_verb_mods.is_empty();
-    if !whole_negative_go && !whole_omission {
+    // Keep the source negation when the caller's replacement supplies only the action.
+    let replacement_has_negative = whole_negative_go
+        && verb_render.as_ref().is_some_and(|(_, lock, _)| {
+            let replacement = lock.replacement.trim_start();
+            replacement.starts_with(['沒', '未', '不', '無'])
+                || ["從未", "從沒", "並未", "並沒"]
+                    .iter()
+                    .any(|prefix| replacement.starts_with(prefix))
+        });
+    if !replacement_has_negative && !whole_omission {
         parts.extend(inner_pre_mods);
     }
     if let Some(partner) = meeting_partner {

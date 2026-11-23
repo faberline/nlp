@@ -868,6 +868,7 @@ pub(crate) fn translate_ja_sentence(
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
+                    source_locks: Some(lock_table),
                     following: &segments[seg_idx + 1..],
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
@@ -5500,6 +5501,7 @@ struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
     contrasts_recurrence: bool,
     source_chars: &'a [char],
+    source_locks: Option<&'a SpanLockTable>,
     following: &'a [Segment],
     preceding_activity: &'a [Atom],
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
@@ -11305,8 +11307,11 @@ fn translate_clause_bunsetsus(
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> (String, bool) {
-    let restored_tobacco = if target == TargetVariant::ZhHant && !ctx.inside_quote {
-        direct_smoking::restore_locked_object(&mut bunsetsus, source, doc, ctx.source_chars)
+    let restored_tobacco = if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let Some(locks) = ctx.source_locks
+    {
+        direct_smoking::restore_locked_object(&mut bunsetsus, source, doc, ctx.source_chars, locks)
     } else {
         None
     };

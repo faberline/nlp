@@ -3,6 +3,9 @@
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Options, SyntaxToken, Token, analyze_document};
 
+use crate::lock::{LockOrigin, SpanLockTable};
+use crate::schema::GlossaryKind;
+
 use super::{Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, Upos, dasu_case_link};
 
 fn source_identity<'a>(atom: &Atom, doc: &'a Document) -> Option<(&'a SyntaxToken, &'a Token)> {
@@ -44,17 +47,39 @@ pub(super) fn restore_locked_object<'a>(
     source: &'a [Atom],
     doc: &Document,
     chars: &[char],
+    locks: &SpanLockTable,
 ) -> Option<&'a Atom> {
-    let mut objects = source.iter().filter_map(|atom| {
-        if !atom.is_locked || atom.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM) {
+    let mut objects = source.iter().enumerate().filter_map(|(idx, atom)| {
+        if !atom.is_locked {
             return None;
         }
-        let [noun @ .., 'を'] = chars.get(atom.span.start_char..atom.span.end_char)? else {
-            return None;
+        let word = chars.get(atom.span.start_char..atom.span.end_char)?;
+        let (noun, noun_end, case_end) = if let [noun @ .., 'を'] = word {
+            (noun, atom.span.end_char - 1, atom.span.end_char)
+        } else {
+            let case = source.get(idx + 1)?;
+            if case.is_locked || case.surface != "を" || case.span.start_char != atom.span.end_char
+            {
+                return None;
+            }
+            (word, atom.span.end_char, case.span.end_char)
         };
-        is_tobacco(noun).then_some((atom, noun))
+        (is_tobacco(noun)
+            && locks.locks.iter().any(|entry| {
+                entry.mandatory
+                    && entry.source_span == atom.span
+                    && entry.placeholder == atom.surface
+                    && matches!(
+                        entry.origin,
+                        LockOrigin::Glossary {
+                            kind: GlossaryKind::Object | GlossaryKind::DomainTerm,
+                            ..
+                        }
+                    )
+            }))
+        .then_some((atom, noun, noun_end, case_end))
     });
-    let (lock, noun) = objects.next()?;
+    let (lock, noun, noun_end, case_end) = objects.next()?;
     if objects.next().is_some() {
         return None;
     }
@@ -80,8 +105,8 @@ pub(super) fn restore_locked_object<'a>(
     };
     let case = analysis.syntax.iter().find(|link| {
         let span = absolute(link.span);
-        span.end_char == lock.span.end_char
-            && span.start_char + 1 == span.end_char
+        span.start_char == noun_end
+            && span.end_char == case_end
             && link.deprel == "case"
             && analysis.tokens[link.token].upos == Some(Upos::Adp)
     })?;
@@ -101,7 +126,21 @@ pub(super) fn restore_locked_object<'a>(
         return None;
     }
     let group = groups.iter_mut().find(|group| {
-        matches!(group.atoms.as_slice(), [atom] if atom.is_locked && atom.span == lock.span)
+        let Some((atom, rest)) = group.atoms.split_first() else {
+            return false;
+        };
+        atom.is_locked
+            && atom.span == lock.span
+            && match rest {
+                [] => true,
+                [case] => {
+                    !case.is_locked
+                        && case.surface == "を"
+                        && case.span.start_char == noun_end
+                        && case.span.end_char == case_end
+                }
+                _ => false,
+            }
     })?;
     // The exact glossary placeholder is opaque to rendering; only the
     // attested object role is recovered here.
@@ -153,6 +192,69 @@ pub(super) fn tobacco_object<'a>(
             && chars.get(marker.span.start_char..marker.span.end_char) == Some(&['を']))
         .then_some(noun)
     })
+}
+
+#[cfg(test)]
+mod term_glossary_tests {
+    use faberline_nlp::Span;
+    use faberline_nlp::doc::{analyze_document, model::Backend};
+
+    use crate::{
+        GlossaryEntry, GlossaryKind, TargetVariant, TranslateOptions, TranslationGlossary,
+        analyze_and_translate, doc_options_for_translate, translate_document,
+    };
+
+    #[test]
+    fn tobacco_domain_term_keeps_its_declared_category_and_object_role() {
+        let source = "ここでたばこを吸わないでください。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let doc = analyze_document(
+            source,
+            &doc_options_for_translate(&options, &TranslationGlossary::new()),
+        );
+        for (word, end) in [("たばこ", 6), ("たばこを", 7)] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.domain_terms.push(GlossaryEntry {
+                canonical: word.into(),
+                surfaces: vec![word.into()],
+                targets: [(TargetVariant::ZhHant, "雪茄".into())].into(),
+                ..GlossaryEntry::default()
+            });
+            let hinted =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            let unhinted = translate_document(
+                source,
+                &doc,
+                #[cfg(feature = "narrative")]
+                None,
+                &options,
+                &glossary,
+                None,
+            )
+            .unwrap();
+            assert_eq!(hinted.target_text, "請不要在這裡抽雪茄。");
+            assert_eq!(hinted.target_text, unhinted.target_text);
+            assert_eq!(hinted.glossary_hits, unhinted.glossary_hits);
+            let [hit] = hinted.glossary_hits.as_slice() else {
+                panic!("expected one complete glossary hit");
+            };
+            assert_eq!(hit.kind, GlossaryKind::DomainTerm);
+            assert_eq!(
+                hit.source_span,
+                Span {
+                    start_char: 3,
+                    end_char: end
+                }
+            );
+            let target: String = hinted
+                .target_text
+                .chars()
+                .skip(hit.target_span.start_char)
+                .take(hit.target_span.end_char - hit.target_span.start_char)
+                .collect();
+            assert_eq!(target, "雪茄");
+        }
+    }
 }
 
 #[cfg(test)]

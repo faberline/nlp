@@ -22,7 +22,7 @@ mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
 mod payment_potential;
-mod polarity_contrast;
+pub(crate) mod polarity_contrast;
 mod reception;
 mod return_endpoint;
 

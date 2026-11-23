@@ -2,9 +2,12 @@
 
 use faberline_nlp::doc::SyntaxToken;
 
+use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
+use crate::schema::GlossaryKind;
+
 use super::{
-    Atom, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Token, Upos, dasu_case_link,
-    is_companion_person, source_time_head,
+    Atom, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, Token, Upos, build_sentence_atoms,
+    classify_bunsetsu, dasu_case_link, is_companion_person, physical_goal_head, source_time_head,
 };
 
 #[derive(Clone, Copy)]
@@ -38,7 +41,36 @@ fn qualifies_topic(
     allowed_lock: Option<&str>,
     doc: &Document,
 ) -> bool {
-    source_identity(noun, doc).is_some_and(|(link, token)| {
+    let identity = source_identity(noun, doc).or_else(|| {
+        if !noun.is_locked || allowed_lock != Some(LOCKED_OBJECT_ATOM) {
+            return None;
+        }
+        let id = noun.doc_tok_idx?;
+        let token = doc.tokens.get(id)?;
+        let before = id.checked_sub(1)?;
+        let prefix = doc.tokens.get(before)?;
+        let relation = doc.syntax.get(before)?;
+        if prefix.span.start_char != noun.span.start_char
+            || prefix.span.end_char != token.span.start_char
+            || prefix.sentence != token.sentence
+            || prefix.upos != Some(Upos::Adv)
+            || relation.token != before
+            || relation.span != prefix.span
+            || relation.sentence != prefix.sentence
+            || relation.head != Some(predicate.token)
+            || relation.deprel != "advmod"
+            || token.span.end_char != noun.span.end_char
+        {
+            return None;
+        }
+        // The locked meal can also include its native time prefix.
+        let head = Atom {
+            span: token.span,
+            ..noun.clone()
+        };
+        source_identity(&head, doc)
+    });
+    identity.is_some_and(|(link, token)| {
         let trusted = if noun.is_locked {
             allowed_lock.is_some_and(|kind| noun.lemma.as_deref() == Some(kind))
         } else {
@@ -89,16 +121,20 @@ fn meal_topic(noun: &Atom, verb: &Atom, doc: &Document, chars: &[char]) -> bool 
     verb.doc_tok_idx
         .and_then(|id| doc.tokens.get(id))
         .is_some_and(|token| token.lemma.as_deref() == Some("食べる"))
-        && matches!(
-            chars.get(noun.span.start_char..noun.span.end_char),
-            Some(
-                ['ご', '飯']
-                    | ['御', '飯']
-                    | ['朝' | '昼' | '夕', 'ご', '飯']
-                    | ['朝' | '昼' | '夕', '食']
-                    | ['食', '事']
-            )
-        )
+        && chars
+            .get(noun.span.start_char..noun.span.end_char)
+            .is_some_and(is_meal)
+}
+
+fn is_meal(word: &[char]) -> bool {
+    matches!(
+        word,
+        ['ご', '飯']
+            | ['御', '飯']
+            | ['朝' | '昼' | '夕', 'ご', '飯']
+            | ['朝' | '昼' | '夕', '食']
+            | ['食', '事']
+    )
 }
 
 pub(super) fn matches(previous: &[Atom], current: &[Atom], doc: &Document, chars: &[char]) -> bool {
@@ -184,6 +220,113 @@ pub(super) fn affirmative_meal(
         topic: topic.doc_tok_idx?,
         time_first: leading.iter().any(source_time_head),
     })
+}
+
+fn topic_lock_kind(lock: &LockedSpan) -> Option<GlossaryKind> {
+    match lock.origin {
+        LockOrigin::Glossary { kind, .. } if lock.mandatory => Some(kind),
+        _ => None,
+    }
+}
+
+pub(crate) fn may_restore_topics(text: &str, chars: &[char], locks: &SpanLockTable) -> bool {
+    text.contains(['、', '，'])
+        && !text.contains(['「', '」', '『', '』', '"', '“', '”', '?', '？'])
+        && text.matches('は').nth(1).is_some()
+        && locks.locks.iter().any(|lock| {
+            let span = lock.source_span;
+            let Some(surface) = chars.get(span.start_char..span.end_char) else {
+                return false;
+            };
+            match (topic_lock_kind(lock), surface) {
+                (Some(GlossaryKind::Object), [meal @ .., 'は']) => is_meal(meal),
+                (
+                    Some(GlossaryKind::Place | GlossaryKind::DomainTerm),
+                    [_, .., 'に' | 'へ', 'は'],
+                ) => true,
+                (Some(GlossaryKind::Place | GlossaryKind::DomainTerm), [_, .., 'に' | 'へ']) => {
+                    chars.get(span.end_char) == Some(&'は')
+                }
+                _ => false,
+            }
+        })
+}
+
+pub(crate) fn restore_topics(
+    sentence: usize,
+    doc: &Document,
+    tokens: &[&Token],
+    chars: &[char],
+    locks: &SpanLockTable,
+) -> Option<SpanLockTable> {
+    let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
+    let (ending, body) = atoms.split_last()?;
+    let body = if matches!(ending.surface.as_str(), "。" | ".") {
+        body
+    } else {
+        &atoms
+    };
+    let comma = body
+        .iter()
+        .position(|atom| matches!(atom.surface.as_str(), "、" | "，"))?;
+    let previous = &body[..comma];
+    let current = &body[comma + 1..];
+    affirmative_meal(previous, current, doc, chars)?;
+
+    let [leading @ .., meal, topic, action, _] = previous else {
+        return None;
+    };
+    let go_index = current
+        .iter()
+        .position(|atom| atom.upos == Some(Upos::Verb))?;
+    let [.., place, direction, focus, go] = &current[..=go_index] else {
+        return None;
+    };
+    let goal = classify_bunsetsu(vec![place.clone(), direction.clone()], doc, sentence);
+    if physical_goal_head(&goal) != go.doc_tok_idx {
+        return None;
+    }
+    let meal_start = leading
+        .last()
+        .filter(|prefix| {
+            prefix.span.end_char == meal.span.start_char
+                && prefix.head == action.doc_tok_idx
+                && is_meal(&chars[prefix.span.start_char..meal.span.end_char])
+        })
+        .map_or(meal.span.start_char, |prefix| prefix.span.start_char);
+
+    let mut render = locks.clone();
+    let mut restored = false;
+    for lock in &mut render.locks {
+        let span = lock.source_span;
+        let end_char = match topic_lock_kind(lock)? {
+            GlossaryKind::Object
+                if (span.start_char == meal.span.start_char || span.start_char == meal_start)
+                    && [meal.span.end_char, topic.span.end_char].contains(&span.end_char) =>
+            {
+                meal.span.end_char
+            }
+            GlossaryKind::Place | GlossaryKind::DomainTerm
+                if span.start_char == place.span.start_char
+                    && [
+                        place.span.end_char,
+                        direction.span.end_char,
+                        focus.span.end_char,
+                    ]
+                    .contains(&span.end_char) =>
+            {
+                if let LockOrigin::Glossary { kind, .. } = &mut lock.origin {
+                    *kind = GlossaryKind::Place;
+                }
+                place.span.end_char
+            }
+            _ => return None,
+        };
+        restored |= end_char != span.end_char;
+        // Only the renderer sees this boundary. The public hit uses the original lock.
+        lock.source_span.end_char = end_char;
+    }
+    restored.then_some(render)
 }
 
 #[cfg(test)]
@@ -290,6 +433,97 @@ mod tests {
                 .target_text
                 .contains("有吃")
         );
+    }
+
+    #[test]
+    fn case_inside_a_glossary_match_keeps_the_two_topics() {
+        let term = |surface: &str, output: &str| GlossaryEntry {
+            canonical: surface.to_owned(),
+            surfaces: vec![surface.to_owned()],
+            targets: [(TargetVariant::ZhHant, output.to_owned())].into(),
+            ..GlossaryEntry::default()
+        };
+        let extract = |text: &str, span: faberline_nlp::Span| {
+            text.chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect::<String>()
+        };
+        let source = "朝ご飯は食べて、学校には行きませんでした。";
+        for meal in ["朝ご飯", "朝ご飯は"] {
+            for destination in ["学校", "学校に", "学校には"] {
+                for domain in [false, true] {
+                    if domain && meal == "朝ご飯" && destination == "学校" {
+                        continue;
+                    }
+                    let mut glossary = TranslationGlossary::new();
+                    glossary.objects.push(term(meal, "早餐"));
+                    let places = if domain {
+                        &mut glossary.domain_terms
+                    } else {
+                        &mut glossary.places
+                    };
+                    places.push(term(destination, "新校舍"));
+                    let result = translate(source, &glossary);
+                    let (first, second) = result.target_text.split_once('，').unwrap();
+                    assert_eq!(first, "早餐有吃", "{meal}, {destination}, {domain}");
+                    assert!(
+                        matches!(second, "但沒有去到新校舍。" | "但沒有去新校舍。"),
+                        "{meal}, {destination}, {domain}: {second}",
+                    );
+                    assert_eq!(result.clause_alignments.len(), 2);
+                    assert_eq!(result.glossary_hits.len(), 2);
+                    for (hit, (original, replacement)) in result
+                        .glossary_hits
+                        .iter()
+                        .zip([(meal, "早餐"), (destination, "新校舍")])
+                    {
+                        assert_eq!(extract(source, hit.source_span), original);
+                        assert_eq!(extract(&result.target_text, hit.target_span), replacement);
+                    }
+                    assert_eq!(
+                        result.glossary_hits[1].kind,
+                        if domain {
+                            crate::GlossaryKind::DomainTerm
+                        } else {
+                            crate::GlossaryKind::Place
+                        }
+                    );
+
+                    let options = TranslateOptions::new(TargetVariant::ZhHant);
+                    let doc = faberline_nlp::doc::analyze_document(
+                        source,
+                        &crate::doc_options_for_translate(&options, &TranslationGlossary::new()),
+                    );
+                    let direct = crate::translate_document(
+                        source,
+                        &doc,
+                        #[cfg(feature = "narrative")]
+                        None,
+                        &options,
+                        &glossary,
+                        None,
+                    )
+                    .unwrap();
+                    assert_eq!(direct.target_text, result.target_text);
+                    assert_eq!(direct.glossary_hits, result.glossary_hits);
+                }
+            }
+        }
+
+        let mut glossary = TranslationGlossary::new();
+        glossary.objects.push(term("朝ご飯は", "早餐"));
+        glossary.places.push(term("学校には", "新校舍"));
+        for control in [
+            "朝ご飯は食べて、学校には行きました。",
+            "朝ご飯は食べて、学校には行きませんでしたか。",
+            "朝ご飯は食べて、学校には行きませんでした？",
+            "「朝ご飯は食べて、学校には行きませんでした」と言いました。",
+        ] {
+            let result = translate(control, &glossary);
+            assert!(!result.target_text.contains('但'), "{control}");
+            assert_eq!(result.glossary_hits.len(), 2, "{control}");
+        }
     }
 
     #[test]

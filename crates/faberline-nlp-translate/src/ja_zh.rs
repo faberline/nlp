@@ -17,6 +17,7 @@ mod daytime;
 mod direct_smoking;
 mod finished_go;
 mod finite_adjective;
+mod first_step;
 mod handover;
 mod naide_glossary;
 pub(crate) use naide_glossary::{
@@ -11850,6 +11851,7 @@ fn translate_clause_bunsetsus(
     let mut subjects: Vec<String> = Vec::new();
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
+    let mut first_steps = Vec::new();
     let state_interval = if target == TargetVariant::ZhHant {
         finite_adjective::take_time_interval(&mut bunsetsus, source, doc, &ctx.adjective)
     } else {
@@ -12402,8 +12404,10 @@ fn translate_clause_bunsetsus(
             setting_origin = Some(format!("從{}", setting_time_label(&b, target)));
             continue;
         }
-        if target == TargetVariant::ZhHant && is_bare_first_step(&b, source) {
-            temporal_others.push("先".to_owned());
+        if target == TargetVariant::ZhHant
+            && let Some(label) = first_step::render(&b, source, ctx.source_chars, ctx.locks)
+        {
+            first_steps.push(label);
             continue;
         }
         if daypart_groups.contains(&idx)
@@ -12916,6 +12920,7 @@ fn translate_clause_bunsetsus(
         Finite,
         Omission,
     }
+    let joint_subject = matches!(joint_manner, Some((JointManner::Everyone, false, _)));
     let verb_render = match predicates.as_slice() {
         [predicate] if !ctx.verb_locks.is_empty() && transfer.is_none() => {
             match predicate.atoms.as_slice() {
@@ -12926,7 +12931,7 @@ fn translate_clause_bunsetsus(
                         && (ending.iter().all(|atom| {
                             !atom.is_locked && matches!(atom.upos, Some(Upos::Aux | Upos::Sconj))
                         }) || is_polite_prohibition_ending(head, ending)
-                            || matches!(joint_manner, Some((JointManner::Everyone, false, _)))
+                            || (!first_steps.is_empty() || joint_subject)
                                 && polite_joint::is_polite_ending(head, ending))
                         && verb_core
                             == translate_single_ja_term(
@@ -14099,6 +14104,9 @@ fn translate_clause_bunsetsus(
         }
         adverbs = remaining;
     }
+    if !joint_subject {
+        temporal_others.append(&mut first_steps);
+    }
     let has_front_modal = !front_modals.is_empty();
     let mut manner_adverbs = Vec::new();
     if !has_front_modal {
@@ -14288,6 +14296,7 @@ fn translate_clause_bunsetsus(
     if !counted_companion {
         parts.extend(joint_participants.take());
     }
+    parts.extend(first_steps);
     // A span of days before a negation measures how long the action did
     // not occur. It does not imply that an event of that length took place.
     if predicate_is_negative
@@ -19221,28 +19230,6 @@ fn has_motion_reading(clause: &[Bunsetsu], source: &[Atom], head: usize) -> bool
 // 夕方に働く, 夕方にする and 夕方に戻る can share the same case relation.
 // Keep the time only when its own governor and that governor's other
 // arguments support an event-time reading.
-fn is_bare_first_step(group: &Bunsetsu, source: &[Atom]) -> bool {
-    let [first, ni] = group.atoms.as_slice() else {
-        return false;
-    };
-    let Some(governor) = first.head else {
-        return false;
-    };
-    first.surface == "初め"
-        && first.upos == Some(Upos::Noun)
-        && ni.surface == "に"
-        && linked_joint_case(first, ni)
-        && source
-            .iter()
-            .all(|atom| atom.head != first.doc_tok_idx || atom.doc_tok_idx == ni.doc_tok_idx)
-        && source.iter().any(|atom| {
-            !atom.is_locked
-                && atom.doc_tok_idx == Some(governor)
-                && atom.upos == Some(Upos::Verb)
-                && atom.deprel == "root"
-        })
-}
-
 fn is_event_daypart(group: &Bunsetsu, clause: &[Bunsetsu], source: &[Atom]) -> bool {
     if matches!(group.atoms.as_slice(), [day] if daytime::is_modifier(day)) {
         return true;

@@ -5,7 +5,7 @@ use crate::schema::GlossaryKind;
 
 use super::{
     Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
-    finished_go, group_into_bunsetsus, household_entry, is_punct_atom, naide_adverbial,
+    finished_go, first_step, group_into_bunsetsus, household_entry, is_punct_atom, naide_adverbial,
     outward_look, physical_goal_head, polarity_contrast, polite_joint, trip_after_meal,
 };
 
@@ -87,6 +87,9 @@ pub(crate) fn may_restore_glossary_syntax(
     if text.contains("ます") && polite_joint::may_restore_actor(chars, locks) {
         return true;
     }
+    if text.contains("初めに") && first_step::may_restore(chars, locks) {
+        return true;
+    }
     if locks
         .locks
         .iter()
@@ -138,7 +141,7 @@ pub(crate) fn glossary_render_locks(
     locks: &SpanLockTable,
 ) -> Option<(SpanLockTable, WholeVerbLocks)> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
-    omitted_render_locks(sentence, doc, chars, locks, &atoms)
+    let prior = omitted_render_locks(sentence, doc, chars, locks, &atoms)
         .or_else(|| {
             if !locks
                 .locks
@@ -187,7 +190,14 @@ pub(crate) fn glossary_render_locks(
         .or_else(|| {
             polite_joint::restore_actor_case(sentence, &atoms, doc, chars, locks)
                 .map(|render| (render, WholeVerbLocks::default()))
-        })
+        });
+    if let Some((render, verbs)) = prior {
+        let render =
+            first_step::restore_case(sentence, &atoms, doc, chars, &render).unwrap_or(render);
+        return Some((render, verbs));
+    }
+    first_step::restore_case(sentence, &atoms, doc, chars, locks)
+        .map(|render| (render, WholeVerbLocks::default()))
 }
 
 fn omitted_render_locks(

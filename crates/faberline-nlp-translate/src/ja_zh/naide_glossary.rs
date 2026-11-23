@@ -68,6 +68,14 @@ fn covers_case_marker(lock: &LockedSpan, chars: &[char]) -> bool {
     )
 }
 
+fn covers_household_goal(lock: &LockedSpan, chars: &[char]) -> bool {
+    mandatory_domain_term(lock)
+        && matches!(
+            chars.get(lock.source_span.start_char..lock.source_span.end_char),
+            Some(['家'] | ['家', 'に'])
+        )
+}
+
 pub(crate) fn may_restore_glossary_syntax(
     text: &str,
     chars: &[char],
@@ -112,7 +120,8 @@ pub(crate) fn may_restore_glossary_syntax(
                 } || naide
                     && (covers_case_marker(lock, chars)
                         || may_cover_past_predicate(lock, chars)
-                        || may_cover_omitted_predicate(lock, chars)))
+                        || may_cover_omitted_predicate(lock, chars)
+                        || covers_household_goal(lock, chars)))
         })
 }
 
@@ -218,11 +227,13 @@ fn omitted_render_locks(
             }
             _ => None,
         });
-    let completed = if omission.zuni {
+    let completed_entry = if omission.zuni {
         None
     } else {
-        completed_motion.or_else(|| whole_entry_span(sentence, doc, chars, following, later))
+        whole_entry_span(sentence, doc, chars, following, later)
     };
+    let restore_household_domain_goal = omission.join_unstated_subject && completed_entry.is_some();
+    let completed = completed_motion.or(completed_entry);
     let whole_verbs = WholeVerbLocks {
         following: completed.and_then(|span| whole_domain_lock(locks, span)),
         omitted: completed
@@ -245,19 +256,16 @@ fn omitted_render_locks(
     if whole_verbs.following.is_none()
         && whole_verbs.omitted.is_none()
         && !omission.zuni
-        && !locks
-            .locks
-            .iter()
-            .any(|lock| covers_case_marker(lock, chars))
+        && !locks.locks.iter().any(|lock| {
+            covers_case_marker(lock, chars)
+                || (restore_household_domain_goal && covers_household_goal(lock, chars))
+        })
     {
         return None;
     }
 
     let mut render = locks.clone();
     for lock in &mut render.locks {
-        let LockOrigin::Glossary { kind, .. } = lock.origin else {
-            return None;
-        };
         if !lock.mandatory {
             return None;
         }
@@ -277,6 +285,9 @@ fn omitted_render_locks(
         {
             continue;
         }
+        let LockOrigin::Glossary { kind, .. } = &mut lock.origin else {
+            return None;
+        };
         let first = atoms
             .iter()
             .position(|a| a.span.start_char == span.start_char)?;
@@ -302,7 +313,7 @@ fn omitted_render_locks(
         {
             return None;
         }
-        match (kind, marker.surface.as_str(), noun.deprel.as_str()) {
+        match (*kind, marker.surface.as_str(), noun.deprel.as_str()) {
             (GlossaryKind::Object, "を", "obj") if noun.head == Some(omitted_action) => {
                 let prefix = &atoms[first..head_index];
                 // The unhinted tokenizer may give 朝 its own adverb role.
@@ -321,12 +332,16 @@ fn omitted_render_locks(
                     return None;
                 }
             }
-            (GlossaryKind::Place, "に" | "へ", "obl")
+            (GlossaryKind::Place | GlossaryKind::DomainTerm, "に" | "へ", "obl")
                 if noun.head == Some(later)
                     && first == head_index
                     && movement.is_some_and(|motion| {
                         matches!(motion.lemma.as_deref(), Some("行く" | "入る"))
-                    }) =>
+                    })
+                    && (*kind == GlossaryKind::Place
+                        || (restore_household_domain_goal
+                            && noun.surface == "家"
+                            && marker.surface == "に")) =>
             {
                 let goal = classify_bunsetsu(vec![noun.clone(), marker.clone()], doc, sentence);
                 if physical_goal_head(&goal) != Some(later)
@@ -341,6 +356,9 @@ fn omitted_render_locks(
                 {
                     return None;
                 }
+                // Only the render clone uses the recovered place role.
+                // The original lock supplies the caller's category and span.
+                *kind = GlossaryKind::Place;
             }
             (GlossaryKind::Place, "を", "obj")
                 if omission.zuni && noun.head == Some(later) && first == head_index => {}
@@ -348,7 +366,7 @@ fn omitted_render_locks(
         }
         // Keep the omitted object in the caller's opaque clause. Moving it
         // behind a replacement that ends in a connector would split the two.
-        if covered_connector.is_some() && kind == GlossaryKind::Object {
+        if covered_connector.is_some() && *kind == GlossaryKind::Object {
             continue;
         }
         lock.source_span = Span {

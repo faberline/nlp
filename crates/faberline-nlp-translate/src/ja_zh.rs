@@ -18410,9 +18410,12 @@ fn merge_adnominal_bunsetsus(
 
                     // Pure `N の` modifier (e.g. `美咲の`, `机の`, `3冊の`, `今回の`).
                     let supplied_genitive = target == TargetVariant::ZhHant
-                        && b.atoms
-                            .first_mut()
-                            .is_some_and(|noun| written_opening::render(noun, &mod_b.atoms, ctx));
+                        && b.atoms.first_mut().is_some_and(|noun| {
+                            written_opening::render(noun, &mod_b.atoms, ctx)
+                                || ctx.is_some_and(|ctx| {
+                                    partitive::supplies_genitive(noun, &mod_b.atoms, ctx.locks)
+                                })
+                        });
                     mod_b.atoms.pop();
                     let omit_de = supplied_genitive
                         || starts_with_num_counter(&mod_b)

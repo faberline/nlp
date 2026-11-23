@@ -18,6 +18,7 @@ mod finite_adjective;
 mod handover;
 mod homework_desire;
 mod homework_relative;
+pub(crate) mod lesson_start;
 mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
@@ -208,6 +209,7 @@ pub(crate) fn translate_ja_sentence(
     doc: &Document,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
+    lesson_source: Option<lesson_start::SourceAnalysis>,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -254,6 +256,33 @@ pub(crate) fn translate_ja_sentence(
         .filter(|(_, c)| c.sentence == sentence_idx)
         .map(|(i, c)| (i, c.span))
         .collect();
+    if let Some(source_analysis) = lesson_source
+        && let [(clause, source_span)] = doc_clauses.as_slice()
+        && *source_span == sent_span
+        && let Some(text) = lesson_start::render_locked(
+            chars,
+            sentence_idx,
+            doc,
+            sent_tokens,
+            &atoms,
+            lock_table,
+            source_analysis,
+        )
+    {
+        let target_span = Span {
+            start_char: 0,
+            end_char: text.chars().count(),
+        };
+        return (
+            text,
+            vec![ClauseAlignment {
+                clause: *clause,
+                sentence: sentence_idx,
+                source_span: *source_span,
+                target_span,
+            }],
+        );
+    }
 
     // A written form can cross an analysis sentence boundary. Emit the
     // continuation before syntax can put a translated particle in front of it.
@@ -1196,6 +1225,7 @@ pub(crate) fn translate_ja_fragment(
             &doc,
             &sent_tokens,
             &lock_table,
+            None,
             &cond,
             target,
             None,
@@ -12312,7 +12342,13 @@ fn translate_clause_bunsetsus(
                 }
             }
             BunsetsuRole::Obj => {
-                let text = render_bunsetsu_np(&b, target);
+                let text = if target == TargetVariant::ZhHant
+                    && lesson_start::uses_native_object(&b.atoms, source)
+                {
+                    "上課".to_owned()
+                } else {
+                    render_bunsetsu_np(&b, target)
+                };
                 if let Some(marker) = motion
                     .filter(|m| !m.expressed_by_verb)
                     .and_then(|m| route_marker(&b, source, m.head))

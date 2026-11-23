@@ -29,6 +29,7 @@ use crate::conditioning::{
     build_sentence_conditioning, format_control_prefix, partition_clause_windows,
 };
 use crate::glossary::{CompiledGlossary, format_entity_for_target};
+use crate::ja_zh::lesson_start::SourceAnalysis;
 use crate::lock::{LockOrigin, SpanLockTable};
 use crate::model::{Seq2SeqModel, VerifiedSeq2Seq, load_verified_seq2seq, verify_seq2seq};
 use crate::opaque::{
@@ -138,7 +139,7 @@ pub fn analyze_and_translate(
         None => None,
     };
 
-    translate_document(
+    translate_analyzed_document(
         text,
         &doc,
         #[cfg(feature = "narrative")]
@@ -146,6 +147,11 @@ pub fn analyze_and_translate(
         options,
         glossary,
         loaded_seq2seq.as_ref(),
+        if models_dir.is_none() {
+            SourceAnalysis::OwnedCpu
+        } else {
+            SourceAnalysis::Provided
+        },
     )
 }
 
@@ -159,6 +165,27 @@ pub fn translate_document(
     options: &TranslateOptions,
     glossary: &TranslationGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
+) -> anyhow::Result<TranslatedDocument> {
+    translate_analyzed_document(
+        text,
+        doc,
+        #[cfg(feature = "narrative")]
+        narrative,
+        options,
+        glossary,
+        seq2seq,
+        SourceAnalysis::Provided,
+    )
+}
+
+fn translate_analyzed_document(
+    text: &str,
+    doc: &Document,
+    #[cfg(feature = "narrative")] narrative: Option<&ChapterNarrative>,
+    options: &TranslateOptions,
+    glossary: &TranslationGlossary,
+    seq2seq: Option<&LoadedTranslateModel>,
+    source_analysis: SourceAnalysis,
 ) -> anyhow::Result<TranslatedDocument> {
     #[cfg(not(feature = "narrative"))]
     let narrative: Option<&()> = None;
@@ -373,6 +400,7 @@ pub fn translate_document(
                     &written_quotes,
                     &mut dates,
                     &mut honorifics,
+                    source_analysis,
                 );
 
                 let start = target_char_pos;
@@ -765,6 +793,7 @@ fn translate_single_sentence(
     written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
     dates: &mut ja_zh::DateContext,
     honorifics: &mut ja_zh::HonorificContext,
+    source_analysis: SourceAnalysis,
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
@@ -929,12 +958,17 @@ fn translate_single_sentence(
             );
             ja_zh::prior_letter_distribution(idx, chars, doc, &locks)
         });
+        let lesson_source = (options.target == TargetVariant::ZhHant
+            && direct_quote.is_none()
+            && written_quotes.is_empty())
+        .then_some(source_analysis);
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
             doc,
             sent_tokens,
             &lock_table,
+            lesson_source,
             &conditioning,
             options.target,
             direct_quote,

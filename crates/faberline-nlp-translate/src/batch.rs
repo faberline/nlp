@@ -9,13 +9,15 @@ use faberline_nlp::doc::analyze_document;
 use faberline_nlp::doc::model::Backend;
 use serde::Deserialize;
 
+use crate::ja_zh::lesson_start::SourceAnalysis;
 use crate::schema::{
     ChapterTranslateReceipt, GlossaryEntry, OpaquePolicy, TRANSLATE_BATCH_RECEIPT_SCHEMA,
     TranslateManifestReceipt, TranslateOptions, TranslateUnknownKind, TranslatedDocument,
     TranslationGlossary, TranslationTrack, sha256_hex,
 };
 use crate::{
-    LoadedTranslateModel, doc_options_for_translate, render_bilingual_markdown, translate_document,
+    LoadedTranslateModel, doc_options_for_translate, render_bilingual_markdown,
+    translate_analyzed_document,
 };
 
 #[derive(Deserialize)]
@@ -307,7 +309,7 @@ fn process_one_chapter(
     #[cfg(not(feature = "narrative"))]
     let _ = chapter_num;
 
-    let tr_doc = translate_document(
+    let tr_doc = translate_analyzed_document(
         &src_text,
         &doc,
         #[cfg(feature = "narrative")]
@@ -315,6 +317,7 @@ fn process_one_chapter(
         &cfg.options,
         glossary,
         seq2seq,
+        SourceAnalysis::OwnedCpu,
     )?;
 
     fs::write(&json_path, serde_json::to_string_pretty(&tr_doc)? + "\n")?;

@@ -35,6 +35,7 @@ mod nominal_possession;
 mod nominal_receiving_glossary;
 mod order_noun;
 mod outward_look;
+mod partitive;
 mod payment_potential;
 mod place_goal_glossary;
 mod polarity_contrast;
@@ -356,7 +357,7 @@ fn translate_ja_sentence_with_verb_locks(
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
     if target == TargetVariant::ZhHant {
         class_period::normalize(&mut atoms, chars);
-        normalize_partitive_halves(&mut atoms);
+        partitive::normalize(&mut atoms);
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
         daytime::bind_form_time(&mut atoms, chars, doc);
@@ -7826,26 +7827,6 @@ fn dasu_case_link(noun: &Atom, particle: &Atom) -> bool {
         && noun.doc_tok_idx.is_some()
         && particle.head == noun.doc_tok_idx
         && noun.span.end_char == particle.span.start_char
-}
-
-fn normalize_partitive_halves(atoms: &mut [Atom]) {
-    for index in 2..atoms.len() {
-        if let [whole, genitive, half] = &mut atoms[index - 2..=index]
-            && !half.is_locked
-            && half.surface == "半分"
-            && half.upos == Some(Upos::Noun)
-            && half.doc_tok_idx.is_some()
-            && whole.deprel == "nmod"
-            && whole.head == half.doc_tok_idx
-            && genitive.surface == "の"
-            && dasu_case_link(whole, genitive)
-            && genitive.span.end_char == half.span.start_char
-        {
-            // Keep the genitive and its existing noun-phrase rendering.
-            half.surface = "一半".to_owned();
-            half.is_locked = true;
-        }
-    }
 }
 
 fn try_translate_homework_transfer(

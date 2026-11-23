@@ -1,8 +1,8 @@
 use faberline_nlp::doc::{analyze_document, model::Backend};
 
 use crate::{
-    GlossaryEntry, TargetVariant, TranslateOptions, TranslatedDocument, TranslationGlossary,
-    analyze_and_translate, doc_options_for_translate, translate_document,
+    GlossaryEntry, GlossaryKind, TargetVariant, TranslateOptions, TranslatedDocument,
+    TranslationGlossary, analyze_and_translate, doc_options_for_translate, translate_document,
 };
 
 fn translate(source: &str, glossary: &TranslationGlossary) -> TranslatedDocument {
@@ -115,6 +115,104 @@ fn a_place_lock_cannot_turn_an_invitation_into_a_completed_trip() {
     let output = translate("母と一緒に市場へ行きませんか。", &market_glossary("市場へ"));
     assert_eq!(output.target_text, "要不要和母親一起公有市場去？");
     assert_eq!(output.glossary_hits[0].canonical, "市場へ");
+}
+
+#[test]
+fn actor_and_place_locks_keep_both_roles_in_the_completed_trip() {
+    // Adopted public development case jz004.
+    let source = "母と一緒に市場へ行った。";
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let raw = analyze_document(
+        source,
+        &doc_options_for_translate(&options, &TranslationGlossary::new()),
+    );
+    for actor in ["母", "母と"] {
+        for place in [None, Some("市場"), Some("市場へ")] {
+            let mut glossary = place.map_or_else(TranslationGlossary::new, market_glossary);
+            glossary.actors.push(GlossaryEntry {
+                canonical: actor.into(),
+                surfaces: vec![actor.into()],
+                targets: [(TargetVariant::ZhHant, "媽媽".into())].into(),
+                ..GlossaryEntry::default()
+            });
+            let analyzed = translate(source, &glossary);
+            let direct = translate_document(
+                source,
+                &raw,
+                #[cfg(feature = "narrative")]
+                None,
+                &options,
+                &glossary,
+                None,
+            )
+            .unwrap();
+            let goal = if place.is_some() {
+                "公有市場"
+            } else {
+                "市場"
+            };
+            assert_eq!(analyzed.target_text, format!("跟媽媽一起去了{goal}。"));
+            assert_eq!(direct.target_text, analyzed.target_text);
+            assert_eq!(direct.glossary_hits, analyzed.glossary_hits);
+            let [person, destinations @ ..] = analyzed.glossary_hits.as_slice() else {
+                panic!("expected an actor glossary hit");
+            };
+            assert_eq!(person.kind, GlossaryKind::Actor);
+            assert_eq!(person.canonical, actor);
+            assert_eq!(
+                (person.source_span.start_char, person.source_span.end_char),
+                (0, actor.chars().count())
+            );
+            assert_eq!(
+                (person.target_span.start_char, person.target_span.end_char),
+                (1, 3)
+            );
+            match place {
+                Some(term) => {
+                    let [destination] = destinations else {
+                        panic!("expected one place glossary hit");
+                    };
+                    assert_eq!(destination.kind, GlossaryKind::Place);
+                    assert_eq!(destination.canonical, term);
+                    assert_eq!(
+                        (
+                            destination.source_span.start_char,
+                            destination.source_span.end_char
+                        ),
+                        (5, 5 + term.chars().count())
+                    );
+                    assert_eq!(
+                        (
+                            destination.target_span.start_char,
+                            destination.target_span.end_char
+                        ),
+                        (7, 11)
+                    );
+                }
+                None => assert!(destinations.is_empty()),
+            }
+        }
+    }
+}
+
+#[test]
+fn an_actor_lock_does_not_turn_a_coordinated_subject_into_a_companion() {
+    let mut glossary = TranslationGlossary::new();
+    glossary.actors.push(GlossaryEntry {
+        canonical: "兄".into(),
+        surfaces: vec!["兄".into()],
+        targets: [(TargetVariant::ZhHant, "親人".into())].into(),
+        ..GlossaryEntry::default()
+    });
+    glossary.places.push(GlossaryEntry {
+        canonical: "駅へ".into(),
+        surfaces: vec!["駅へ".into()],
+        targets: [(TargetVariant::ZhHant, "北站".into())].into(),
+        ..GlossaryEntry::default()
+    });
+    let result = translate("兄と妹が駅へ行きました。", &glossary);
+    assert_eq!(result.target_text, "親人和妹妹北站去了。");
+    assert_eq!(result.glossary_hits.len(), 2);
 }
 
 fn market_glossary(term: &str) -> TranslationGlossary {

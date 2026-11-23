@@ -4,10 +4,10 @@ use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
 use crate::schema::GlossaryKind;
 
 use super::{
-    Atom, Document, Span, Token, Upos, build_sentence_atoms, calendar, classify_bunsetsu,
-    dasu_case_link, finished_go, first_step, group_into_bunsetsus, handover, household_entry,
-    is_punct_atom, letter_deadline, naide_adverbial, outward_look, physical_goal_head,
-    polarity_contrast, polite_joint, trip_after_meal, written_opening,
+    Atom, Document, Span, Token, Upos, application_form, build_sentence_atoms, calendar,
+    classify_bunsetsu, dasu_case_link, finished_go, first_step, group_into_bunsetsus, handover,
+    household_entry, is_punct_atom, letter_deadline, naide_adverbial, outward_look,
+    physical_goal_head, polarity_contrast, polite_joint, trip_after_meal, written_opening,
 };
 
 #[derive(Default)]
@@ -96,6 +96,7 @@ pub(crate) fn may_restore_glossary_syntax(
     }
     if text.contains('渡') && handover::may_restore(locks)
         || calendar::glossary::may_cover_time(chars, locks)
+        || text.contains('出') && application_form::may_restore_case(chars, locks)
         || text.contains("までに") && letter_deadline::may_cover_object(chars, locks)
     {
         return true;
@@ -240,9 +241,12 @@ pub(crate) fn glossary_render_locks(
         prior
     };
     let previous = prior.as_ref().map_or(locks, |(render, _)| render);
-    let Some((render, time)) =
-        calendar::glossary::time_render_locks(&atoms, tokens, chars, previous)
-    else {
+    let repaired =
+        calendar::glossary::time_render_locks(&atoms, tokens, chars, previous).or_else(|| {
+            application_form::restore_case(&atoms, chars, previous)
+                .map(|render| (render, calendar::glossary::TimeSyntax::default()))
+        });
+    let Some((render, time)) = repaired else {
         return prior;
     };
     let mut syntax = prior.map_or_else(GlossarySyntax::default, |(_, syntax)| syntax);

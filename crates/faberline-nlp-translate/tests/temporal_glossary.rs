@@ -150,3 +150,38 @@ fn protected_letter_is_completed_only_at_a_deadline() {
         "我最晚在六點整撰寫信。",
     );
 }
+
+#[test]
+fn protected_date_and_application_keep_their_separate_roles() {
+    // Both glossary entries refer to the filing action in adopted DLC-01 and DLC-02.
+    for (source, dates, prefix) in [
+        (
+            "今月は何日までに講座の申込書を出しますか。",
+            &["何日", "何日まで", "何日までに"][..],
+            "這個月最晚幾日交",
+        ),
+        (
+            "今月は何日に講座の申込書を出しますか。",
+            &["何日", "何日に"][..],
+            "這個月幾日交",
+        ),
+    ] {
+        for date in dates {
+            for (form, qualifier) in [
+                ("申込書", "課程"),
+                ("申込書を", "課程"),
+                ("講座の申込書", ""),
+                ("講座の申込書を", ""),
+            ] {
+                assert_glosses(
+                    source,
+                    &[
+                        (GlossaryKind::DomainTerm, date, "幾日"),
+                        (GlossaryKind::Object, form, "指定表單"),
+                    ],
+                    &format!("{prefix}{qualifier}指定表單？"),
+                );
+            }
+        }
+    }
+}

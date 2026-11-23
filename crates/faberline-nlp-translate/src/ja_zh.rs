@@ -130,6 +130,7 @@ enum BunsetsuRole {
     },
     JointCompanion,
     TravelCompanion,
+    TravelTogether,
     ResidencePlace {
         form: ResidenceForm,
         past: bool,
@@ -196,6 +197,17 @@ pub(crate) struct DirectQuotePlacement {
     pub(crate) opening: Option<DirectQuotePrefix>,
     pub(crate) report: Option<Span>,
     pub(crate) detached_from: Option<usize>,
+}
+
+pub(crate) fn companion_place_render_locks(
+    sentence: usize,
+    chars: &[char],
+    doc: &Document,
+    tokens: &[&Token],
+    locks: &SpanLockTable,
+) -> Option<SpanLockTable> {
+    let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
+    finished_go::restore_companion_place(sentence, &atoms, doc, chars, locks)
 }
 
 /// Translate a single Japanese (or Ja-dominant Mixed) sentence into `target` (`zh-Hant` / `zh-Hans`),
@@ -6823,6 +6835,9 @@ fn translate_clause_atoms(
     // Group into bunsetsus, then fold adnominal modifiers (`の`, prenominal `Adj`, `acl`).
     let mut grouped = group_into_bunsetsus(&norm_atoms, doc, sentence_idx);
     mark_return_arguments(&mut grouped, original_body, doc);
+    if target == TargetVariant::ZhHant && !ctx.inside_quote {
+        finished_go::mark_companions(&mut grouped, original_body, doc, ctx.source_chars);
+    }
     for group in &mut grouped {
         if group
             .atoms
@@ -11436,6 +11451,7 @@ fn translate_clause_bunsetsus(
     let mut joint_participants = None;
     let mut joint_companions = Vec::new();
     let mut travel_companions = Vec::new();
+    let mut travel_together = false;
     let mut residence = None;
     let mut residence_additive = false;
     let mut additional_residences = Vec::new();
@@ -12107,6 +12123,7 @@ fn translate_clause_bunsetsus(
             BunsetsuRole::TravelCompanion => {
                 travel_companions.push(format!("跟{}", render_bunsetsu_np(&b, target)));
             }
+            BunsetsuRole::TravelTogether => travel_together = true,
             BunsetsuRole::MotionPurpose => purpose = b.atoms[0].lemma.clone(),
             BunsetsuRole::PurposeModifier if b.atoms[0].surface == "一緒" => {
                 go_together.push(render_bunsetsu_np(&b, target));
@@ -13557,6 +13574,9 @@ fn translate_clause_bunsetsus(
         parts.extend(temporal_others);
     }
     parts.extend(travel_companions);
+    if travel_together {
+        parts.push("一起".to_owned());
+    }
     // A place marked by まで is the endpoint of a motion event. Keep this
     // local to まで: the global goal flag also changes recipients and vehicles.
     let mut made_endpoints = Vec::new();

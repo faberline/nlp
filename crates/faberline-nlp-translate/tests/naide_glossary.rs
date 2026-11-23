@@ -85,12 +85,20 @@ fn omitted_actions_keep_their_objects_and_the_later_destinations() {
 fn omitted_action_keeps_departure_source_when_a_glossary_covers_its_case() {
     // jz062 in the adopted standing development cases.
     let source = "朝ご飯を食べずに家を出た。";
+    let expected_without_meal_lock = match faberline_nlp::lexicon::ja::lookup_ja_gloss(
+        "朝ご飯",
+        Some(faberline_nlp::doc::Upos::Noun),
+    ) {
+        None => "早上沒有吃飯就離開舊屋了。",
+        Some("早餐") => "沒有吃早餐就離開舊屋了。",
+        Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+    };
     for place in ["家", "家を"] {
         check(
             source,
             None,
             Some((place, "舊屋")),
-            "早上沒有吃飯就離開舊屋了。",
+            expected_without_meal_lock,
         );
         for meal in ["朝ご飯", "朝ご飯を"] {
             check(

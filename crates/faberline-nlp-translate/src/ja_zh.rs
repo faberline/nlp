@@ -12449,6 +12449,13 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, mut passive_agent_needed) =
         synthesize_predicate_complex(&predicates, past_until, target, transfer);
+    if target == TargetVariant::ZhHant
+        && verb_core == "能得到"
+        && !ctx.inside_quote
+        && recipient_scope::receives_distributed_item(source, doc, ctx.source_chars)
+    {
+        verb_core = "能領取".to_owned();
+    }
     if meeting_partner.is_some() {
         passive_agent_needed = false;
     }

@@ -1,4 +1,4 @@
-//! Recover a household destination particle covered by a caller's place lock.
+//! Recover a household destination particle covered by a caller's glossary lock.
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, Upos, analyze_document};
@@ -14,12 +14,12 @@ pub(super) fn restore_destination(
     doc: &Document,
     locks: &SpanLockTable,
 ) {
-    let mut places = locks.locks.iter().filter(|lock| {
+    let mut candidates = locks.locks.iter().filter(|lock| {
         lock.mandatory
             && matches!(
                 lock.origin,
                 LockOrigin::Glossary {
-                    kind: GlossaryKind::Place,
+                    kind: GlossaryKind::Place | GlossaryKind::DomainTerm,
                     ..
                 }
             )
@@ -28,10 +28,10 @@ pub(super) fn restore_destination(
             && chars.get(lock.source_span.start_char..lock.source_span.end_char)
                 == Some(&['家', 'に'])
     });
-    let Some(lock) = places.next() else {
+    let Some(lock) = candidates.next() else {
         return;
     };
-    if places.next().is_some() {
+    if candidates.next().is_some() {
         return;
     }
     let Some(index) = atoms.iter().position(|atom| {
@@ -39,13 +39,27 @@ pub(super) fn restore_destination(
     }) else {
         return;
     };
-    let Some((case, entry)) = proven_destination(atoms, chars, sentence, doc, lock.source_span)
+    let Some((case, entry, adverbials)) =
+        proven_destination(atoms, chars, sentence, doc, lock.source_span)
     else {
         return;
     };
 
-    // The lock table retains the full hit and supplies the single replacement.
+    // Restore only the render role. The lock table retains the original
+    // category and full hit and supplies the single replacement.
     let mut destination = atoms[index].clone();
+    if let Some(original) = destination.doc_tok_idx {
+        // A compound hint can make the destination look like a verb. Repair
+        // only links to that token which the original grammar ties to entry.
+        for atom in atoms.iter_mut().filter(|atom| {
+            !atom.is_locked
+                && atom.head == Some(original)
+                && atom.deprel == "advcl"
+                && adverbials.contains(&atom.span)
+        }) {
+            atom.head = Some(entry);
+        }
+    }
     destination.span.end_char = case.start_char;
     destination.lemma = Some(LOCKED_PLACE_ATOM.to_owned());
     destination.doc_tok_idx = None;
@@ -70,7 +84,7 @@ fn proven_destination(
     sentence: Span,
     doc: &Document,
     span: Span,
-) -> Option<(Span, usize)> {
+) -> Option<(Span, usize, Vec<Span>)> {
     if !doc.options.enrich_morphology || !doc.options.cpu_syntax {
         return None;
     }
@@ -134,16 +148,25 @@ fn proven_destination(
     if competing_destination {
         return None;
     }
-    Some((case, entry_atom.doc_tok_idx?))
+    let adverbials = parsed
+        .syntax
+        .iter()
+        .filter(|link| link.deprel == "advcl" && link.head == Some(entry.token))
+        .map(|link| absolute(link.span))
+        .collect();
+    Some((case, entry_atom.doc_tok_idx?, adverbials))
 }
 
 #[cfg(test)]
 mod tests {
+    use faberline_nlp::Span;
     use faberline_nlp::doc::{analyze_document, model::Backend};
 
+    use super::{LockOrigin, SpanLockTable, restore_destination};
+    use crate::ja_zh::build_sentence_atoms;
     use crate::{
-        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
-        doc_options_for_translate, translate_document,
+        GlossaryEntry, GlossaryKind, TargetVariant, TranslateOptions, TranslationGlossary,
+        analyze_and_translate, doc_options_for_translate, translate_document,
     };
 
     fn entry(surface: &str, target: &str) -> GlossaryEntry {
@@ -157,12 +180,62 @@ mod tests {
 
     #[test]
     fn caller_place_keeps_the_syntactic_destination_and_full_source_span() {
+        check_destination(GlossaryKind::Place);
+    }
+
+    #[test]
+    fn caller_domain_term_keeps_the_syntactic_destination_and_full_source_span() {
+        check_destination(GlossaryKind::DomainTerm);
+    }
+
+    #[test]
+    fn recovering_a_destination_keeps_the_earlier_action_linked_to_entry() {
+        let source = "靴を脱がないで、家に入りました。";
+        let chars = source.chars().collect::<Vec<_>>();
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let mut glossary = TranslationGlossary::new();
+        glossary.domain_terms.push(entry("家に", "舊屋"));
+        let doc = analyze_document(source, &doc_options_for_translate(&options, &glossary));
+        let locks = SpanLockTable::build(vec![(
+            1,
+            Span {
+                start_char: 8,
+                end_char: 10,
+            },
+            "舊屋".into(),
+            LockOrigin::Glossary {
+                canonical: "家に".into(),
+                kind: GlossaryKind::DomainTerm,
+            },
+            true,
+        )]);
+        let tokens = doc.tokens.iter().collect::<Vec<_>>();
+        let mut atoms = build_sentence_atoms(0, &chars, &doc, &tokens, &locks);
+        restore_destination(
+            &mut atoms,
+            &chars,
+            doc.segmentation.sentences[0].span,
+            &doc,
+            &locks,
+        );
+        let entry = atoms.iter().find(|atom| atom.surface == "入り").unwrap();
+        let earlier = atoms.iter().find(|atom| atom.surface == "脱が").unwrap();
+        assert_eq!(earlier.deprel, "advcl");
+        assert_eq!(earlier.head, Some(entry.doc_tok_idx.unwrap()));
+    }
+
+    fn check_destination(kind: GlossaryKind) {
         let source = "靴を脱がないで、家に入りました。";
         let options = TranslateOptions::new(TargetVariant::ZhHant);
         let mut glossary = TranslationGlossary::new();
         let doc = analyze_document(source, &doc_options_for_translate(&options, &glossary));
         for term in ["家", "家に"] {
-            glossary.places = vec![entry(term, "舊屋")];
+            let terms = match kind {
+                GlossaryKind::Place => &mut glossary.places,
+                GlossaryKind::DomainTerm => &mut glossary.domain_terms,
+                _ => unreachable!(),
+            };
+            *terms = vec![entry(term, "舊屋")];
             for objects in [vec![], vec![entry("靴", "鞋履")]] {
                 glossary.objects = objects;
                 let analyzed =
@@ -194,6 +267,7 @@ mod tests {
                         .iter()
                         .find(|hit| hit.canonical == term)
                         .unwrap();
+                    assert_eq!(hit.kind, kind);
                     let at = |text: &str, span: faberline_nlp::Span| -> String {
                         text.chars()
                             .skip(span.start_char)

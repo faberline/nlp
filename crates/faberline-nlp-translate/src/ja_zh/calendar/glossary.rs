@@ -7,7 +7,7 @@ use faberline_nlp::Span;
 use faberline_nlp::doc::Token;
 
 use super::super::{
-    dasu_case_link, daytime, deadline_weekday, is_clock_atom, is_daypart_surface,
+    application_form, dasu_case_link, daytime, deadline_weekday, is_clock_atom, is_daypart_surface,
     is_named_event_time, normalize_clock_atoms, render_clock_surface, render_temporal_made_atom,
     selects_time_value,
 };
@@ -253,6 +253,7 @@ pub(in crate::ja_zh) fn time_render_locks(
     let clocks = normalize_clock_atoms(original);
     let mut table = locks.clone();
     let mut labels = Vec::new();
+    let mut composite_objects = Vec::new();
     for lock in &mut table.locks {
         let LockOrigin::Glossary { kind, .. } = lock.origin else {
             return None;
@@ -264,9 +265,22 @@ pub(in crate::ja_zh) fn time_render_locks(
             lock.source_span = label.span;
             labels.push(label);
         } else if !tokens.iter().any(|t| t.span == lock.source_span) {
-            // A second, unrelated composite lock may hide its own syntax.
-            return None;
+            if kind != GlossaryKind::Object || !lock.mandatory {
+                return None;
+            }
+            composite_objects.push(lock);
         }
     }
-    (!labels.is_empty()).then_some((table, TimeSyntax { labels }))
+    if labels.is_empty() {
+        return None;
+    }
+    for lock in composite_objects {
+        let (span, governor) =
+            application_form::filing_object_span(original, chars, lock.source_span)?;
+        if !labels.iter().any(|label| label.governor == governor) {
+            return None;
+        }
+        lock.source_span = span;
+    }
+    Some((table, TimeSyntax { labels }))
 }

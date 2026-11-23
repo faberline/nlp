@@ -1,6 +1,11 @@
 //! Select the use of a written application and the sense of 出す from its
 //! own object, destination and source. Preserve the ordinary predicate path.
-use super::{Atom, Document, Upos, dasu_case_link, direct_quote_time, is_clock_atom};
+use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
+use crate::schema::GlossaryKind;
+
+use super::{Atom, Document, Span, Upos, dasu_case_link, direct_quote_time, is_clock_atom};
+
+const FORM_NOUNS: [&str; 3] = ["申込書", "申込み書", "申し込み書"];
 
 pub(super) const SUBMIT: &str = "__ja_submit_application";
 pub(super) const CAN_SUBMIT: &str = "__ja_can_submit_application";
@@ -29,7 +34,7 @@ fn form_start(atoms: &[Atom], end: usize, chars: &[char]) -> Option<usize> {
         return None;
     }
     let raw = spelling(form, chars);
-    if matches!(raw.as_str(), "申込書" | "申込み書" | "申し込み書") {
+    if FORM_NOUNS.contains(&raw.as_str()) {
         return Some(end);
     }
     if raw != "書" || end == 0 {
@@ -106,11 +111,11 @@ fn named_purpose(label: &str, subject: bool) -> Option<&'static str> {
 // The glossary can make a protected qualified noun one source token.
 // Its visible case and source spelling identify the filing argument.
 fn covered_purpose(form: &Atom, chars: &[char]) -> bool {
-    if !form.is_locked {
-        return false;
-    }
-    let raw = spelling(form, chars);
-    ["申込書", "申込み書", "申し込み書"]
+    form.is_locked && qualified_form(&spelling(form, chars))
+}
+
+fn qualified_form(raw: &str) -> bool {
+    FORM_NOUNS
         .iter()
         .find_map(|ending| raw.strip_suffix(ending))
         .and_then(|name| named_purpose(name.strip_suffix('の').unwrap_or(name), false))
@@ -157,6 +162,104 @@ fn filing_reading(a: &Atom, atoms: &[Atom]) -> Option<&'static str> {
         }
         _ => None,
     }
+}
+
+pub(super) fn filing_object_span(
+    original: &[Atom],
+    chars: &[char],
+    lock: Span,
+) -> Option<(Span, usize)> {
+    let first = original
+        .iter()
+        .position(|atom| atom.span.start_char == lock.start_char)?;
+    for (end, pair) in original.windows(2).enumerate().skip(first) {
+        let [form, case] = pair else { continue };
+        if form.span.end_char > lock.end_char {
+            break;
+        }
+        if form.deprel != "obj"
+            || case.surface != "を"
+            || !dasu_case_link(form, case)
+            || form.span.end_char != case.span.start_char
+            || ![form.span.end_char, case.span.end_char].contains(&lock.end_char)
+        {
+            continue;
+        }
+        let noun = form_start(original, end, chars)?;
+        if first != noun {
+            let (owner, _) = purpose(original, noun, form, chars)?;
+            if first > owner
+                || original[first..owner].iter().any(|modifier| {
+                    modifier.deprel != "compound" || modifier.head != original[owner].doc_tok_idx
+                })
+            {
+                return None;
+            }
+        }
+        if original[first..=end]
+            .windows(2)
+            .any(|part| part[0].span.end_char != part[1].span.start_char)
+        {
+            return None;
+        }
+        let governor = form.head?;
+        original.iter().find(|action| {
+            action.doc_tok_idx == Some(governor) && filing_reading(action, original).is_some()
+        })?;
+        return Some((
+            Span {
+                start_char: lock.start_char,
+                end_char: form.span.end_char,
+            },
+            governor,
+        ));
+    }
+    None
+}
+
+fn case_inclusive_object(lock: &LockedSpan, chars: &[char]) -> bool {
+    if !lock.mandatory
+        || !matches!(
+            lock.origin,
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Object,
+                ..
+            }
+        )
+    {
+        return false;
+    }
+    let Some([noun @ .., 'を']) = chars.get(lock.source_span.start_char..lock.source_span.end_char)
+    else {
+        return false;
+    };
+    let noun: String = noun.iter().collect();
+    FORM_NOUNS.contains(&noun.as_str()) || qualified_form(&noun)
+}
+
+pub(super) fn may_restore_case(chars: &[char], locks: &SpanLockTable) -> bool {
+    locks
+        .locks
+        .iter()
+        .any(|lock| case_inclusive_object(lock, chars))
+}
+
+pub(super) fn restore_case(
+    original: &[Atom],
+    chars: &[char],
+    locks: &SpanLockTable,
+) -> Option<SpanLockTable> {
+    let mut render = None;
+    for (index, lock) in locks.locks.iter().enumerate() {
+        if case_inclusive_object(lock, chars)
+            && let Some((span, _)) = filing_object_span(original, chars, lock.source_span)
+        {
+            // Expose the case marker in the render copy. The original lock
+            // records the caller's full match and exact target replacement.
+            render.get_or_insert_with(|| locks.clone()).locks[index].source_span = span;
+        }
+    }
+    render
 }
 
 // An office or person receives the document only when its case belongs to this action.

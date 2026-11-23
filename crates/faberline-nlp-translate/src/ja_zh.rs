@@ -26,6 +26,7 @@ pub(crate) use naide_glossary::{
 mod homework_desire;
 mod homework_relative;
 mod household_entry;
+mod letter_deadline;
 mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
@@ -12082,6 +12083,17 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
+    let deadline_letter = if target == TargetVariant::ZhHant && !ctx.inside_quote {
+        letter_deadline::completion_object(
+            &bunsetsus,
+            candidates.iter(),
+            source,
+            doc,
+            ctx.source_chars,
+        )
+    } else {
+        None
+    };
     // Resolve time and result roles while the other arguments of the predicate are available.
     let hand_return = if ctx.return_trip.is_none() && target == TargetVariant::ZhHant {
         return_endpoint::clock_hand_return(
@@ -14017,6 +14029,18 @@ fn translate_clause_bunsetsus(
         verb_core = action;
         Some(modal)
     });
+
+    if let Some(letter) = deadline_letter
+        && verb_render.is_none()
+        && verb_core == "寫"
+        && matches!(objs.as_slice(), [object] if object == letter)
+        && inner_pre_mods.is_empty()
+        && post_verb_mods.is_empty()
+        && matches!(obliques.as_slice(), [time] if time.case_particle.as_deref() == Some("までに")
+            && !matches!(time.deadline_endpoint, DeadlineEndpoint::Question { .. }))
+    {
+        verb_core.push('完');
+    }
 
     // Assemble SVO order:
     let implicit_subject = subjects.is_empty();
@@ -22545,7 +22569,11 @@ mod clock_rule_tests {
         let translate = |s| public_translate(s, &glossary).target_text;
         assert_eq!(
             translate("私は六時までに手紙を書きます。"),
-            "我最晚在六點寫信。"
+            "我最晚在六點寫完信。"
+        );
+        assert_eq!(
+            translate("私は日曜日までに手紙を書きます。"),
+            "我最晚在星期日寫完信。"
         );
         assert_eq!(
             translate("金曜日までに先生に手紙を書きます。"),
@@ -24982,10 +25010,10 @@ mod motion_endpoint_tests {
     }
 
     #[test]
-    fn temporal_made_leaves_deadlines_and_other_endpoints_alone() {
+    fn temporal_made_distinguishes_deadlines_and_other_endpoints() {
         assert_eq!(
             translate("私は六時までに手紙を書きます。"),
-            "我最晚在六點寫信。"
+            "我最晚在六點寫完信。"
         );
         assert_eq!(translate("私は六時に手紙を書きます。"), "我在六點寫信。");
         assert_eq!(translate("先生まで歩いた。"), "連老師都走了。");

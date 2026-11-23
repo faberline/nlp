@@ -4,14 +4,21 @@ use faberline_nlp_translate::{
     analyze_and_translate,
 };
 
-fn assert_time_gloss(source: &str, term: &str, replacement: &str, expected: &str) {
+fn assert_glosses(source: &str, terms: &[(GlossaryKind, &str, &str)], expected: &str) {
     let mut glossary = TranslationGlossary::new();
-    glossary.domain_terms.push(GlossaryEntry {
-        canonical: term.to_owned(),
-        surfaces: vec![term.to_owned()],
-        targets: [(TargetVariant::ZhHant, replacement.to_owned())].into(),
-        ..Default::default()
-    });
+    for &(kind, term, replacement) in terms {
+        let entries = match kind {
+            GlossaryKind::DomainTerm => &mut glossary.domain_terms,
+            GlossaryKind::Object => &mut glossary.objects,
+            _ => panic!("unexpected glossary kind: {kind:?}"),
+        };
+        entries.push(GlossaryEntry {
+            canonical: term.to_owned(),
+            surfaces: vec![term.to_owned()],
+            targets: [(TargetVariant::ZhHant, replacement.to_owned())].into(),
+            ..Default::default()
+        });
+    }
     let document = analyze_and_translate(
         source,
         &TranslateOptions::new(TargetVariant::ZhHant),
@@ -20,29 +27,33 @@ fn assert_time_gloss(source: &str, term: &str, replacement: &str, expected: &str
         Backend::Onnx,
     )
     .unwrap();
-    assert_eq!(document.target_text, expected, "{source} with {term}");
-    let [hit] = document.glossary_hits.as_slice() else {
-        panic!("expected exactly one glossary hit for {term}");
-    };
-    assert_eq!(hit.kind, GlossaryKind::DomainTerm);
+    assert_eq!(document.target_text, expected, "{source} with {terms:?}");
+    assert_eq!(document.glossary_hits.len(), terms.len());
     let range = |text: &str, start: usize, end: usize| {
         text.chars()
             .skip(start)
             .take(end - start)
             .collect::<String>()
     };
-    assert_eq!(
-        range(source, hit.source_span.start_char, hit.source_span.end_char),
-        term
-    );
-    assert_eq!(
-        range(
-            &document.target_text,
-            hit.target_span.start_char,
-            hit.target_span.end_char
-        ),
-        replacement
-    );
+    for &(kind, term, replacement) in terms {
+        let hit = document
+            .glossary_hits
+            .iter()
+            .find(|hit| hit.kind == kind && hit.canonical == term)
+            .unwrap();
+        assert_eq!(
+            range(source, hit.source_span.start_char, hit.source_span.end_char),
+            term
+        );
+        assert_eq!(
+            range(
+                &document.target_text,
+                hit.target_span.start_char,
+                hit.target_span.end_char
+            ),
+            replacement
+        );
+    }
 }
 
 #[test]
@@ -57,11 +68,15 @@ fn protected_time_distinguishes_deadline_point_and_continuation() {
         (
             "私は六時までに手紙を書きます。",
             "六時までに",
-            "我最晚在六點整寫信。",
+            "我最晚在六點整寫完信。",
         ),
         ("私は六時に手紙を書きます。", "六時に", "我在六點整寫信。"),
     ] {
-        assert_time_gloss(source, term, "六點整", expected);
+        assert_glosses(
+            source,
+            &[(GlossaryKind::DomainTerm, term, "六點整")],
+            expected,
+        );
     }
 }
 
@@ -80,6 +95,58 @@ fn protected_calendar_question_preserves_the_date_and_its_action() {
             "這個月幾日交課程報名表？",
         ),
     ] {
-        assert_time_gloss(source, term, "幾日", expected);
+        assert_glosses(
+            source,
+            &[(GlossaryKind::DomainTerm, term, "幾日")],
+            expected,
+        );
     }
+}
+
+#[test]
+fn protected_letter_is_completed_only_at_a_deadline() {
+    for (source, marker, native_time, protected_time) in [
+        (
+            "私は六時までに手紙を書きます。",
+            "六時までに",
+            "六點",
+            "六點整",
+        ),
+        (
+            "私は日曜日までに手紙を書きます。",
+            "日曜日までに",
+            "星期日",
+            "週日",
+        ),
+    ] {
+        for term in ["手紙", "手紙を"] {
+            let object = (GlossaryKind::Object, term, "信函");
+            assert_glosses(
+                source,
+                &[object],
+                &format!("我最晚在{native_time}寫完信函。"),
+            );
+            assert_glosses(
+                source,
+                &[(GlossaryKind::DomainTerm, marker, protected_time), object],
+                &format!("我最晚在{protected_time}寫完信函。"),
+            );
+        }
+    }
+    assert_glosses(
+        "私は六時に手紙を書きます。",
+        &[
+            (GlossaryKind::DomainTerm, "六時に", "六點整"),
+            (GlossaryKind::Object, "手紙", "信函"),
+        ],
+        "我在六點整寫信函。",
+    );
+    assert_glosses(
+        "私は六時までに手紙を書きます。",
+        &[
+            (GlossaryKind::DomainTerm, "六時までに", "六點整"),
+            (GlossaryKind::DomainTerm, "書き", "撰寫"),
+        ],
+        "我最晚在六點整撰寫信。",
+    );
 }

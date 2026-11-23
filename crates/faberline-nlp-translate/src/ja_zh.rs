@@ -7297,6 +7297,7 @@ fn translate_clause_atoms(
         bind_tidied_tabletops(&mut merged_atoms);
         localize_sufficiency(&mut merged_atoms);
         honorific::bind_voice_manners(&mut merged_atoms);
+        payment_potential::bind_method(&mut merged_atoms);
     }
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {

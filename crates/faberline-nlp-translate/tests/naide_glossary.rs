@@ -5,6 +5,16 @@ use faberline_nlp_translate::{
 };
 
 fn check(source: &str, object: Option<(&str, &str)>, place: Option<(&str, &str)>, expected: &str) {
+    check_locks(source, object, place, &[], expected);
+}
+
+fn check_locks(
+    source: &str,
+    object: Option<(&str, &str)>,
+    place: Option<(&str, &str)>,
+    domain: &[(&str, &str)],
+    expected: &str,
+) {
     let entry = |(term, target): (&str, &str)| GlossaryEntry {
         canonical: term.to_owned(),
         surfaces: vec![term.to_owned()],
@@ -14,6 +24,9 @@ fn check(source: &str, object: Option<(&str, &str)>, place: Option<(&str, &str)>
     let mut glossary = TranslationGlossary::new();
     glossary.objects.extend(object.map(entry));
     glossary.places.extend(place.map(entry));
+    glossary
+        .domain_terms
+        .extend(domain.iter().copied().map(entry));
     let options = TranslateOptions::new(TargetVariant::ZhHant);
     let analyzed = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
     let doc = faberline_nlp::doc::analyze_document(
@@ -35,16 +48,22 @@ fn check(source: &str, object: Option<(&str, &str)>, place: Option<(&str, &str)>
         let expected_hits = object
             .map(|pair| (GlossaryKind::Object, pair))
             .into_iter()
-            .chain(place.map(|pair| (GlossaryKind::Place, pair)));
+            .chain(place.map(|pair| (GlossaryKind::Place, pair)))
+            .chain(
+                domain
+                    .iter()
+                    .copied()
+                    .map(|pair| (GlossaryKind::DomainTerm, pair)),
+            );
         assert_eq!(
             result.glossary_hits.len(),
-            usize::from(object.is_some()) + usize::from(place.is_some())
+            usize::from(object.is_some()) + usize::from(place.is_some()) + domain.len()
         );
         for (kind, (term, replacement)) in expected_hits {
             let hit = result
                 .glossary_hits
                 .iter()
-                .find(|h| h.kind == kind)
+                .find(|h| h.kind == kind && h.canonical == term)
                 .unwrap();
             let at = |text: &str, span: faberline_nlp::Span| {
                 text.chars()
@@ -55,6 +74,29 @@ fn check(source: &str, object: Option<(&str, &str)>, place: Option<(&str, &str)>
             assert_eq!(at(source, hit.source_span), term);
             assert_eq!(at(&result.target_text, hit.target_span), replacement);
         }
+    }
+}
+
+#[test]
+fn household_goals_keep_their_role_in_a_domain_glossary() {
+    for (source, place) in [
+        ("靴を脱がないで、家に入りました。", "家"),
+        ("靴を脱がないで家に入りました。", "家に"),
+    ] {
+        check_locks(
+            source,
+            None,
+            None,
+            &[(place, "舊屋")],
+            "沒有脫下鞋子就進入舊屋了。",
+        );
+        check_locks(
+            source,
+            Some(("靴を", "皮鞋")),
+            None,
+            &[(place, "舊屋"), ("入りました", "踏進了")],
+            "沒有脫下皮鞋就踏進了舊屋。",
+        );
     }
 }
 

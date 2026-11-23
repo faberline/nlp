@@ -13172,13 +13172,23 @@ fn translate_clause_bunsetsus(
     if meeting_partner.is_some() {
         passive_agent_needed = false;
     }
-    if affirmative_meal.is_some()
+    if let Some((meal, _)) = affirmative_meal
         && verb_core == "吃"
         && pre_verb_mods.is_empty()
         && post_verb_mods.is_empty()
         && !passive_agent_needed
     {
-        pre_verb_mods.push("有".to_owned());
+        let caller_marks_the_meal = verb_render.is_some()
+            && doc.tokens.get(meal.predicate).is_some_and(|action| {
+                ctx.verb_locks.iter().any(|lock| {
+                    let term = lock.replacement.trim();
+                    lock.source_span == action.span
+                        && (term.starts_with(['有', '已']) || term.ends_with(['了', '過', '过']))
+                })
+            });
+        if !caller_marks_the_meal {
+            pre_verb_mods.push("有".to_owned());
+        }
     }
     if let Some(state) = bounded_state {
         verb_core = state.to_owned();

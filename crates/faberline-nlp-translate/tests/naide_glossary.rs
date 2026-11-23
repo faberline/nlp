@@ -15,6 +15,16 @@ fn check_locks(
     domain: &[(&str, &str)],
     expected: &str,
 ) {
+    check_locks_in_both_entries(source, object, place, domain, [expected; 2]);
+}
+
+fn check_locks_in_both_entries(
+    source: &str,
+    object: Option<(&str, &str)>,
+    place: Option<(&str, &str)>,
+    domain: &[(&str, &str)],
+    expected: [&str; 2],
+) {
     let entry = |(term, target): (&str, &str)| GlossaryEntry {
         canonical: term.to_owned(),
         surfaces: vec![term.to_owned()],
@@ -43,8 +53,14 @@ fn check_locks(
         None,
     )
     .unwrap();
-    for result in [analyzed, direct] {
-        assert_eq!(result.target_text, expected);
+    for ((entry, result), expected) in [
+        ("analyze and translate", analyzed),
+        ("preanalyzed input", direct),
+    ]
+    .into_iter()
+    .zip(expected)
+    {
+        assert_eq!(result.target_text, expected, "{entry}");
         let expected_hits = object
             .map(|pair| (GlossaryKind::Object, pair))
             .into_iter()
@@ -137,6 +153,7 @@ fn omitted_action_keeps_departure_source_when_a_glossary_covers_its_case() {
     };
     for place in ["家", "家を"] {
         check(source, None, Some((place, "舊屋")), native_meal);
+        check_locks(source, None, None, &[(place, "舊屋")], native_meal);
         for meal in ["朝ご飯", "朝ご飯を"] {
             check(
                 source,
@@ -144,6 +161,35 @@ fn omitted_action_keeps_departure_source_when_a_glossary_covers_its_case() {
                 Some((place, "舊屋")),
                 "沒有吃早餐就離開舊屋了。",
             );
+            check_locks(
+                source,
+                Some((meal, "早餐")),
+                None,
+                &[(place, "舊屋")],
+                "沒有吃早餐就離開舊屋了。",
+            );
         }
     }
+}
+
+#[test]
+fn departure_source_terms_work_for_other_physical_places() {
+    check_locks(
+        "水を飲まずに部屋を出た。",
+        None,
+        None,
+        &[("部屋を", "書房")],
+        "沒有喝水就離開書房了。",
+    );
+}
+
+#[test]
+fn a_negated_departure_does_not_recover_the_source_role() {
+    check_locks_in_both_entries(
+        "水を飲まずに家を出なかった。",
+        None,
+        None,
+        &[("家を", "舊屋")],
+        ["沒有喝在舊屋出去水。", "不喝在水的舊屋沒有出去。"],
+    );
 }

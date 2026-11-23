@@ -25996,17 +25996,18 @@ fn is_existing_spatial_label(surface: &str) -> bool {
     )
 }
 
+fn is_departure_source_surface(surface: &str) -> bool {
+    is_existing_spatial_label(surface) || spatial_route_marker(surface).is_some()
+}
+
 fn is_departure_source(place: &Atom, chars: &[char]) -> bool {
-    let is_spatial = |surface: &str| {
-        is_existing_spatial_label(surface) || spatial_route_marker(surface).is_some()
-    };
     if place.is_locked {
         return place.lemma.as_deref() == Some(LOCKED_PLACE_ATOM)
             && chars
                 .get(place.span.start_char..place.span.end_char)
-                .is_some_and(|raw| is_spatial(&raw.iter().collect::<String>()));
+                .is_some_and(|raw| is_departure_source_surface(&raw.iter().collect::<String>()));
     }
-    place.upos == Some(Upos::Noun) && is_spatial(&place.surface)
+    place.upos == Some(Upos::Noun) && is_departure_source_surface(&place.surface)
 }
 
 /// Find a completed physical departure with one source marked by を.

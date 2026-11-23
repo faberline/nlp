@@ -6,9 +6,10 @@ use crate::schema::GlossaryKind;
 use super::{
     Atom, Document, Span, Token, Upos, application_form, build_sentence_atoms, calendar,
     classify_bunsetsu, dasu_case_link, finished_go, first_step, group_into_bunsetsus, handover,
-    homework_glossary, household_entry, is_punct_atom, letter_deadline, naide_adverbial,
-    nominal_receiving_glossary, outward_look, physical_goal_head, polarity_contrast, polite_joint,
-    polite_prohibition, recipient_scope, te_help_glossary, trip_after_meal, written_opening,
+    homework_glossary, household_entry, is_departure_source_surface, is_punct_atom,
+    letter_deadline, naide_adverbial, nominal_receiving_glossary, outward_look, physical_goal_head,
+    polarity_contrast, polite_joint, polite_prohibition, recipient_scope, te_help_glossary,
+    trip_after_meal, written_opening,
 };
 
 #[derive(Default)]
@@ -129,6 +130,16 @@ fn covers_household_goal(lock: &LockedSpan, chars: &[char]) -> bool {
         )
 }
 
+fn may_cover_departure_source(lock: &LockedSpan, chars: &[char]) -> bool {
+    mandatory_domain_term(lock)
+        && chars
+            .get(lock.source_span.start_char..lock.source_span.end_char)
+            .is_some_and(|raw| {
+                let raw: String = raw.iter().collect();
+                is_departure_source_surface(raw.strip_suffix('を').unwrap_or(&raw))
+            })
+}
+
 pub(crate) fn may_restore_glossary_syntax(
     text: &str,
     chars: &[char],
@@ -223,7 +234,7 @@ pub(crate) fn may_restore_glossary_syntax(
                             kind: GlossaryKind::Place,
                             ..
                         }
-                    )
+                    ) || may_cover_departure_source(lock, chars)
                 } else {
                     false
                 } || naide
@@ -542,8 +553,13 @@ fn omitted_render_locks(
                 // The original lock supplies the caller's category and span.
                 *kind = GlossaryKind::Place;
             }
-            (GlossaryKind::Place, "を", "obj")
-                if omission.zuni && noun.head == Some(later) && first == head_index => {}
+            (GlossaryKind::Place | GlossaryKind::DomainTerm, "を", "obj")
+                if omission.zuni && noun.head == Some(later) && first == head_index =>
+            {
+                // The original parse has already proved a physical source
+                // for this departure. Keep the caller's kind in the hit.
+                *kind = GlossaryKind::Place;
+            }
             _ => return None,
         }
         // Keep the omitted object in the caller's opaque clause. Moving it

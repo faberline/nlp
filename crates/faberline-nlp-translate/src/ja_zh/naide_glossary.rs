@@ -6,7 +6,7 @@ use crate::schema::GlossaryKind;
 use super::{
     Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
     finished_go, group_into_bunsetsus, household_entry, is_punct_atom, naide_adverbial,
-    outward_look, physical_goal_head, polarity_contrast, trip_after_meal,
+    outward_look, physical_goal_head, polarity_contrast, polite_joint, trip_after_meal,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -83,6 +83,9 @@ pub(crate) fn may_restore_glossary_syntax(
 ) -> bool {
     if text.contains(['「', '」', '『', '』', '"', '“', '”']) {
         return false;
+    }
+    if text.contains("ます") && polite_joint::may_restore_actor(chars, locks) {
+        return true;
     }
     if locks
         .locks
@@ -180,6 +183,10 @@ pub(crate) fn glossary_render_locks(
                     },
                 )
             })
+        })
+        .or_else(|| {
+            polite_joint::restore_actor_case(sentence, &atoms, doc, chars, locks)
+                .map(|render| (render, WholeVerbLocks::default()))
         })
 }
 

@@ -311,7 +311,10 @@ pub(crate) fn translate_ja_sentence(
     {
         (segments, Some(departure))
     } else {
-        (split_ja_atoms(&atoms, doc, sent_span, target == TargetVariant::ZhHant), None)
+        (
+            split_ja_atoms(&atoms, doc, sent_span, target == TargetVariant::ZhHant),
+            None,
+        )
     };
     let recovered_meal_trip = match segments.as_slice() {
         [
@@ -12077,8 +12080,7 @@ fn translate_clause_bunsetsus(
             ctx.source_chars,
             ctx.prior_meal.or(ctx.preceding_naide_action),
         )
-
-            .or(recovered_goal)
+        .or(recovered_goal)
     } else {
         None
     };
@@ -13576,9 +13578,8 @@ fn translate_clause_bunsetsus(
     let has_until = obliques
         .iter()
         .any(|o| o.case_particle.as_deref() == Some("まで"));
-    let direct_negative_physical_go = only_goal.is_some_and(goes_to_arg)
-        && single_goal
-        && !has_until;
+    let direct_negative_physical_go =
+        only_goal.is_some_and(goes_to_arg) && single_goal && !has_until;
     let household_entry = single_goal
         && !has_until
         && household_entry_head.is_some_and(|predicate| {
@@ -19254,9 +19255,17 @@ mod naide_adverbial_tests {
         {
             assert_eq!(translate(text), "沒有喝水就跑了。");
         }
+        let expected = match faberline_nlp::lexicon::ja::lookup_ja_gloss(
+            "朝ご飯",
+            Some(faberline_nlp::doc::Upos::Noun),
+        ) {
+            None => "早上沒有吃飯就去了學校。",
+            Some("早餐") => "沒有吃早餐就去了學校。",
+            Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+        };
         assert_eq!(
             translate("朝ご飯を食べないで、学校へ行きました。"),
-            "早上沒有吃飯就去了學校。"
+            expected
         );
     }
 

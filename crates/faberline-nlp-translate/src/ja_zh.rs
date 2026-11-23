@@ -23,6 +23,7 @@ mod household_entry;
 mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
+mod outward_look;
 mod payment_potential;
 mod place_goal_glossary;
 mod reception;
@@ -233,6 +234,7 @@ pub(crate) fn translate_ja_sentence(
         Vec::new()
     };
     if target == TargetVariant::ZhHant {
+        outward_look::restore_case(&mut atoms, chars, sent_span, doc, lock_table);
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
         daytime::bind_form_time(&mut atoms, chars, doc);
@@ -12744,6 +12746,16 @@ fn translate_clause_bunsetsus(
         } else {
             format!("向{office}{verb_core}")
         };
+    }
+    if target == TargetVariant::ZhHant
+        && verb_core == "看"
+        && !passive_agent_needed
+        && !pre_verb_mods.iter().any(|modifier| modifier == "讓")
+        && matches!(objs.as_slice(), [object] if object == "外面")
+        && outward_look::is_direction(source, &predicates, doc)
+    {
+        objs.clear();
+        verb_core = "往外看".to_owned();
     }
     if let Some((span, action)) = daylight_meeting
         && matches!(verb_core.as_str(), "開" | "舉辦")

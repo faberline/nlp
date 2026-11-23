@@ -49,7 +49,13 @@ fn source_head<'a>(atom: &Atom, doc: &'a Document) -> Option<&'a Token> {
         .then_some(token)
 }
 
-fn completed_go(verb: &Atom, tail: &[Atom], doc: &Document, source: &[char]) -> Option<usize> {
+fn completed_go(
+    verb: &Atom,
+    tail: &[Atom],
+    doc: &Document,
+    source: &[char],
+    preceding_action: Option<usize>,
+) -> Option<usize> {
     let predicate = verb.doc_tok_idx?;
     let original = source_head(verb, doc)?;
     let sentence = doc.segmentation.sentences.get(original.sentence)?.span;
@@ -76,6 +82,15 @@ fn completed_go(verb: &Atom, tail: &[Atom], doc: &Document, source: &[char]) -> 
         [polite, past] => polite.surface == "まし" && past.surface == "た",
         _ => false,
     };
+    let preceding_action = preceding_action.filter(|&action| {
+        (first_token..predicate).contains(&action)
+            && doc.syntax.get(action).is_some_and(|link| {
+                link.token == action
+                    && link.sentence == original.sentence
+                    && link.head == Some(predicate)
+                    && link.deprel == "advcl"
+            })
+    });
     if !affirmative_past
         || tail[0].span.start_char != verb.span.end_char
         || tail
@@ -92,8 +107,9 @@ fn completed_go(verb: &Atom, tail: &[Atom], doc: &Document, source: &[char]) -> 
             .iter()
             .enumerate()
             .any(|(offset, item)| {
-                first_token + offset != predicate
-                    && (item.upos == Some(Upos::Verb)
+                let token = first_token + offset;
+                token != predicate
+                    && ((item.upos == Some(Upos::Verb) && preceding_action != Some(token))
                         || matches!(
                             raw(source, item.span),
                             Some(
@@ -253,6 +269,7 @@ pub(super) fn resolve(
     atoms: &[Atom],
     doc: &Document,
     source: &[char],
+    preceding_action: Option<usize>,
 ) -> Option<FinishedGo> {
     if doc.text_chars != source.len() {
         return None;
@@ -265,7 +282,7 @@ pub(super) fn resolve(
     if predicates.next().is_some() || group.sconj_tail.is_some() || group.sfp_tail.is_some() {
         return None;
     }
-    let predicate = completed_go(verb, tail, doc, source)?;
+    let predicate = completed_go(verb, tail, doc, source, preceding_action)?;
     let going = direct_destination(atoms, predicate, doc, source)?;
     // The renderer must have the original subject group in this same clause.
     let mut subjects = doc
@@ -306,7 +323,7 @@ fn reading_pause(atoms: &[Atom], doc: &Document, source: &[char]) -> Option<usiz
         [tail @ .., period] if !period.is_locked && period.surface == "。" => tail,
         _ => ending,
     };
-    let predicate = completed_go(verb, tail, doc, source)?;
+    let predicate = completed_go(verb, tail, doc, source, None)?;
     let going = direct_destination(atoms, predicate, doc, source)?;
     if pause.is_locked
         || pause.deprel != "punct"
@@ -447,7 +464,7 @@ mod tests {
             &doc,
             TargetVariant::ZhHant,
         );
-        let goal = resolve(&groups, &body, &doc, &source).map(|result| {
+        let goal = resolve(&groups, &body, &doc, &source, None).map(|result| {
             assert_eq!(doc.tokens[result.predicate].lemma.as_deref(), Some("行く"));
             let head = &groups[result.goal_group].atoms[0];
             raw(&source, head.span).unwrap().iter().collect()

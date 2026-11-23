@@ -10,20 +10,32 @@ use std::collections::HashMap;
 mod application_form;
 mod calendar;
 pub(crate) use calendar::DateContext;
+mod carrying;
 mod copular_time;
 mod counted_object;
 mod daytime;
+mod direct_smoking;
 mod finished_go;
 mod finite_adjective;
+mod focused_goal_glossary;
 mod handover;
 mod homework_desire;
 mod homework_relative;
+mod household_entry;
 mod meeting_voice;
 mod nominal_possession;
+mod omitted_departure;
 mod order_noun;
+mod outward_look;
 mod payment_potential;
+mod place_goal_glossary;
+pub(crate) mod polarity_contrast;
 mod reception;
 mod return_endpoint;
+mod trip_after_meal;
+
+#[cfg(test)]
+mod focused_negative_go_tests;
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
@@ -223,7 +235,18 @@ pub(crate) fn translate_ja_sentence(
         return definition.render(doc, sentence_idx, target);
     }
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
+    let glossary_carry = if target == TargetVariant::ZhHant && direct_quote.is_none() {
+        carrying::restore_case(&mut atoms, chars, sent_span, doc, lock_table)
+    } else {
+        Vec::new()
+    };
+    let glossary_goals = if target == TargetVariant::ZhHant && direct_quote.is_none() {
+        focused_goal_glossary::restore(&mut atoms, chars, sent_span, doc, lock_table)
+    } else {
+        Vec::new()
+    };
     if target == TargetVariant::ZhHant {
+        outward_look::restore_case(&mut atoms, chars, sent_span, doc, lock_table);
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
         daytime::bind_form_time(&mut atoms, chars, doc);
@@ -276,10 +299,36 @@ pub(crate) fn translate_ja_sentence(
         calendar::bind_relative_contrast(&mut atoms, chars);
         homework_relative::mark_argument_commas(&mut atoms, doc);
         finished_go::mark_reading_pause(&mut atoms, doc, chars);
+        place_goal_glossary::restore_destination(&mut atoms, chars, sent_span, doc, lock_table);
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
-    let segments = split_atoms_into_segments(&atoms, doc, sent_span);
+    let (segments, departure) = if target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && continuation.is_none()
+        && let Some((segments, departure)) =
+            omitted_departure::segments(&atoms, doc, chars, lock_table)
+    {
+        (segments, Some(departure))
+    } else {
+        (
+            split_ja_atoms(&atoms, doc, sent_span, target == TargetVariant::ZhHant),
+            None,
+        )
+    };
+    let recovered_meal_trip = match segments.as_slice() {
+        [
+            Segment::Clause {
+                atoms: meal,
+                trailing_punct: Some(comma),
+                ..
+            },
+            Segment::Clause { atoms: trip, .. },
+        ] if matches!(comma.as_str(), "、" | "，") && target == TargetVariant::ZhHant => {
+            trip_after_meal::recover(meal, trip, doc, chars, lock_table)
+        }
+        _ => None,
+    };
     let prior_letter_distribution = prior_letter_distribution.filter(|_| {
         direct_quote.is_none() && matches!(segments.as_slice(), [Segment::Clause { .. }])
     });
@@ -330,10 +379,13 @@ pub(crate) fn translate_ja_sentence(
     // clause, so a later verified event can adjust its own reading pause.
     let mut emitted_clause_comma: Option<(usize, Span, usize, usize)> = None;
     let mut emitted_preparation: Option<(usize, usize, String)> = None;
+    let mut emitted_naide_action = None;
+    let mut emitted_departure_omission = false;
 
     for (seg_idx, seg) in segments.iter().enumerate() {
         let previous_clause_comma = emitted_clause_comma.take();
         let previous_preparation = emitted_preparation.take();
+        let preceding_naide_action = emitted_naide_action.take();
         if direct_quote_prefix_segments > 0 {
             direct_quote_prefix_segments -= 1;
             continue;
@@ -848,6 +900,8 @@ pub(crate) fn translate_ja_sentence(
                     ends_continued_quote(segments.get(seg_idx + 1), doc, sentence_idx, chars);
                 let meeting_evidence = std::rc::Rc::new(std::cell::Cell::new(None));
                 let measured_activity = std::cell::Cell::new(None);
+                let joined_naide = std::cell::Cell::new(None);
+                let joined_departure = std::cell::Cell::new(false);
                 let previous_preparation = previous_preparation.filter(|_| {
                     !inside_quote
                         && previous_clause_comma.is_some_and(
@@ -867,16 +921,56 @@ pub(crate) fn translate_ja_sentence(
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
+                    source_locks: Some(lock_table),
                     following: &segments[seg_idx + 1..],
+                    glossary_carry: &glossary_carry,
+                    glossary_goals: &glossary_goals,
+                    affirmative_meal: match (trailing_punct.as_deref(), segments.get(seg_idx + 1)) {
+                        (Some("、" | "，"), Some(Segment::Clause { atoms: trip, .. }))
+                            if target == TargetVariant::ZhHant && !inside_quote =>
+                        {
+                            polarity_contrast::affirmative_meal(trimmed_atoms, trip, doc, chars)
+                        }
+                        _ => None,
+                    },
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
                             if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
                         _ => &[],
                     },
+                    prior_meal: match segments.as_slice() {
+                        [Segment::Clause { atoms: meal, trailing_punct: Some(comma), .. }, Segment::Clause { atoms: trip, .. }]
+                            if matches!(comma.as_str(), "、" | "，")
+                                && target == TargetVariant::ZhHant && !inside_quote =>
+                        {
+                            trip_after_meal::prior_meal(meal, trip, doc, chars)
+                                .or(recovered_meal_trip.map(|frame| frame.meal_predicate))
+                        }
+                        _ => None,
+                    },
+                    recovered_meal_trip: recovered_meal_trip.filter(|_| !inside_quote),
                     measured_activity: Some(&measured_activity),
+                    departure_omission: departure.filter(|_| seg_idx == 0 && !inside_quote),
+                    joined_departure: Some(&joined_departure),
+                    completed_departure: departure.filter(|_| emitted_departure_omission && !inside_quote),
                     prepared_for_predicate: previous_preparation
                         .as_ref()
                         .map(|(_, predicate, _)| *predicate),
+                    naide_adverbial: match (trailing_punct.as_deref(), segments.get(seg_idx + 1)) {
+                        (
+                            Some("、" | "，" | ","),
+                            Some(Segment::Clause {
+                                atoms: next,
+                                trailing_punct: next_punct,
+                                ..
+                            }),
+                        ) if target == TargetVariant::ZhHant && !inside_quote => {
+                            naide_adverbial(trimmed_atoms, next, next_punct.as_deref())
+                        }
+                        _ => None,
+                    },
+                    joined_naide: Some(&joined_naide),
+                    preceding_naide_action,
                     return_trip: None,
                     parallel_elapsed_te: if target == TargetVariant::ZhHant
                         && !prev_was_quote
@@ -1024,8 +1118,25 @@ pub(crate) fn translate_ja_sentence(
                     aligned_target.end_char = tgt_start;
                     rendered.insert_str(0, "接著");
                 }
+                if target == TargetVariant::ZhHant
+                    && !inside_quote
+                    && !rendered.is_empty()
+                    && !rendered.starts_with(['但', '卻'])
+                    && let Some((previous_index, _, byte_end, char_end)) = previous_clause_comma
+                    && previous_index.checked_add(1) == Some(seg_idx)
+                    && out.len() == byte_end
+                    && tgt_start == char_end
+                    && let Some(Segment::Clause {
+                        atoms: previous, ..
+                    }) = segments.get(previous_index)
+                    && polarity_contrast::matches(previous, trimmed_atoms, doc, chars)
+                {
+                    rendered.insert(0, '但');
+                }
                 let byte_start = out.len();
                 out.push_str(&rendered);
+                emitted_naide_action = joined_naide.get();
+                emitted_departure_omission = joined_departure.get();
                 let next_quote_framed = match (segments.get(seg_idx + 1), segments.get(seg_idx + 2))
                 {
                     (Some(Segment::Quote { .. }), Some(Segment::Clause { atoms: nx2, .. })) => {
@@ -1053,7 +1164,9 @@ pub(crate) fn translate_ja_sentence(
                             && topic.deprel == "case" && topic.head == name.doc_tok_idx
                             && matches!(segments.get(seg_idx + 1), Some(Segment::Clause { atoms, .. })
                                 if atoms.iter().any(|verb| verb.upos == Some(Upos::Verb) && verb.doc_tok_idx == name.head)));
-                    if !(suppress_cleft_comma
+                    if !(emitted_naide_action.is_some()
+                        || emitted_departure_omission
+                        || suppress_cleft_comma
                         || inside_habitual_action
                         || (continued_subject && matches!(p, "、" | ","))
                         || (rendered.ends_with('？') && matches!(p, "。" | "？" | "?"))
@@ -4581,7 +4694,156 @@ fn return_trip_at(atoms: &[Atom], link: usize, doc: &Document) -> Option<ReturnT
     })
 }
 
+#[derive(Clone, Copy)]
+struct NaideAdverbial {
+    action: usize,
+    negative: usize,
+    connective: usize,
+    past: bool,
+    join_unstated_subject: bool,
+}
+
+impl NaideAdverbial {
+    fn matches_predicate(self, predicate: &Bunsetsu) -> bool {
+        [self.action, self.negative, self.connective]
+            .into_iter()
+            .all(|index| {
+                predicate
+                    .atoms
+                    .iter()
+                    .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(index))
+            })
+    }
+}
+
+fn naide_adverbial(
+    before: &[Atom],
+    following: &[Atom],
+    following_punct: Option<&str>,
+) -> Option<NaideAdverbial> {
+    let [.., action, negative, connective] = before else {
+        return None;
+    };
+    let action_id = action.doc_tok_idx?;
+    let governor = action.head?;
+    if action.is_locked
+        || negative.is_locked
+        || connective.is_locked
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "advcl"
+        || negative.surface != "ない"
+        || negative.upos != Some(Upos::Aux)
+        || negative.deprel != "aux"
+        || negative.head != Some(action_id)
+        || connective.surface != "で"
+        || connective.upos != Some(Upos::Sconj)
+        || connective.deprel != "mark"
+        || connective.head != Some(action_id)
+        || action.span.end_char != negative.span.start_char
+        || negative.span.end_char != connective.span.start_char
+    {
+        return None;
+    }
+
+    let end = following
+        .iter()
+        .position(is_punct_atom)
+        .unwrap_or(following.len());
+    let end_punct = following
+        .get(end)
+        .map(|atom| atom.surface.as_str())
+        .or(following_punct);
+    if matches!(end_punct, Some("？" | "?")) {
+        return None;
+    }
+    let clause = &following[..end];
+    let main = clause.iter().find(|atom| {
+        atom.doc_tok_idx == Some(governor) && atom.upos == Some(Upos::Verb) && atom.deprel == "root"
+    })?;
+    // An immediately following subsidiary can govern で without adding
+    // a second action. This includes requests and the state ないでいる.
+    let request = |atom: &Atom| {
+        !atom.is_locked
+            && matches!(
+                atom.surface.as_str(),
+                "ください" | "下さい" | "なさい" | "な"
+            )
+    };
+    if main.is_locked
+        || clause.first().is_some_and(|first| {
+            matches!(first.surface.as_str(), "と" | "って")
+                || (first.doc_tok_idx == Some(governor)
+                    && connective.span.end_char == first.span.start_char
+                    && (is_te_subsidiary_atom(first)
+                        || matches!(first.lemma.as_deref(), Some("いただける" | "もらえる"))))
+        })
+        || request(main)
+        || clause.iter().any(|atom| {
+            !atom.is_locked
+                && atom.head == Some(governor)
+                && (request(atom)
+                    || (atom.surface == "か"
+                        && atom.upos == Some(Upos::Part)
+                        && atom.deprel == "discourse")
+                    // A negated matrix action does not establish a later
+                    // event. Adding 就 can change the scope of its negation.
+                    || (atom.upos == Some(Upos::Aux)
+                        && atom.deprel == "aux"
+                        && (matches!(atom.lemma.as_deref(), Some("ない" | "ぬ" | "ず"))
+                            || matches!(
+                                atom.surface.as_str(),
+                                "ない" | "なかっ" | "なかった" | "ぬ" | "ず" | "ん"
+                                    | "ませ" | "ません" | "ませんでした"
+                            ))))
+        })
+    {
+        return None;
+    }
+    let past = clause.iter().any(|atom| {
+        !atom.is_locked
+            && atom.head == Some(governor)
+            && atom.deprel == "aux"
+            && matches!(atom.surface.as_str(), "た" | "だ" | "ました")
+    });
+    let dictionary_form = main.lemma.as_deref().map_or_else(
+        || {
+            main.surface
+                .ends_with(['う', 'く', 'ぐ', 'す', 'つ', 'ぬ', 'ぶ', 'む', 'る'])
+        },
+        |lemma| main.surface == lemma,
+    );
+    let nonpast = dictionary_form
+        || clause.iter().any(|atom| {
+            !atom.is_locked
+                && atom.head == Some(governor)
+                && atom.deprel == "aux"
+                && atom.surface == "ます"
+        });
+    if !past && !nonpast {
+        return None;
+    }
+    let join_unstated_subject = !clause
+        .iter()
+        .any(|atom| atom.deprel == "nsubj" && atom.head == Some(governor));
+    Some(NaideAdverbial {
+        action: action_id,
+        negative: negative.doc_tok_idx?,
+        connective: connective.doc_tok_idx?,
+        past,
+        join_unstated_subject,
+    })
+}
+
 fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) -> Vec<Segment> {
+    split_ja_atoms(atoms, doc, parent_span, false)
+}
+
+fn split_ja_atoms(
+    atoms: &[Atom],
+    doc: &Document,
+    parent_span: Span,
+    split_naide: bool,
+) -> Vec<Segment> {
     let mut segments = Vec::new();
     let mut current: Vec<Atom> = Vec::new();
     let mut i = 0usize;
@@ -4921,6 +5183,16 @@ fn split_atoms_into_segments(atoms: &[Atom], doc: &Document, parent_span: Span) 
                 i += 2;
                 continue;
             }
+            i += 1;
+            continue;
+        }
+
+        if split_naide
+            && a.surface == "で"
+            && atoms.get(i + 1).is_some_and(|next| !is_punct_atom(next))
+            && naide_adverbial(&current, &atoms[i + 1..], None).is_some()
+        {
+            flush_clause(&mut current, Some("，".to_owned()), &mut segments);
             i += 1;
             continue;
         }
@@ -5499,10 +5771,22 @@ struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
     contrasts_recurrence: bool,
     source_chars: &'a [char],
+    source_locks: Option<&'a SpanLockTable>,
     following: &'a [Segment],
+    glossary_carry: &'a [carrying::GlossaryCarry],
+    glossary_goals: &'a [focused_goal_glossary::FocusedGoal],
+    affirmative_meal: Option<polarity_contrast::AffirmativeMeal>,
     preceding_activity: &'a [Atom],
+    prior_meal: Option<usize>,
+    recovered_meal_trip: Option<trip_after_meal::RecoveredTrip>,
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
+    departure_omission: Option<omitted_departure::OmittedDeparture>,
+    joined_departure: Option<&'a std::cell::Cell<bool>>,
+    completed_departure: Option<omitted_departure::OmittedDeparture>,
     prepared_for_predicate: Option<usize>,
+    naide_adverbial: Option<NaideAdverbial>,
+    joined_naide: Option<&'a std::cell::Cell<Option<usize>>>,
+    preceding_naide_action: Option<usize>,
     return_trip: Option<ReturnTrip>,
     parallel_elapsed_te: Option<usize>,
     inside_quote: bool,
@@ -6795,6 +7079,13 @@ fn translate_clause_atoms(
         std::borrow::Cow::Borrowed(phrases)
     };
     let mut merged_atoms = apply_phrase_matches(&attributed);
+    if let Some(omission) = ctx.departure_omission {
+        // This に belongs to the omission marker, rather than a location.
+        merged_atoms.retain(|atom| atom.doc_tok_idx != Some(omission.connective));
+    }
+    if let Some(departure) = ctx.completed_departure {
+        departure.expose_source_case(&mut merged_atoms);
+    }
     if target == TargetVariant::ZhHant {
         bind_tidied_tabletops(&mut merged_atoms);
         localize_sufficiency(&mut merged_atoms);
@@ -6855,6 +7146,9 @@ fn translate_clause_atoms(
     }
     if let Some((predicate, _)) = proposal {
         localize_proposal_arguments(&mut grouped, predicate, body, target);
+    }
+    if let Some(departure) = ctx.completed_departure {
+        departure.restore_source(&mut grouped, atoms);
     }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if target == TargetVariant::ZhHant
@@ -7563,7 +7857,7 @@ fn render_homework_transfer(
         (ClassroomRole::Teacher, None) => format!("出{homework}"),
     };
     let (before_verb, verb, after_verb, passive) =
-        synthesize_predicate_complex(std::slice::from_ref(predicate), false, target, None);
+        synthesize_predicate_complex(std::slice::from_ref(predicate), false, target, None, None);
     if verb != "拿出" || passive {
         return None;
     }
@@ -11304,6 +11598,44 @@ fn translate_clause_bunsetsus(
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> (String, bool) {
+    let recovered_goal = ctx
+        .recovered_meal_trip
+        .and_then(|frame| frame.restore_arguments(&mut bunsetsus));
+    let restored_tobacco = if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let Some(locks) = ctx.source_locks
+    {
+        direct_smoking::restore_locked_object(&mut bunsetsus, source, doc, ctx.source_chars, locks)
+    } else {
+        None
+    };
+    let affirmative_meal = ctx.affirmative_meal.and_then(|meal| {
+        let topic = bunsetsus.iter().position(|group| {
+            group.role == BunsetsuRole::Subj
+                && group.case_particle.as_deref() == Some("は")
+                && group
+                    .atoms
+                    .iter()
+                    .any(|atom| atom.doc_tok_idx == Some(meal.topic))
+        })?;
+        bunsetsus
+            .iter()
+            .filter(|group| group.role == BunsetsuRole::Predicate)
+            .flat_map(|group| &group.atoms)
+            .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(meal.predicate))
+            .then_some((meal, topic))
+    });
+    // An explicit time can lead the clause. Keep a bare meal topic in front.
+    if let Some((meal, topic)) = affirmative_meal
+        && meal.time_first
+    {
+        bunsetsus[topic].role = BunsetsuRole::Obj;
+    }
+    let allow_pro_drop_inject = allow_pro_drop_inject && affirmative_meal.is_none();
+
+    let departure = ctx
+        .completed_departure
+        .filter(|frame| frame.restore_source(&mut bunsetsus, source));
     let focused_days = if target == TargetVariant::ZhHant {
         calendar::take_focused_days(&mut bunsetsus, source)
     } else {
@@ -11400,8 +11732,19 @@ fn translate_clause_bunsetsus(
         is_event_time_ni: bool,
         transfer_dative: bool,
         physical_goal_head: Option<usize>,
+        household_goal_head: Option<usize>,
+        focused_goal_head: Option<usize>,
         completed_go_place: Option<String>,
     }
+
+    let focused_goal = |group: &Bunsetsu| {
+        if target == TargetVariant::ZhHant {
+            focused_physical_goal_head(group, doc, ctx.source_chars)
+                .or_else(|| focused_goal_glossary::restored_head(group, ctx.glossary_goals))
+        } else {
+            None
+        }
+    };
 
     struct PlacedSubj {
         text: String,
@@ -11730,7 +12073,14 @@ fn translate_clause_bunsetsus(
         .find_map(|day| daytime::meeting_verb(source, day));
     let handover = handover::resolve(&bunsetsus, ctx.source_chars, doc, target);
     let completed_go = if target == TargetVariant::ZhHant && !ctx.inside_quote {
-        finished_go::resolve(&bunsetsus, source, doc, ctx.source_chars)
+        finished_go::resolve(
+            &bunsetsus,
+            source,
+            doc,
+            ctx.source_chars,
+            ctx.prior_meal.or(ctx.preceding_naide_action),
+        )
+        .or(recovered_goal)
     } else {
         None
     };
@@ -12259,6 +12609,8 @@ fn translate_clause_bunsetsus(
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
+                        household_goal_head: bare_household_goal_head(&b),
+                        focused_goal_head: focused_goal(&b),
                         completed_go_place,
                     });
                 }
@@ -12307,6 +12659,8 @@ fn translate_clause_bunsetsus(
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
+                        household_goal_head: bare_household_goal_head(&b),
+                        focused_goal_head: focused_goal(&b),
                         completed_go_place,
                     });
                 }
@@ -12375,7 +12729,12 @@ fn translate_clause_bunsetsus(
     }
 
     let had_overt_subj_no_pred = !subj_entries.is_empty() && predicates.is_empty();
-    let pred_is_imperative = predicates.iter().any(predicate_is_imperative);
+    let naide_adverbial = ctx.naide_adverbial.filter(|adverbial| {
+        matches!(predicates.as_slice(), [predicate] if adverbial.matches_predicate(predicate))
+    });
+    let pred_is_imperative = predicates
+        .iter()
+        .any(|predicate| predicate_is_imperative(predicate, naide_adverbial.is_some()));
     let pred_looks_passive = meeting_partner.is_none() && predicates_has_passive(&predicates);
 
     // Layer 6 Pro-Drop resolution: if no overt subject and narrative/coref resolved pro-drop,
@@ -12445,13 +12804,61 @@ fn translate_clause_bunsetsus(
 
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, mut passive_agent_needed) =
-        synthesize_predicate_complex(&predicates, past_until, target, transfer);
+        synthesize_predicate_complex(
+            &predicates,
+            past_until,
+            target,
+            transfer,
+            naide_adverbial.map(|adverbial| adverbial.past),
+        );
+    let joined_departure = ctx
+        .departure_omission
+        .is_some_and(|frame| frame.matches_action(&predicates))
+        && if let Some(negative) = pre_verb_mods
+            .iter_mut()
+            .find(|modifier| modifier.as_str() == "不")
+        {
+            *negative = "沒有".to_owned();
+            true
+        } else {
+            false
+        };
+    let completed_departure = verb_core == "出去"
+        && departure.is_some_and(|frame| {
+            source
+                .iter()
+                .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(frame.governor))
+        });
+    if completed_departure {
+        verb_core = "離開".to_owned();
+    }
     if meeting_partner.is_some() {
         passive_agent_needed = false;
+    }
+    if affirmative_meal.is_some()
+        && verb_core == "吃"
+        && pre_verb_mods.is_empty()
+        && post_verb_mods.is_empty()
+        && !passive_agent_needed
+    {
+        pre_verb_mods.push("有".to_owned());
     }
     if let Some(state) = bounded_state {
         verb_core = state.to_owned();
         post_verb_mods.retain(|m| m != "著");
+    }
+    if target == TargetVariant::ZhHant
+        && verb_core == "拿著"
+        && !ctx.inside_quote
+        && !passive_agent_needed
+        && !pre_verb_mods.iter().any(|m| m == "讓")
+        && (carrying::restored_carry(source, &predicates, ctx.following, ctx.glossary_carry)
+            || carrying::with_motion(source, &predicates, ctx.following, doc, ctx.source_chars))
+    {
+        let negative = pre_verb_mods
+            .iter()
+            .any(|modifier| matches!(modifier.as_str(), "不" | "沒有" | "不要" | "請不要"));
+        verb_core = if negative { "帶" } else { "帶著" }.to_owned();
     }
     if past_until && adverbs.iter().any(|adv| adv == "一直") {
         pre_verb_mods.retain(|modifier| modifier != "一直");
@@ -12487,6 +12894,16 @@ fn translate_clause_bunsetsus(
             format!("向{office}{verb_core}")
         };
     }
+    if target == TargetVariant::ZhHant
+        && verb_core == "看"
+        && !passive_agent_needed
+        && !pre_verb_mods.iter().any(|modifier| modifier == "讓")
+        && matches!(objs.as_slice(), [object] if object == "外面")
+        && outward_look::is_direction(source, &predicates, doc)
+    {
+        objs.clear();
+        verb_core = "往外看".to_owned();
+    }
     if let Some((span, action)) = daylight_meeting
         && matches!(verb_core.as_str(), "開" | "舉辦")
         && predicates
@@ -12495,6 +12912,19 @@ fn translate_clause_bunsetsus(
             .any(|a| a.span.start_char <= span.start_char && span.end_char <= a.span.end_char)
     {
         verb_core = action.to_owned();
+    }
+    if target == TargetVariant::ZhHant
+        && verb_core == "吮吸"
+        && let [object] = objs.as_mut_slice()
+        && let Some(tobacco) = restored_tobacco
+            .or_else(|| direct_smoking::tobacco_object(source, &predicates, doc, ctx.source_chars))
+    {
+        if !tobacco.is_locked
+            && let Some(modifiers) = object.strip_suffix(&tobacco.surface)
+        {
+            *object = format!("{modifiers}菸");
+        }
+        verb_core = "抽".to_owned();
     }
     if elapsed_progressive_relative && !elapsed_progressive_negative {
         pre_verb_mods.retain(|m| m != "正在");
@@ -12878,6 +13308,8 @@ fn translate_clause_bunsetsus(
                     is_event_time_ni: false,
                     transfer_dative: false,
                     physical_goal_head: None,
+                    household_goal_head: None,
+                    focused_goal_head: None,
                     completed_go_place: None,
                 });
             }
@@ -13071,9 +13503,9 @@ fn translate_clause_bunsetsus(
         .iter()
         .flat_map(|b| &b.atoms)
         .filter(|a| !a.is_locked && a.upos == Some(Upos::Verb));
-    let direct_go = lexical_verbs
-        .next()
-        .filter(|a| a.lemma.as_deref().unwrap_or(&a.surface) == "行く");
+    let first_verb = lexical_verbs.next();
+    let single_verb = lexical_verbs.next().is_none();
+    let direct_go = first_verb.filter(|a| a.lemma.as_deref().unwrap_or(&a.surface) == "行く");
     // Keep the original argument unless the ordinary renderer still has
     // the same affirmative past action and its proved destination.
     let completed_destination = if verb_core == "去"
@@ -13106,34 +13538,64 @@ fn translate_clause_bunsetsus(
         && pre_verb_mods
             .iter()
             .any(|m| matches!(m.as_str(), "不" | "沒有"));
-    let negative_go_head = if lexical_verbs.next().is_none()
+    let unlocked_predicate = !predicates
+        .iter()
+        .flat_map(|b| &b.atoms)
+        .any(|a| a.is_locked);
+    let negative_go_head = if single_verb
         && is_negative_go
         && !has_causative
         && !passive_agent_needed
         && objs.is_empty()
-        && !predicates
-            .iter()
-            .flat_map(|b| &b.atoms)
-            .any(|a| a.is_locked)
+        && unlocked_predicate
     {
         direct_go.and_then(|a| a.doc_tok_idx)
     } else {
         None
     };
+    let household_entry_head = first_verb
+        .filter(|verb| {
+            target == TargetVariant::ZhHant
+                && verb_core == "進入"
+                && verb.lemma.as_deref().unwrap_or(&verb.surface) == "入る"
+                && single_verb
+                && unlocked_predicate
+                && !has_causative
+                && !passive_agent_needed
+                && objs.is_empty()
+        })
+        .and_then(|verb| verb.doc_tok_idx);
     let mut marked_goals = obliques
         .iter()
         .chain(&iobjs)
         .filter(|o| matches!(o.case_particle.as_deref(), Some("に" | "へ")) && !o.is_event_time_ni);
     let only_goal = marked_goals.next();
-    let direct_negative_physical_go = negative_go_head.is_some()
-        && only_goal.is_some_and(|o| o.physical_goal_head == negative_go_head)
-        && marked_goals.next().is_none()
-        && !obliques
-            .iter()
-            .any(|o| o.case_particle.as_deref() == Some("まで"));
+    let goes_to_arg = |arg: &PlacedArg| {
+        negative_go_head
+            .is_some_and(|head| arg.physical_goal_head.or(arg.focused_goal_head) == Some(head))
+    };
+    let single_goal = marked_goals.next().is_none();
+    let has_until = obliques
+        .iter()
+        .any(|o| o.case_particle.as_deref() == Some("まで"));
+    let direct_negative_physical_go =
+        only_goal.is_some_and(goes_to_arg) && single_goal && !has_until;
+    let household_entry = single_goal
+        && !has_until
+        && household_entry_head.is_some_and(|predicate| {
+            only_goal.is_some_and(|o| o.household_goal_head == Some(predicate))
+                && household_entry::allows_physical_entry(
+                    doc,
+                    ctx.source_chars,
+                    predicate,
+                    household_entry::EntryUse::NativeWording,
+                )
+        });
     let seated_until = past_until && verb_core == "坐";
     let format_directional_goal = |arg: &PlacedArg, raw_np: &str| {
-        if direct_negative_physical_go && arg.physical_goal_head == negative_go_head {
+        if household_entry && arg.household_goal_head == household_entry_head {
+            "屋".to_owned()
+        } else if direct_negative_physical_go && goes_to_arg(arg) {
             raw_np.to_owned()
         } else if seated_until && arg.case_particle.as_deref() == Some("に") {
             let place = raw_np.strip_prefix('到').unwrap_or(raw_np);
@@ -13186,8 +13648,12 @@ fn translate_clause_bunsetsus(
         iobjs = kept_iobjs;
     }
 
-    if !goal_tails.is_empty() && verb_core == "回去" {
-        verb_core = "回".to_owned();
+    if !goal_tails.is_empty() {
+        if household_entry {
+            verb_core = "進".to_owned();
+        } else if verb_core == "回去" {
+            verb_core = "回".to_owned();
+        }
     }
 
     if is_cause_verb && !passive_agent_needed {
@@ -13259,6 +13725,18 @@ fn translate_clause_bunsetsus(
     // Separate top-level pre-verbal modals (`請不要` / `不要` / `請` / `讓` / `聽說`) so modals precede adverbs.
     let mut front_modals: Vec<String> = Vec::new();
     let mut inner_pre_mods: Vec<String> = Vec::new();
+    let completed_prior_meal = ctx.prior_meal.is_some_and(|action| {
+        matches!(predicates.as_slice(), [predicate] if predicate.atoms.iter().any(
+            |atom| !atom.is_locked && atom.doc_tok_idx == Some(action)))
+            && verb_core == "吃"
+            && objs.len() == 1
+            && pre_verb_mods.is_empty()
+            && post_verb_mods.is_empty()
+            && !passive_agent_needed
+    });
+    if completed_prior_meal {
+        post_verb_mods.push("了".to_owned());
+    }
     for m in pre_verb_mods.drain(..) {
         if matches!(m.as_str(), "請不要" | "不要" | "請" | "讓" | "聽說") {
             front_modals.push(m);
@@ -13636,7 +14114,7 @@ fn translate_clause_bunsetsus(
             parts.push(format!("連{raw_np}都"));
         } else if direct_negative_physical_go
             && o.case_particle.as_deref() == Some("へ")
-            && o.physical_goal_head == negative_go_head
+            && goes_to_arg(&o)
         {
             if let Some(place) = o.text.strip_prefix('往') {
                 goal_tails.push(place.to_owned());
@@ -13864,14 +14342,16 @@ fn translate_clause_bunsetsus(
     parts.extend(result_value);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
-    let trailing_change_le =
-        if (is_change_of_state_you || purpose.is_some() || !route_endpoints.is_empty())
-            && post_verb_mods.last().is_some_and(|m| m == "了")
-        {
-            post_verb_mods.pop()
-        } else {
-            None
-        };
+    let trailing_change_le = if (completed_departure
+        || is_change_of_state_you
+        || purpose.is_some()
+        || !route_endpoints.is_empty())
+        && post_verb_mods.last().is_some_and(|m| m == "了")
+    {
+        post_verb_mods.pop()
+    } else {
+        None
+    };
     // A temporal continuation endpoint already bounds the activity. Omit the
     // ordinary perfective marker rather than break up the activity and endpoint.
     if !temporal_made_tails.is_empty() {
@@ -13913,6 +14393,9 @@ fn translate_clause_bunsetsus(
     parts.extend(event_counts);
     parts.extend(counted_arrival);
     parts.extend(objs);
+    if completed_prior_meal {
+        parts.push("後".to_owned());
+    }
     parts.extend(elapsed_duration);
     parts.extend(activity_period_tail);
     parts.extend(purpose_recipients);
@@ -13948,6 +14431,16 @@ fn translate_clause_bunsetsus(
             following,
             text: join_zh_parts(&preparation),
         }));
+    }
+    if let Some(adverbial) = naide_adverbial.filter(|adverbial| adverbial.join_unstated_subject)
+        && let Some(joined) = ctx.joined_naide
+    {
+        parts.push("就".to_owned());
+        joined.set(Some(adverbial.action));
+    }
+    if joined_departure && let Some(joined) = ctx.joined_departure {
+        parts.push("就".to_owned());
+        joined.set(true);
     }
     (join_zh_parts(&parts), had_overt_subj_no_pred)
 }
@@ -17563,7 +18056,7 @@ fn fold_nominalized_deadline_ability(
         return;
     }
     let (before, _, after, passive) =
-        synthesize_predicate_complex(std::slice::from_ref(matrix), false, target, None);
+        synthesize_predicate_complex(std::slice::from_ref(matrix), false, target, None, None);
     let modal = match (before.as_slice(), after.as_slice(), passive) {
         ([], [], false) => "可以",
         ([], [past], false) if past == "了" => "得以",
@@ -18737,6 +19230,214 @@ fn predicates_has_passive(predicates: &[Bunsetsu]) -> bool {
                     || a.surface.ends_with("された"))
         })
     })
+}
+
+#[cfg(test)]
+mod naide_adverbial_tests {
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::doc::model::Backend;
+
+    fn translate(text: &str) -> String {
+        analyze_and_translate(
+            text,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .expect("translate Japanese without a model")
+        .target_text
+    }
+
+    #[test]
+    fn declarative_naide_keeps_the_omitted_action_and_the_later_action() {
+        for text in ["水を飲まないで走りました。", "水を飲まないで、走りました。"]
+        {
+            assert_eq!(translate(text), "沒有喝水就跑了。");
+        }
+        let expected = match faberline_nlp::lexicon::ja::lookup_ja_gloss(
+            "朝ご飯",
+            Some(faberline_nlp::doc::Upos::Noun),
+        ) {
+            None => "早上沒有吃飯就去了學校。",
+            Some("早餐") => "沒有吃早餐就去了學校。",
+            Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+        };
+        assert_eq!(
+            translate("朝ご飯を食べないで、学校へ行きました。"),
+            expected
+        );
+    }
+
+    #[test]
+    fn standalone_requests_and_subsidiary_states_keep_the_existing_rendering() {
+        assert_eq!(translate("窓を開けないで。"), "不要開窗戶。");
+        assert_eq!(translate("窓を開けないでください。"), "請不要打開窗戶。");
+        assert_eq!(translate("話さないでいました。"), "不說了。");
+    }
+
+    #[test]
+    fn questions_and_attached_help_keep_the_existing_rendering() {
+        assert_eq!(
+            translate("案内を読まないで手紙を二通書けますか。"),
+            "二通不讀能寫說明信嗎？"
+        );
+        assert_eq!(
+            translate("案内を読まないで、手紙を二通書けます？"),
+            "不要讀說明，二通能寫信？"
+        );
+        assert_eq!(
+            translate("市長に手紙を四通書かないでいただけた。"),
+            "給市長四通不寫能得到了信。"
+        );
+    }
+
+    #[test]
+    fn a_negated_following_action_does_not_add_a_result() {
+        for text in [
+            "傘を持たないで出かけませんでした。傘を持って出かけました。",
+            "傘を持たないで、出かけませんでした。",
+            "水を飲まないで走らなかった。",
+            "水を飲まないで、走らない。",
+        ] {
+            assert!(!translate(text).contains('就'));
+        }
+    }
+}
+
+#[cfg(test)]
+mod household_entry_tests {
+    use crate::{
+        GlossaryEntry, TargetVariant, TranslateOptions, TranslatedDocument, TranslationGlossary,
+        analyze_and_translate,
+    };
+    use faberline_nlp::doc::model::Backend;
+
+    fn translate(text: &str, glossary: &TranslationGlossary) -> TranslatedDocument {
+        analyze_and_translate(
+            text,
+            &TranslateOptions::new(TargetVariant::ZhHant),
+            glossary,
+            None,
+            Backend::Onnx,
+        )
+        .expect("translate Japanese on CPU")
+    }
+
+    #[test]
+    fn bare_household_entry_keeps_the_actions_tense_and_negation() {
+        let glossary = TranslationGlossary::new();
+        assert_eq!(
+            translate("犬は家に入りました。", &glossary).target_text,
+            "狗進屋了。"
+        );
+        assert_eq!(
+            translate("犬は家に入りませんでした。", &glossary).target_text,
+            "狗沒有進屋。"
+        );
+    }
+
+    #[test]
+    fn other_locations_and_household_roles_keep_their_rendering() {
+        let glossary = TranslationGlossary::new();
+        assert_eq!(
+            translate("犬は庭に入りました。", &glossary).target_text,
+            "狗進入庭了。"
+        );
+        assert_eq!(
+            translate("犬は家で休みました。", &glossary).target_text,
+            "狗在家休息了。"
+        );
+    }
+
+    #[test]
+    fn a_glossary_location_keeps_its_rendering_and_match() {
+        let mut glossary = TranslationGlossary::new();
+        glossary.places.push(GlossaryEntry {
+            canonical: "家".to_owned(),
+            surfaces: vec!["家".to_owned()],
+            targets: [(TargetVariant::ZhHant, "舊屋".to_owned())].into(),
+            ..GlossaryEntry::default()
+        });
+        let translated = translate("犬は家に入りました。", &glossary);
+        assert_eq!(translated.target_text, "狗進入舊屋了。");
+        assert_eq!(translated.glossary_hits.len(), 1);
+        assert_eq!(translated.glossary_hits[0].canonical, "家");
+    }
+
+    #[test]
+    fn a_family_role_or_family_work_does_not_assert_physical_entry() {
+        let glossary = TranslationGlossary::new();
+        for text in [
+            "一人娘と結婚し、婿養子として家に入った。",
+            "養子に迎えられて、家に入った。",
+            "妻は家に入って専業主婦になった。",
+            "結婚後、仕事を辞めて家に入り、子育てに専念しました。",
+        ] {
+            assert!(!translate(text, &glossary).target_text.contains("進屋"));
+        }
+        assert!(
+            translate("訪問客として、家に入った。", &glossary)
+                .target_text
+                .contains("進屋")
+        );
+    }
+
+    #[test]
+    fn linked_family_context_requires_a_physical_cue() {
+        let glossary = TranslationGlossary::new();
+        for text in [
+            "兄は結婚して家に入りました。",
+            "妹は結婚してから家に入りました。",
+            "妹は家に入って家業を継ぎました。",
+            "兄は家に入って家業を引き継いだ。",
+        ] {
+            let target = translate(text, &glossary).target_text;
+            assert!(!target.contains("進屋"), "{text} => {target}");
+        }
+        for text in [
+            "兄は結婚して、玄関の戸を開けて家に入りました。",
+            "妹は結婚して、家に入ってから戸を閉めた。",
+            "妹は玄関で靴を脱いで家に入って家業を継ぎました。",
+            "兄が結婚して、犬が家に入りました。",
+            "兄は家に入って、姉が家業を継ぎました。",
+            "兄は結婚しました。犬は家に入りました。",
+        ] {
+            let target = translate(text, &glossary).target_text;
+            assert!(target.contains("進屋"), "{text} => {target}");
+        }
+    }
+
+    #[test]
+    fn linked_family_context_keeps_a_caller_destination_in_place() {
+        let entry = GlossaryEntry {
+            canonical: "家に".to_owned(),
+            surfaces: vec!["家に".to_owned()],
+            targets: [(TargetVariant::ZhHant, "舊屋".to_owned())].into(),
+            ..GlossaryEntry::default()
+        };
+        let text = "兄は結婚して家に入りました。";
+        for glossary in [
+            TranslationGlossary {
+                places: vec![entry.clone()],
+                ..TranslationGlossary::new()
+            },
+            TranslationGlossary {
+                domain_terms: vec![entry],
+                ..TranslationGlossary::new()
+            },
+        ] {
+            let translated = translate(text, &glossary);
+            assert_eq!(translated.target_text, "哥哥結婚，進入舊屋了。");
+            let [hit] = translated.glossary_hits.as_slice() else {
+                panic!("expected one complete destination match");
+            };
+            assert_eq!(hit.source_span.start_char, 6);
+            assert_eq!(hit.source_span.end_char, 8);
+            assert_eq!(hit.target_span.start_char, 7);
+            assert_eq!(hit.target_span.end_char, 9);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -24135,8 +24836,90 @@ fn clock_case_governor(clock: &Atom, marker: &Atom, doc: &Document) -> Option<us
     }
 }
 
+fn bare_household_goal_head(b: &Bunsetsu) -> Option<usize> {
+    let [home, direction] = b.atoms.as_slice() else {
+        return None;
+    };
+    let home_idx = home.doc_tok_idx?;
+    if b.case_particle.as_deref() != Some("に")
+        || home.is_locked
+        || direction.is_locked
+        || home.surface != "家"
+        || home.upos != Some(Upos::Noun)
+        || home.deprel != "obl"
+        || direction.surface != "に"
+        || direction.upos != Some(Upos::Adp)
+        || direction.deprel != "case"
+        || direction.head != Some(home_idx)
+        || home.span.end_char != direction.span.start_char
+    {
+        return None;
+    }
+    home.head
+}
+
 fn physical_goal_head(b: &Bunsetsu) -> Option<usize> {
     let (particle, content) = b.atoms.split_last()?;
+    physical_goal_head_for_case(b, particle, content)
+}
+
+fn focused_physical_goal_head(b: &Bunsetsu, doc: &Document, chars: &[char]) -> Option<usize> {
+    let [content @ .., case, focus] = b.atoms.as_slice() else {
+        return None;
+    };
+    let noun = content.last()?;
+    if noun.is_locked && (content.len() != 1 || noun.lemma.as_deref() != Some(LOCKED_PLACE_ATOM)) {
+        return None;
+    }
+    if !matches!(case.surface.as_str(), "に" | "へ")
+        || focus.surface != "は"
+        || focus.upos != Some(Upos::Adp)
+        || focus.deprel != "case"
+        || focus.head != noun.doc_tok_idx
+        || focus.is_locked
+        || case.span.end_char != focus.span.start_char
+        || !dasu_case_link(noun, case)
+        || !matches!(noun.deprel.as_str(), "nsubj" | "obl")
+    {
+        return None;
+    }
+
+    // The parser can mark the focused place as a subject. Keep the original
+    // case links so only the place attached to the negated verb qualifies.
+    for atom in [noun, case, focus] {
+        let id = atom.doc_tok_idx?;
+        let token = doc.tokens.get(id)?;
+        let link = doc.syntax.get(id)?;
+        if token.span != atom.span
+            || (!atom.is_locked && token.upos != atom.upos)
+            || link.token != id
+            || link.span != atom.span
+            || link.sentence != token.sentence
+            || link.head != atom.head
+            || link.deprel != atom.deprel
+        {
+            return None;
+        }
+    }
+    if !noun.is_locked {
+        return physical_goal_head_for_case(b, case, content);
+    }
+
+    // The whole lock preserves rendering, but the original noun must still
+    // pass the same physical-place check as an unlocked argument.
+    let token = doc.tokens.get(noun.doc_tok_idx?)?;
+    let source = chars.get(noun.span.start_char..noun.span.end_char)?;
+    let original = Atom {
+        surface: source.iter().collect(),
+        lemma: token.lemma.clone(),
+        upos: token.upos,
+        is_locked: false,
+        ..noun.clone()
+    };
+    physical_goal_head_for_case(b, case, std::slice::from_ref(&original))
+}
+
+fn physical_goal_head_for_case(b: &Bunsetsu, particle: &Atom, content: &[Atom]) -> Option<usize> {
     if !matches!(b.case_particle.as_deref(), Some("に" | "へ" | "まで"))
         || Some(particle.surface.as_str()) != b.case_particle.as_deref()
         || particle.upos != Some(Upos::Adp)
@@ -25224,16 +26007,17 @@ fn localize_honorific(name: &str, suffix: &str) -> String {
     }
 }
 
-fn predicate_is_imperative(b: &Bunsetsu) -> bool {
+fn predicate_is_imperative(b: &Bunsetsu, subordinate_naide: bool) -> bool {
     b.atoms
         .iter()
         .any(|a| !a.is_locked && matches!(a.surface.as_str(), "ください" | "なさい" | "な"))
-        || b.atoms.windows(2).any(|w| {
-            !w[0].is_locked && w[0].surface == "ない" && !w[1].is_locked && w[1].surface == "で"
-        })
-        || b.atoms
-            .iter()
-            .any(|a| !a.is_locked && a.surface == "ないで")
+        || (!subordinate_naide
+            && (b.atoms.windows(2).any(|w| {
+                !w[0].is_locked && w[0].surface == "ない" && !w[1].is_locked && w[1].surface == "で"
+            }) || b
+                .atoms
+                .iter()
+                .any(|a| !a.is_locked && a.surface == "ないで")))
 }
 
 /// Synthesize predicate complex from predicate bunsetsu(s).
@@ -25243,6 +26027,7 @@ fn synthesize_predicate_complex(
     past_until: bool,
     target: TargetVariant,
     transfer: Option<GivingReceivingPredicate>,
+    subordinate_naide_past: Option<bool>,
 ) -> (Vec<String>, String, Vec<String>, bool) {
     if predicates.is_empty() {
         return (Vec::new(), String::new(), Vec::new(), false);
@@ -25430,7 +26215,9 @@ fn synthesize_predicate_complex(
     if has_rashii {
         pre.push("聽說".to_owned());
     }
-    if has_naide_kudasai {
+    if let Some(past) = subordinate_naide_past {
+        pre.push(if past { "沒有" } else { "不" }.to_owned());
+    } else if has_naide_kudasai {
         pre.push("請不要".to_owned());
     } else if has_naide {
         pre.push("不要".to_owned());

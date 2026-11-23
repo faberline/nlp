@@ -111,14 +111,49 @@ fn eligibility_object(
     }
     let tokens: Vec<_> = parsed.tokens.iter().collect();
     let raw = build_sentence_atoms(0, source, &parsed, &tokens, &SpanLockTable::default());
-    let [group @ .., noun, case, root, masu, negative, ka] = core_non_punct(&raw) else {
+    let EligibilityQuestion {
+        receiver,
+        item,
+        case,
+        root,
+        ..
+    } = eligibility_question(core_non_punct(&raw))?;
+    if item.first()?.span.start_char + start != lock.span.start_char
+        || case.span.end_char + start != lock.span.end_char
+        || root.span.start_char + start != verb.span.start_char
+        || root.span.end_char + start != verb.span.end_char
+    {
+        return None;
+    }
+    let receiver_index = subject.iter().position(|atom| {
+        atom.span.start_char == receiver.span.start_char + start
+            && atom.span.end_char == receiver.span.end_char + start
+    })?;
+    let mut particle = case.clone();
+    particle.span.start_char += start;
+    particle.span.end_char += start;
+    Some((subject.len(), receiver_index, particle))
+}
+
+struct EligibilityQuestion<'a> {
+    group: &'a [Atom],
+    receiver: &'a Atom,
+    item: &'a [Atom],
+    case: &'a Atom,
+    root: &'a Atom,
+}
+
+fn eligibility_question(atoms: &[Atom]) -> Option<EligibilityQuestion<'_>> {
+    let [prefix @ .., noun, case, root, masu, negative, ka] = atoms else {
         return None;
     };
-    let [.., receiver, topic] = group else {
+    let item_start = compound_start(prefix, noun);
+    let item = &atoms[item_start..=prefix.len()];
+    let [group @ .., _, _, _, receiver, topic] = &prefix[..item_start] else {
         return None;
     };
     let predicate = Some(root.doc_tok_idx?);
-    if !excludes_people(group, group.len().checked_sub(5)?)
+    if !excludes_people(atoms, group.len())
         || receiver.deprel != "nsubj"
         || receiver.head != predicate
         || topic.surface != "は"
@@ -141,22 +176,160 @@ fn eligibility_object(
         || [masu, negative, ka]
             .iter()
             .any(|atom| atom.head != predicate)
+        || !contiguous(item)
         || !adjacent(&[noun, case, root, masu, negative, ka])
-        || noun.span.start_char + start != lock.span.start_char
-        || case.span.end_char + start != lock.span.end_char
-        || root.span.start_char + start != verb.span.start_char
-        || root.span.end_char + start != verb.span.end_char
     {
         return None;
     }
-    let receiver_index = subject.iter().position(|atom| {
-        atom.span.start_char == receiver.span.start_char + start
-            && atom.span.end_char == receiver.span.end_char + start
-    })?;
-    let mut particle = case.clone();
-    particle.span.start_char += start;
-    particle.span.end_char += start;
-    Some((subject.len(), receiver_index, particle))
+    Some(EligibilityQuestion {
+        group,
+        receiver,
+        item,
+        case,
+        root,
+    })
+}
+
+pub(super) fn receives_distributed_item(atoms: &[Atom], doc: &Document, chars: &[char]) -> bool {
+    receiving_distribution(atoms, doc, chars).is_some()
+}
+
+fn receiving_distribution(atoms: &[Atom], doc: &Document, chars: &[char]) -> Option<()> {
+    let atoms = core_non_punct(atoms);
+    let [.., verb, polite, negative, question] = atoms else {
+        return None;
+    };
+    if verb.is_locked
+        || verb.lemma.as_deref() != Some("いただける")
+        || polite.surface != "ませ"
+        || negative.surface != "ん"
+        || question.surface != "か"
+        || !doc.options.cpu_syntax
+        || !doc.options.enrich_morphology
+    {
+        return None;
+    }
+    let sentence = doc.tokens.get(verb.doc_tok_idx?)?.sentence;
+    let previous = doc.segmentation.sentences.get(sentence.checked_sub(1)?)?;
+    let current = doc.segmentation.sentences.get(sentence)?;
+    if previous.paragraph != current.paragraph {
+        return None;
+    }
+    let passage = chars.get(previous.span.start_char..current.span.end_char)?;
+    let mut options = doc.options.clone();
+    let mut locks = atoms.iter().enumerate().filter(|(_, atom)| atom.is_locked);
+    if let Some((index, lock)) = locks.next() {
+        if lock.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM) || locks.next().is_some() {
+            return None;
+        }
+        // Restoration can split the original object lock from its case marker.
+        // Omit either spelling as a tokenization hint for this syntax check.
+        let bare: String = chars
+            .get(lock.span.start_char..lock.span.end_char)?
+            .iter()
+            .collect();
+        let case_end = atoms
+            .get(index + 1)
+            .filter(|next| next.surface == "を" && next.span.start_char == lock.span.end_char)
+            .map_or(lock.span.end_char, |next| next.span.end_char);
+        let with_case: String = chars.get(lock.span.start_char..case_end)?.iter().collect();
+        options
+            .lexicon
+            .retain(|hint| hint != &bare && hint != &with_case);
+        options
+            .names
+            .retain(|hint| hint != &bare && hint != &with_case);
+    }
+    let parsed = analyze_document(&passage.iter().collect::<String>(), &options);
+    if parsed.segmentation.sentences.len() != 2 {
+        return None;
+    }
+    let raw_atoms = |sentence| {
+        let tokens: Vec<_> = parsed
+            .tokens
+            .iter()
+            .filter(|token| token.sentence == sentence)
+            .collect();
+        build_sentence_atoms(
+            sentence,
+            passage,
+            &parsed,
+            &tokens,
+            &SpanLockTable::default(),
+        )
+    };
+    let statement = raw_atoms(0);
+    let question = raw_atoms(1);
+    if statement.last()?.surface != "。" {
+        return None;
+    }
+    let (group, item) = distribution_item(core_non_punct(&statement))?;
+    let request = eligibility_question(core_non_punct(&question))?;
+    let same_predicate = request.root.span.start_char + previous.span.start_char
+        == verb.span.start_char
+        && request.root.span.end_char + previous.span.start_char == verb.span.end_char;
+    let span_text =
+        |group: &[Atom]| passage.get(group.first()?.span.start_char..group.last()?.span.end_char);
+    (same_predicate
+        && span_text(item)? == span_text(request.item)?
+        && span_text(group)? == span_text(request.group)?)
+    .then_some(())
+}
+
+fn distribution_item(atoms: &[Atom]) -> Option<(&[Atom], &[Atom])> {
+    if !distributes_only_to(atoms) {
+        return None;
+    }
+    let [.., recipient, _, _, verb, _] = atoms else {
+        return None;
+    };
+    let topic_index = atoms.iter().position(|atom| atom.surface == "は")?;
+    let [modifiers @ .., noun, topic] = &atoms[..=topic_index] else {
+        return None;
+    };
+    let item_start = compound_start(modifiers, noun);
+    let item = &atoms[item_start..topic_index];
+    let group = atoms.get(topic_index + 1..atoms.len().checked_sub(4)?)?;
+    let [compounds @ .., _] = group else {
+        return None;
+    };
+    if noun.upos != Some(Upos::Noun)
+        || noun.deprel != "nsubj"
+        || noun.head != verb.doc_tok_idx
+        || topic.deprel != "case"
+        || topic.head != noun.doc_tok_idx
+        || !adjacent(&[noun, topic])
+        || !contiguous(item)
+        || !contiguous(group)
+        || modifiers[..item_start].iter().any(|atom| {
+            atom.upos != Some(Upos::Det) || atom.deprel != "det" || atom.head != noun.doc_tok_idx
+        })
+        || !compounds.iter().all(|atom| compound_of(atom, recipient))
+    {
+        return None;
+    }
+    Some((group, item))
+}
+
+fn compound_start(prefix: &[Atom], head: &Atom) -> usize {
+    prefix
+        .iter()
+        .rposition(|atom| !compound_of(atom, head))
+        .map_or(0, |index| index + 1)
+}
+
+fn compound_of(atom: &Atom, head: &Atom) -> bool {
+    !atom.is_locked
+        && matches!(atom.upos, Some(Upos::Noun | Upos::Propn))
+        && atom.deprel == "compound"
+        && head.doc_tok_idx.is_some()
+        && atom.head == head.doc_tok_idx
+}
+
+fn contiguous(atoms: &[Atom]) -> bool {
+    atoms
+        .windows(2)
+        .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
 }
 
 pub(super) fn distributes_only_to(atoms: &[Atom]) -> bool {
@@ -207,15 +380,40 @@ mod tests {
         };
         assert_eq!(
             translate("入場券は学生だけに配ります。学生以外の人は入場券をいただけませんか。"),
-            "入場券只發給學生。學生以外的人不能得到入場券嗎？"
+            "入場券只發給學生。學生以外的人不能領取入場券嗎？"
         );
         assert!(translate("建物の外の人は待ってください。").contains("外面"));
     }
 
     #[test]
+    fn pickup_requires_the_same_group_and_item_in_the_previous_statement() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        let translate = |source: &str| {
+            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                .unwrap()
+                .target_text
+        };
+        let question = "参加者以外の人は資料をいただけませんか。";
+        for preceding in [
+            "",
+            "この資料は学生だけに配ります。",
+            "入場券は参加者だけに配ります。",
+            "この資料は参加者だけに配ります。\n\n",
+        ] {
+            let text = format!("{preceding}{question}");
+            assert!(translate(&text).ends_with("不能得到資料嗎？"), "{text}");
+        }
+        assert_eq!(
+            translate("この資料をいただけませんか。"),
+            "可以給我這份資料嗎？"
+        );
+    }
+
+    #[test]
     fn eligibility_keeps_the_glossary_object_after_the_negated_verb() {
         let source = "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。";
-        let expected = "這份資料只發給參加者。參加者以外的人不能得到講義嗎？";
+        let expected = "這份資料只發給參加者。參加者以外的人不能領取講義嗎？";
         let options = TranslateOptions::new(TargetVariant::ZhHant);
         let mut glossary = TranslationGlossary::new();
         glossary.objects.push(GlossaryEntry {

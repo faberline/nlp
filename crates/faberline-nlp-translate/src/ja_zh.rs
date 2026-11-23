@@ -39,6 +39,7 @@ mod polarity_contrast;
 mod polite_joint;
 mod polite_prohibition;
 mod reception;
+mod recipient_scope;
 mod return_endpoint;
 mod te_help_glossary;
 mod trip_after_meal;
@@ -407,6 +408,7 @@ fn translate_ja_sentence_with_verb_locks(
         if let Some(restored) = glossary_syntax.assistance_object(&atoms, doc) {
             atoms = restored;
         }
+        glossary_syntax.restore_eligibility_object(&mut atoms);
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
@@ -1019,6 +1021,7 @@ fn translate_ja_sentence_with_verb_locks(
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
+                    pickup_predicate: glossary_syntax.pickup_predicate(),
                     verb_locks,
                     locks: &lock_table.locks,
                     following: &segments[seg_idx + 1..],
@@ -5908,6 +5911,7 @@ struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
     contrasts_recurrence: bool,
     source_chars: &'a [char],
+    pickup_predicate: Option<Span>,
     verb_locks: &'a [&'a LockedSpan],
     locks: &'a [LockedSpan],
     following: &'a [Segment],
@@ -7267,6 +7271,7 @@ fn translate_clause_atoms(
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
         daytime::bind(&mut norm_atoms, body, doc);
         order_noun::bind(&mut norm_atoms, body, ctx.source_chars);
+        recipient_scope::mark_exclusions(&mut norm_atoms);
     }
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
@@ -7320,6 +7325,15 @@ fn translate_clause_atoms(
     }
     if let Some((predicate, _)) = proposal {
         localize_proposal_arguments(&mut grouped, predicate, body, target);
+    }
+    if target == TargetVariant::ZhHant
+        && grouped.iter().any(|group| {
+            group.atoms.first().is_some_and(|atom| {
+                atom.is_locked && atom.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
+            })
+        })
+    {
+        grouped = fold_locked_document_demonstratives(grouped, doc, ctx.source_chars);
     }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target, Some(ctx));
     if target == TargetVariant::ZhHant
@@ -13129,6 +13143,13 @@ fn translate_clause_bunsetsus(
     if departure {
         verb_core = "離開".to_owned();
     }
+    if target == TargetVariant::ZhHant
+        && verb_core == "能得到"
+        && !ctx.inside_quote
+        && recipient_scope::matches_pickup_predicate(source, ctx.pickup_predicate)
+    {
+        verb_core = "能領取".to_owned();
+    }
     if meeting_partner.is_some() {
         passive_agent_needed = false;
     }
@@ -14109,6 +14130,24 @@ fn translate_clause_bunsetsus(
 
     let mut transfer_prefix = None;
     let mut transfer_recipient = None;
+    if target == TargetVariant::ZhHant
+        && verb_core == "發放"
+        && transfer.is_none()
+        && objs.is_empty()
+        && !passive_agent_needed
+        && recipient_scope::distributes_only_to(source)
+        && let [recipient] = iobjs.as_slice()
+        && recipient.transfer_dative
+        && let Some(person) = recipient
+            .text
+            .strip_prefix('對')
+            .and_then(|text| text.strip_suffix('只'))
+        && !person.is_empty()
+    {
+        transfer_recipient = Some(person.to_owned());
+        iobjs.clear();
+        verb_core = "只發給".to_owned();
+    }
     if let Some(transfer) = transfer
         && subjects.len() <= 1
     {
@@ -17330,15 +17369,19 @@ fn attached_demonstrative(det: &Atom, noun: &Atom) -> Option<char> {
 }
 
 fn attached_demonstrative_at(det: &Atom, noun: &Atom, nominal_start: usize) -> Option<char> {
+    if noun.is_locked || noun.upos != Some(Upos::Noun) {
+        return None;
+    }
+    source_demonstrative(det, noun.doc_tok_idx?, nominal_start)
+}
+
+fn source_demonstrative(det: &Atom, noun_index: usize, nominal_start: usize) -> Option<char> {
     if det.is_locked
-        || noun.is_locked
         || det.upos != Some(Upos::Det)
-        || noun.upos != Some(Upos::Noun)
         || det.span.end_char != nominal_start
         || det.deprel != "det"
         || det.doc_tok_idx.is_none()
-        || noun.doc_tok_idx.is_none()
-        || det.head != noun.doc_tok_idx
+        || det.head != Some(noun_index)
     {
         return None;
     }
@@ -17347,6 +17390,61 @@ fn attached_demonstrative_at(det: &Atom, noun: &Atom, nominal_start: usize) -> O
         "その" | "あの" => Some('那'),
         _ => None,
     }
+}
+
+fn locked_document_demonstrative(
+    det: &Atom,
+    noun: &Atom,
+    doc: &Document,
+    source_chars: &[char],
+) -> Option<String> {
+    if !noun.is_locked || noun.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM) {
+        return None;
+    }
+    let noun_index = noun.doc_tok_idx?;
+    let pointer = source_demonstrative(det, noun_index, noun.span.start_char)?;
+    let token = doc.tokens.get(noun_index)?;
+    if token.span != noun.span
+        || token.upos != Some(Upos::Noun)
+        || doc.tokens.get(noun_index + 1).is_some_and(|next| {
+            next.span.start_char == token.span.end_char
+                && matches!(next.upos, Some(Upos::Noun | Upos::Propn))
+        })
+    {
+        return None;
+    }
+    // The locked atom contains the caller's placeholder. Select the unit from
+    // the original noun and keep the placeholder as its own atom.
+    let source: String = source_chars
+        .get(noun.span.start_char..noun.span.end_char)?
+        .iter()
+        .collect();
+    let word = translate_single_ja_term(&source, token.lemma.as_deref(), token.upos);
+    takes_document_counter(&word).then(|| format!("{pointer}份"))
+}
+
+fn takes_document_counter(word: &str) -> bool {
+    matches!(word, "資料" | "文件" | "報告" | "報紙")
+}
+
+fn fold_locked_document_demonstratives(
+    groups: Vec<Bunsetsu>,
+    doc: &Document,
+    source_chars: &[char],
+) -> Vec<Bunsetsu> {
+    let mut merged: Vec<Bunsetsu> = Vec::with_capacity(groups.len());
+    for mut group in groups {
+        if let Some(previous) = merged.last()
+            && let [det] = previous.atoms.as_slice()
+            && let Some(noun) = group.atoms.first()
+            && let Some(prefix) = locked_document_demonstrative(det, noun, doc, source_chars)
+        {
+            merged.pop();
+            prepend_locked_atom(&mut group, prefix);
+        }
+        merged.push(group);
+    }
+    merged
 }
 
 /// A demonstrative already has an attached noun here. Use complete person nouns,
@@ -26240,7 +26338,7 @@ fn demonstrative_classifier(word: &str, noun: &Atom) -> &'static str {
     match word {
         "書" | "小說" | "雜誌" | "字典" => "本",
         "車" | "公車" | "電車" | "汽車" | "卡車" | "腳踏車" | "自行車" => "輛",
-        "資料" | "文件" | "報告" | "報紙" => "份",
+        _ if takes_document_counter(word) => "份",
         "商店" | "餐廳" | "公司" => "家",
         "寺" | "寺廟" | "橋" => "座",
         "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
@@ -26255,6 +26353,11 @@ fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
     let mut i = 0usize;
     while i < b.atoms.len() {
         let a = &b.atoms[i];
+        if a.lemma.as_deref() == Some(recipient_scope::EXCLUSION_OUTSIDE) {
+            out.push('外');
+            i += 1;
+            continue;
+        }
         if !a.is_locked
             && a.surface == "子"
             && a.upos == Some(Upos::Noun)

@@ -410,6 +410,9 @@ fn translate_ja_sentence_with_verb_locks(
             atoms = restored;
         }
         glossary_syntax.restore_eligibility_object(&mut atoms);
+        if direct_quote.is_none() && continuation.is_none() && report.is_none() {
+            mark_locked_start_question(&mut atoms, doc, chars, sent_span, lock_table);
+        }
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
@@ -4497,6 +4500,93 @@ fn direct_ka_before_period(clause: &[Atom], end: &Atom, doc: &Document) -> bool 
                     .iter()
                     .any(|cop| !cop.is_locked && cop.deprel == "cop" && cop.head == a.doc_tok_idx)
         })
+}
+
+fn mark_locked_start_question(
+    atoms: &mut [Atom],
+    doc: &Document,
+    source: &[char],
+    sentence_span: Span,
+    locks: &SpanLockTable,
+) {
+    let [body @ .., question, period] = atoms else {
+        return;
+    };
+    let (Some(verb_id), Some(question_id)) = (question.head, question.doc_tok_idx) else {
+        return;
+    };
+    let Some([verb, auxiliaries @ .., marker]) = doc.tokens.get(verb_id..=question_id) else {
+        return;
+    };
+    let source_link = |id, token: &Token, head, role| {
+        doc.syntax
+            .get(id)
+            .is_some_and(|edge: &faberline_nlp::doc::SyntaxToken| {
+                edge.token == id
+                    && edge.span == token.span
+                    && edge.sentence == verb.sentence
+                    && token.sentence == verb.sentence
+                    && edge.head == head
+                    && edge.deprel == role
+            })
+    };
+    let finite_span = Span {
+        start_char: verb.span.start_char,
+        end_char: marker.span.start_char,
+    };
+    // A glossary hint can merge 始め and ます into one source token.
+    let complete_form = match auxiliaries {
+        [] => verb.span == finite_span,
+        [polite] => {
+            verb.lemma.as_deref() == Some("始める")
+                && polite.upos == Some(Upos::Aux)
+                && verb.span.end_char == polite.span.start_char
+                && polite.span.end_char == marker.span.start_char
+                && source_link(verb_id + 1, polite, Some(verb_id), "aux")
+        }
+        _ => false,
+    };
+    // A complete verb replacement can hide the root while leaving か visible.
+    // Recover only the final marker of a standalone 始める question.
+    if period.is_locked
+        || period.surface != "。"
+        || period.span.end_char != sentence_span.end_char
+        || question.is_locked
+        || question.surface != "か"
+        || question.upos != Some(Upos::Part)
+        || marker.upos != Some(Upos::Part)
+        || marker.span != question.span
+        || marker.span.end_char != period.span.start_char
+        || verb.upos != Some(Upos::Verb)
+        || !complete_form
+        || !matches!(
+            source.get(finite_span.start_char..finite_span.end_char),
+            Some(['始', 'め', 'ま', 'す'] | ['は', 'じ', 'め', 'ま', 'す'])
+        )
+        || !source_link(verb_id, verb, None, "root")
+        || !source_link(question_id, marker, Some(verb_id), "discourse")
+        || body
+            .iter()
+            .any(|atom| is_punct_atom(atom) || atom.upos == Some(Upos::Sconj))
+    {
+        return;
+    }
+    if locks.locks.iter().any(|lock| {
+        lock.mandatory
+            && matches!(
+                lock.origin,
+                LockOrigin::Glossary {
+                    kind: GlossaryKind::DomainTerm,
+                    ..
+                }
+            )
+            && lock.source_span == finite_span
+            && body.iter().any(|atom| {
+                atom.is_locked && atom.span == lock.source_span && atom.surface == lock.placeholder
+            })
+    }) {
+        period.surface = "？".to_owned();
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -12985,7 +13075,13 @@ fn translate_clause_bunsetsus(
                 }
             }
             BunsetsuRole::Obj => {
-                let text = render_bunsetsu_np(&b, target);
+                let text = if target == TargetVariant::ZhHant
+                    && lesson_as_object_of_start(&b, source, ctx)
+                {
+                    "上課".to_owned()
+                } else {
+                    render_bunsetsu_np(&b, target)
+                };
                 if let Some(marker) = motion
                     .filter(|m| !m.expressed_by_verb)
                     .and_then(|m| route_marker(&b, source, m.head))
@@ -13140,14 +13236,18 @@ fn translate_clause_bunsetsus(
     let joint_subject = matches!(joint_manner, Some((JointManner::Everyone, false, _)));
     let verb_render = match predicates.as_slice() {
         [predicate] if !ctx.verb_locks.is_empty() && transfer.is_none() => {
-            let atoms = polarity_contrast::negative_question_body(&predicate.atoms, doc)
-                .filter(|body| {
-                    body.first().zip(body.last()).is_some_and(|(head, last)| {
-                        ctx.verb_locks.iter().any(|lock| {
-                            lock.source_span.start_char == head.span.start_char
-                                && lock.source_span.end_char == last.span.end_char
-                        })
-                    })
+            let atoms = start_question_body(predicate, source)
+                .or_else(|| {
+                    polarity_contrast::negative_question_body(&predicate.atoms, doc).filter(
+                        |body| {
+                            body.first().zip(body.last()).is_some_and(|(head, last)| {
+                                ctx.verb_locks.iter().any(|lock| {
+                                    lock.source_span.start_char == head.span.start_char
+                                        && lock.source_span.end_char == last.span.end_char
+                                })
+                            })
+                        },
+                    )
                 })
                 .unwrap_or(&predicate.atoms);
             match atoms {
@@ -26647,6 +26747,69 @@ fn render_bunsetsu_np(b: &Bunsetsu, target: TargetVariant) -> String {
     out
 }
 
+// A stem replacement still needs the original question particle after its auxiliary.
+fn start_question_body<'a>(predicate: &'a Bunsetsu, source: &[Atom]) -> Option<&'a [Atom]> {
+    let [verb, polite, question] = predicate.atoms.as_slice() else {
+        return None;
+    };
+    let head = verb.doc_tok_idx?;
+    (!verb.is_locked
+        && verb.upos == Some(Upos::Verb)
+        && verb.deprel == "root"
+        && verb.lemma.as_deref() == Some("始める")
+        && !polite.is_locked
+        && polite.surface == "ます"
+        && polite.upos == Some(Upos::Aux)
+        && polite.head == Some(head)
+        && polite.deprel == "aux"
+        && verb.span.end_char == polite.span.start_char
+        && polite.span.end_char == question.span.start_char
+        && !question.is_locked
+        && question.surface == "か"
+        && question.upos == Some(Upos::Part)
+        && question.head == Some(head)
+        && question.deprel == "discourse"
+        && question.doc_tok_idx.is_some()
+        && predicate.sfp_tail.as_deref() == Some("か")
+        && core_non_punct(source).last().is_some_and(|last| {
+            !last.is_locked
+                && last.doc_tok_idx == question.doc_tok_idx
+                && last.span == question.span
+        }))
+    .then_some(&predicate.atoms[..2])
+}
+
+// A caller's verb replacement keeps the lesson as an object rather than a second action.
+fn lesson_as_object_of_start(group: &Bunsetsu, source: &[Atom], ctx: &ClauseDiscourseCtx) -> bool {
+    let [lesson, case] = group.atoms.as_slice() else {
+        return false;
+    };
+    let Some(action) = lesson.head else {
+        return false;
+    };
+    !lesson.is_locked
+        && lesson.surface == "授業"
+        && lesson.upos == Some(Upos::Noun)
+        && lesson.deprel == "obj"
+        && case.surface == "を"
+        && dasu_case_link(lesson, case)
+        && source.iter().any(|atom| {
+            atom.doc_tok_idx == Some(action)
+                && !atom.is_locked
+                && atom.upos == Some(Upos::Verb)
+                && atom.deprel == "root"
+                && atom.lemma.as_deref() == Some("始める")
+                && !ctx
+                    .locks
+                    .iter()
+                    .chain(ctx.verb_locks.iter().copied())
+                    .any(|lock| {
+                        lock.source_span.start_char < atom.span.end_char
+                            && atom.span.start_char < lock.source_span.end_char
+                    })
+        })
+}
+
 fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool) -> String {
     let core = render_bunsetsu_np(b, target);
     if core.is_empty() {
@@ -29097,6 +29260,92 @@ mod existence_rule_tests {
                 expected,
                 "{source}"
             );
+        }
+    }
+
+    #[test]
+    fn starting_class_preserves_the_question_and_the_callers_word() {
+        let statement = "先生は授業を始めます。";
+        let question = "先生は授業を始めますか。";
+        let empty = TranslationGlossary::new();
+        assert_eq!(translate(statement, &empty).target_text, "老師開始上課。");
+        assert_eq!(translate(question, &empty).target_text, "老師開始上課嗎？");
+
+        let glossary = TranslationGlossary {
+            objects: vec![GlossaryEntry {
+                canonical: "授業".into(),
+                surfaces: vec!["授業".into()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "專題課".into())]),
+                ..GlossaryEntry::default()
+            }],
+            ..TranslationGlossary::new()
+        };
+        let locked = translate(statement, &glossary);
+        assert_eq!(locked.target_text, "老師開始專題課。");
+        let [hit] = locked.glossary_hits.as_slice() else {
+            panic!("expected one glossary hit for the class noun");
+        };
+        let span = hit.target_span;
+        assert_eq!(
+            locked
+                .target_text
+                .chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect::<String>(),
+            "專題課"
+        );
+    }
+
+    #[test]
+    fn lesson_start_verb_locks_keep_the_object_and_the_question() {
+        let options = crate::TranslateOptions::new(TargetVariant::ZhHant);
+        for (term, replacement) in [("始め", "展開"), ("始めます", "開展")] {
+            let glossary = TranslationGlossary {
+                domain_terms: vec![GlossaryEntry {
+                    canonical: term.into(),
+                    surfaces: vec![term.into()],
+                    targets: BTreeMap::from([(TargetVariant::ZhHant, replacement.into())]),
+                    ..GlossaryEntry::default()
+                }],
+                ..TranslationGlossary::new()
+            };
+            for (source, ending) in [
+                ("先生は授業を始めます。", "。"),
+                ("先生は授業を始めますか。", "嗎？"),
+            ] {
+                let translated = translate(source, &glossary);
+                let document = faberline_nlp::doc::analyze_document(
+                    source,
+                    &crate::doc_options_for_translate(&options, &TranslationGlossary::new()),
+                );
+                let direct = crate::translate_document(
+                    source,
+                    &document,
+                    #[cfg(feature = "narrative")]
+                    None,
+                    &options,
+                    &glossary,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(
+                    translated.target_text,
+                    format!("老師{replacement}授業{ending}"),
+                    "{source} / {term}"
+                );
+                assert_eq!(direct.target_text, translated.target_text);
+                assert_eq!(direct.glossary_hits, translated.glossary_hits);
+                assert_eq!(direct.clause_alignments, translated.clause_alignments);
+                let [hit] = translated.glossary_hits.as_slice() else {
+                    panic!("expected a single verb glossary hit");
+                };
+                assert_eq!(
+                    hit.source_span.start_char..hit.source_span.end_char,
+                    6..6 + term.chars().count()
+                );
+                assert_eq!(hit.target_span.start_char..hit.target_span.end_char, 2..4);
+            }
         }
     }
 

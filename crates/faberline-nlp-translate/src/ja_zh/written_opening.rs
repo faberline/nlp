@@ -229,7 +229,7 @@ mod tests {
         glossary.objects.push(entry("会議", "会議", "例會"));
         check("会議の初めは大切です。", &glossary, "例會的起初重要。");
         let empty = TranslationGlossary::new();
-        check("先生は授業を始めます。", &empty, "老師開始授業。");
+        check("先生は授業を始めます。", &empty, "老師開始上課。");
         check("私は初めに名前を書きます。", &empty, "我先寫名字。");
     }
 }

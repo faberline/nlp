@@ -20,6 +20,7 @@ mod homework_desire;
 mod homework_relative;
 mod meeting_voice;
 mod nominal_possession;
+mod omitted_departure;
 mod order_noun;
 mod payment_potential;
 mod reception;
@@ -279,7 +280,16 @@ pub(crate) fn translate_ja_sentence(
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.
-    let segments = split_atoms_into_segments(&atoms, doc, sent_span);
+    let (segments, departure) = if target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && continuation.is_none()
+        && let Some((segments, departure)) =
+            omitted_departure::segments(&atoms, doc, chars, lock_table)
+    {
+        (segments, Some(departure))
+    } else {
+        (split_atoms_into_segments(&atoms, doc, sent_span), None)
+    };
     let prior_letter_distribution = prior_letter_distribution.filter(|_| {
         direct_quote.is_none() && matches!(segments.as_slice(), [Segment::Clause { .. }])
     });
@@ -330,6 +340,7 @@ pub(crate) fn translate_ja_sentence(
     // clause, so a later verified event can adjust its own reading pause.
     let mut emitted_clause_comma: Option<(usize, Span, usize, usize)> = None;
     let mut emitted_preparation: Option<(usize, usize, String)> = None;
+    let mut emitted_departure_omission = false;
 
     for (seg_idx, seg) in segments.iter().enumerate() {
         let previous_clause_comma = emitted_clause_comma.take();
@@ -848,6 +859,7 @@ pub(crate) fn translate_ja_sentence(
                     ends_continued_quote(segments.get(seg_idx + 1), doc, sentence_idx, chars);
                 let meeting_evidence = std::rc::Rc::new(std::cell::Cell::new(None));
                 let measured_activity = std::cell::Cell::new(None);
+                let joined_departure = std::cell::Cell::new(false);
                 let previous_preparation = previous_preparation.filter(|_| {
                     !inside_quote
                         && previous_clause_comma.is_some_and(
@@ -874,6 +886,9 @@ pub(crate) fn translate_ja_sentence(
                         _ => &[],
                     },
                     measured_activity: Some(&measured_activity),
+                    departure_omission: departure.filter(|_| seg_idx == 0 && !inside_quote),
+                    joined_departure: Some(&joined_departure),
+                    completed_departure: departure.filter(|_| emitted_departure_omission && !inside_quote),
                     prepared_for_predicate: previous_preparation
                         .as_ref()
                         .map(|(_, predicate, _)| *predicate),
@@ -1026,6 +1041,7 @@ pub(crate) fn translate_ja_sentence(
                 }
                 let byte_start = out.len();
                 out.push_str(&rendered);
+                emitted_departure_omission = joined_departure.get();
                 let next_quote_framed = match (segments.get(seg_idx + 1), segments.get(seg_idx + 2))
                 {
                     (Some(Segment::Quote { .. }), Some(Segment::Clause { atoms: nx2, .. })) => {
@@ -1053,7 +1069,8 @@ pub(crate) fn translate_ja_sentence(
                             && topic.deprel == "case" && topic.head == name.doc_tok_idx
                             && matches!(segments.get(seg_idx + 1), Some(Segment::Clause { atoms, .. })
                                 if atoms.iter().any(|verb| verb.upos == Some(Upos::Verb) && verb.doc_tok_idx == name.head)));
-                    if !(suppress_cleft_comma
+                    if !(emitted_departure_omission
+                        || suppress_cleft_comma
                         || inside_habitual_action
                         || (continued_subject && matches!(p, "、" | ","))
                         || (rendered.ends_with('？') && matches!(p, "。" | "？" | "?"))
@@ -5502,6 +5519,9 @@ struct ClauseDiscourseCtx<'a> {
     following: &'a [Segment],
     preceding_activity: &'a [Atom],
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
+    departure_omission: Option<omitted_departure::OmittedDeparture>,
+    joined_departure: Option<&'a std::cell::Cell<bool>>,
+    completed_departure: Option<omitted_departure::OmittedDeparture>,
     prepared_for_predicate: Option<usize>,
     return_trip: Option<ReturnTrip>,
     parallel_elapsed_te: Option<usize>,
@@ -6795,6 +6815,13 @@ fn translate_clause_atoms(
         std::borrow::Cow::Borrowed(phrases)
     };
     let mut merged_atoms = apply_phrase_matches(&attributed);
+    if let Some(omission) = ctx.departure_omission {
+        // This に belongs to the omission marker, rather than a location.
+        merged_atoms.retain(|atom| atom.doc_tok_idx != Some(omission.connective));
+    }
+    if let Some(departure) = ctx.completed_departure {
+        departure.expose_source_case(&mut merged_atoms);
+    }
     if target == TargetVariant::ZhHant {
         bind_tidied_tabletops(&mut merged_atoms);
         localize_sufficiency(&mut merged_atoms);
@@ -6855,6 +6882,9 @@ fn translate_clause_atoms(
     }
     if let Some((predicate, _)) = proposal {
         localize_proposal_arguments(&mut grouped, predicate, body, target);
+    }
+    if let Some(departure) = ctx.completed_departure {
+        departure.restore_source(&mut grouped, atoms);
     }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if target == TargetVariant::ZhHant
@@ -11304,6 +11334,9 @@ fn translate_clause_bunsetsus(
     ctx: &ClauseDiscourseCtx,
     target: TargetVariant,
 ) -> (String, bool) {
+    let departure = ctx
+        .completed_departure
+        .filter(|frame| frame.restore_source(&mut bunsetsus, source));
     let focused_days = if target == TargetVariant::ZhHant {
         calendar::take_focused_days(&mut bunsetsus, source)
     } else {
@@ -12446,6 +12479,27 @@ fn translate_clause_bunsetsus(
     // Synthesize predicate complex.
     let (mut pre_verb_mods, mut verb_core, mut post_verb_mods, mut passive_agent_needed) =
         synthesize_predicate_complex(&predicates, past_until, target, transfer);
+    let joined_departure = ctx
+        .departure_omission
+        .is_some_and(|frame| frame.matches_action(&predicates))
+        && if let Some(negative) = pre_verb_mods
+            .iter_mut()
+            .find(|modifier| modifier.as_str() == "不")
+        {
+            *negative = "沒有".to_owned();
+            true
+        } else {
+            false
+        };
+    let completed_departure = verb_core == "出去"
+        && departure.is_some_and(|frame| {
+            source
+                .iter()
+                .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(frame.governor))
+        });
+    if completed_departure {
+        verb_core = "離開".to_owned();
+    }
     if meeting_partner.is_some() {
         passive_agent_needed = false;
     }
@@ -13864,14 +13918,16 @@ fn translate_clause_bunsetsus(
     parts.extend(result_value);
     let is_change_of_state_you =
         raw_clause.contains("ようになり") || raw_clause.contains("ようになった");
-    let trailing_change_le =
-        if (is_change_of_state_you || purpose.is_some() || !route_endpoints.is_empty())
-            && post_verb_mods.last().is_some_and(|m| m == "了")
-        {
-            post_verb_mods.pop()
-        } else {
-            None
-        };
+    let trailing_change_le = if (completed_departure
+        || is_change_of_state_you
+        || purpose.is_some()
+        || !route_endpoints.is_empty())
+        && post_verb_mods.last().is_some_and(|m| m == "了")
+    {
+        post_verb_mods.pop()
+    } else {
+        None
+    };
     // A temporal continuation endpoint already bounds the activity. Omit the
     // ordinary perfective marker rather than break up the activity and endpoint.
     if !temporal_made_tails.is_empty() {
@@ -13948,6 +14004,10 @@ fn translate_clause_bunsetsus(
             following,
             text: join_zh_parts(&preparation),
         }));
+    }
+    if joined_departure && let Some(joined) = ctx.joined_departure {
+        parts.push("就".to_owned());
+        joined.set(true);
     }
     (join_zh_parts(&parts), had_overt_subj_no_pred)
 }

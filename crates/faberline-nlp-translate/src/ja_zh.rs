@@ -13091,6 +13091,7 @@ fn translate_clause_bunsetsus(
         Stem,
         Finite,
         Omission,
+        Polite { add_request: bool },
     }
     let joint_subject = matches!(joint_manner, Some((JointManner::Everyone, false, _)));
     let verb_render = match predicates.as_slice() {
@@ -13123,6 +13124,15 @@ fn translate_clause_bunsetsus(
                             CoveredVerb::Stem
                         } else if omitted_span == Some(lock.source_span) {
                             CoveredVerb::Omission
+                        } else if pre_verb_mods.iter().any(|part| part == "請不要")
+                            && let Some(scope) =
+                                polite_prohibition::predicate_scope(head, ending, lock.source_span)
+                        {
+                            CoveredVerb::Polite {
+                                add_request: scope
+                                    == polite_prohibition::CoveredPredicate::Negative
+                                    && !lock.replacement.trim_start().starts_with(['請', '请']),
+                            }
                         } else if lock.source_span == predicate_span {
                             CoveredVerb::Finite
                         } else {
@@ -13136,6 +13146,15 @@ fn translate_clause_bunsetsus(
         }
         _ => None,
     };
+    if let Some((_, _, CoveredVerb::Polite { add_request })) = &verb_render
+        && let Some(command) = pre_verb_mods.iter().position(|part| part == "請不要")
+    {
+        if *add_request {
+            pre_verb_mods[command] = "請".into();
+        } else {
+            pre_verb_mods.remove(command);
+        }
+    }
     let departure = target == TargetVariant::ZhHant
         && !ctx.inside_quote
         && verb_core == "出去"
@@ -14715,6 +14734,7 @@ fn translate_clause_bunsetsus(
                     CoveredVerb::Stem => true,
                     CoveredVerb::Finite => whole_negative_go || post_verb_mods == ["了"],
                     CoveredVerb::Omission => whole_omission,
+                    CoveredVerb::Polite { .. } => true,
                 }
         }) {
             if coverage == CoveredVerb::Finite {

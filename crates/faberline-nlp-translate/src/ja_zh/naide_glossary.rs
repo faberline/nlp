@@ -8,13 +8,14 @@ use super::{
     classify_bunsetsu, dasu_case_link, finished_go, first_step, group_into_bunsetsus, handover,
     homework_glossary, household_entry, is_punct_atom, letter_deadline, naide_adverbial,
     nominal_receiving_glossary, outward_look, physical_goal_head, polarity_contrast, polite_joint,
-    recipient_scope, te_help_glossary, trip_after_meal, written_opening,
+    polite_prohibition, recipient_scope, te_help_glossary, trip_after_meal, written_opening,
 };
 
 #[derive(Default)]
 pub(crate) struct GlossarySyntax {
     following: Option<usize>,
     omitted: Option<usize>,
+    prohibition: Option<usize>,
     handover: Option<handover::HandoverSyntax>,
     time: calendar::glossary::TimeSyntax,
     nominal_request: Option<nominal_receiving_glossary::NominalRequest>,
@@ -24,7 +25,9 @@ pub(crate) struct GlossarySyntax {
 
 impl GlossarySyntax {
     pub(super) fn protects_verb(&self, index: usize) -> bool {
-        self.following == Some(index) || self.omitted == Some(index)
+        self.following == Some(index)
+            || self.omitted == Some(index)
+            || self.prohibition == Some(index)
     }
 
     pub(super) fn nominal_request(&self, atoms: &[Atom]) -> Option<&str> {
@@ -132,6 +135,8 @@ pub(crate) fn may_restore_glossary_syntax(
     if nominal_receiving_glossary::may_restore(text, locks)
         || te_help_glossary::may_restore(text, locks)
         || recipient_scope::may_restore(text, locks)
+        || text.contains("ないでください")
+            && polite_prohibition::may_restore_predicate(chars, locks)
     {
         return true;
     }
@@ -295,10 +300,12 @@ pub(crate) fn glossary_render_locks(
     let nominal_request = nominal_receiving_glossary::prove(&atoms, chars, doc, sentence, locks);
     let assistance_object = te_help_glossary::prove(&atoms, doc, locks);
     let eligibility = recipient_scope::prove(&atoms, sentence, doc, chars, locks);
+    let prohibition = polite_prohibition::predicate_lock(&atoms, locks);
     if repaired.is_none()
         && nominal_request.is_none()
         && assistance_object.is_none()
         && eligibility.is_none()
+        && prohibition.is_none()
     {
         return prior;
     }
@@ -311,6 +318,7 @@ pub(crate) fn glossary_render_locks(
     syntax.nominal_request = nominal_request;
     syntax.assistance_object = assistance_object;
     syntax.eligibility = eligibility.unwrap_or_default();
+    syntax.prohibition = prohibition;
     Some((render, syntax))
 }
 

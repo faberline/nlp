@@ -21,7 +21,7 @@ mod first_step;
 mod handover;
 mod naide_glossary;
 pub(crate) use naide_glossary::{
-    WholeVerbLocks, glossary_render_locks, may_restore_glossary_syntax,
+    GlossarySyntax, glossary_render_locks, may_restore_glossary_syntax,
 };
 mod homework_desire;
 mod homework_relative;
@@ -227,7 +227,7 @@ pub(crate) fn translate_ja_sentence(
     verb_grammar: Option<&Document>,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
-    whole_verbs: WholeVerbLocks,
+    glossary_syntax: GlossarySyntax,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -255,7 +255,7 @@ pub(crate) fn translate_ja_sentence(
             .locks
             .iter()
             .filter(|lock| {
-                whole_verbs.contains(lock.index)
+                glossary_syntax.protects_verb(lock.index)
                     || crate::verb_glossary::is_stem_lock(lock, grammar, sentence_idx)
             })
             .collect();
@@ -284,6 +284,7 @@ pub(crate) fn translate_ja_sentence(
                 tokens,
                 &grammar_locks,
                 &verb_locks,
+                glossary_syntax.handover,
                 conditioning,
                 target,
                 None,
@@ -309,6 +310,7 @@ pub(crate) fn translate_ja_sentence(
         sent_tokens,
         lock_table,
         &[],
+        glossary_syntax.handover,
         conditioning,
         target,
         direct_quote,
@@ -327,6 +329,7 @@ fn translate_ja_sentence_with_verb_locks(
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
     verb_locks: &[&LockedSpan],
+    handover: Option<handover::HandoverSyntax>,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -336,7 +339,10 @@ fn translate_ja_sentence_with_verb_locks(
     honorifics: &mut HonorificContext,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
-    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    if let Some(syntax) = handover {
+        syntax.apply(&mut atoms);
+    }
     honorifics.enter_sentence(doc.segmentation.sentences[sentence_idx].paragraph, &atoms);
     if let Some(definition) = honorifics.definition(&atoms, lock_table) {
         return definition.render(doc, sentence_idx, target);
@@ -1391,7 +1397,7 @@ pub(crate) fn translate_ja_fragment(
             None,
             &sent_tokens,
             &lock_table,
-            WholeVerbLocks::default(),
+            GlossarySyntax::default(),
             &cond,
             target,
             None,

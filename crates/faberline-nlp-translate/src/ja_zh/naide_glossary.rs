@@ -5,19 +5,20 @@ use crate::schema::GlossaryKind;
 
 use super::{
     Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
-    finished_go, first_step, group_into_bunsetsus, household_entry, is_punct_atom, naide_adverbial,
-    outward_look, physical_goal_head, polarity_contrast, polite_joint, trip_after_meal,
-    written_opening,
+    finished_go, first_step, group_into_bunsetsus, handover, household_entry, is_punct_atom,
+    naide_adverbial, outward_look, physical_goal_head, polarity_contrast, polite_joint,
+    trip_after_meal, written_opening,
 };
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct WholeVerbLocks {
+pub(crate) struct GlossarySyntax {
     following: Option<usize>,
     omitted: Option<usize>,
+    pub(super) handover: Option<handover::HandoverSyntax>,
 }
 
-impl WholeVerbLocks {
-    pub(crate) fn contains(self, index: usize) -> bool {
+impl GlossarySyntax {
+    pub(super) fn protects_verb(self, index: usize) -> bool {
         self.following == Some(index) || self.omitted == Some(index)
     }
 }
@@ -85,6 +86,9 @@ pub(crate) fn may_restore_glossary_syntax(
     if text.contains(['「', '」', '『', '』', '"', '“', '”']) {
         return false;
     }
+    if text.contains('渡') && handover::may_restore(locks) {
+        return true;
+    }
     if text.contains("ます") && polite_joint::may_restore_actor(chars, locks) {
         return true;
     }
@@ -145,8 +149,17 @@ pub(crate) fn glossary_render_locks(
     tokens: &[&Token],
     chars: &[char],
     locks: &SpanLockTable,
-) -> Option<(SpanLockTable, WholeVerbLocks)> {
+) -> Option<(SpanLockTable, GlossarySyntax)> {
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
+    if let Some((render, handover)) = handover::restore_case(sentence, doc, &atoms, chars, locks) {
+        return Some((
+            render,
+            GlossarySyntax {
+                handover: Some(handover),
+                ..GlossarySyntax::default()
+            },
+        ));
+    }
     let prior = omitted_render_locks(sentence, doc, chars, locks, &atoms)
         .or_else(|| {
             if !locks
@@ -159,9 +172,9 @@ pub(crate) fn glossary_render_locks(
             trip_after_meal::whole_trip_lock(sentence, &atoms, doc, chars, locks).map(|index| {
                 (
                     locks.clone(),
-                    WholeVerbLocks {
+                    GlossarySyntax {
                         following: Some(index),
-                        omitted: None,
+                        ..GlossarySyntax::default()
                     },
                 )
             })
@@ -171,9 +184,9 @@ pub(crate) fn glossary_render_locks(
                 |(render, following)| {
                     (
                         render,
-                        WholeVerbLocks {
+                        GlossarySyntax {
                             following,
-                            omitted: None,
+                            ..GlossarySyntax::default()
                         },
                     )
                 },
@@ -186,24 +199,24 @@ pub(crate) fn glossary_render_locks(
             outward_look::restore_case(doc, chars, locks, &atoms, following).map(|render| {
                 (
                     render,
-                    WholeVerbLocks {
+                    GlossarySyntax {
                         following,
-                        omitted: None,
+                        ..GlossarySyntax::default()
                     },
                 )
             })
         })
         .or_else(|| {
             polite_joint::restore_actor_case(sentence, &atoms, doc, chars, locks)
-                .map(|render| (render, WholeVerbLocks::default()))
+                .map(|render| (render, GlossarySyntax::default()))
         });
     let earlier = prior.as_ref().map_or(locks, |(render, _)| render);
     let first_step = first_step::restore_case(sentence, &atoms, doc, chars, earlier);
     let written =
         written_opening::restore_case(&atoms, chars, first_step.as_ref().unwrap_or(earlier));
     if let Some(render) = written.or(first_step) {
-        let verbs = prior.map_or_else(WholeVerbLocks::default, |(_, verbs)| verbs);
-        return Some((render, verbs));
+        let syntax = prior.map_or_else(GlossarySyntax::default, |(_, syntax)| syntax);
+        return Some((render, syntax));
     }
     prior
 }
@@ -214,7 +227,7 @@ fn omitted_render_locks(
     chars: &[char],
     locks: &SpanLockTable,
     atoms: &[Atom],
-) -> Option<(SpanLockTable, WholeVerbLocks)> {
+) -> Option<(SpanLockTable, GlossarySyntax)> {
     let mut omitted = (3..atoms.len()).filter_map(|end| {
         let remaining = &atoms[end..];
         let following = if matches!(remaining[0].surface.as_str(), "、" | "，" | ",") {
@@ -259,11 +272,12 @@ fn omitted_render_locks(
     };
     let restore_household_domain_goal = omission.join_unstated_subject && completed_entry.is_some();
     let completed = completed_motion.or(completed_entry);
-    let whole_verbs = WholeVerbLocks {
+    let whole_verbs = GlossarySyntax {
         following: completed.and_then(|span| whole_domain_lock(locks, span)),
         omitted: completed
             .and_then(|_| omission.omitted_predicate_span(doc))
             .and_then(|span| whole_domain_lock(locks, span)),
+        ..GlossarySyntax::default()
     };
     // A term that also covers で owns the connector. Keep it opaque while
     // recovering the arguments and the completed predicate that follow it.
@@ -295,7 +309,7 @@ fn omitted_render_locks(
             return None;
         }
         let span = lock.source_span;
-        if whole_verbs.contains(lock.index) || covered_connector == Some(lock.index) {
+        if whole_verbs.protects_verb(lock.index) || covered_connector == Some(lock.index) {
             continue;
         }
         // Preserve proved verb stems while exposing argument case markers.

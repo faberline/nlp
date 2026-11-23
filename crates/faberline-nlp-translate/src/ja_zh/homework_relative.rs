@@ -5,9 +5,19 @@ use super::{
 };
 
 const ARGUMENT_COMMA: &str = "__ja_homework_argument_comma";
+const LOCKED_TEACHER: &str = "__ja_locked_assigned_teacher";
 
 pub(super) fn is_argument_comma(atom: &Atom) -> bool {
     atom.lemma.as_deref() == Some(ARGUMENT_COMMA)
+}
+
+pub(super) fn keep_argument_pause(atom: &mut Atom) {
+    atom.lemma = Some(ARGUMENT_COMMA.to_owned());
+}
+
+pub(super) fn mark_locked_teacher(atom: &mut Atom) {
+    atom.lemma = Some(LOCKED_TEACHER.to_owned());
+    atom.upos = Some(Upos::Noun);
 }
 
 /// A reading comma can follow a fronted argument of a transfer.
@@ -18,7 +28,7 @@ pub(super) fn mark_argument_commas(source: &mut [Atom], doc: &Document) {
         return;
     }
     if let Some(comma) = teaching_argument_pause(source, doc) {
-        source[comma].lemma = Some(ARGUMENT_COMMA.to_owned());
+        keep_argument_pause(&mut source[comma]);
     }
     let mut objects = source
         .iter()
@@ -141,11 +151,11 @@ pub(super) fn mark_argument_commas(source: &mut [Atom], doc: &Document) {
         start = i + 1;
     }
     for i in separators {
-        source[i].lemma = Some(ARGUMENT_COMMA.to_owned());
+        keep_argument_pause(&mut source[i]);
     }
 }
 
-fn teaching_argument_pause(source: &[Atom], doc: &Document) -> Option<usize> {
+pub(super) fn teaching_argument_pause(source: &[Atom], doc: &Document) -> Option<usize> {
     let [_, _, _, relative, teacher, _, comma, rest @ ..] = source else {
         return None;
     };
@@ -186,10 +196,14 @@ fn teaching_argument_pause(source: &[Atom], doc: &Document) -> Option<usize> {
 /// Match the finite adnominal of a standalone teacher. A true name suffix
 /// has a different source span, with the name between the verb and 先生.
 fn assigned_lesson<'a>(verb: &Atom, teacher: &Atom, source: &'a [Atom]) -> Option<&'a Atom> {
+    let teacher_name = if teacher.is_locked {
+        teacher.lemma.as_deref() == Some(LOCKED_TEACHER)
+    } else {
+        teacher.surface == "先生"
+    };
     if verb.is_locked
-        || teacher.is_locked
         || verb.surface != "する"
-        || teacher.surface != "先生"
+        || !teacher_name
         || verb.upos != Some(Upos::Verb)
         || teacher.upos != Some(Upos::Noun)
         || verb.deprel != "acl"
@@ -222,7 +236,9 @@ fn assigned_lesson<'a>(verb: &Atom, teacher: &Atom, source: &'a [Atom]) -> Optio
                 (teacher.deprel.as_str(), noun_case.surface.as_str()),
                 ("nsubj", "は" | "が") | ("iobj" | "obl", "に" | "へ")
             )
-            || six.iter().any(|atom| atom.is_locked)
+            || six
+                .iter()
+                .any(|atom| atom.is_locked && atom.doc_tok_idx != teacher.doc_tok_idx)
             || six
                 .windows(2)
                 .any(|pair| pair[0].span.end_char != pair[1].span.start_char)

@@ -7,6 +7,7 @@ use super::{
     Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
     finished_go, first_step, group_into_bunsetsus, household_entry, is_punct_atom, naide_adverbial,
     outward_look, physical_goal_head, polarity_contrast, polite_joint, trip_after_meal,
+    written_opening,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -88,6 +89,11 @@ pub(crate) fn may_restore_glossary_syntax(
         return true;
     }
     if text.contains("初めに") && first_step::may_restore(chars, locks) {
+        return true;
+    }
+    if (text.contains("の始め") || text.contains("の初め"))
+        && written_opening::may_restore(chars, locks)
+    {
         return true;
     }
     if locks
@@ -191,13 +197,15 @@ pub(crate) fn glossary_render_locks(
             polite_joint::restore_actor_case(sentence, &atoms, doc, chars, locks)
                 .map(|render| (render, WholeVerbLocks::default()))
         });
-    if let Some((render, verbs)) = prior {
-        let render =
-            first_step::restore_case(sentence, &atoms, doc, chars, &render).unwrap_or(render);
+    let earlier = prior.as_ref().map_or(locks, |(render, _)| render);
+    let first_step = first_step::restore_case(sentence, &atoms, doc, chars, earlier);
+    let written =
+        written_opening::restore_case(&atoms, chars, first_step.as_ref().unwrap_or(earlier));
+    if let Some(render) = written.or(first_step) {
+        let verbs = prior.map_or_else(WholeVerbLocks::default, |(_, verbs)| verbs);
         return Some((render, verbs));
     }
-    first_step::restore_case(sentence, &atoms, doc, chars, locks)
-        .map(|render| (render, WholeVerbLocks::default()))
+    prior
 }
 
 fn omitted_render_locks(

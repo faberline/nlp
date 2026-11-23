@@ -38,6 +38,7 @@ mod polite_prohibition;
 mod reception;
 mod return_endpoint;
 mod trip_after_meal;
+mod written_opening;
 
 #[cfg(test)]
 mod focused_negative_go_tests;
@@ -7247,7 +7248,7 @@ fn translate_clause_atoms(
     if let Some((predicate, _)) = proposal {
         localize_proposal_arguments(&mut grouped, predicate, body, target);
     }
-    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
+    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target, Some(ctx));
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
         && let Some(homework) = render_homework_transfer(
@@ -17646,27 +17647,6 @@ fn coordinated_elapsed_both_genitive(
     })
 }
 
-fn is_written_opening(noun: &Atom, modifier: &[Atom]) -> bool {
-    let [.., text, genitive] = modifier else {
-        return false;
-    };
-    !noun.is_locked
-        && noun.upos == Some(Upos::Noun)
-        && matches!(noun.surface.as_str(), "始め" | "初め")
-        && noun.doc_tok_idx.is_some()
-        && !text.is_locked
-        && text.upos == Some(Upos::Noun)
-        && matches!(
-            text.surface.as_str(),
-            "本" | "書籍" | "小説" | "物語" | "文章" | "段落" | "章" | "手紙"
-        )
-        && text.deprel == "nmod"
-        && text.head == noun.doc_tok_idx
-        && genitive.surface == "の"
-        && dasu_case_link(text, genitive)
-        && genitive.span.end_char == noun.span.start_char
-}
-
 #[cfg(test)]
 #[test]
 fn renders_the_opening_part_of_a_book() {
@@ -17686,6 +17666,7 @@ fn merge_adnominal_bunsetsus(
     source: &[Atom],
     doc: &Document,
     target: TargetVariant,
+    ctx: Option<&ClauseDiscourseCtx<'_>>,
 ) -> Vec<Bunsetsu> {
     let mut res: Vec<Bunsetsu> = Vec::with_capacity(bunsetsus.len());
 
@@ -17802,15 +17783,13 @@ fn merge_adnominal_bunsetsus(
                     }
 
                     // Pure `N の` modifier (e.g. `美咲の`, `机の`, `3冊の`, `今回の`).
-                    if target == TargetVariant::ZhHant
-                        && let Some(noun) = b.atoms.first_mut()
-                        && is_written_opening(noun, &mod_b.atoms)
-                    {
-                        noun.surface = "開頭".to_owned();
-                        noun.lemma = None;
-                    }
+                    let supplied_genitive = target == TargetVariant::ZhHant
+                        && b.atoms
+                            .first_mut()
+                            .is_some_and(|noun| written_opening::render(noun, &mod_b.atoms, ctx));
                     mod_b.atoms.pop();
-                    let omit_de = starts_with_num_counter(&mod_b)
+                    let omit_de = supplied_genitive
+                        || starts_with_num_counter(&mod_b)
                         || is_spatial_head_bunsetsu(&b)
                         || mod_b.atoms.first().is_some_and(|a| a.surface == "今回");
                     let mut mod_str = render_bunsetsu_np(&mod_b, target);
@@ -23031,7 +23010,7 @@ mod motion_endpoint_tests {
     #[test]
     fn bare_hajime_ni_marks_the_first_action() {
         assert_eq!(translate("私は初めに名前を書きます。"), "我先寫名字。");
-        assert!(translate("本の始めは大切です。").starts_with("書的開始"));
+        assert_eq!(translate("本の始めは大切です。"), "書的開頭重要。");
         assert!(translate("先生は授業を始めます。").starts_with("老師開始"));
         assert!(translate("先生は授業を始めますか。").ends_with("嗎？"));
     }

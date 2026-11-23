@@ -3,6 +3,9 @@
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Options, SyntaxToken, analyze_document};
 
+use crate::lock::LockOrigin;
+use crate::schema::GlossaryKind;
+
 use super::{
     Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, SpanLockTable,
     Token, Upos, build_sentence_atoms, dasu_case_link, finished_go, group_into_bunsetsus,
@@ -76,18 +79,15 @@ impl RecoveredTrip {
         self,
         groups: &mut [Bunsetsu],
     ) -> Option<finished_go::FinishedGo> {
-        let wide_lock = |group: &Bunsetsu, span: Option<Span>, kind: &str| {
-            matches!(group.atoms.as_slice(), [atom] if atom.is_locked
-                && Some(atom.span) == span && atom.lemma.as_deref() == Some(kind))
-        };
+        let wide_lock = |group: &Bunsetsu, span: Option<Span>| matches!(group.atoms.as_slice(), [atom] if atom.is_locked && Some(atom.span) == span);
         if let Some(group) = groups
             .iter_mut()
-            .find(|group| wide_lock(group, self.wide_meal, LOCKED_OBJECT_ATOM))
+            .find(|group| wide_lock(group, self.wide_meal))
         {
             group.role = BunsetsuRole::Obj;
         }
         let goal_group = groups.iter().position(|group| {
-            wide_lock(group, self.wide_place, LOCKED_PLACE_ATOM)
+            wide_lock(group, self.wide_place)
                 || matches!(group.atoms.as_slice(), [place, marker]
                     if place.span == self.place && marker.span == self.marker
                         && marker.surface == self.direction && !marker.is_locked)
@@ -108,42 +108,51 @@ pub(super) fn recover(
     trip: &[Atom],
     doc: &Document,
     chars: &[char],
+    locks: &SpanLockTable,
 ) -> Option<RecoveredTrip> {
     let mut lexical_words = Vec::new();
-    let mut wide = [None, None];
-    for ((part, kind, markers), covered) in [
-        (before, LOCKED_OBJECT_ATOM, &['を'][..]),
-        (trip, LOCKED_PLACE_ATOM, &['に', 'へ'][..]),
+    let mut arguments = [None, None];
+    let mut needs_reparse = false;
+    for ((part, allowed, markers), argument) in [
+        (before, GlossaryKind::Object, &['を'][..]),
+        (trip, GlossaryKind::Place, &['に', 'へ'][..]),
     ]
     .into_iter()
-    .zip(&mut wide)
+    .zip(&mut arguments)
     {
-        let mut locks = part.iter().filter(|atom| atom.is_locked);
-        if let Some(lock) = locks.next() {
-            if locks.next().is_some() || lock.lemma.as_deref() != Some(kind) {
-                return None;
-            }
-            let word = chars.get(lock.span.start_char..lock.span.end_char)?;
-            let (last, prefix) = word.split_last()?;
-            let noun = if markers.contains(last) && !prefix.is_empty() {
-                *covered = Some(lock.span);
-                prefix
-            } else {
-                word
-            };
-            lexical_words.push(noun.iter().collect::<String>());
+        let mut locked = part.iter().filter(|atom| atom.is_locked);
+        let Some(atom) = locked.next() else {
+            continue;
+        };
+        if locked.next().is_some() {
+            return None;
         }
+        let entry = locks.locks.iter().find(|entry| {
+            entry.mandatory && entry.source_span == atom.span && entry.placeholder == atom.surface
+        })?;
+        let LockOrigin::Glossary { kind, .. } = entry.origin else {
+            return None;
+        };
+        if kind != allowed && kind != GlossaryKind::DomainTerm {
+            return None;
+        }
+
+        let word = chars.get(atom.span.start_char..atom.span.end_char)?;
+        let (last, prefix) = word.split_last()?;
+        let covers_case = markers.contains(last) && !prefix.is_empty();
+        let noun: String = if covers_case { prefix } else { word }.iter().collect();
+        // General terms need the original syntactic role, even when the noun is already a token.
+        needs_reparse |=
+            covers_case || kind == GlossaryKind::DomainTerm || !doc.options.lexicon.contains(&noun);
+        *argument = Some((atom.span, covers_case));
+        lexical_words.push(noun);
     }
-    let [wide_meal, wide_place] = wide;
-    // An analysis supplied by the caller can lack the glossary's noun hints.
-    if wide_meal.is_none()
-        && wide_place.is_none()
-        && lexical_words
-            .iter()
-            .all(|word| doc.options.lexicon.contains(word))
-    {
+    if !needs_reparse {
         return None;
     }
+    let [meal_lock, goal_lock] = arguments;
+    let covered_span =
+        |lock: Option<(Span, bool)>| lock.filter(|(_, wide)| *wide).map(|(span, _)| span);
     let [.., eat, _] = before else { return None };
     let go = trip.iter().find(|atom| atom.upos == Some(Upos::Verb))?;
     let meal = source_link(eat, doc)?;
@@ -152,7 +161,6 @@ pub(super) fn recover(
         || go.lemma.as_deref() != Some("行く")
         || meal.sentence != motion.sentence
         || meal.deprel != "advcl"
-        || meal.head != Some(motion.token)
         || motion.deprel != "root"
     {
         return None;
@@ -195,6 +203,8 @@ pub(super) fn recover(
     };
     let original_meal = part(before)?;
     let original_trip = part(trip)?;
+    // A fused place term can intercept the dependency in the hinted parse.
+    // Require the original meal-to-trip link in the recovered parse.
     let original_meal_predicate = prior_meal(&original_meal, &original_trip, &analysis, local)?;
     let [.., meal_noun, meal_case, original_eat, _] = original_meal.as_slice() else {
         return None;
@@ -202,16 +212,21 @@ pub(super) fn recover(
     let [place, marker, original_go, ..] = original_trip.as_slice() else {
         return None;
     };
-    let matches_lock = |lock: Option<Span>, noun: &Atom, case: &Atom| {
-        lock.is_none_or(|lock| {
+    let matches_lock = |lock: Option<(Span, bool)>, noun: &Atom, case: &Atom| {
+        lock.is_none_or(|(lock, covers_case)| {
+            let end = if covers_case {
+                case.span.end_char
+            } else {
+                noun.span.end_char
+            };
             lock.start_char == absolute(noun.span).start_char
-                && lock.end_char == absolute(case.span).end_char
+                && lock.end_char == span.start_char + end
         })
     };
     if absolute(original_eat.span) != eat.span
         || absolute(original_go.span) != go.span
-        || !matches_lock(wide_meal, meal_noun, meal_case)
-        || !matches_lock(wide_place, place, marker)
+        || !matches_lock(meal_lock, meal_noun, meal_case)
+        || !matches_lock(goal_lock, place, marker)
     {
         return None;
     }
@@ -231,8 +246,8 @@ pub(super) fn recover(
     Some(RecoveredTrip {
         meal_predicate: meal.token,
         motion_predicate: motion.token,
-        wide_meal,
-        wide_place,
+        wide_meal: covered_span(meal_lock),
+        wide_place: covered_span(goal_lock),
         place: absolute(place.span),
         marker: absolute(marker.span),
         direction,
@@ -304,6 +319,76 @@ pub(super) fn prior_meal(
     tail.iter()
         .all(|ch| matches!(ch, '。' | '.') || ch.is_whitespace())
         .then_some(action.token)
+}
+
+#[cfg(test)]
+mod domain_term_tests {
+    use faberline_nlp::doc::{analyze_document, model::Backend};
+
+    use crate::{
+        GlossaryEntry, GlossaryKind, TargetVariant, TranslateOptions, TranslationGlossary,
+        analyze_and_translate, doc_options_for_translate, translate_document,
+    };
+
+    #[test]
+    fn general_terms_keep_the_completed_meal_and_trip() {
+        let source = "朝ご飯を食べて、学校へ行きました。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let doc = analyze_document(
+            source,
+            &doc_options_for_translate(&options, &TranslationGlossary::new()),
+        );
+        let entry = |surface: &str, target: &str| GlossaryEntry {
+            canonical: surface.into(),
+            surfaces: vec![surface.into()],
+            targets: [(TargetVariant::ZhHant, target.into())].into(),
+            ..GlossaryEntry::default()
+        };
+        for meal in ["朝ご飯", "朝ご飯を"] {
+            for goal in ["学校", "学校へ"] {
+                let mut glossary = TranslationGlossary::new();
+                glossary
+                    .domain_terms
+                    .extend([entry(meal, "早餐"), entry(goal, "新校舍")]);
+                let result =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                let direct = translate_document(
+                    source,
+                    &doc,
+                    #[cfg(feature = "narrative")]
+                    None,
+                    &options,
+                    &glossary,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(
+                    result.target_text, "吃了早餐後，去了新校舍。",
+                    "{meal}, {goal}"
+                );
+                assert_eq!(result.target_text, direct.target_text);
+                assert_eq!(result.glossary_hits, direct.glossary_hits);
+                assert_eq!(result.glossary_hits.len(), 2);
+                assert_eq!(result.clause_alignments.len(), 2);
+                for (hit, (original, replacement)) in result
+                    .glossary_hits
+                    .iter()
+                    .zip([(meal, "早餐"), (goal, "新校舍")])
+                {
+                    let extract = |text: &str, span: faberline_nlp::Span| {
+                        text.chars()
+                            .skip(span.start_char)
+                            .take(span.end_char - span.start_char)
+                            .collect::<String>()
+                    };
+                    assert_eq!(hit.kind, GlossaryKind::DomainTerm);
+                    assert_eq!(extract(source, hit.source_span), original);
+                    assert_eq!(extract(&result.target_text, hit.target_span), replacement);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -386,7 +471,15 @@ mod tests {
         let mut glossary = TranslationGlossary::new();
         let source = "朝ご飯を食べて、学校へ行きました。";
         let meal = translate(source, &glossary);
-        assert_eq!(meal.target_text, "早上吃了飯後，去了學校。");
+        let native = match faberline_nlp::lexicon::ja::lookup_ja_gloss(
+            "朝ご飯",
+            Some(faberline_nlp::doc::Upos::Noun),
+        ) {
+            None => "早上吃了飯後，去了學校。",
+            Some("早餐") => "吃了早餐後，去了學校。",
+            Some(gloss) => panic!("unexpected breakfast gloss: {gloss}"),
+        };
+        assert_eq!(meal.target_text, native);
         let plain = translate("ご飯を食べて、駅に行った。", &glossary);
         assert_eq!(plain.target_text, "吃了飯後，去了車站。");
 

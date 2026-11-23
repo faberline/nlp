@@ -290,7 +290,7 @@ pub(crate) fn translate_ja_sentence(
             },
             Segment::Clause { atoms: trip, .. },
         ] if matches!(comma.as_str(), "、" | "，") && target == TargetVariant::ZhHant => {
-            trip_after_meal::recover(meal, trip, doc, chars)
+            trip_after_meal::recover(meal, trip, doc, chars, lock_table)
         }
         _ => None,
     };

@@ -32,6 +32,7 @@ mod outward_look;
 mod payment_potential;
 mod place_goal_glossary;
 mod polarity_contrast;
+mod polite_joint;
 mod polite_prohibition;
 mod reception;
 mod return_endpoint;
@@ -7230,7 +7231,7 @@ fn translate_clause_atoms(
     mark_residence_place(&mut grouped, body);
     mark_joint_question(&mut grouped, &norm_atoms, body);
     if target == TargetVariant::ZhHant {
-        mark_polite_joint_agent(&mut grouped, &norm_atoms);
+        polite_joint::mark(&mut grouped, &norm_atoms, ctx.source_chars);
     }
     if target == TargetVariant::ZhHant
         && localize_elapsed_modal(&mut grouped, body, doc, ctx.inside_quote)
@@ -12536,7 +12537,11 @@ fn translate_clause_bunsetsus(
                         None
                     }
                     JointManner::Together => None,
-                    JointManner::Everyone => Some("大家".to_owned()),
+                    JointManner::Everyone => Some(if b.atoms[0].is_locked {
+                        b.atoms[0].surface.clone()
+                    } else {
+                        "大家".to_owned()
+                    }),
                     JointManner::Counted => Some(render_joint_people(&b.atoms[0].surface)),
                 };
                 joint_manner = Some((manner, invitation, wh_question));
@@ -12916,7 +12921,9 @@ fn translate_clause_bunsetsus(
                         && !ending.is_empty()
                         && (ending.iter().all(|atom| {
                             !atom.is_locked && matches!(atom.upos, Some(Upos::Aux | Upos::Sconj))
-                        }) || is_polite_prohibition_ending(head, ending))
+                        }) || is_polite_prohibition_ending(head, ending)
+                            || matches!(joint_manner, Some((JointManner::Everyone, false, _)))
+                                && polite_joint::is_polite_ending(head, ending))
                         && verb_core
                             == translate_single_ja_term(
                                 &head.surface,
@@ -16132,52 +16139,6 @@ fn joint_action<'a>(body: &'a [Atom], verb: &'a Atom, head: usize) -> &'a Atom {
                 })
         })
         .unwrap_or(verb)
-}
-
-fn mark_polite_joint_agent(groups: &mut [Bunsetsu], source: &[Atom]) {
-    let (source, question) = match source {
-        [prefix @ .., ka] if ka.surface == "か" => (prefix, Some(ka)),
-        _ => (source, None),
-    };
-    let [body @ .., verb, polite] = source else {
-        return;
-    };
-    let Some(head) = verb.doc_tok_idx else { return };
-    if verb.is_locked
-        || verb.upos != Some(Upos::Verb)
-        || verb.deprel != "root"
-        || polite.is_locked
-        || polite.surface != "ます"
-        || polite.upos != Some(Upos::Aux)
-        || polite.deprel != "aux"
-        || polite.head != Some(head)
-        || verb.span.end_char != polite.span.start_char
-        || question.is_some_and(|ka| {
-            ka.is_locked
-                || ka.deprel != "discourse"
-                || ka.head != Some(head)
-                || polite.span.end_char != ka.span.start_char
-        })
-    {
-        return;
-    }
-    let action = joint_action(body, verb, head);
-    for group in groups {
-        if group.role == BunsetsuRole::Obl
-            && let [everyone, de] = group.atoms.as_slice()
-            && matches!(everyone.surface.as_str(), "みんな" | "皆")
-            && de.surface == "で"
-            && (everyone.head == Some(head)
-                || action.doc_tok_idx.is_some() && everyone.head == action.doc_tok_idx)
-            && linked_joint_case(everyone, de)
-        {
-            group.role = BunsetsuRole::JointManner {
-                manner: JointManner::Everyone,
-                invitation: false,
-                wh_question: false,
-            };
-        }
-    }
 }
 
 // An overt joint participant or a joint manner can invite the listener.

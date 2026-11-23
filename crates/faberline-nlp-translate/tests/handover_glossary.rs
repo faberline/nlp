@@ -115,3 +115,50 @@ fn domain_terms_do_not_make_places_or_motion_into_handover_roles() {
         check_source(source, &[(GlossaryKind::DomainTerm, term, label)], expected);
     }
 }
+
+#[test]
+fn surname_glossary_keeps_the_linked_honorific_and_recipient() {
+    let recipient = HS_12.replace("さんへ", "さんに");
+    for source in [HS_12, recipient.as_str()] {
+        for kind in [GlossaryKind::Actor, GlossaryKind::DomainTerm] {
+            check_source(
+                source,
+                &[(kind, "佐藤", "張先生")],
+                "負責授課的老師下課後把資料交給張先生。",
+            );
+        }
+    }
+    check_glossary(
+        &[(GlossaryKind::DomainTerm, "佐藤", "張")],
+        "負責授課的老師下課後把資料交給張。",
+    );
+    check_source(
+        "鈴木さんは佐藤さんに資料を渡しました。",
+        &[
+            (GlossaryKind::DomainTerm, "鈴木", "陳老師"),
+            (GlossaryKind::DomainTerm, "佐藤", "張先生"),
+        ],
+        "陳老師把資料交給張先生。",
+    );
+}
+
+#[test]
+fn matching_a_name_does_not_consume_an_independent_glossary_lock() {
+    check_glossary(
+        &[
+            (GlossaryKind::DomainTerm, "佐藤", "張先生"),
+            (GlossaryKind::DomainTerm, "さん", "君"),
+        ],
+        "負責授課的老師下課後往君張先生遞給了資料。",
+    );
+    check_source(
+        "先生は大阪さんへ資料を渡しました。",
+        &[(GlossaryKind::DomainTerm, "大阪", "大阪市")],
+        "老師往三大阪市遞給了資料。",
+    );
+    check_source(
+        "「佐藤さんへ」と書きました。",
+        &[(GlossaryKind::DomainTerm, "佐藤", "張先生")],
+        "「往三張先生」寫了。",
+    );
+}

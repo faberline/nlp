@@ -356,6 +356,7 @@ fn translate_ja_sentence_with_verb_locks(
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
     if target == TargetVariant::ZhHant {
         class_period::normalize(&mut atoms, chars);
+        normalize_partitive_halves(&mut atoms);
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
         daytime::bind_form_time(&mut atoms, chars, doc);
@@ -7825,6 +7826,26 @@ fn dasu_case_link(noun: &Atom, particle: &Atom) -> bool {
         && noun.doc_tok_idx.is_some()
         && particle.head == noun.doc_tok_idx
         && noun.span.end_char == particle.span.start_char
+}
+
+fn normalize_partitive_halves(atoms: &mut [Atom]) {
+    for index in 2..atoms.len() {
+        if let [whole, genitive, half] = &mut atoms[index - 2..=index]
+            && !half.is_locked
+            && half.surface == "半分"
+            && half.upos == Some(Upos::Noun)
+            && half.doc_tok_idx.is_some()
+            && whole.deprel == "nmod"
+            && whole.head == half.doc_tok_idx
+            && genitive.surface == "の"
+            && dasu_case_link(whole, genitive)
+            && genitive.span.end_char == half.span.start_char
+        {
+            // Keep the genitive and its existing noun-phrase rendering.
+            half.surface = "一半".to_owned();
+            half.is_locked = true;
+        }
+    }
 }
 
 fn try_translate_homework_transfer(
@@ -22251,6 +22272,24 @@ mod clock_rule_tests {
                 public_translate(jp, &glossary).target_text,
                 expected,
                 "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn genitive_half_names_a_portion_of_the_whole() {
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("ケーキの半分を食べました。", "吃了蛋糕的一半。"),
+            ("この本の半分を読みました。", "讀了這本書的一半。"),
+            ("会議は二時間半続きます。", "會議持續兩個半小時。"),
+            ("会議は午後二時半に始まります。", "會議在下午兩點半開始。"),
+            ("ケーキの`半分`を食べました。", "吃了蛋糕的`半分`。"),
+        ] {
+            assert_eq!(
+                public_translate(source, &glossary).target_text,
+                expected,
+                "{source}"
             );
         }
     }

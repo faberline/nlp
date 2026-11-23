@@ -1106,7 +1106,7 @@ fn translate_ja_sentence_with_verb_locks(
                     meeting_evidence: Some(meeting_evidence.clone()),
                 };
                 let receiving_request = if target == TargetVariant::ZhHant
-                    && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
+                    && nominal_receiving_request_position(&segments, seg_idx, doc)
                 {
                     if trimmed_atoms.iter().any(|atom| atom.is_locked) {
                         glossary_syntax
@@ -6780,21 +6780,12 @@ fn nominal_receiving_request_position(
     segments: &[Segment],
     seg_idx: usize,
     doc: &Document,
-    sentence_idx: usize,
 ) -> bool {
     let [prefix @ .., Segment::Clause { trailing_punct, .. }] = segments else {
         return false;
     };
     if seg_idx != prefix.len()
         || !matches!(trailing_punct.as_deref(), None | Some("。" | "？" | "?"))
-    {
-        return false;
-    }
-    // A preceding sentence in the same paragraph can supply a restriction
-    // or a third-person receiver even when this question has no subject.
-    if sentence_idx > 0
-        && doc.segmentation.sentences[sentence_idx - 1].paragraph
-            == doc.segmentation.sentences[sentence_idx].paragraph
     {
         return false;
     }
@@ -6825,6 +6816,13 @@ fn nominal_receiving_daypart(date: &Atom, no: &Atom, period: &Atom) -> bool {
             period.surface.as_str(),
             "朝" | "午前" | "午後" | "昼" | "夜"
         )
+}
+
+fn has_courtesy_time_prefix(phrase: &[Atom]) -> bool {
+    matches!(phrase, [prefix, noun, _]
+        if prefix.surface == "お"
+            && noun.surface == "時間"
+            && prefix.span.end_char == noun.span.start_char)
 }
 
 #[derive(Clone, Copy)]
@@ -7010,6 +7008,18 @@ fn render_nominal_receiving_request(
         return None;
     }
     let time_request = raw_object == "時間";
+    // Earlier sentences can supply a receiver or an eligibility restriction.
+    // A linked request for a little of the addressee's time carries its own
+    // evidence. Other subjectless questions keep the paragraph boundary.
+    if sentence_idx > 0
+        && doc.segmentation.sentences[sentence_idx - 1].paragraph
+            == doc.segmentation.sentences[sentence_idx].paragraph
+        && !(time_request
+            && has_courtesy_time_prefix(phrase)
+            && matches!(amount, Some(NominalReceivingAmount::Approximate(_))))
+    {
+        return None;
+    }
     let object = if let Some(lock) = lock {
         let qualifier = usize::from(
             matches!(amount, Some(NominalReceivingAmount::Count { .. }))

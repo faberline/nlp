@@ -54,7 +54,7 @@ pub(super) fn prove(
     let [prefix @ .., Segment::Clause { atoms, .. }] = segments.as_slice() else {
         return None;
     };
-    if !nominal_receiving_request_position(&segments, prefix.len(), doc, sentence) {
+    if !nominal_receiving_request_position(&segments, prefix.len(), doc) {
         return None;
     }
     let atoms = core_non_punct(atoms);
@@ -80,6 +80,7 @@ pub(super) fn render_object(
     };
     if mandatory_domain_term(lock)
         && !original_document_noun(&noun.surface, noun.lemma.as_deref(), noun.upos)
+        && !(time_request && has_courtesy_time_prefix(phrase))
     {
         return None;
     }
@@ -161,6 +162,47 @@ mod tests {
                 "可以給我講義嗎？",
             );
         }
+    }
+
+    #[test]
+    fn a_courteous_time_request_can_follow_an_eligibility_question() {
+        let context = "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。";
+        let expected = "這份資料只發給參加者。參加者以外的人不能領取資料嗎？明天下午，可以占用您一點談話時間嗎？";
+        for request in [
+            "明日の午後、少しお時間をいただけませんか。",
+            "明日の午後少しお時間をいただけませんか。",
+        ] {
+            let source = format!("{context}{request}");
+            for field in ["objects", "domain_terms"] {
+                for term in ["時間", "お時間", "時間を", "お時間を"] {
+                    assert_eq!(
+                        translate_with_kind(&source, term, "談話時間", field),
+                        expected,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn following_document_question_keeps_the_existing_restriction_reading() {
+        let source = concat!(
+            "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。",
+            "この資料をいただけませんか。",
+        );
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let result = analyze_and_translate(
+            source,
+            &options,
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(
+            result.target_text,
+            "這份資料只發給參加者。參加者以外的人不能領取資料嗎？不能得到這份資料嗎？",
+        );
     }
 
     #[test]

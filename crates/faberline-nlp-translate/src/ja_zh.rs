@@ -29,12 +29,18 @@ use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
 
 use crate::conditioning::zh_pronoun_for_hint;
-use crate::lock::{LockOrigin, SpanLockTable};
+use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
 use crate::schema::{ClauseAlignment, GlossaryKind, SentenceConditioning, TargetVariant};
 use crate::variant::{convert_zh_text_to_target, convert_zh_text_to_target_with_spans};
 
 mod honorific;
 pub(crate) use honorific::HonorificContext;
+
+#[derive(Clone, Copy)]
+pub(crate) enum FareSourceAnalysis {
+    Provided,
+    OwnedCpu,
+}
 
 /// Returns `true` if `text` contains Hiragana or Katakana and no Hangul.
 pub(crate) fn has_kana_no_hangul(text: &str) -> bool {
@@ -208,6 +214,7 @@ pub(crate) fn translate_ja_sentence(
     doc: &Document,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
+    fare_source: Option<FareSourceAnalysis>,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -901,6 +908,10 @@ pub(crate) fn translate_ja_sentence(
                     sonomono_antecedent: sonomono_antecedent.clone(),
                     prior_letter_distribution,
                     meeting_evidence: Some(meeting_evidence.clone()),
+                    fare_analysis: fare_source.map(|source| payment_potential::FareAnalysis {
+                        source,
+                        locks: lock_table,
+                    }),
                 };
                 let receiving_request = if target == TargetVariant::ZhHant
                     && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
@@ -1196,6 +1207,7 @@ pub(crate) fn translate_ja_fragment(
             &doc,
             &sent_tokens,
             &lock_table,
+            Some(FareSourceAnalysis::Provided),
             &cond,
             target,
             None,
@@ -5521,6 +5533,7 @@ struct ClauseDiscourseCtx<'a> {
     sonomono_antecedent: Option<String>,
     prior_letter_distribution: Option<PriorLetterDistribution>,
     meeting_evidence: Option<std::rc::Rc<std::cell::Cell<Option<meeting_voice::MeetingEvidence>>>>,
+    fare_analysis: Option<payment_potential::FareAnalysis<'a>>,
 }
 
 // A previously emitted reading pause can be removed only after the next
@@ -6623,6 +6636,19 @@ fn translate_clause_atoms(
 
     if target == TargetVariant::ZhHant
         && let Some(text) = payment_potential::render(core_non_punct(atoms), target, false)
+    {
+        return (text, false);
+    }
+    if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let Some(analysis) = ctx.fare_analysis
+        && let Some(text) = payment_potential::render_fare_statement(
+            core_non_punct(atoms),
+            doc,
+            sentence_idx,
+            ctx.source_chars,
+            analysis,
+        )
     {
         return (text, false);
     }

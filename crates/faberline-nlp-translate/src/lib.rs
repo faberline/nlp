@@ -262,6 +262,7 @@ pub fn translate_document(
     let mut consumed_direct_reports = HashMap::new();
     let mut dates = ja_zh::DateContext::default();
     let mut honorifics = ja_zh::HonorificContext::default();
+    let partitive_source = std::cell::OnceCell::new();
 
     for (span, item) in items {
         if span.start_char > cursor {
@@ -373,6 +374,7 @@ pub fn translate_document(
                     &written_quotes,
                     &mut dates,
                     &mut honorifics,
+                    &partitive_source,
                 );
 
                 let start = target_char_pos;
@@ -765,6 +767,7 @@ fn translate_single_sentence(
     written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
     dates: &mut ja_zh::DateContext,
     honorifics: &mut ja_zh::HonorificContext,
+    partitive_source: &std::cell::OnceCell<Option<Document>>,
 ) -> SentenceOutcome {
     let sent = &doc.segmentation.sentences[sentence_idx];
     let sent_span = sent.span;
@@ -929,12 +932,36 @@ fn translate_single_sentence(
             );
             ja_zh::prior_letter_distribution(idx, chars, doc, &locks)
         });
+        let partitive_source = if options.target == TargetVariant::ZhHant
+            && direct_quote.is_none()
+            && written_quotes.is_empty()
+            && ja_zh::partitive::may_repair(sent_span, chars, &lock_table)
+        {
+            partitive_source
+                .get_or_init(|| {
+                    // A glossary match can split the noun or absorb its particle.
+                    let text: String = chars.iter().collect();
+                    let mut source_options = doc.options.clone();
+                    source_options
+                        .lexicon
+                        .retain(|term| ja_zh::partitive::retain_other_terms(term));
+                    let source = analyze_document(&text, &source_options);
+                    (doc.segmentation.sentences == source.segmentation.sentences
+                        && doc.segmentation.clauses == source.segmentation.clauses
+                        && doc.segmentation.opaque == source.segmentation.opaque)
+                        .then_some(source)
+                })
+                .as_ref()
+        } else {
+            None
+        };
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
             doc,
             sent_tokens,
             &lock_table,
+            partitive_source,
             &conditioning,
             options.target,
             direct_quote,

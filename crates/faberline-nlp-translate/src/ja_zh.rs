@@ -21,6 +21,7 @@ mod homework_relative;
 mod meeting_voice;
 mod nominal_possession;
 mod order_noun;
+pub(crate) mod partitive;
 mod payment_potential;
 mod reception;
 mod return_endpoint;
@@ -208,6 +209,7 @@ pub(crate) fn translate_ja_sentence(
     doc: &Document,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
+    partitive_source: Option<&Document>,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -216,6 +218,23 @@ pub(crate) fn translate_ja_sentence(
     prior_letter_distribution: Option<PriorLetterDistribution>,
     honorifics: &mut HonorificContext,
 ) -> (String, Vec<ClauseAlignment>) {
+    let partitive = partitive_source.and_then(|source| {
+        let first = source
+            .tokens
+            .partition_point(|tok| tok.sentence < sentence_idx);
+        let last = source
+            .tokens
+            .partition_point(|tok| tok.sentence <= sentence_idx);
+        let tokens: Vec<_> = source.tokens[first..last].iter().collect();
+        let original =
+            build_sentence_atoms(sentence_idx, chars, source, &tokens, &SpanLockTable::new());
+        let repairs = partitive::prove(&original, lock_table);
+        (!repairs.is_empty()).then_some((source, tokens, repairs))
+    });
+    let (doc, sent_tokens, repairs): (_, _, &[_]) = match &partitive {
+        Some((source, tokens, repairs)) => (*source, tokens.as_slice(), repairs.as_slice()),
+        None => (doc, sent_tokens, &[]),
+    };
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
     let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
     honorifics.enter_sentence(doc.segmentation.sentences[sentence_idx].paragraph, &atoms);
@@ -224,6 +243,10 @@ pub(crate) fn translate_ja_sentence(
     }
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
     if target == TargetVariant::ZhHant {
+        for repair in repairs {
+            repair.apply(&mut atoms);
+        }
+        partitive::normalize(&mut atoms);
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
         daytime::bind_form_time(&mut atoms, chars, doc);
@@ -1196,6 +1219,7 @@ pub(crate) fn translate_ja_fragment(
             &doc,
             &sent_tokens,
             &lock_table,
+            None,
             &cond,
             target,
             None,
@@ -17090,8 +17114,13 @@ fn merge_adnominal_bunsetsus(
                     }
 
                     // Pure `N の` modifier (e.g. `美咲の`, `机の`, `3冊の`, `今回の`).
+                    let supplied_genitive = target == TargetVariant::ZhHant
+                        && b.atoms
+                            .first()
+                            .is_some_and(|noun| partitive::supplies_genitive(noun, &mod_b.atoms));
                     mod_b.atoms.pop();
-                    let omit_de = starts_with_num_counter(&mod_b)
+                    let omit_de = supplied_genitive
+                        || starts_with_num_counter(&mod_b)
                         || is_spatial_head_bunsetsu(&b)
                         || mod_b.atoms.first().is_some_and(|a| a.surface == "今回");
                     let mut mod_str = render_bunsetsu_np(&mod_b, target);

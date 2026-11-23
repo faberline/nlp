@@ -456,6 +456,7 @@ pub(crate) fn translate_ja_sentence(
                                 false,
                                 &ClauseDiscourseCtx {
                                     source_chars: chars,
+                                    locks: Some(lock_table),
                                     inside_quote: true,
                                     elapsed_modal_applied: elapsed_modal_applied.clone(),
                                     following: &inner_segs[idx + 1..],
@@ -543,6 +544,7 @@ pub(crate) fn translate_ja_sentence(
                             false,
                             &ClauseDiscourseCtx {
                                 source_chars: chars,
+                                locks: Some(lock_table),
                                 inside_quote: true,
                                 following: &inner_segs[idx + 1..],
                                 adjective: finite_adjective::Context::in_quote(
@@ -867,6 +869,7 @@ pub(crate) fn translate_ja_sentence(
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
+                    locks: Some(lock_table),
                     following: &segments[seg_idx + 1..],
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
@@ -5499,6 +5502,7 @@ struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
     contrasts_recurrence: bool,
     source_chars: &'a [char],
+    locks: Option<&'a SpanLockTable>,
     following: &'a [Segment],
     preceding_activity: &'a [Atom],
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
@@ -6799,6 +6803,7 @@ fn translate_clause_atoms(
         bind_tidied_tabletops(&mut merged_atoms);
         localize_sufficiency(&mut merged_atoms);
         honorific::bind_voice_manners(&mut merged_atoms);
+        payment_potential::bind_method(&mut merged_atoms, doc, ctx.source_chars, ctx.locks);
     }
     let mut norm_atoms = normalize_building_floors(normalize_ja_atoms(&merged_atoms), doc);
     if target == TargetVariant::ZhHant {

@@ -228,6 +228,9 @@ pub(crate) fn translate_ja_sentence(
         return definition.render(doc, sentence_idx, target);
     }
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
+    if let Some(locks) = handover_locks {
+        locks.apply_bound_names(&mut atoms);
+    }
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);

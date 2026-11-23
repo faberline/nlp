@@ -26,6 +26,7 @@ pub(crate) struct HandoverRenderLocks {
     course_time: Option<(Span, usize)>,
     subject_pause: Option<Span>,
     teacher: Option<Span>,
+    names_with_suffix: Vec<Span>,
 }
 
 impl HandoverRenderLocks {
@@ -40,6 +41,16 @@ impl HandoverRenderLocks {
                 && atom.is_locked
             {
                 daytime::mark_locked_course_time(atom, governor);
+            }
+        }
+    }
+
+    pub(super) fn apply_bound_names(&self, atoms: &mut [Atom]) {
+        for atom in atoms {
+            if self.names_with_suffix.contains(&atom.span)
+                && honorific::is_glossary_person_with_suffix(atom)
+            {
+                atom.lemma = Some(LOCKED_RESIDENT_ATOM.to_owned());
             }
         }
     }
@@ -103,6 +114,7 @@ pub(crate) fn handover_render_locks(
         course_time: None,
         subject_pause: None,
         teacher: None,
+        names_with_suffix: Vec::new(),
     };
     for lock in &mut render.table.locks {
         let LockOrigin::Glossary { kind, .. } = &mut lock.origin else {
@@ -145,6 +157,29 @@ pub(crate) fn handover_render_locks(
         {
             return None;
         }
+        // The caller may cover only the name. The separate honorific can
+        // still own the case, and remains available to the honorific pass.
+        let with_suffix = lock.mandatory
+            && matches!(*kind, GlossaryKind::Actor | GlossaryKind::DomainTerm)
+            && covered.len() == 1
+            && original
+                .iter()
+                .position(|atom| atom.doc_tok_idx == Some(last))
+                .is_some_and(|name| {
+                    original.get(name + 1).is_some_and(|suffix| {
+                        suffix.doc_tok_idx == Some(last + 1)
+                            && honorific::is_linked_person_suffix(
+                                &original[..=name],
+                                suffix,
+                                source,
+                            )
+                            && !locks.locks.iter().any(|other| {
+                                other.source_span.start_char < suffix.span.end_char
+                                    && suffix.span.start_char < other.source_span.end_char
+                            })
+                    })
+                });
+        let last = last + usize::from(with_suffix);
         let tail = source.syntax.get(last)?;
         let (head, absorbed) = if tail.deprel == "case" {
             (source.syntax.get(tail.head?)?, Some(tail))
@@ -176,11 +211,14 @@ pub(crate) fn handover_render_locks(
             }
             _ => return None,
         };
+        if with_suffix && role != GlossaryKind::Actor {
+            return None;
+        }
         if *kind == GlossaryKind::DomainTerm {
             if !lock.mandatory {
                 return None;
             }
-            if role == GlossaryKind::Actor {
+            if role == GlossaryKind::Actor && !with_suffix {
                 let argument = original
                     .iter()
                     .find(|atom| atom.doc_tok_idx == Some(head.token))?;
@@ -212,7 +250,14 @@ pub(crate) fn handover_render_locks(
         // Only the render copy uses the proven source role. The caller still
         // receives the original glossary kind and span.
         *kind = role;
-        lock.source_span.end_char = head.span.end_char;
+        if with_suffix {
+            render.names_with_suffix.push(Span {
+                start_char: span.start_char,
+                end_char: head.span.end_char,
+            });
+        } else {
+            lock.source_span.end_char = head.span.end_char;
+        }
         if head.deprel == "nsubj"
             && let Some(pause) = teacher_pause
             && original[pause].span.start_char == case.span.end_char

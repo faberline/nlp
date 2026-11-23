@@ -28,6 +28,12 @@ pub(super) fn is_bound_person(atom: &Atom) -> bool {
         )
 }
 
+pub(super) fn is_glossary_person_with_suffix(atom: &Atom) -> bool {
+    atom.is_locked
+        && atom.lemma.as_deref() == Some(PERSON_WITH_SUFFIX)
+        && atom.surface.starts_with("[[PH")
+}
+
 #[derive(Default)]
 pub(crate) struct HonorificContext {
     paragraph: Option<usize>,
@@ -852,4 +858,21 @@ fn person_reading(before: &[Atom], suffix: &Atom, doc: &Document) -> Option<Pers
     } else {
         PersonReading::Ambiguous
     })
+}
+
+pub(super) fn is_linked_person_suffix(before: &[Atom], suffix: &Atom, doc: &Document) -> bool {
+    suffix.surface == "さん"
+        && !suffix.is_locked
+        && suffix.doc_tok_idx.is_some()
+        && before.last().is_some_and(|name| {
+            !name.is_locked
+                && name.upos == Some(Upos::Propn)
+                && name.span.end_char == suffix.span.start_char
+                && name.deprel == "compound"
+                && name.head == suffix.doc_tok_idx
+        })
+        && matches!(
+            person_reading(before, suffix, doc),
+            Some(PersonReading::Proven)
+        )
 }

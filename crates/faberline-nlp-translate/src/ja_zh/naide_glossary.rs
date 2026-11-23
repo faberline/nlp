@@ -175,6 +175,27 @@ pub(crate) fn may_restore_glossary_syntax(
     if text.matches('は').nth(1).is_some() && polarity_contrast::may_restore_topics(chars, locks) {
         return true;
     }
+    if (text.contains('と') || text.contains("一緒に"))
+        && locks.locks.iter().any(|lock| {
+            lock.mandatory
+                && match lock.origin {
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Actor,
+                        ..
+                    } => true,
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Place,
+                        ..
+                    } => matches!(
+                        chars.get(lock.source_span.end_char.saturating_sub(1)),
+                        Some('に' | 'へ')
+                    ),
+                    _ => false,
+                }
+        })
+    {
+        return true;
+    }
     if locks
         .locks
         .iter()
@@ -263,6 +284,10 @@ pub(crate) fn glossary_render_locks(
                     )
                 },
             )
+        })
+        .or_else(|| {
+            finished_go::restore_companion_locks(sentence, &atoms, doc, chars, locks)
+                .map(|render| (render, GlossarySyntax::default()))
         })
         .or_else(|| {
             let past_gaze = outward_look::gaze_predicate(doc, &atoms).and_then(|predicate| {

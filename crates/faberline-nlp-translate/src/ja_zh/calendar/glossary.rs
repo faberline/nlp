@@ -265,7 +265,7 @@ pub(in crate::ja_zh) fn time_render_locks(
             lock.source_span = label.span;
             labels.push(label);
         } else if !tokens.iter().any(|t| t.span == lock.source_span) {
-            if kind != GlossaryKind::Object || !lock.mandatory {
+            if !matches!(kind, GlossaryKind::Object | GlossaryKind::DomainTerm) || !lock.mandatory {
                 return None;
             }
             composite_objects.push(lock);
@@ -275,6 +275,7 @@ pub(in crate::ja_zh) fn time_render_locks(
         return None;
     }
     for lock in composite_objects {
+        // The source link establishes the form's role even for a domain term.
         let (span, governor) =
             application_form::filing_object_span(original, chars, lock.source_span)?;
         if !labels.iter().any(|label| label.governor == governor) {

@@ -173,15 +173,38 @@ fn protected_date_and_application_keep_their_separate_roles() {
                 ("講座の申込書", ""),
                 ("講座の申込書を", ""),
             ] {
-                assert_glosses(
-                    source,
-                    &[
-                        (GlossaryKind::DomainTerm, date, "幾日"),
-                        (GlossaryKind::Object, form, "指定表單"),
-                    ],
-                    &format!("{prefix}{qualifier}指定表單？"),
-                );
+                for form_kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+                    assert_glosses(
+                        source,
+                        &[
+                            (GlossaryKind::DomainTerm, date, "幾日"),
+                            (form_kind, form, "指定表單"),
+                        ],
+                        &format!("{prefix}{qualifier}指定表單？"),
+                    );
+                }
             }
         }
     }
+}
+
+#[test]
+fn protected_application_case_requires_a_linked_filing_action() {
+    let form = (GlossaryKind::DomainTerm, "申込書を", "指定表單");
+    assert_glosses(
+        "今月は何日までに講座の申込書を出しますか。",
+        &[form],
+        "這個月最晚幾號交課程指定表單？",
+    );
+    let date = (GlossaryKind::DomainTerm, "何日に", "幾日");
+    assert_glosses(
+        "今月は何日に申込書を読みますか。",
+        &[date, form],
+        "這個月幾日指定表單讀嗎？",
+    );
+    assert_glosses(
+        "今月は何日に鉛筆を出しますか。",
+        &[date, (GlossaryKind::DomainTerm, "鉛筆を", "指定鉛筆")],
+        "這個月幾日指定鉛筆拿出嗎？",
+    );
 }

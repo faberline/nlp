@@ -970,20 +970,20 @@ fn translate_single_sentence(
                     .partition_point(|token| token.sentence <= sentence_idx);
                 let tokens = source.tokens[first..last].iter().collect::<Vec<_>>();
                 ja_zh::glossary_render_locks(sentence_idx, source, &tokens, chars, &lock_table)
-                    .map(|(locks, whole_verbs)| (source, tokens, locks, whole_verbs))
+                    .map(|(locks, glossary_syntax)| (source, tokens, locks, glossary_syntax))
             })
         } else {
             None
         };
-        let (render_doc, render_tokens, render_locks, whole_verbs) = match &repaired {
-            Some((source, tokens, locks, whole_verbs)) => {
-                (*source, tokens.as_slice(), locks, *whole_verbs)
+        let (render_doc, render_tokens, render_locks, glossary_syntax) = match &repaired {
+            Some((source, tokens, locks, glossary_syntax)) => {
+                (*source, tokens.as_slice(), locks, *glossary_syntax)
             }
             None => (
                 doc,
                 sent_tokens,
                 &lock_table,
-                ja_zh::WholeVerbLocks::default(),
+                ja_zh::GlossarySyntax::default(),
             ),
         };
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
@@ -997,7 +997,7 @@ fn translate_single_sentence(
             },
             render_tokens,
             render_locks,
-            whole_verbs,
+            glossary_syntax,
             &conditioning,
             options.target,
             direct_quote,

@@ -27,6 +27,7 @@ mod homework_desire;
 mod homework_glossary;
 mod homework_relative;
 mod household_entry;
+mod lesson_start;
 mod letter_deadline;
 mod meeting_voice;
 mod nominal_possession;
@@ -1026,6 +1027,7 @@ fn translate_ja_sentence_with_verb_locks(
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
                     pickup_predicate: glossary_syntax.pickup_predicate(),
+                    lesson_start: glossary_syntax.lesson_start,
                     verb_locks,
                     locks: &lock_table.locks,
                     following: &segments[seg_idx + 1..],
@@ -1290,6 +1292,15 @@ fn translate_ja_sentence_with_verb_locks(
                         || inside_habitual_action
                         || (continued_subject && matches!(p, "、" | ","))
                         || (rendered.ends_with('？') && matches!(p, "。" | "？" | "?"))
+                        || matches!(p, "。" | "？" | "?")
+                            && glossary_syntax.lesson_start.is_some_and(|predicate| {
+                                predicate.includes_question
+                                    && verb_locks.iter().any(|lock| {
+                                        lock.index == predicate.index
+                                            && lesson_start::owns_question_punctuation(lock)
+                                            && rendered.ends_with(&lock.placeholder)
+                                    })
+                            })
                         || ((p == "、" || p == ",")
                             && (rendered.ends_with("，就立刻")
                                 || rendered.ends_with("，但是")
@@ -6030,6 +6041,7 @@ struct ClauseDiscourseCtx<'a> {
     contrasts_recurrence: bool,
     source_chars: &'a [char],
     pickup_predicate: Option<Span>,
+    lesson_start: Option<lesson_start::PredicateLock>,
     verb_locks: &'a [&'a LockedSpan],
     locks: &'a [LockedSpan],
     following: &'a [Segment],
@@ -13089,13 +13101,10 @@ fn translate_clause_bunsetsus(
                 }
             }
             BunsetsuRole::Obj => {
-                let text = if target == TargetVariant::ZhHant
-                    && lesson_as_object_of_start(&b, source, ctx)
-                {
-                    "上課".to_owned()
-                } else {
-                    render_bunsetsu_np(&b, target)
-                };
+                let text = (target == TargetVariant::ZhHant)
+                    .then(|| lesson_object_text(&b, source, ctx))
+                    .flatten()
+                    .map_or_else(|| render_bunsetsu_np(&b, target), str::to_owned);
                 if let Some(marker) = motion
                     .filter(|m| !m.expressed_by_verb)
                     .and_then(|m| route_marker(&b, source, m.head))
@@ -13247,6 +13256,7 @@ fn translate_clause_bunsetsus(
         Omission,
         Departure { includes_source: bool },
         Polite { add_request: bool },
+        LessonStart { includes_question: bool },
     }
     let departure = if target == TargetVariant::ZhHant && !ctx.inside_quote && verb_core == "出去"
     {
@@ -13297,6 +13307,12 @@ fn translate_clause_bunsetsus(
                     ctx.verb_locks.iter().find_map(|lock| {
                         let coverage = if lock.source_span == head.span {
                             CoveredVerb::Stem
+                        } else if let Some(lesson) =
+                            ctx.lesson_start.filter(|lesson| lesson.index == lock.index)
+                        {
+                            CoveredVerb::LessonStart {
+                                includes_question: lesson.includes_question,
+                            }
                         } else if omitted_span == Some(lock.source_span) {
                             CoveredVerb::Omission
                         } else if pre_verb_mods.iter().any(|part| part == "請不要")
@@ -14930,6 +14946,7 @@ fn translate_clause_bunsetsus(
         parts.push(verb_core.clone());
         parts.push(objs.remove(0));
     }
+    let mut add_lesson_question_mark = false;
     if !verb_core.is_empty() {
         // Native morphology and syntax still determine clause roles.
         // A whole lock already owns the ending of its finite predicate.
@@ -14942,6 +14959,9 @@ fn translate_clause_bunsetsus(
                     CoveredVerb::Omission => whole_omission,
                     CoveredVerb::Departure { .. } => objs.len() == 1 && post_verb_mods == ["了"],
                     CoveredVerb::Polite { .. } => true,
+                    CoveredVerb::LessonStart { includes_question } => {
+                        !includes_question || objs.len() == 1 && sfp_suffix == Some("嗎")
+                    }
                 }
         }) {
             if coverage == CoveredVerb::Finite {
@@ -14953,6 +14973,20 @@ fn translate_clause_bunsetsus(
                 }
                 objs.clear();
                 post_verb_mods.clear();
+            }
+            if coverage
+                == (CoveredVerb::LessonStart {
+                    includes_question: true,
+                })
+            {
+                if lesson_start::owns_question_ending(lock) {
+                    // Put the lesson before the subject so the caller's
+                    // question still ends the clause.
+                    let lesson = objs.pop().expect("one verified lesson object");
+                    parts.insert(0, format!("{lesson}，"));
+                    sfp_suffix = None;
+                }
+                add_lesson_question_mark = !lesson_start::owns_question_punctuation(lock);
             }
             if meal_lock_has_connector {
                 parts.append(&mut objs);
@@ -15037,6 +15071,9 @@ fn translate_clause_bunsetsus(
     }
     if let Some(sfp) = sfp_suffix {
         parts.push(sfp.to_owned());
+    }
+    if add_lesson_question_mark {
+        parts.push("？".to_owned());
     }
     if let Some(ss) = sconj_suffix {
         parts.push(ss.to_owned());
@@ -26827,24 +26864,7 @@ fn start_question_body<'a>(predicate: &'a Bunsetsu, source: &[Atom]) -> Option<&
     let [verb, polite, question] = predicate.atoms.as_slice() else {
         return None;
     };
-    let head = verb.doc_tok_idx?;
-    (!verb.is_locked
-        && verb.upos == Some(Upos::Verb)
-        && verb.deprel == "root"
-        && verb.lemma.as_deref() == Some("始める")
-        && !polite.is_locked
-        && polite.surface == "ます"
-        && polite.upos == Some(Upos::Aux)
-        && polite.head == Some(head)
-        && polite.deprel == "aux"
-        && verb.span.end_char == polite.span.start_char
-        && polite.span.end_char == question.span.start_char
-        && !question.is_locked
-        && question.surface == "か"
-        && question.upos == Some(Upos::Part)
-        && question.head == Some(head)
-        && question.deprel == "discourse"
-        && question.doc_tok_idx.is_some()
+    (lesson_start::question_tail(verb, polite, question)
         && predicate.sfp_tail.as_deref() == Some("か")
         && core_non_punct(source).last().is_some_and(|last| {
             !last.is_locked
@@ -26854,35 +26874,38 @@ fn start_question_body<'a>(predicate: &'a Bunsetsu, source: &[Atom]) -> Option<&
     .then_some(&predicate.atoms[..2])
 }
 
-// A caller's verb replacement keeps the lesson as an object rather than a second action.
-fn lesson_as_object_of_start(group: &Bunsetsu, source: &[Atom], ctx: &ClauseDiscourseCtx) -> bool {
+fn lesson_object_text(
+    group: &Bunsetsu,
+    source: &[Atom],
+    ctx: &ClauseDiscourseCtx,
+) -> Option<&'static str> {
     let [lesson, case] = group.atoms.as_slice() else {
-        return false;
+        return None;
     };
-    let Some(action) = lesson.head else {
-        return false;
-    };
-    !lesson.is_locked
-        && lesson.surface == "授業"
-        && lesson.upos == Some(Upos::Noun)
-        && lesson.deprel == "obj"
-        && case.surface == "を"
-        && dasu_case_link(lesson, case)
-        && source.iter().any(|atom| {
-            atom.doc_tok_idx == Some(action)
-                && !atom.is_locked
-                && atom.upos == Some(Upos::Verb)
-                && atom.deprel == "root"
-                && atom.lemma.as_deref() == Some("始める")
-                && !ctx
-                    .locks
-                    .iter()
-                    .chain(ctx.verb_locks.iter().copied())
-                    .any(|lock| {
-                        lock.source_span.start_char < atom.span.end_char
-                            && atom.span.start_char < lock.source_span.end_char
-                    })
-        })
+    let action = lesson_start::lesson_head(lesson, case)?;
+    let verb = source
+        .iter()
+        .find(|atom| atom.doc_tok_idx == Some(action) && lesson_start::is_start_root(atom))?;
+    let verb_lock = ctx
+        .locks
+        .iter()
+        .chain(ctx.verb_locks.iter().copied())
+        .find(|lock| {
+            lock.source_span.start_char < verb.span.end_char
+                && verb.span.start_char < lock.source_span.end_char
+        });
+    match verb_lock {
+        None => Some("上課"),
+        // A whole question needs a noun that can also serve as the topic.
+        Some(lock)
+            if ctx
+                .lesson_start
+                .is_some_and(|pred| pred.includes_question && pred.index == lock.index) =>
+        {
+            Some("課程")
+        }
+        Some(_) => None,
+    }
 }
 
 fn render_bunsetsu_obl(b: &Bunsetsu, target: TargetVariant, is_instrument: bool) -> String {
@@ -29422,6 +29445,114 @@ mod existence_rule_tests {
                 assert_eq!(hit.target_span.start_char..hit.target_span.end_char, 2..4);
             }
         }
+    }
+
+    #[test]
+    fn lesson_start_keeps_complete_caller_terms_in_their_roles() {
+        fn term(source: &str, target: &str) -> GlossaryEntry {
+            GlossaryEntry {
+                canonical: source.into(),
+                surfaces: vec![source.into()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, target.into())]),
+                ..GlossaryEntry::default()
+            }
+        }
+
+        let question = "先生は授業を始めますか。";
+        let statement = "先生は授業を始めます。";
+        let options = crate::TranslateOptions::new(TargetVariant::ZhHant);
+        let object = term("授業を", "專題課");
+        for (source, object, verb, expected) in [
+            (statement, Some(object.clone()), None, "老師開始專題課。"),
+            (question, Some(object.clone()), None, "老師開始專題課嗎？"),
+            (
+                question,
+                Some(object.clone()),
+                Some(term("始めます", "開展")),
+                "老師開展專題課嗎？",
+            ),
+            (
+                question,
+                None,
+                Some(term("始めますか", "已開展嗎")),
+                "課程，老師已開展嗎？",
+            ),
+            (
+                question,
+                Some(object.clone()),
+                Some(term("始めますか", "已開展嗎？")),
+                "專題課，老師已開展嗎？",
+            ),
+            (
+                question,
+                Some(object),
+                Some(term("始めますか", "開展")),
+                "老師開展專題課嗎？",
+            ),
+        ] {
+            let glossary = TranslationGlossary {
+                objects: object.into_iter().collect(),
+                domain_terms: verb.into_iter().collect(),
+                ..TranslationGlossary::new()
+            };
+            let actual = translate(source, &glossary);
+            assert_eq!(actual.target_text, expected);
+            let doc = faberline_nlp::doc::analyze_document(
+                source,
+                &crate::doc_options_for_translate(&options, &TranslationGlossary::new()),
+            );
+            let direct = crate::translate_document(
+                source,
+                &doc,
+                #[cfg(feature = "narrative")]
+                None,
+                &options,
+                &glossary,
+                None,
+            )
+            .unwrap();
+            assert_eq!(direct.target_text, actual.target_text);
+            assert_eq!(direct.glossary_hits, actual.glossary_hits);
+            assert_eq!(direct.clause_alignments, actual.clause_alignments);
+            assert_eq!(
+                actual.glossary_hits.len(),
+                glossary.objects.len() + glossary.domain_terms.len()
+            );
+            let slice = |text: &str, span: Span| {
+                text.chars()
+                    .skip(span.start_char)
+                    .take(span.end_char - span.start_char)
+                    .collect::<String>()
+            };
+            for hit in &actual.glossary_hits {
+                let entry = match hit.kind {
+                    GlossaryKind::Object => &glossary.objects[0],
+                    GlossaryKind::DomainTerm => &glossary.domain_terms[0],
+                    _ => panic!("unexpected glossary kind: {:?}", hit.kind),
+                };
+                assert_eq!(slice(source, hit.source_span), entry.canonical);
+                assert_eq!(
+                    slice(&actual.target_text, hit.target_span),
+                    entry.targets[&TargetVariant::ZhHant],
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lesson_start_leaves_written_openings_on_the_nominal_path() {
+        let glossary = TranslationGlossary {
+            domain_terms: vec![GlossaryEntry {
+                canonical: "始め".into(),
+                surfaces: vec!["始め".into()],
+                targets: BTreeMap::from([(TargetVariant::ZhHant, "起首".into())]),
+                ..GlossaryEntry::default()
+            }],
+            ..TranslationGlossary::new()
+        };
+        let actual = translate("本の始めが大切です。", &glossary);
+        assert_eq!(actual.target_text, "書的起首重要。");
+        assert_eq!(actual.glossary_hits.len(), 1);
     }
 
     #[test]

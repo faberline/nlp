@@ -7,7 +7,7 @@ use super::{
     Atom, Document, Span, Token, Upos, application_form, build_sentence_atoms, calendar,
     classify_bunsetsu, completed_departure, dasu_case_link, finished_go, first_step,
     group_into_bunsetsus, handover, homework_glossary, household_entry,
-    is_departure_source_surface, is_punct_atom, letter_deadline, naide_adverbial,
+    is_departure_source_surface, is_punct_atom, lesson_start, letter_deadline, naide_adverbial,
     nominal_receiving_glossary, outward_look, physical_goal_head, polarity_contrast, polite_joint,
     polite_prohibition, recipient_scope, te_help_glossary, trip_after_meal, written_opening,
 };
@@ -22,6 +22,7 @@ pub(crate) struct GlossarySyntax {
     nominal_request: Option<nominal_receiving_glossary::NominalRequest>,
     assistance_object: Option<te_help_glossary::AssistanceObject>,
     eligibility: recipient_scope::EligibilitySyntax,
+    pub(super) lesson_start: Option<lesson_start::PredicateLock>,
 }
 
 impl GlossarySyntax {
@@ -29,6 +30,7 @@ impl GlossarySyntax {
         self.following == Some(index)
             || self.omitted == Some(index)
             || self.prohibition == Some(index)
+            || self.lesson_start.is_some_and(|lock| lock.index == index)
     }
 
     pub(super) fn nominal_request(&self, atoms: &[Atom]) -> Option<&str> {
@@ -165,6 +167,7 @@ pub(crate) fn may_restore_glossary_syntax(
     if nominal_receiving_glossary::may_restore(text, locks)
         || te_help_glossary::may_restore(text, locks)
         || recipient_scope::may_restore(text, locks)
+        || lesson_start::may_restore(text, chars, locks)
         || text.contains("ないでください")
             && polite_prohibition::may_restore_predicate(chars, locks)
     {
@@ -368,11 +371,17 @@ pub(crate) fn glossary_render_locks(
     let assistance_object = te_help_glossary::prove(&atoms, doc, locks);
     let eligibility = recipient_scope::prove(&atoms, sentence, doc, chars, locks);
     let prohibition = polite_prohibition::predicate_lock(&atoms, locks);
+    let lesson = lesson_start::restore_locks(
+        &atoms,
+        chars,
+        repaired.as_ref().map_or(previous, |(render, _)| render),
+    );
     if repaired.is_none()
         && nominal_request.is_none()
         && assistance_object.is_none()
         && eligibility.is_none()
         && prohibition.is_none()
+        && lesson.is_none()
     {
         return prior;
     }
@@ -385,8 +394,12 @@ pub(crate) fn glossary_render_locks(
     syntax.nominal_request = nominal_request;
     syntax.assistance_object = assistance_object;
     syntax.eligibility = eligibility.unwrap_or_default();
-    syntax.eligibility.restore_render_role(&mut render);
     syntax.prohibition = prohibition;
+    if let Some((repaired, predicate)) = lesson {
+        render = repaired;
+        syntax.lesson_start = predicate;
+    }
+    syntax.eligibility.restore_render_role(&mut render);
     Some((render, syntax))
 }
 

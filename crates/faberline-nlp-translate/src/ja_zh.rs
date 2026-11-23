@@ -14,6 +14,7 @@ mod carrying;
 mod copular_time;
 mod counted_object;
 mod daytime;
+mod direct_smoking;
 mod finished_go;
 mod finite_adjective;
 mod handover;
@@ -895,6 +896,7 @@ pub(crate) fn translate_ja_sentence(
                     contrasts_recurrence: seg_idx.checked_sub(1).is_some_and(|i|
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
+                    source_locks: Some(lock_table),
                     following: &segments[seg_idx + 1..],
                     glossary_carry: &glossary_carry,
                     preceding_activity: match segments[..seg_idx].last() {
@@ -5715,6 +5717,7 @@ struct ClauseDiscourseCtx<'a> {
     adjective: finite_adjective::Context,
     contrasts_recurrence: bool,
     source_chars: &'a [char],
+    source_locks: Option<&'a SpanLockTable>,
     following: &'a [Segment],
     glossary_carry: &'a [carrying::GlossaryCarry],
     preceding_activity: &'a [Atom],
@@ -11529,6 +11532,14 @@ fn translate_clause_bunsetsus(
     let recovered_goal = ctx
         .recovered_meal_trip
         .and_then(|frame| frame.restore_arguments(&mut bunsetsus));
+    let restored_tobacco = if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let Some(locks) = ctx.source_locks
+    {
+        direct_smoking::restore_locked_object(&mut bunsetsus, source, doc, ctx.source_chars, locks)
+    } else {
+        None
+    };
     let focused_days = if target == TargetVariant::ZhHant {
         calendar::take_focused_days(&mut bunsetsus, source)
     } else {
@@ -12765,6 +12776,19 @@ fn translate_clause_bunsetsus(
             .any(|a| a.span.start_char <= span.start_char && span.end_char <= a.span.end_char)
     {
         verb_core = action.to_owned();
+    }
+    if target == TargetVariant::ZhHant
+        && verb_core == "吮吸"
+        && let [object] = objs.as_mut_slice()
+        && let Some(tobacco) = restored_tobacco
+            .or_else(|| direct_smoking::tobacco_object(source, &predicates, doc, ctx.source_chars))
+    {
+        if !tobacco.is_locked
+            && let Some(modifiers) = object.strip_suffix(&tobacco.surface)
+        {
+            *object = format!("{modifiers}菸");
+        }
+        verb_core = "抽".to_owned();
     }
     if elapsed_progressive_relative && !elapsed_progressive_negative {
         pre_verb_mods.retain(|m| m != "正在");

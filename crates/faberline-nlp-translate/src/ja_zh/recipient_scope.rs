@@ -217,6 +217,20 @@ fn receiving_distribution(atoms: &[Atom], doc: &Document, chars: &[char]) -> Opt
     }
     let passage = chars.get(previous.span.start_char..current.span.end_char)?;
     let mut options = doc.options.clone();
+    // A caller's lock can hide the topic noun in the previous distribution.
+    // Remove a hint that reaches that topic boundary only for the syntax probe.
+    let statement: String = chars
+        .get(previous.span.start_char..previous.span.end_char)?
+        .iter()
+        .collect();
+    let crosses_topic = |hint: &String| {
+        !hint.is_empty()
+            && statement.strip_prefix(hint).is_some_and(|tail| {
+                tail.starts_with('は') || (!tail.is_empty() && hint.ends_with('は'))
+            })
+    };
+    options.lexicon.retain(|hint| !crosses_topic(hint));
+    options.names.retain(|hint| !crosses_topic(hint));
     let mut locks = atoms.iter().enumerate().filter(|(_, atom)| atom.is_locked);
     if let Some((index, lock)) = locks.next() {
         if lock.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM) || locks.next().is_some() {
@@ -411,30 +425,43 @@ mod tests {
     }
 
     #[test]
-    fn eligibility_keeps_the_glossary_object_after_the_negated_verb() {
+    fn eligibility_preserves_glossary_spans_in_either_sentence() {
         let source = "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。";
-        let expected = "這份資料只發給參加者。參加者以外的人不能領取講義嗎？";
         let options = TranslateOptions::new(TargetVariant::ZhHant);
-        let mut glossary = TranslationGlossary::new();
-        glossary.objects.push(GlossaryEntry {
-            canonical: "資料を".to_owned(),
-            surfaces: vec!["資料を".to_owned()],
-            targets: [(TargetVariant::ZhHant, "講義".to_owned())].into(),
-            ..GlossaryEntry::default()
-        });
-        let translated =
-            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
-        assert_eq!(translated.target_text, expected);
-        let [hit] = translated.glossary_hits.as_slice() else {
-            panic!("expected one object glossary hit");
-        };
         let slice = |text: &str, span: faberline_nlp::Span| -> String {
             text.chars()
                 .skip(span.start_char)
                 .take(span.end_char - span.start_char)
                 .collect()
         };
-        assert_eq!(slice(source, hit.source_span), "資料を");
-        assert_eq!(slice(expected, hit.target_span), "講義");
+        for (term, gloss, expected) in [
+            (
+                "資料を",
+                "講義",
+                "這份資料只發給參加者。參加者以外的人不能領取講義嗎？",
+            ),
+            (
+                "この資料",
+                "本資料",
+                "本資料只發給參加者。參加者以外的人不能領取資料嗎？",
+            ),
+        ] {
+            let mut glossary = TranslationGlossary::new();
+            glossary.objects.push(GlossaryEntry {
+                canonical: term.to_owned(),
+                surfaces: vec![term.to_owned()],
+                targets: [(TargetVariant::ZhHant, gloss.to_owned())].into(),
+                ..GlossaryEntry::default()
+            });
+            let translated =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(translated.target_text, expected);
+            let [hit] = translated.glossary_hits.as_slice() else {
+                panic!("expected one object glossary hit");
+            };
+            assert_eq!(hit.kind, crate::GlossaryKind::Object);
+            assert_eq!(slice(source, hit.source_span), term);
+            assert_eq!(slice(expected, hit.target_span), gloss);
+        }
     }
 }

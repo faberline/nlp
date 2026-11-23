@@ -134,8 +134,8 @@ fn bind_case(
             && wa.head == Some(clock_id)
             && wa.span.start_char == atoms[after_case - 1].span.end_char
     });
-    let copular_end = clock.deprel == "root"
-        && marker.surface == "まで"
+    let copular_boundary = clock.deprel == "root"
+        && matches!(marker.surface.as_str(), "まで" | "から")
         && atoms[case + 1..]
             .iter()
             .any(|a| a.deprel == "cop" && a.head == Some(clock_id));
@@ -148,7 +148,7 @@ fn bind_case(
     if marker.surface == "の" && !nominal {
         return false;
     }
-    if !copular_end
+    if !copular_boundary
         && !nominal
         && !(topic && clock.deprel == "nsubj")
         && (!matches!(clock.deprel.as_str(), "obl" | "advmod" | "iobj") || clock.head.is_none())

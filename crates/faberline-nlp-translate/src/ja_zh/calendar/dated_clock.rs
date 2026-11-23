@@ -210,8 +210,12 @@ fn bind_case(
                 })
                 && day
                     .head
-                    .and_then(|h| doc.tokens.get(h))
-                    .is_some_and(|h| start_clock <= h.span.start_char && h.span.end_char <= end)
+                    .and_then(|head| doc.tokens.get(head).map(|token| (head, token)))
+                    .is_some_and(|(head, token)| {
+                        // The verified fused clock host also contains its case particle.
+                        start_clock <= token.span.start_char
+                            && (token.span.end_char <= end || fused_ni && head == clock_id)
+                    })
         });
         if !whole && !attached {
             continue;

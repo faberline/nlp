@@ -1,17 +1,18 @@
 //! Recover a nominal request from the shared unlocked source analysis.
 
-use super::naide_glossary::sole_object_lock;
+use super::naide_glossary::{mandatory_domain_term, sole_object_or_term_lock};
 use super::*;
 
 pub(super) fn may_restore(text: &str, locks: &SpanLockTable) -> bool {
     text.trim_end_matches(|ch: char| ch.is_whitespace() || matches!(ch, '。' | '？' | '?'))
         .ends_with("いただけませんか")
-        && sole_object_lock(locks).is_some()
+        && sole_object_or_term_lock(locks).is_some()
 }
 
 pub(super) struct NominalRequest {
     clause: Span,
     object: Span,
+    placeholder: String,
     text: String,
 }
 
@@ -27,7 +28,7 @@ impl NominalRequest {
         let mut locked = atoms.iter().filter(|atom| atom.is_locked);
         let lock = locked.next()?;
         (locked.next().is_none()
-            && lock.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
+            && lock.surface == self.placeholder
             && lock.span == self.object
             && clause_span(atoms) == Some(self.clause))
         .then_some(self.text.as_str())
@@ -41,7 +42,7 @@ pub(super) fn prove(
     sentence: usize,
     locks: &SpanLockTable,
 ) -> Option<NominalRequest> {
-    let lock = sole_object_lock(locks)?;
+    let lock = sole_object_or_term_lock(locks)?;
     if !matches!(core_non_punct(atoms), [.., verb, masu, neg, question]
         if verb.surface == "いただけ" && masu.surface == "ませ"
             && neg.surface == "ん" && question.surface == "か")
@@ -61,6 +62,7 @@ pub(super) fn prove(
     Some(NominalRequest {
         clause: clause_span(atoms)?,
         object: lock.source_span,
+        placeholder: lock.placeholder.clone(),
         text,
     })
 }
@@ -76,6 +78,11 @@ pub(super) fn render_object(
     let [.., noun, particle] = phrase else {
         return None;
     };
+    if mandatory_domain_term(lock)
+        && !original_document_noun(&noun.surface, noun.lemma.as_deref(), noun.upos)
+    {
+        return None;
+    }
     let nominal_start = phrase.first()?.span.start_char;
     if lock.source_span.end_char != noun.span.end_char
         && lock.source_span.end_char != particle.span.end_char
@@ -108,11 +115,15 @@ mod tests {
     use faberline_nlp::doc::model::Backend;
 
     fn translate(source: &str, term: &str, label: &str) -> String {
+        translate_with_kind(source, term, label, "objects")
+    }
+
+    fn translate_with_kind(source: &str, term: &str, label: &str, field: &str) -> String {
         let mut options = TranslateOptions::new(TargetVariant::ZhHant);
         options.source_hint = Some(TargetVariant::Ja);
         let glossary = serde_json::from_value::<TranslationGlossary>(serde_json::json!({
             "schema": "nlp.translate.glossary.v1",
-            "objects": [{
+            (field): [{
                 "canonical": term,
                 "surfaces": [term],
                 "targets": {"zh-Hant": label}
@@ -133,6 +144,23 @@ mod tests {
         assert_eq!(slice(source, hit.source_span), term);
         assert_eq!(slice(&result.target_text, hit.target_span), label);
         result.target_text
+    }
+
+    #[test]
+    fn document_terms_keep_the_classifier_and_the_request() {
+        let source = "この資料をいただけませんか。";
+        for term in ["資料", "資料を"] {
+            assert_eq!(
+                translate_with_kind(source, term, "講義", "domain_terms"),
+                "可以給我這份講義嗎？",
+            );
+        }
+        for term in ["この資料", "この資料を"] {
+            assert_eq!(
+                translate_with_kind(source, term, "講義", "domain_terms"),
+                "可以給我講義嗎？",
+            );
+        }
     }
 
     #[test]

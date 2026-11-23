@@ -4,22 +4,30 @@ use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
 use crate::schema::GlossaryKind;
 
 use super::{
-    Atom, Document, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu, dasu_case_link,
-    finished_go, first_step, group_into_bunsetsus, handover, household_entry, is_punct_atom,
-    naide_adverbial, outward_look, physical_goal_head, polarity_contrast, polite_joint,
-    trip_after_meal, written_opening,
+    Atom, Document, Span, Token, Upos, build_sentence_atoms, calendar, classify_bunsetsu,
+    dasu_case_link, finished_go, first_step, group_into_bunsetsus, handover, household_entry,
+    is_punct_atom, naide_adverbial, outward_look, physical_goal_head, polarity_contrast,
+    polite_joint, trip_after_meal, written_opening,
 };
 
-#[derive(Clone, Copy, Default)]
+#[derive(Default)]
 pub(crate) struct GlossarySyntax {
     following: Option<usize>,
     omitted: Option<usize>,
-    pub(super) handover: Option<handover::HandoverSyntax>,
+    handover: Option<handover::HandoverSyntax>,
+    time: calendar::glossary::TimeSyntax,
 }
 
 impl GlossarySyntax {
-    pub(super) fn protects_verb(self, index: usize) -> bool {
+    pub(super) fn protects_verb(&self, index: usize) -> bool {
         self.following == Some(index) || self.omitted == Some(index)
+    }
+
+    pub(super) fn apply(&self, atoms: &mut Vec<Atom>) {
+        if let Some(handover) = &self.handover {
+            handover.apply(atoms);
+        }
+        self.time.apply(atoms);
     }
 }
 
@@ -86,7 +94,9 @@ pub(crate) fn may_restore_glossary_syntax(
     if text.contains(['「', '」', '『', '』', '"', '“', '”']) {
         return false;
     }
-    if text.contains('渡') && handover::may_restore(locks) {
+    if text.contains('渡') && handover::may_restore(locks)
+        || calendar::glossary::may_cover_time(chars, locks)
+    {
         return true;
     }
     if text.contains("ます") && polite_joint::may_restore_actor(chars, locks) {
@@ -214,11 +224,21 @@ pub(crate) fn glossary_render_locks(
     let first_step = first_step::restore_case(sentence, &atoms, doc, chars, earlier);
     let written =
         written_opening::restore_case(&atoms, chars, first_step.as_ref().unwrap_or(earlier));
-    if let Some(render) = written.or(first_step) {
+    let prior = if let Some(render) = written.or(first_step) {
         let syntax = prior.map_or_else(GlossarySyntax::default, |(_, syntax)| syntax);
-        return Some((render, syntax));
-    }
-    prior
+        Some((render, syntax))
+    } else {
+        prior
+    };
+    let previous = prior.as_ref().map_or(locks, |(render, _)| render);
+    let Some((render, time)) =
+        calendar::glossary::time_render_locks(&atoms, tokens, chars, previous)
+    else {
+        return prior;
+    };
+    let mut syntax = prior.map_or_else(GlossarySyntax::default, |(_, syntax)| syntax);
+    syntax.time = time;
+    Some((render, syntax))
 }
 
 fn omitted_render_locks(

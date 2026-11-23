@@ -1,6 +1,7 @@
 //! Bind a calendar day to its case particles before noun-phrase grouping.
 mod dated_clock;
 mod dates;
+pub(super) mod glossary;
 mod quantities;
 pub(super) mod report;
 use super::{Atom, Upos, normalize_decimal_digits, selects_time_value};
@@ -549,11 +550,12 @@ pub(super) fn count_modifier(atom: &Atom) -> Option<&'static str> {
 }
 
 pub(super) fn is_date(atom: &Atom) -> bool {
-    matches!(atom.lemma.as_deref(), Some(DATE | DATE_LIST))
+    matches!(atom.lemma.as_deref(), Some(DATE | DATE_LIST)) || glossary::is_date(atom)
 }
 
 pub(super) fn question(atom: &Atom) -> Option<&str> {
-    (atom.lemma.as_deref() == Some(CLOCK_QUESTION)
+    (glossary::is_question(atom)
+        || atom.lemma.as_deref() == Some(CLOCK_QUESTION)
         || is_date(atom) && (atom.surface.ends_with("幾號") || atom.surface == "星期幾"))
         .then_some(atom.surface.as_str())
 }

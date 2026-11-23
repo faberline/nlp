@@ -360,6 +360,7 @@ fn physical_argument(
         }
         let temporal = direct_quote_time(noun, doc).is_some()
             || is_clock_atom(noun)
+            || super::calendar::glossary::is_time(noun)
             || noun.lemma.as_deref() == Some(TIME_QUESTION)
             || matches!(
                 raw.as_str(),

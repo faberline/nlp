@@ -1,8 +1,8 @@
-use faberline_nlp::doc::model::Backend;
+use faberline_nlp::doc::{analyze_document, model::Backend};
 
 use crate::{
     GlossaryEntry, TargetVariant, TranslateOptions, TranslatedDocument, TranslationGlossary,
-    analyze_and_translate,
+    analyze_and_translate, doc_options_for_translate, translate_document,
 };
 
 fn translate(source: &str, glossary: &TranslationGlossary) -> TranslatedDocument {
@@ -66,4 +66,64 @@ fn a_glossary_place_retains_its_label() {
     let output = translate("父と駅へ行きました。", &glossary);
     assert_eq!(output.target_text, "跟父親去了北站。");
     assert_eq!(output.glossary_hits[0].canonical, "駅");
+}
+
+#[test]
+fn a_market_place_lock_preserves_the_companion_and_the_complete_hit() {
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    for (source, term) in [
+        ("母と一緒に市場へ行った。", "市場"),
+        ("母と一緒に市場へ行った。", "市場へ"),
+        ("母と一緒に市場に行った。", "市場"),
+        ("母と一緒に市場に行った。", "市場に"),
+    ] {
+        let glossary = market_glossary(term);
+        let raw = analyze_document(
+            source,
+            &doc_options_for_translate(&options, &TranslationGlossary::new()),
+        );
+        let direct = translate_document(
+            source,
+            &raw,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            &glossary,
+            None,
+        )
+        .unwrap();
+        for output in [translate(source, &glossary), direct] {
+            assert_eq!(output.target_text, "跟母親一起去了公有市場。", "{term}");
+            let [hit] = output.glossary_hits.as_slice() else {
+                panic!("expected one glossary hit for {term}");
+            };
+            assert_eq!(hit.canonical, term);
+            assert_eq!(
+                (hit.source_span.start_char, hit.source_span.end_char),
+                (5, 5 + term.chars().count())
+            );
+            assert_eq!(
+                (hit.target_span.start_char, hit.target_span.end_char),
+                (7, 11)
+            );
+        }
+    }
+}
+
+#[test]
+fn a_place_lock_cannot_turn_an_invitation_into_a_completed_trip() {
+    let output = translate("母と一緒に市場へ行きませんか。", &market_glossary("市場へ"));
+    assert_eq!(output.target_text, "要不要和母親一起公有市場去？");
+    assert_eq!(output.glossary_hits[0].canonical, "市場へ");
+}
+
+fn market_glossary(term: &str) -> TranslationGlossary {
+    let mut glossary = TranslationGlossary::new();
+    glossary.places.push(GlossaryEntry {
+        canonical: term.into(),
+        surfaces: vec![term.into()],
+        targets: [(TargetVariant::ZhHant, "公有市場".into())].into(),
+        ..GlossaryEntry::default()
+    });
+    glossary
 }

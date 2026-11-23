@@ -2,10 +2,13 @@
 
 use faberline_nlp::doc::{EntityKind, Token};
 
+use crate::lock::SpanLockTable;
+
 use super::{
-    Atom, Bunsetsu, BunsetsuRole, CLOCK_ATOM, Document, LOCKED_PLACE_ATOM, SemanticClass, Span,
-    Upos, clock_case_governor, dasu_case_link, is_clock_atom, is_companion_person,
-    physical_goal_head, return_companion_owner, source_time_head,
+    Atom, Bunsetsu, BunsetsuRole, CLOCK_ATOM, Document, LOCKED_PLACE_ATOM, Segment, SemanticClass,
+    Span, Upos, clock_case_governor, dasu_case_link, group_into_bunsetsus, is_clock_atom,
+    is_companion_person, physical_goal_head, return_companion_owner, source_time_head,
+    split_atoms_into_segments,
 };
 
 #[cfg(test)]
@@ -275,7 +278,8 @@ fn companion_market_destination(
     // 市場 has no Location tag. With a proved companion, the direct に/へ
     // argument of completed 行く still identifies the market as a place.
     source_destination(group, going, doc, source).is_some_and(|(place, _, _)| {
-        !place.is_locked && raw(source, place.span) == Some(&['市', '場'])
+        raw(source, place.span) == Some(&['市', '場'])
+            && (!place.is_locked || place.lemma.as_deref() == Some(LOCKED_PLACE_ATOM))
     })
 }
 
@@ -389,12 +393,6 @@ pub(super) fn resolve(
     source: &[char],
 ) -> Option<FinishedGo> {
     let predicate = completed_predicate(groups, doc, source)?;
-    let is_companion_group = |group: &Bunsetsu| {
-        matches!(
-            group.role,
-            BunsetsuRole::TravelCompanion | BunsetsuRole::TravelTogether
-        )
-    };
     let going = direct_destination(atoms, predicate, doc, source, |id| {
         groups.iter().any(|group| {
             is_companion_group(group)
@@ -413,6 +411,48 @@ pub(super) fn resolve(
         predicate,
         goal_group,
     })
+}
+
+fn is_companion_group(group: &Bunsetsu) -> bool {
+    matches!(
+        group.role,
+        BunsetsuRole::TravelCompanion | BunsetsuRole::TravelTogether
+    )
+}
+
+/// Expose a proven goal's case marker while keeping the caller's replacement.
+pub(super) fn restore_companion_place(
+    sentence: usize,
+    atoms: &[Atom],
+    doc: &Document,
+    source: &[char],
+    locks: &SpanLockTable,
+) -> Option<SpanLockTable> {
+    let [place_lock] = locks.locks.as_slice() else {
+        return None;
+    };
+    let span = doc.segmentation.sentences.get(sentence)?.span;
+    let clauses = split_atoms_into_segments(atoms, doc, span);
+    let [Segment::Clause { atoms, .. }] = clauses.as_slice() else {
+        return None;
+    };
+    let mut groups = group_into_bunsetsus(atoms, doc, sentence);
+    mark_companions(&mut groups, atoms, doc, source);
+    if !groups.iter().any(is_companion_group) {
+        return None;
+    }
+    let going = resolve(&groups, atoms, doc, source)?;
+    let [place, marker] = groups[going.goal_group].atoms.as_slice() else {
+        return None;
+    };
+    if place_lock.source_span.start_char != place.span.start_char
+        || place_lock.source_span.end_char != marker.span.end_char
+    {
+        return None;
+    }
+    let mut render = locks.clone();
+    render.locks.first_mut()?.source_span = place.span;
+    Some(render)
 }
 
 /// A reading comma after a source-linked time can keep all arguments of the

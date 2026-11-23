@@ -929,12 +929,70 @@ fn translate_single_sentence(
             );
             ja_zh::prior_letter_distribution(idx, chars, doc, &locks)
         });
+        let place_hint = if options.target == TargetVariant::ZhHant
+            && direct_quote.is_none()
+            && written_quotes.is_empty()
+            && !raw_sent.contains(['「', '」', '『', '』', '"', '“', '”'])
+            && (raw_sent.contains('と') || raw_sent.contains("一緒に"))
+            && let [lock] = lock_table.locks.as_slice()
+            && lock.mandatory
+            && matches!(
+                lock.origin,
+                LockOrigin::Glossary {
+                    kind: GlossaryKind::Place,
+                    ..
+                }
+            )
+            && let Some(place @ [_, .., 'に' | 'へ']) =
+                chars.get(lock.source_span.start_char..lock.source_span.end_char)
+        {
+            Some(place.iter().collect::<String>())
+        } else {
+            None
+        };
+        let companion_doc = place_hint
+            .as_ref()
+            .filter(|hint| doc.options.lexicon.contains(hint) || doc.options.names.contains(hint))
+            .map(|hint| {
+                let mut source_options = doc.options.clone();
+                source_options.lexicon.retain(|term| term != hint);
+                source_options.names.retain(|term| term != hint);
+                source_options.enrich_morphology = true;
+                source_options.cpu_syntax = true;
+                analyze_document(&chars.iter().collect::<String>(), &source_options)
+            })
+            .filter(|source| {
+                source.segmentation.sentences == doc.segmentation.sentences
+                    && source.segmentation.clauses == doc.segmentation.clauses
+            });
+        let repaired = place_hint.and_then(|_| {
+            let source = companion_doc.as_ref().unwrap_or(doc);
+            let start = source
+                .tokens
+                .partition_point(|token| token.sentence < sentence_idx);
+            let end = source
+                .tokens
+                .partition_point(|token| token.sentence <= sentence_idx);
+            let tokens = source.tokens[start..end].iter().collect::<Vec<_>>();
+            let locks = ja_zh::companion_place_render_locks(
+                sentence_idx,
+                chars,
+                source,
+                &tokens,
+                &lock_table,
+            )?;
+            Some((source, tokens, locks))
+        });
+        let (render_doc, render_tokens, render_locks) = repaired.as_ref().map_or(
+            (doc, sent_tokens, &lock_table),
+            |(source, tokens, locks)| (*source, tokens.as_slice(), locks),
+        );
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
-            doc,
-            sent_tokens,
-            &lock_table,
+            render_doc,
+            render_tokens,
+            render_locks,
             &conditioning,
             options.target,
             direct_quote,

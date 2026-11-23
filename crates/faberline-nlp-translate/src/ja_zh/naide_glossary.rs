@@ -6,8 +6,9 @@ use crate::schema::GlossaryKind;
 use super::{
     Atom, Document, Span, Token, Upos, application_form, build_sentence_atoms, calendar,
     classify_bunsetsu, dasu_case_link, finished_go, first_step, group_into_bunsetsus, handover,
-    household_entry, is_punct_atom, letter_deadline, naide_adverbial, outward_look,
-    physical_goal_head, polarity_contrast, polite_joint, trip_after_meal, written_opening,
+    homework_glossary, household_entry, is_punct_atom, letter_deadline, naide_adverbial,
+    outward_look, physical_goal_head, polarity_contrast, polite_joint, trip_after_meal,
+    written_opening,
 };
 
 #[derive(Default)]
@@ -96,7 +97,9 @@ pub(crate) fn may_restore_glossary_syntax(
     }
     if text.contains('渡') && handover::may_restore(locks)
         || calendar::glossary::may_cover_time(chars, locks)
-        || text.contains('出') && application_form::may_restore_case(chars, locks)
+        || text.contains('出')
+            && (application_form::may_restore_case(chars, locks)
+                || homework_glossary::may_restore_case(chars, locks))
         || text.contains("までに") && letter_deadline::may_cover_object(chars, locks)
     {
         return true;
@@ -234,7 +237,10 @@ pub(crate) fn glossary_render_locks(
         chars,
         render.as_ref().unwrap_or(earlier),
     );
-    let prior = if let Some(render) = letter.or(render) {
+    let render = letter.or(render);
+    let homework =
+        homework_glossary::restore_case(&atoms, chars, render.as_ref().unwrap_or(earlier));
+    let prior = if let Some(render) = homework.or(render) {
         let syntax = prior.map_or_else(GlossarySyntax::default, |(_, syntax)| syntax);
         Some((render, syntax))
     } else {

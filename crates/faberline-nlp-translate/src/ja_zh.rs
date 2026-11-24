@@ -6634,6 +6634,13 @@ fn translate_clause_atoms(
         return (text, false);
     }
 
+    if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let Some(text) = common_noun_sense::teamwork_idiom(core_non_punct(atoms))
+    {
+        return (text.to_owned(), false);
+    }
+
     if let Some(request) =
         te_help_request(core_non_punct(atoms), doc, ctx.prior_letter_distribution)
         && let Some(rendered) = render_te_help_request(request, doc, sentence_idx, ctx, target)

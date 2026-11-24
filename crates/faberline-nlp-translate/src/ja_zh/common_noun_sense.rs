@@ -171,7 +171,7 @@ pub(super) fn render_transfer(source: &[Atom], doc: &Document, sentence: usize) 
         .iter()
         .rposition(|atom| atom.upos == Some(Upos::Verb))?;
     let verb = &source[predicate];
-    if !like(verb, &["入れる", "投函する", "インストールする"]) {
+    if !like(verb, &["入れる", "投函する", "インストールする", "置く"]) {
         return None;
     }
     let governor = verb.doc_tok_idx?;
@@ -215,6 +215,7 @@ pub(super) fn render_transfer(source: &[Atom], doc: &Document, sentence: usize) 
     let install = item_reading == Some("軟體")
         && like(verb, &["入れる", "インストールする"])
         && like(place, &["パソコン", "コンピューター", "端末"]);
+    let lay = item_reading == Some("纜線") && like(verb, &["置く"]) && like(place, &["床", "机"]);
     let noun_phrase =
         |atoms| nominal_possession::noun_phrase(atoms, doc, sentence, TargetVariant::ZhHant);
     let subject = match subject {
@@ -226,12 +227,58 @@ pub(super) fn render_transfer(source: &[Atom], doc: &Document, sentence: usize) 
     if install {
         return Some(format!("{subject}在{place}安裝{aspect}{item}"));
     }
+    if lay {
+        return Some(format!("{subject}把{item}放在{place}上{aspect}"));
+    }
     let action = match place_reading {
         Some("相簿") if like(verb, &["入れる"]) => "放進",
         Some("郵筒") if like(verb, &["入れる", "投函する"]) => "投進",
         _ => return None,
     };
     Some(format!("{subject}把{item}{action}{aspect}{place}"))
+}
+
+pub(super) fn teamwork_idiom(atoms: &[Atom]) -> Option<&'static str> {
+    if atoms.iter().any(|atom| atom.is_locked) {
+        return None;
+    }
+    let (degree, words) = match atoms {
+        [degree, words @ ..]
+            if degree.upos == Some(Upos::Adv) && like(degree, &["とても", "よく"]) =>
+        {
+            (Some(degree), words)
+        }
+        _ => (None, atoms),
+    };
+    let [breath, case, verb, ..] = words else {
+        return None;
+    };
+    if breath.surface != "息"
+        || breath.deprel != "nsubj"
+        || verb.doc_tok_idx.is_none()
+        || breath.head != verb.doc_tok_idx
+        || case.surface != "が"
+        || !dasu_case_link(breath, case)
+        || !like(verb, &["合う"])
+        || degree.is_some_and(|word| word.head != verb.doc_tok_idx)
+    {
+        return None;
+    }
+    let finite: String = words[2..]
+        .iter()
+        .map(|atom| atom.surface.as_str())
+        .collect();
+    if !matches!(
+        finite.as_str(),
+        "合う" | "合います" | "合っている" | "合っています"
+    ) {
+        return None;
+    }
+    Some(match degree.map(|word| word.surface.as_str()) {
+        Some("とても") => "非常有默契",
+        Some("よく") => "很有默契",
+        _ => "有默契",
+    })
 }
 
 struct Context<'a> {
@@ -532,6 +579,9 @@ mod tests {
                 .zip(cable.find("纜車"))
                 .is_some_and(|(wire, car)| wire < car)
         );
+        assert!(run(&bank, "N24").target_text.contains("非常有默契"));
+        let placement = run(&bank, "N33").target_text;
+        assert!(placement.contains("纜線放在地板上"));
     }
 
     #[test]

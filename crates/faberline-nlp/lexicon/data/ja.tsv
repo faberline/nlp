@@ -16256,7 +16256,7 @@
 ケーター島	ja	541	PROPN	PROPN	-	-	-
 ケーニヒ	ja	673	PROPN	PROPN	-	-	sem=person
 ケーヒン	ja	782	PROPN	PROPN	-	-	sem=organization
-ケーブル	ja	519	NOUN	NOUN	-	電線	src=first_party_mit
+ケーブル	ja	519	NOUN	NOUN	-	纜線	src=first_party_mit
 ケーブルカー	ja	533	NOUN	NOUN	-	-	-
 ケーブルコミュニケーション長良川	ja	782	PROPN	PROPN	-	-	sem=organization
 ケーブルネットワーク	ja	782	PROPN	PROPN	-	-	sem=organization
@@ -24514,7 +24514,7 @@
 ドラッグストア	ja	533	NOUN	NOUN	-	-	-
 ドラッグバント	ja	533	NOUN	NOUN	-	-	-
 ドラフト	ja	532	NOUN	NOUN	-	-	-
-ドラマ	ja	520	NOUN	NOUN	-	連續劇	src=first_party_mit
+ドラマ	ja	520	NOUN	NOUN	-	戲劇	src=first_party_mit
 ドラマツルギー	ja	533	NOUN	NOUN	-	-	-
 ドラマー	ja	533	NOUN	NOUN	-	-	-
 ドラム	ja	532	NOUN	NOUN	-	鼓	src=first_party_mit
@@ -30334,7 +30334,7 @@
 マンサク	ja	533	NOUN	NOUN	-	-	-
 マンシャ	ja	689	PROPN	PROPN	-	-	sem=person
 マンショ	ja	691	PROPN	PROPN	-	-	sem=person
-マンション	ja	466	NOUN	NOUN	-	大樓	src=first_party_mit
+マンション	ja	466	NOUN	NOUN	-	住宅大樓	src=first_party_mit
 マンション不況	ja	533	NOUN	NOUN	-	-	-
 マンジュシャゲ	ja	533	NOUN	NOUN	-	-	-
 マンセル	ja	659	PROPN	PROPN	-	-	sem=person

@@ -108,11 +108,14 @@ pub(super) fn allows_physical_entry(
         })
         .and_then(|head| doc.syntax.get(head));
 
-    let married = children(entry, "advcl")
-        .chain(children(entry, "obl").filter(|prior| has_te_kara(prior.token)))
-        .any(|prior| {
-            prior.token < entry && can_share_actor(prior.token) && form_is(prior, "結婚する")
-        });
+    let linked_marriages = || {
+        children(entry, "advcl")
+            .chain(children(entry, "obl").filter(|prior| has_te_kara(prior.token)))
+            .filter(|prior| {
+                prior.token < entry && can_share_actor(prior.token) && form_is(prior, "結婚する")
+            })
+    };
+    let married = linked_marriages().next().is_some();
     let family_succession = result.is_some_and(|next| {
         let inherits = form_is(next, "継ぐ")
             || form_is(next, "引き継ぐ")
@@ -138,17 +141,46 @@ pub(super) fn allows_physical_entry(
     // A caller can supply the complete destination. The uncertain reading
     // only limits the idiom chosen by the engine for an unlocked noun.
     if usage == EntryUse::NativeWording && (married || family_succession) {
-        // An attached door or threshold action can still establish actual entry.
+        let actor_agrees = |action| {
+            can_share_actor(action)
+                && children(action, "nsubj").all(|actor| {
+                    linked_marriages()
+                        .flat_map(|prior| children(prior.token, "nsubj"))
+                        .all(|prior_actor| {
+                            // Same-sentence first person has a fixed referent.
+                            ["私", "僕", "俺"].iter().any(|name| {
+                                surface_is(actor, name) && surface_is(prior_actor, name)
+                            })
+                        })
+                })
+        };
+        let action_is_asserted = |action| {
+            children(action, "aux").all(|suffix| {
+                ["た", "だ", "ます", "まし"]
+                    .iter()
+                    .any(|form| surface_is(suffix, form))
+            }) && !children(action, "discourse").any(|particle| surface_is(particle, "か"))
+                && !children(action, "mark").any(|marker| {
+                    ["か", "なら", "ば", "たら", "と"]
+                        .iter()
+                        .any(|form| surface_is(marker, form))
+                })
+                && !children(action, "punct")
+                    .any(|punct| surface_is(punct, "？") || surface_is(punct, "?"))
+        };
+        // A linked, asserted door or threshold action can establish actual entry.
         let before_door = children(entry, "advcl").any(|prior| {
             prior.token < entry
-                && can_share_actor(prior.token)
+                && actor_agrees(prior.token)
+                && action_is_asserted(prior.token)
                 && (form_is(prior, "開ける") && has_argument(prior.token, "obj", DOORS, "を")
                     || form_is(prior, "脱ぐ")
                         && has_argument(prior.token, "obj", &["靴"], "を")
                         && has_argument(prior.token, "obl", &["玄関"], "で"))
         });
         let after_door = result.is_some_and(|next| {
-            can_share_actor(next.token)
+            actor_agrees(next.token)
+                && action_is_asserted(next.token)
                 && form_is(next, "閉める")
                 && has_argument(next.token, "obj", DOORS, "を")
         });

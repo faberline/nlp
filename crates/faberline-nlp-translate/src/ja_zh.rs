@@ -18882,6 +18882,42 @@ mod household_entry_tests {
     }
 
     #[test]
+    fn an_uncertain_or_other_persons_door_action_does_not_prove_entry() {
+        let glossary = TranslationGlossary::new();
+        for (source, ending) in [
+            (
+                "妹は結婚して、家に入ってから戸を閉めなかった。",
+                "沒有關上戶。",
+            ),
+            (
+                "妹は結婚して、家に入ってから戸を閉めませんでした。",
+                "沒有關上戶。",
+            ),
+            (
+                "妹は結婚して、家に入ってから戸を閉めましたか。",
+                "關上了戶嗎？",
+            ),
+            ("妹は結婚して、家に入ってから戸を閉めたら。", "如果關上戶。"),
+            ("妹は結婚して、家に入ってから戸を閉めたい。", "想關上戶。"),
+            (
+                "妹は結婚して、家に入ってから父が戸を閉めた。",
+                "父親關上了戶。",
+            ),
+        ] {
+            let target = translate(source, &glossary).target_text;
+            assert!(
+                target.contains("進入家後") && target.ends_with(ending),
+                "{target}"
+            );
+        }
+        let shared_actor = "私は結婚して、家に入ってから私が戸を閉めた。";
+        assert_eq!(
+            translate(shared_actor, &glossary).target_text,
+            "我結婚，進屋後，我關上了戶。"
+        );
+    }
+
+    #[test]
     fn linked_family_context_keeps_a_caller_destination_in_place() {
         let entry = GlossaryEntry {
             canonical: "家に".to_owned(),

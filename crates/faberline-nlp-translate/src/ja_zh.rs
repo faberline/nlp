@@ -19359,6 +19359,13 @@ mod naide_adverbial_tests {
     }
 
     #[test]
+    fn an_omitted_door_action_keeps_the_linked_family_context() {
+        let text = translate("兄は結婚して、玄関の戸を開けないで家に入りました。");
+        assert!(text.contains("沒有開玄關的戶"), "{text}");
+        assert!(text.ends_with("就進入家了。"), "{text}");
+    }
+
+    #[test]
     fn a_conditional_or_conjectured_result_is_not_asserted_by_naide() {
         let conditional = translate("水を飲まないで、走るなら、先に教えてください。");
         assert!(conditional.contains("如果") && !conditional.contains("就跑了"));

@@ -91,9 +91,10 @@ pub(super) fn allows_physical_entry(
     }
 
     // Do not infer a shared actor when each action has an explicit subject.
-    let can_share_actor = |other| {
-        children(entry, "nsubj").next().is_none() || children(other, "nsubj").next().is_none()
+    let can_share_subject = |left, right| {
+        children(left, "nsubj").next().is_none() || children(right, "nsubj").next().is_none()
     };
+    let can_share_actor = |other| can_share_subject(entry, other);
     let has_te_kara = |verb| {
         children(verb, "mark").any(|mark| surface_is(mark, "て"))
             && children(verb, "case").any(|case| surface_is(case, "から"))
@@ -108,14 +109,6 @@ pub(super) fn allows_physical_entry(
         })
         .and_then(|head| doc.syntax.get(head));
 
-    let linked_marriages = || {
-        children(entry, "advcl")
-            .chain(children(entry, "obl").filter(|prior| has_te_kara(prior.token)))
-            .filter(|prior| {
-                prior.token < entry && can_share_actor(prior.token) && form_is(prior, "結婚する")
-            })
-    };
-    let married = linked_marriages().next().is_some();
     let family_succession = result.is_some_and(|next| {
         let inherits = form_is(next, "継ぐ")
             || form_is(next, "引き継ぐ")
@@ -140,7 +133,49 @@ pub(super) fn allows_physical_entry(
     });
     // A caller can supply the complete destination. The uncertain reading
     // only limits the idiom chosen by the engine for an unlocked noun.
-    if usage == EntryUse::NativeWording && (married || family_succession) {
+    let mut prior_heads = vec![entry];
+    if usage == EntryUse::NativeWording {
+        // The parser can attach an earlier marriage clause to an omitted
+        // action instead of to 入る. Keep that context when rendering ないで
+        // as a separate clause. Only follow original, attached omission links.
+        let mut next = 0;
+        while let Some(&head) = prior_heads.get(next) {
+            prior_heads.extend(
+                children(head, "advcl")
+                    .filter(|prior| {
+                        prior.token < head
+                            && can_share_actor(prior.token)
+                            && can_share_subject(head, prior.token)
+                            && doc.tokens[prior.token].upos == Some(Upos::Verb)
+                            && children(prior.token, "aux").any(|negative| {
+                                prior.span.end_char == negative.span.start_char
+                                    && surface_is(negative, "ない")
+                                    && children(prior.token, "mark").any(|marker| {
+                                        negative.span.end_char == marker.span.start_char
+                                            && surface_is(marker, "で")
+                                    })
+                            })
+                    })
+                    .map(|prior| prior.token),
+            );
+            next += 1;
+        }
+    }
+    let linked_marriages = || {
+        prior_heads.iter().flat_map(|&head| {
+            children(head, "advcl")
+                .chain(children(head, "obl").filter(|prior| has_te_kara(prior.token)))
+                .filter(move |prior| {
+                    prior.token < head
+                        && can_share_actor(prior.token)
+                        && can_share_subject(head, prior.token)
+                        && form_is(prior, "結婚する")
+                })
+        })
+    };
+    if usage == EntryUse::NativeWording
+        && (family_succession || linked_marriages().next().is_some())
+    {
         let actor_agrees = |action| {
             can_share_actor(action)
                 && children(action, "nsubj").all(|actor| {

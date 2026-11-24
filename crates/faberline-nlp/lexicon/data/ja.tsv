@@ -40474,7 +40474,7 @@
 収載	ja	763	-	NOUN|VERB	-	-	-
 収録	ja	762	-	NOUN|VERB	-	收錄	src=unihan_zh_hant
 収集	ja	753	-	NOUN|VERB	-	收集	src=unihan_zh_hant
-叔母	ja	996	NOUN	NOUN	-	嬸母	src=first_party_mit
+叔母	ja	996	NOUN	NOUN	-	父母任一方的妹妹或弟媳	src=first_party_mit
 叔父	ja	911	NOUN	NOUN	-	叔父	-
 取かかる	ja	1161	VERB	VERB	-	-	infl=godan_ra
 取こぼす	ja	1162	VERB	VERB	-	-	infl=godan_sa

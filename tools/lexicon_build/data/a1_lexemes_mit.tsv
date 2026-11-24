@@ -48,7 +48,7 @@
 姉妹	ja	1039	NOUN	NOUN	-	姊妹	src=first_party_mit
 孫	ja	1036	NOUN	NOUN	-	孫子	src=first_party_mit
 伯母	ja	740	NOUN	NOUN	-	伯母	src=first_party_mit
-叔母	ja	996	NOUN	NOUN	-	嬸母	src=first_party_mit
+叔母	ja	996	NOUN	NOUN	-	父母任一方的妹妹或弟媳	src=first_party_mit
 従兄弟	ja	740	NOUN	NOUN	-	堂表親	src=first_party_mit
 従姉妹	ja	740	NOUN	NOUN	-	堂表親	src=first_party_mit
 甥	ja	1135	NOUN	NOUN	-	兄弟姊妹的兒子	src=first_party_mit

@@ -24,6 +24,7 @@ mod homework_desire;
 mod homework_relative;
 mod household_entry;
 mod meeting_voice;
+pub(crate) mod naide_locks;
 mod nominal_possession;
 mod order_noun;
 mod outward_look;
@@ -220,6 +221,7 @@ pub(crate) fn translate_ja_sentence(
     doc: &Document,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
+    protected_omission: Option<&naide_locks::ProtectedOmission>,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -991,6 +993,7 @@ pub(crate) fn translate_ja_sentence(
                     },
                     joined_naide: Some(&joined_naide),
                     preceding_naide_action,
+                    protected_verb_stem: protected_omission.and_then(|frame| frame.stem(trimmed_atoms)),
                     return_trip: None,
                     parallel_elapsed_te: if target == TargetVariant::ZhHant
                         && !prev_was_quote
@@ -1028,7 +1031,11 @@ pub(crate) fn translate_ja_sentence(
                 } else {
                     trailing_punct.as_deref()
                 };
-                let (mut rendered, had_subj_only) = if editorial_shikashi {
+                let (mut rendered, had_subj_only) = if let Some(result) =
+                    protected_omission.and_then(|frame| frame.result(*span))
+                {
+                    (result.to_owned(), false)
+                } else if editorial_shikashi {
                     ("然而".to_owned(), false)
                 } else if let Some(rendered) = receiving_request {
                     (rendered, false)
@@ -1327,6 +1334,7 @@ pub(crate) fn translate_ja_fragment(
             &doc,
             &sent_tokens,
             &lock_table,
+            None,
             &cond,
             target,
             None,
@@ -5876,6 +5884,7 @@ struct ClauseDiscourseCtx<'a> {
     naide_adverbial: Option<NaideAdverbial>,
     joined_naide: Option<&'a std::cell::Cell<Option<usize>>>,
     preceding_naide_action: Option<usize>,
+    protected_verb_stem: Option<&'a str>,
     return_trip: Option<ReturnTrip>,
     parallel_elapsed_te: Option<usize>,
     inside_quote: bool,
@@ -14408,7 +14417,9 @@ fn translate_clause_bunsetsus(
         parts.push(verb_core.clone());
         parts.push(objs.remove(0));
     }
-    if !verb_core.is_empty() {
+    if let Some(stem) = ctx.protected_verb_stem {
+        parts.push(stem.to_owned());
+    } else if !verb_core.is_empty() {
         parts.push(verb_core);
     }
     if keep_go {

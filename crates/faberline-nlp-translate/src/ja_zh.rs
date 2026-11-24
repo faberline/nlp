@@ -29,6 +29,7 @@ mod nominal_possession;
 mod order_noun;
 mod outward_look;
 mod payment_potential;
+pub(crate) use payment_potential::{FareRoles, fare_roles_for_sentence};
 mod place_goal_glossary;
 pub(crate) mod polarity_contrast;
 pub(crate) mod predicate_glossary;
@@ -223,6 +224,7 @@ pub(crate) fn translate_ja_sentence(
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
     predicate_terms: Option<&predicate_glossary::PredicateTerms>,
+    fare_source: Option<&dyn Fn(Span) -> Option<FareRoles>>,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -937,6 +939,7 @@ pub(crate) fn translate_ja_sentence(
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
                     source_locks: Some(lock_table),
+                    fare_source,
                     following: &segments[seg_idx + 1..],
                     glossary_carry: &glossary_carry,
                     glossary_goals: &glossary_goals,
@@ -1338,6 +1341,7 @@ pub(crate) fn translate_ja_fragment(
             &sent_tokens,
             &lock_table,
             None,
+            Some(&|_| None),
             &cond,
             target,
             None,
@@ -5875,6 +5879,7 @@ struct ClauseDiscourseCtx<'a> {
     contrasts_recurrence: bool,
     source_chars: &'a [char],
     source_locks: Option<&'a SpanLockTable>,
+    fare_source: Option<&'a dyn Fn(Span) -> Option<FareRoles>>,
     following: &'a [Segment],
     glossary_carry: &'a [carrying::GlossaryCarry],
     glossary_goals: &'a [focused_goal_glossary::FocusedGoal],
@@ -7008,6 +7013,21 @@ fn translate_clause_atoms(
 
     if target == TargetVariant::ZhHant
         && let Some(text) = payment_potential::render(core_non_punct(atoms), target, false)
+    {
+        return (text, false);
+    }
+
+    if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let (Some(locks), Some(unhinted_roles)) = (ctx.source_locks, ctx.fare_source)
+        && let Some(text) = payment_potential::render_fare_statement(
+            core_non_punct(atoms),
+            doc,
+            sentence_idx,
+            ctx.source_chars,
+            locks,
+            unhinted_roles,
+        )
     {
         return (text, false);
     }

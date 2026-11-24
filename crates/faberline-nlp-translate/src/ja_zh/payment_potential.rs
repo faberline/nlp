@@ -1,4 +1,4 @@
-//! Resolve the potential of 払う from its arguments within one clause.
+//! Resolve payment and potential 払う from their source arguments.
 
 use super::*;
 
@@ -730,10 +730,191 @@ pub(super) fn render(source: &[Atom], target: TargetVariant, reported: bool) -> 
     ))
 }
 
+pub(crate) struct FareRoles {
+    amount: Span,
+    medium: Span,
+    medium_with_case: Span,
+    native_medium: &'static str,
+}
+
+impl FareRoles {
+    fn render(&self, overrides: &[&crate::lock::LockedSpan]) -> Option<String> {
+        let mut amount = "票款";
+        let mut method = self.native_medium.to_owned();
+        for lock in overrides {
+            if lock.source_span == self.amount {
+                amount = &lock.placeholder;
+            } else if lock.source_span == self.medium {
+                method = format!("用{}", lock.placeholder);
+            } else if lock.source_span == self.medium_with_case {
+                method.clone_from(&lock.placeholder);
+            } else {
+                return None;
+            }
+        }
+        Some(format!("{method}付{amount}"))
+    }
+}
+
+pub(super) fn render_fare_statement(
+    source: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    chars: &[char],
+    locks: &SpanLockTable,
+    unhinted_roles: &dyn Fn(Span) -> Option<FareRoles>,
+) -> Option<String> {
+    let sentence_span = doc.segmentation.sentences.get(sentence)?.span;
+    let start = source.first()?.span.start_char;
+    let end = source.last()?.span.end_char;
+    // Only a complete affirmative payment statement uses this word order.
+    if !chars.get(start..end)?.starts_with(&['切', '符', '代'])
+        || !chars
+            .get(sentence_span.start_char..start)?
+            .iter()
+            .all(|ch| ch.is_whitespace())
+        || !chars
+            .get(end..sentence_span.end_char)?
+            .iter()
+            .all(|ch| matches!(ch, '。' | '.') || ch.is_whitespace())
+        || doc
+            .segmentation
+            .opaque
+            .iter()
+            .any(|opaque| opaque.span.start_char < end && start < opaque.span.end_char)
+    {
+        return None;
+    }
+    let overrides: Vec<_> = locks
+        .locks
+        .iter()
+        .filter(|lock| lock.source_span.start_char < end && start < lock.source_span.end_char)
+        .collect();
+    if overrides.is_empty() {
+        return fare_roles(source)?.render(&[]);
+    }
+    if overrides.iter().any(|lock| {
+        !lock.mandatory
+            || !matches!(
+                lock.origin,
+                LockOrigin::Glossary {
+                    kind: GlossaryKind::Object | GlossaryKind::DomainTerm,
+                    ..
+                }
+            )
+            || !source.iter().any(|atom| {
+                atom.is_locked && atom.span == lock.source_span && atom.surface == lock.placeholder
+            })
+    }) || source.iter().filter(|atom| atom.is_locked).count() != overrides.len()
+    {
+        return None;
+    }
+
+    // The lock can hide で. Prove the roles using the source analysis while
+    // keeping the active placeholders and their original ranges.
+    let content = Span {
+        start_char: start,
+        end_char: end,
+    };
+    let roles = fare_roles_for_sentence(doc, sentence, chars, content)
+        .or_else(|| unhinted_roles(content))?;
+    roles.render(&overrides)
+}
+
+pub(crate) fn fare_roles_for_sentence(
+    doc: &Document,
+    sentence: usize,
+    chars: &[char],
+    content: Span,
+) -> Option<FareRoles> {
+    let first = doc
+        .tokens
+        .partition_point(|token| token.sentence < sentence);
+    let last = doc
+        .tokens
+        .partition_point(|token| token.sentence <= sentence);
+    let tokens: Vec<_> = doc.tokens[first..last].iter().collect();
+    let original = build_sentence_atoms(sentence, chars, doc, &tokens, &SpanLockTable::default());
+    let original = core_non_punct(&original);
+    if original.first()?.span.start_char != content.start_char
+        || original.last()?.span.end_char != content.end_char
+    {
+        return None;
+    }
+    fare_roles(original)
+}
+
+fn fare_roles(source: &[Atom]) -> Option<FareRoles> {
+    let [charge @ .., topic, medium, by, verb, polite] = source else {
+        return None;
+    };
+    if source.iter().any(|atom| atom.is_locked) {
+        return None;
+    }
+    let fare = match charge {
+        [fare] if fare.surface == "切符代" => fare,
+        [ticket, fare]
+            if ticket.surface == "切符"
+                && ticket.upos == Some(Upos::Noun)
+                && ticket.deprel == "compound"
+                && ticket.head == fare.doc_tok_idx
+                && ticket.span.end_char == fare.span.start_char
+                && fare.surface == "代" =>
+        {
+            fare
+        }
+        _ => return None,
+    };
+    let governor = verb.doc_tok_idx?;
+    if fare.upos != Some(Upos::Noun)
+        || fare.deprel != "nsubj"
+        || fare.head != Some(governor)
+        || topic.surface != "は"
+        || !dasu_case_link(fare, topic)
+        || medium.upos != Some(Upos::Noun)
+        || medium.deprel != "obl"
+        || medium.head != Some(governor)
+        || by.surface != "で"
+        || !dasu_case_link(medium, by)
+        || verb.upos != Some(Upos::Verb)
+        || verb.lemma.as_deref() != Some("支払う")
+        || verb.deprel != "root"
+        || verb.head.is_some()
+        || polite.surface != "ます"
+        || polite.upos != Some(Upos::Aux)
+        || polite.deprel != "aux"
+        || polite.head != Some(governor)
+        || verb.span.end_char != polite.span.start_char
+    {
+        return None;
+    }
+    let native_medium = match medium.surface.as_str() {
+        "カード" => "刷卡",
+        "現金" => "用現金",
+        _ => return None,
+    };
+    Some(FareRoles {
+        amount: Span {
+            start_char: charge.first()?.span.start_char,
+            end_char: fare.span.end_char,
+        },
+        medium: medium.span,
+        medium_with_case: Span {
+            start_char: medium.span.start_char,
+            end_char: by.span.end_char,
+        },
+        native_medium,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use crate::{
+        GlossaryEntry, Span, TargetVariant, TranslateOptions, TranslationGlossary,
+        analyze_and_translate,
+    };
     use faberline_nlp::doc::model::Backend;
+    use faberline_nlp::doc::{Document, analyze_document};
 
     fn translate(jp: &str) -> String {
         let mut options = TranslateOptions::new(TargetVariant::ZhHant);
@@ -780,6 +961,137 @@ mod tests {
         ] {
             assert_eq!(translate(jp), expected, "{jp}");
         }
+    }
+
+    #[test]
+    fn ticket_fare_is_the_amount_paid() {
+        for (source, expected) in [
+            (
+                "窓口で切符を買います。切符代はカードで支払います。",
+                "刷卡付票款。",
+            ),
+            (
+                "窓口で切符を買います。切符代は現金で支払います。",
+                "用現金付票款。",
+            ),
+        ] {
+            let translated = translate(source);
+            assert_eq!(
+                translated.split_once('。').map(|(_, payment)| payment),
+                Some(expected)
+            );
+        }
+    }
+
+    fn glossary_entry(source: &str, replacement: &str) -> GlossaryEntry {
+        GlossaryEntry {
+            canonical: source.into(),
+            surfaces: vec![source.into()],
+            targets: [(TargetVariant::ZhHant, replacement.into())].into(),
+            ..GlossaryEntry::default()
+        }
+    }
+
+    #[test]
+    fn fare_glossary_keeps_the_amount_and_the_payment_method() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let slice = |text: &str, span: Span| {
+            text.chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect::<String>()
+        };
+        for (method, native, replacement, whole, whole_replacement) in [
+            ("カード", "刷卡", "信用卡", "カードで", "以信用卡"),
+            ("現金", "用現金", "現鈔", "現金で", "以現鈔"),
+        ] {
+            let source = format!("窓口で切符を買います。切符代は{method}で支払います。");
+            for (amount, medium, expected) in [
+                (true, None, format!("{native}付車資。")),
+                (
+                    false,
+                    Some((method, replacement)),
+                    format!("用{replacement}付票款。"),
+                ),
+                (
+                    false,
+                    Some((whole, whole_replacement)),
+                    format!("{whole_replacement}付票款。"),
+                ),
+                (
+                    true,
+                    Some((whole, whole_replacement)),
+                    format!("{whole_replacement}付車資。"),
+                ),
+            ] {
+                let mut glossary = TranslationGlossary::new();
+                let mut expected_hits = Vec::new();
+                if amount {
+                    glossary.objects.push(glossary_entry("切符代", "車資"));
+                    expected_hits.push(("切符代", "車資"));
+                }
+                if let Some((word, gloss)) = medium {
+                    glossary.domain_terms.push(glossary_entry(word, gloss));
+                    expected_hits.push((word, gloss));
+                }
+                let result =
+                    analyze_and_translate(&source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                assert_eq!(result.target_text.split_once('。').unwrap().1, expected);
+                assert_eq!(result.glossary_hits.len(), expected_hits.len());
+                for (hit, (word, gloss)) in result.glossary_hits.iter().zip(expected_hits) {
+                    assert_eq!(slice(&source, hit.source_span), word);
+                    assert_eq!(slice(&result.target_text, hit.target_span), gloss);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fare_reordering_respects_the_callers_payment_dependency() {
+        let source = "窓口で切符を買います。切符代はカードで支払います。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let mut glossary = TranslationGlossary::new();
+        glossary
+            .domain_terms
+            .push(glossary_entry("カードで", "以信用卡"));
+        let mut analysis = analyze_document(
+            source,
+            &crate::doc_options_for_translate(&options, &TranslationGlossary::new()),
+        );
+        let translate = |input: &Document| {
+            crate::translate_document(
+                source,
+                input,
+                #[cfg(feature = "narrative")]
+                None,
+                &options,
+                &glossary,
+                None,
+            )
+            .unwrap()
+        };
+        assert!(
+            translate(&analysis)
+                .target_text
+                .ends_with("以信用卡付票款。")
+        );
+
+        let medium = analysis
+            .syntax
+            .iter_mut()
+            .find(|arc| {
+                source
+                    .chars()
+                    .skip(arc.span.start_char)
+                    .take(arc.span.end_char - arc.span.start_char)
+                    .eq("カード".chars())
+            })
+            .unwrap();
+        medium.deprel = "obj".to_owned();
+        let output = translate(&analysis);
+        assert!(!output.target_text.ends_with("以信用卡付票款。"));
+        assert_eq!(output.glossary_hits.len(), 1);
     }
 
     #[test]

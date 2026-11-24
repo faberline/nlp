@@ -965,6 +965,19 @@ fn translate_single_sentence(
             can_repair && ja_zh::naide_locks::may_restore(&raw_sent, &lock_table);
         let restore_verbs =
             can_repair && ja_zh::predicate_glossary::may_restore(&raw_sent, &lock_table);
+        // Only built-in CPU entry points can identify hints added by the glossary.
+        // Keep external analysis as supplied and preserve sentence boundaries.
+        let unhinted_source = || {
+            source_without_glossary?
+                .get_or_init(|| {
+                    let text: String = chars.iter().collect();
+                    let source_options =
+                        doc_options_for_translate(options, &TranslationGlossary::new());
+                    let source = analyze_document(&text, &source_options);
+                    (doc.segmentation == source.segmentation).then_some(source)
+                })
+                .as_ref()
+        };
         let repaired = if restore_topics || restore_omission || restore_verbs {
             let repair = |source: &Document, tokens: &[&Token]| {
                 if restore_omission
@@ -1005,17 +1018,7 @@ fn translate_single_sentence(
             repair(doc, sent_tokens)
                 .map(|(locks, omission)| (doc, sent_tokens.to_vec(), locks, omission))
                 .or_else(|| {
-                    // Only the built-in CPU entry points can identify the hints
-                    // added by the glossary. Keep external analysis as supplied.
-                    let source = source_without_glossary?
-                        .get_or_init(|| {
-                            let text: String = chars.iter().collect();
-                            let source_options =
-                                doc_options_for_translate(options, &TranslationGlossary::new());
-                            let source = analyze_document(&text, &source_options);
-                            (doc.segmentation == source.segmentation).then_some(source)
-                        })
-                        .as_ref()?;
+                    let source = unhinted_source()?;
                     let first = source
                         .tokens
                         .partition_point(|token| token.sentence < sentence_idx);
@@ -1035,6 +1038,9 @@ fn translate_single_sentence(
             }
             None => (doc, sent_tokens, &lock_table, None),
         };
+        let unhinted_fare_roles = |content| {
+            ja_zh::fare_roles_for_sentence(unhinted_source()?, sentence_idx, chars, content)
+        };
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
@@ -1042,6 +1048,7 @@ fn translate_single_sentence(
             render_tokens,
             render_locks,
             predicate_terms,
+            can_repair.then_some(&unhinted_fare_roles),
             &conditioning,
             options.target,
             direct_quote,

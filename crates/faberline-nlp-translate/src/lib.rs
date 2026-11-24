@@ -963,7 +963,9 @@ fn translate_single_sentence(
             && ja_zh::polarity_contrast::may_restore_topics(&raw_sent, chars, &lock_table);
         let restore_omission =
             can_repair && ja_zh::naide_locks::may_restore(&raw_sent, &lock_table);
-        let repaired = if restore_topics || restore_omission {
+        let restore_verbs =
+            can_repair && ja_zh::predicate_glossary::may_restore(&raw_sent, &lock_table);
+        let repaired = if restore_topics || restore_omission || restore_verbs {
             let repair = |source: &Document, tokens: &[&Token]| {
                 if restore_omission
                     && let Some((locks, omission)) = ja_zh::naide_locks::restore(
@@ -975,6 +977,17 @@ fn translate_single_sentence(
                     )
                 {
                     return Some((locks, Some(omission)));
+                }
+                if restore_verbs
+                    && let Some((locks, terms)) = ja_zh::predicate_glossary::restore(
+                        sentence_idx,
+                        source,
+                        tokens,
+                        chars,
+                        &lock_table,
+                    )
+                {
+                    return Some((locks, Some(terms)));
                 }
                 restore_topics
                     .then(|| {

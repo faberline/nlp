@@ -277,7 +277,7 @@ pub(crate) fn translate_ja_sentence(
         calendar::bind_relative_contrast(&mut atoms, chars);
         homework_relative::mark_argument_commas(&mut atoms, doc);
         finished_go::mark_reading_pause(&mut atoms, doc, chars);
-        if let Some(restored) = te_help_glossary::restore_object(&atoms, doc, chars) {
+        if let Some(restored) = te_help_glossary::restore_object(&atoms, doc, chars, lock_table) {
             atoms = restored;
         }
     }

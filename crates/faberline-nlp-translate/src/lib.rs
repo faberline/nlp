@@ -963,7 +963,9 @@ fn translate_single_sentence(
             && ja_zh::polarity_contrast::may_restore_topics(&raw_sent, chars, &lock_table);
         let restore_omission =
             can_repair && ja_zh::naide_locks::may_restore(&raw_sent, &lock_table);
-        let repaired = if restore_topics || restore_omission {
+        let restore_verbs =
+            can_repair && ja_zh::predicate_glossary::may_restore(&raw_sent, &lock_table);
+        let repaired = if restore_topics || restore_omission || restore_verbs {
             let repair = |source: &Document, tokens: &[&Token]| {
                 if restore_omission
                     && let Some((locks, omission)) = ja_zh::naide_locks::restore(
@@ -975,6 +977,17 @@ fn translate_single_sentence(
                     )
                 {
                     return Some((locks, Some(omission)));
+                }
+                if restore_verbs
+                    && let Some((locks, terms)) = ja_zh::predicate_glossary::restore(
+                        sentence_idx,
+                        source,
+                        tokens,
+                        chars,
+                        &lock_table,
+                    )
+                {
+                    return Some((locks, Some(terms)));
                 }
                 restore_topics
                     .then(|| {
@@ -1016,7 +1029,7 @@ fn translate_single_sentence(
         } else {
             None
         };
-        let (render_doc, render_tokens, render_locks, protected_omission) = match &repaired {
+        let (render_doc, render_tokens, render_locks, predicate_terms) = match &repaired {
             Some((source, tokens, locks, omission)) => {
                 (*source, tokens.as_slice(), locks, omission.as_ref())
             }
@@ -1028,7 +1041,7 @@ fn translate_single_sentence(
             render_doc,
             render_tokens,
             render_locks,
-            protected_omission,
+            predicate_terms,
             &conditioning,
             options.target,
             direct_quote,
@@ -1044,7 +1057,10 @@ fn translate_single_sentence(
             .iter()
             .map(|clause| clause.target_span)
             .collect();
-        let report = lock_table.restore_with_spans(&masked_zh, &mut clause_spans);
+        let report = match predicate_terms {
+            Some(terms) => terms.restore_terms(&lock_table, &masked_zh, &mut clause_spans),
+            None => lock_table.restore_with_spans(&masked_zh, &mut clause_spans),
+        };
         for (clause, span) in clause_alignments.iter_mut().zip(clause_spans) {
             clause.target_span = span;
         }

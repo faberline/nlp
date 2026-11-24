@@ -1,46 +1,14 @@
 //! Keep caller verb terms separate from the syntax that establishes an omission.
 
-use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
+use crate::lock::SpanLockTable;
 use crate::schema::GlossaryKind;
 
+use super::predicate_glossary::{Coverage, PredicateTerms, kind};
+
 use super::{
-    Atom, Document, Segment, Span, Token, Upos, build_sentence_atoms, carrying, naide_adverbial,
+    Document, Segment, Span, Token, Upos, build_sentence_atoms, carrying, naide_adverbial,
     naide_ending, split_ja_atoms,
 };
-
-pub(crate) struct ProtectedOmission {
-    stems: Vec<LockedSpan>,
-    whole_result: Option<LockedSpan>,
-}
-
-impl ProtectedOmission {
-    pub(super) fn stem(&self, atoms: &[Atom]) -> Option<&str> {
-        self.stems
-            .iter()
-            .find(|lock| {
-                atoms.iter().any(|atom| {
-                    !atom.is_locked
-                        && atom.upos == Some(Upos::Verb)
-                        && atom.span == lock.source_span
-                })
-            })
-            .map(|lock| lock.placeholder.as_str())
-    }
-
-    pub(super) fn result(&self, span: Span) -> Option<&str> {
-        self.whole_result
-            .as_ref()
-            .filter(|lock| lock.source_span == span)
-            .map(|lock| lock.placeholder.as_str())
-    }
-}
-
-fn kind(lock: &LockedSpan) -> Option<GlossaryKind> {
-    match lock.origin {
-        LockOrigin::Glossary { kind, .. } if lock.mandatory => Some(kind),
-        _ => None,
-    }
-}
 
 pub(crate) fn may_restore(text: &str, locks: &SpanLockTable) -> bool {
     text.contains("ないで")
@@ -57,7 +25,7 @@ pub(crate) fn restore(
     tokens: &[&Token],
     chars: &[char],
     locks: &SpanLockTable,
-) -> Option<(SpanLockTable, ProtectedOmission)> {
+) -> Option<(SpanLockTable, PredicateTerms)> {
     let sentence_span = doc.segmentation.sentences.get(sentence)?.span;
     let atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
     let segments = split_ja_atoms(&atoms, doc, sentence_span, Some(chars));
@@ -80,7 +48,7 @@ pub(crate) fn restore(
         return None;
     }
     let omission = naide_adverbial(before, after, trailing_punct.as_deref(), chars)?;
-    let (hold, _, _) = naide_ending(before)?;
+    let (hold, _, connective) = naide_ending(before)?;
     let [motion, ending @ ..] = after.as_slice() else {
         return None;
     };
@@ -107,16 +75,21 @@ pub(crate) fn restore(
     };
 
     let mut render = SpanLockTable::new();
-    let mut stems = Vec::new();
-    let mut whole_result = None;
+    let mut terms = PredicateTerms::default();
     for lock in &locks.locks {
         let span = lock.source_span;
         match kind(lock) {
             Some(GlossaryKind::DomainTerm) if span == hold.span || span == motion.span => {
-                stems.push(lock.clone());
+                terms.add(span, lock, Coverage::Stem);
+            }
+            Some(GlossaryKind::DomainTerm)
+                if span.start_char == hold.span.start_char
+                    && span.end_char == connective.span.end_char =>
+            {
+                terms.add(hold.span, lock, Coverage::Complete);
             }
             Some(GlossaryKind::DomainTerm) if span == *result_span => {
-                whole_result = Some(lock.clone());
+                terms.add(motion.span, lock, Coverage::Complete);
             }
             Some(GlossaryKind::Object | GlossaryKind::DomainTerm)
                 if span == noun || span == object_with_case =>
@@ -128,16 +101,7 @@ pub(crate) fn restore(
     }
     // Keep the complete source analysis for grammar. Insert the protected verb
     // placeholders only when rendering the corresponding action.
-    if stems.is_empty() && whole_result.is_none() {
-        return None;
-    }
-    Some((
-        render,
-        ProtectedOmission {
-            stems,
-            whole_result,
-        },
-    ))
+    (!terms.is_empty()).then_some((render, terms))
 }
 
 #[cfg(test)]

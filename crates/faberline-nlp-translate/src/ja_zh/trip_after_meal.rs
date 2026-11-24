@@ -53,7 +53,7 @@ fn only_adverbs(atoms: &[Atom], predicate: &SyntaxToken, doc: &Document) -> bool
     })
 }
 
-fn is_meal_noun(source: &[char]) -> bool {
+pub(super) fn is_meal_noun(source: &[char]) -> bool {
     matches!(
         source,
         ['ご', '飯']

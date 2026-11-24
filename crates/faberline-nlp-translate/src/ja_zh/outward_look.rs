@@ -44,7 +44,7 @@ pub(super) fn is_direction(source: &[Atom], predicates: &[Bunsetsu], doc: &Docum
         })
 }
 
-fn outside_case<'a>(
+pub(super) fn outside_case<'a>(
     source: &'a [Atom],
     look: &Atom,
     doc: &Document,

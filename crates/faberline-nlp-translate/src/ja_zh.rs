@@ -31,6 +31,7 @@ mod outward_look;
 mod payment_potential;
 mod place_goal_glossary;
 pub(crate) mod polarity_contrast;
+pub(crate) mod predicate_glossary;
 mod reception;
 mod return_endpoint;
 mod trip_after_meal;
@@ -221,7 +222,7 @@ pub(crate) fn translate_ja_sentence(
     doc: &Document,
     sent_tokens: &[&Token],
     lock_table: &SpanLockTable,
-    protected_omission: Option<&naide_locks::ProtectedOmission>,
+    predicate_terms: Option<&predicate_glossary::PredicateTerms>,
     conditioning: &SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -237,6 +238,9 @@ pub(crate) fn translate_ja_sentence(
         return definition.render(doc, sentence_idx, target);
     }
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
+    if predicate_terms.is_some() {
+        predicate_glossary::normalize_linked_comma(&mut atoms);
+    }
     let (glossary_carry, glossary_goals) =
         if target == TargetVariant::ZhHant && direct_quote.is_none() {
             (
@@ -993,7 +997,7 @@ pub(crate) fn translate_ja_sentence(
                     },
                     joined_naide: Some(&joined_naide),
                     preceding_naide_action,
-                    protected_verb_stem: protected_omission.and_then(|frame| frame.stem(trimmed_atoms)),
+                    predicate_term: predicate_terms.and_then(|terms| terms.verb(trimmed_atoms)),
                     return_trip: None,
                     parallel_elapsed_te: if target == TargetVariant::ZhHant
                         && !prev_was_quote
@@ -1026,16 +1030,14 @@ pub(crate) fn translate_ja_sentence(
                 } else {
                     None
                 };
-                let trailing_punct = if receiving_request.is_some() {
+                let protected_question =
+                    predicate_terms.is_some_and(|terms| terms.is_question(trimmed_atoms));
+                let trailing_punct = if receiving_request.is_some() || protected_question {
                     Some("？")
                 } else {
                     trailing_punct.as_deref()
                 };
-                let (mut rendered, had_subj_only) = if let Some(result) =
-                    protected_omission.and_then(|frame| frame.result(*span))
-                {
-                    (result.to_owned(), false)
-                } else if editorial_shikashi {
+                let (mut rendered, had_subj_only) = if editorial_shikashi {
                     ("然而".to_owned(), false)
                 } else if let Some(rendered) = receiving_request {
                     (rendered, false)
@@ -1148,6 +1150,7 @@ pub(crate) fn translate_ja_sentence(
                 if target == TargetVariant::ZhHant
                     && !inside_quote
                     && !rendered.is_empty()
+                    && !protected_question
                     && !rendered.starts_with(['但', '卻'])
                     && let Some((previous_index, _, byte_end, char_end)) = previous_clause_comma
                     && previous_index.checked_add(1) == Some(seg_idx)
@@ -5884,7 +5887,7 @@ struct ClauseDiscourseCtx<'a> {
     naide_adverbial: Option<NaideAdverbial>,
     joined_naide: Option<&'a std::cell::Cell<Option<usize>>>,
     preceding_naide_action: Option<usize>,
-    protected_verb_stem: Option<&'a str>,
+    predicate_term: Option<&'a predicate_glossary::PredicateTerm>,
     return_trip: Option<ReturnTrip>,
     parallel_elapsed_te: Option<usize>,
     inside_quote: bool,
@@ -13015,6 +13018,13 @@ fn translate_clause_bunsetsus(
         }
         verb_core = "抽".to_owned();
     }
+    if ctx
+        .predicate_term
+        .is_some_and(|term| term.includes_native_object)
+        && objs.len() == 1
+    {
+        objs.clear();
+    }
     if elapsed_progressive_relative && !elapsed_progressive_negative {
         pre_verb_mods.retain(|m| m != "正在");
         pre_verb_mods.push("已經".to_owned());
@@ -14091,6 +14101,28 @@ fn translate_clause_bunsetsus(
     }
 
     // Place front modals (`請不要` / `不要` / `請` / `讓`), attaching causative causee right after `讓`.
+    if let Some(term) = ctx
+        .predicate_term
+        .filter(|term| term.coverage != predicate_glossary::Coverage::Stem)
+    {
+        front_modals.retain_mut(|modifier| match modifier.as_str() {
+            "請不要" => match (term.has_request, term.has_negation) {
+                (true, true) => false,
+                (false, true) => {
+                    *modifier = "請".to_owned();
+                    true
+                }
+                (true, false) => {
+                    *modifier = "不要".to_owned();
+                    true
+                }
+                (false, false) => true,
+            },
+            "請" => !term.has_request,
+            "不要" => !term.has_negation,
+            _ => true,
+        });
+    }
     parts.extend(front_modals);
     if has_causative && !passive_agent_needed && !iobjs.is_empty() {
         for io in iobjs.drain(..) {
@@ -14243,6 +14275,20 @@ fn translate_clause_bunsetsus(
         } else {
             days
         });
+    }
+    if let Some(term) = ctx
+        .predicate_term
+        .filter(|term| term.coverage != predicate_glossary::Coverage::Stem)
+    {
+        // Whole caller terms own their inflection. Placement above still
+        // uses the original negative, affirmative, and past grammar.
+        inner_pre_mods.retain(|m| {
+            !(term.has_negation && matches!(m.as_str(), "沒有" | "不" | "不要" | "請不要"))
+                && !(m == "有" && term.has_affirmation)
+        });
+        if term.has_past {
+            post_verb_mods.retain(|m| m != "了");
+        }
     }
     parts.extend(inner_pre_mods);
     if let Some(partner) = meeting_partner {
@@ -14417,8 +14463,11 @@ fn translate_clause_bunsetsus(
         parts.push(verb_core.clone());
         parts.push(objs.remove(0));
     }
-    if let Some(stem) = ctx.protected_verb_stem {
-        parts.push(stem.to_owned());
+    if let Some(term) = ctx.predicate_term {
+        if verb_core == "往外看" {
+            parts.push("往外".to_owned());
+        }
+        parts.push(term.placeholder.clone());
     } else if !verb_core.is_empty() {
         parts.push(verb_core);
     }
@@ -14524,7 +14573,9 @@ fn translate_clause_bunsetsus(
     if let Some(adverbial) = naide_adverbial.filter(|adverbial| adverbial.join_unstated_subject)
         && let Some(joined) = ctx.joined_naide
     {
-        parts.push("就".to_owned());
+        if !ctx.predicate_term.is_some_and(|term| term.has_result_link) {
+            parts.push("就".to_owned());
+        }
         joined.set(Some(adverbial.action));
     }
     (join_zh_parts(&parts), had_overt_subj_no_pred)

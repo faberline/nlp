@@ -239,7 +239,11 @@ pub(crate) fn may_restore_topics(text: &str, chars: &[char], locks: &SpanLockTab
                 return false;
             };
             match (topic_lock_kind(lock), surface) {
-                (Some(GlossaryKind::Object), [meal @ .., 'は']) => is_meal(meal),
+                (Some(GlossaryKind::Object | GlossaryKind::DomainTerm), [meal @ .., 'は'])
+                    if is_meal(meal) =>
+                {
+                    true
+                }
                 (
                     Some(GlossaryKind::Place | GlossaryKind::DomainTerm),
                     [_, .., 'に' | 'へ', 'は'],
@@ -249,6 +253,7 @@ pub(crate) fn may_restore_topics(text: &str, chars: &[char], locks: &SpanLockTab
                 }
                 (Some(GlossaryKind::DomainTerm), _) => {
                     matches!(chars.get(span.end_char..), Some(['に' | 'へ', 'は', ..]))
+                        || (is_meal(surface) && chars.get(span.end_char) == Some(&'は'))
                 }
                 _ => false,
             }
@@ -274,6 +279,18 @@ pub(crate) fn restore_topics(
         .position(|atom| matches!(atom.surface.as_str(), "、" | "，"))?;
     let previous = &body[..comma];
     let current = &body[comma + 1..];
+    let (render, changed) = render_topics(sentence, previous, current, doc, chars, locks)?;
+    changed.then_some(render)
+}
+
+pub(super) fn render_topics(
+    sentence: usize,
+    previous: &[Atom],
+    current: &[Atom],
+    doc: &Document,
+    chars: &[char],
+    locks: &SpanLockTable,
+) -> Option<(SpanLockTable, bool)> {
     affirmative_meal(previous, current, doc, chars)?;
 
     let [leading @ .., meal, topic, action, _] = previous else {
@@ -303,10 +320,14 @@ pub(crate) fn restore_topics(
     for lock in &mut render.locks {
         let span = lock.source_span;
         let end_char = match topic_lock_kind(lock)? {
-            GlossaryKind::Object
+            GlossaryKind::Object | GlossaryKind::DomainTerm
                 if (span.start_char == meal.span.start_char || span.start_char == meal_start)
                     && [meal.span.end_char, topic.span.end_char].contains(&span.end_char) =>
             {
+                if let LockOrigin::Glossary { kind, .. } = &mut lock.origin {
+                    restored |= *kind == GlossaryKind::DomainTerm;
+                    *kind = GlossaryKind::Object;
+                }
                 meal.span.end_char
             }
             GlossaryKind::Place | GlossaryKind::DomainTerm
@@ -330,7 +351,7 @@ pub(crate) fn restore_topics(
         // Only the renderer sees this boundary. The public hit uses the original lock.
         lock.source_span.end_char = end_char;
     }
-    restored.then_some(render)
+    Some((render, restored))
 }
 
 #[cfg(test)]

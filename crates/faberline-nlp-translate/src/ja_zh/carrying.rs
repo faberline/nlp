@@ -19,6 +19,7 @@ pub(super) fn with_motion(
     following: &[Segment],
     doc: &Document,
     chars: &[char],
+    locks: Option<&SpanLockTable>,
 ) -> bool {
     let Some((hold, motion)) = linked_actions(predicates, following, doc) else {
         return false;
@@ -26,14 +27,33 @@ pub(super) fn with_motion(
     let Some((object, noun, _)) = portable_object(doc, chars, hold, motion) else {
         return false;
     };
+    if let Some(atom) = source.iter().find(|atom| {
+        atom.is_locked
+            && atom.span.start_char < noun.end_char
+            && noun.start_char < atom.span.end_char
+    }) {
+        // The native syntax already proves the object and its separate case marker.
+        // An exact noun match keeps that role while changing the emitted noun.
+        return atom.span == noun
+            && atom.doc_tok_idx == Some(object)
+            && locks.is_some_and(|table| {
+                table.locks.iter().any(|lock| {
+                    lock.source_span == noun
+                        && lock.placeholder == atom.surface
+                        && lock.mandatory
+                        && matches!(
+                            lock.origin,
+                            LockOrigin::Glossary {
+                                kind: GlossaryKind::Object | GlossaryKind::DomainTerm,
+                                ..
+                            }
+                        )
+                })
+            });
+    }
     source
         .iter()
         .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(object))
-        && !source.iter().any(|atom| {
-            atom.is_locked
-                && atom.span.start_char < noun.end_char
-                && noun.start_char < atom.span.end_char
-        })
 }
 
 fn portable_object(
@@ -446,7 +466,7 @@ mod tests {
     #[test]
     fn an_opaque_item_keeps_its_glossary_rendering() {
         let mut glossary = TranslationGlossary::new();
-        glossary.objects.push(GlossaryEntry {
+        glossary.places.push(GlossaryEntry {
             canonical: "傘".to_owned(),
             surfaces: vec!["傘".to_owned()],
             targets: [(TargetVariant::ZhHant, "雨具".to_owned())].into(),
@@ -459,52 +479,65 @@ mod tests {
     }
 
     #[test]
-    fn a_complete_item_lock_keeps_the_object_and_the_carrying_action() {
-        let source = "傘を持って、駅へ行きました。";
+    fn an_item_lock_keeps_the_object_and_the_carrying_action() {
         let options = TranslateOptions::new(TargetVariant::ZhHant);
-        let unhinted = analyze_document(
-            source,
-            &doc_options_for_translate(&options, &TranslationGlossary::new()),
-        );
-        let entry = GlossaryEntry {
-            canonical: "傘を".to_owned(),
-            surfaces: vec!["傘を".to_owned()],
-            targets: [(TargetVariant::ZhHant, "雨具".to_owned())].into(),
-            ..GlossaryEntry::default()
-        };
-        for glossary in [
-            TranslationGlossary {
-                objects: vec![entry.clone()],
-                ..TranslationGlossary::new()
-            },
-            TranslationGlossary {
-                domain_terms: vec![entry],
-                ..TranslationGlossary::new()
-            },
+        for (source, expected, target_start) in [
+            ("傘を持って、駅へ行きました。", "帶著雨具，往車站去了。", 2),
+            ("傘を持たないで、出かけました。", "沒有帶雨具就出門了。", 3),
         ] {
-            let result = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
-                .expect("translate on CPU");
-            let direct = translate_document(
+            let unhinted = analyze_document(
                 source,
-                &unhinted,
-                #[cfg(feature = "narrative")]
-                None,
-                &options,
-                &glossary,
-                None,
-            )
-            .expect("translate pre-analyzed text");
-            assert_eq!(result.target_text, "帶著雨具，往車站去了。");
-            assert_eq!(direct.target_text, result.target_text);
-            assert_eq!(direct.glossary_hits, result.glossary_hits);
-            let [hit] = result.glossary_hits.as_slice() else {
-                panic!("expected one complete object match");
-            };
-            assert_eq!(hit.source_span.start_char, 0);
-            assert_eq!(hit.source_span.end_char, 2);
-            assert_eq!(hit.target_span.start_char, 2);
-            assert_eq!(hit.target_span.end_char, 4);
-            assert!(!translate("片手で傘を持って、駅へ行きました。", &glossary).contains("帶著"));
+                &doc_options_for_translate(&options, &TranslationGlossary::new()),
+            );
+            for term in ["傘", "傘を"] {
+                let entry = GlossaryEntry {
+                    canonical: term.to_owned(),
+                    surfaces: vec![term.to_owned()],
+                    targets: [(TargetVariant::ZhHant, "雨具".to_owned())].into(),
+                    ..GlossaryEntry::default()
+                };
+                for glossary in [
+                    TranslationGlossary {
+                        objects: vec![entry.clone()],
+                        ..TranslationGlossary::new()
+                    },
+                    TranslationGlossary {
+                        domain_terms: vec![entry],
+                        ..TranslationGlossary::new()
+                    },
+                ] {
+                    let result =
+                        analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                            .expect("translate on CPU");
+                    let direct = translate_document(
+                        source,
+                        &unhinted,
+                        #[cfg(feature = "narrative")]
+                        None,
+                        &options,
+                        &glossary,
+                        None,
+                    )
+                    .expect("translate pre-analyzed text");
+                    assert_eq!(result.target_text, expected);
+                    assert_eq!(direct.target_text, result.target_text);
+                    assert_eq!(direct.glossary_hits, result.glossary_hits);
+                    let [hit] = result.glossary_hits.as_slice() else {
+                        panic!("expected one object match");
+                    };
+                    assert_eq!(hit.source_span.start_char, 0);
+                    assert_eq!(hit.source_span.end_char, term.chars().count());
+                    assert_eq!(hit.target_span.start_char, target_start);
+                    assert_eq!(hit.target_span.end_char, target_start + 2);
+                    for control in [
+                        "片手で傘を持って、駅へ行きました。",
+                        "父が傘を持って、私は先に出かけました。",
+                    ] {
+                        let output = translate(control, &glossary);
+                        assert!(!output.contains("帶著"), "{output}");
+                    }
+                }
+            }
         }
     }
 }

@@ -30,6 +30,7 @@ mod payment_potential;
 mod place_goal_glossary;
 mod reception;
 mod return_endpoint;
+mod trip_after_meal;
 
 #[cfg(test)]
 mod focused_negative_go_tests;
@@ -319,6 +320,19 @@ pub(crate) fn translate_ja_sentence(
         sent_span,
         (target == TargetVariant::ZhHant).then_some(chars),
     );
+    let recovered_meal_trip = match segments.as_slice() {
+        [
+            Segment::Clause {
+                atoms: meal,
+                trailing_punct: Some(comma),
+                ..
+            },
+            Segment::Clause { atoms: trip, .. },
+        ] if matches!(comma.as_str(), "、" | "，") && target == TargetVariant::ZhHant => {
+            trip_after_meal::recover(meal, trip, doc, chars, lock_table)
+        }
+        _ => None,
+    };
     let prior_letter_distribution = prior_letter_distribution.filter(|_| {
         direct_quote.is_none() && matches!(segments.as_slice(), [Segment::Clause { .. }])
     });
@@ -918,6 +932,17 @@ pub(crate) fn translate_ja_sentence(
                             if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
                         _ => &[],
                     },
+                    prior_meal: match segments.as_slice() {
+                        [Segment::Clause { atoms: meal, trailing_punct: Some(comma), .. }, Segment::Clause { atoms: trip, .. }]
+                            if matches!(comma.as_str(), "、" | "，")
+                                && target == TargetVariant::ZhHant && !inside_quote =>
+                        {
+                            trip_after_meal::prior_meal(meal, trip, doc, chars)
+                                .or(recovered_meal_trip.map(|frame| frame.meal_predicate))
+                        }
+                        _ => None,
+                    },
+                    recovered_meal_trip: recovered_meal_trip.filter(|_| !inside_quote),
                     measured_activity: Some(&measured_activity),
                     prepared_for_predicate: previous_preparation
                         .as_ref()
@@ -5810,6 +5835,8 @@ struct ClauseDiscourseCtx<'a> {
     glossary_carry: &'a [carrying::GlossaryCarry],
     glossary_goals: &'a [focused_goal_glossary::FocusedGoal],
     preceding_activity: &'a [Atom],
+    prior_meal: Option<usize>,
+    recovered_meal_trip: Option<trip_after_meal::RecoveredTrip>,
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
     prepared_for_predicate: Option<usize>,
     naide_adverbial: Option<NaideAdverbial>,
@@ -11642,6 +11669,9 @@ fn translate_clause_bunsetsus(
     } else {
         None
     };
+    let recovered_goal = ctx
+        .recovered_meal_trip
+        .and_then(|frame| frame.restore_arguments(&mut bunsetsus));
     let focused_days = if target == TargetVariant::ZhHant {
         calendar::take_focused_days(&mut bunsetsus, source)
     } else {
@@ -12084,8 +12114,9 @@ fn translate_clause_bunsetsus(
             source,
             doc,
             ctx.source_chars,
-            ctx.preceding_naide_action,
+            ctx.preceding_naide_action.or(ctx.prior_meal),
         )
+        .or(recovered_goal)
     } else {
         None
     };
@@ -13691,6 +13722,18 @@ fn translate_clause_bunsetsus(
     // Separate top-level pre-verbal modals (`請不要` / `不要` / `請` / `讓` / `聽說`) so modals precede adverbs.
     let mut front_modals: Vec<String> = Vec::new();
     let mut inner_pre_mods: Vec<String> = Vec::new();
+    let completed_prior_meal = ctx.prior_meal.is_some_and(|action| {
+        matches!(predicates.as_slice(), [predicate] if predicate.atoms.iter().any(
+            |atom| !atom.is_locked && atom.doc_tok_idx == Some(action)))
+            && verb_core == "吃"
+            && objs.len() == 1
+            && pre_verb_mods.is_empty()
+            && post_verb_mods.is_empty()
+            && !passive_agent_needed
+    });
+    if completed_prior_meal {
+        post_verb_mods.push("了".to_owned());
+    }
     for m in pre_verb_mods.drain(..) {
         if matches!(m.as_str(), "請不要" | "不要" | "請" | "讓" | "聽說") {
             front_modals.push(m);
@@ -14345,6 +14388,9 @@ fn translate_clause_bunsetsus(
     parts.extend(event_counts);
     parts.extend(counted_arrival);
     parts.extend(objs);
+    if completed_prior_meal {
+        parts.push("後".to_owned());
+    }
     parts.extend(elapsed_duration);
     parts.extend(activity_period_tail);
     parts.extend(purpose_recipients);

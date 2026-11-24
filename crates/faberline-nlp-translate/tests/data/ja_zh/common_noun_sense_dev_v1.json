@@ -1,0 +1,983 @@
+{
+  "schema": "faberline.nlp.ja_zh.common_noun_sense_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source": "https://github.com/faberline/nlp/issues/528",
+  "visibility": "development-visible",
+  "items": [
+    {
+      "id": "N01",
+      "jp": "新しいソフトをパソコンに入れました。",
+      "zh_hant": "我在電腦上安裝了新軟體。",
+      "coverage": "clear-context,sense:software",
+      "semantic_checks": [
+        "ソフト是電腦軟體。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明軟體名稱或用途。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ソフト",
+      "sense": "ソフト: software"
+    },
+    {
+      "id": "N02",
+      "jp": "弟は新しいゲームソフトを買いました。",
+      "zh_hant": "弟弟買了新的遊戲軟體。",
+      "coverage": "clear-context,sense:game-software",
+      "semantic_checks": [
+        "ソフト指遊戲軟體。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明遊戲名稱。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ソフト",
+      "sense": "ソフト: game software"
+    },
+    {
+      "id": "N03",
+      "jp": "暑い日に、駅前でソフトを食べました。",
+      "zh_hant": "炎熱的日子裡，我在車站前吃了霜淇淋。",
+      "coverage": "clear-context,sense:ice-cream",
+      "semantic_checks": [
+        "食べる的受詞ソフト是霜淇淋。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明口味。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ソフト",
+      "sense": "ソフト: soft-serve ice cream"
+    },
+    {
+      "id": "N04",
+      "jp": "昼休みに、みんなでソフトの試合をしました。",
+      "zh_hant": "午休時，大家一起打了壘球比賽。",
+      "coverage": "clear-context,sense:softball",
+      "semantic_checks": [
+        "ソフトの試合をしたのはみんな；ソフトは壘球。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明場地或比分。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ソフト",
+      "sense": "ソフト: short for softball"
+    },
+    {
+      "id": "N05",
+      "jp": "ソフトを見ました。",
+      "zh_hant": "我看了ソフト。",
+      "coverage": "weak-context,preserve-uncertainty",
+      "semantic_checks": [
+        "保留ソフト原詞，不替語境不足的詞義作選擇。"
+      ],
+      "semantic_unknowns": [
+        "無法判斷是軟體、遊戲軟體、霜淇淋或壘球。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ソフト",
+      "sense": "ソフト: weak context"
+    },
+    {
+      "id": "N06",
+      "jp": "公園でソフトをしました。帰りにアイスを買いました。",
+      "zh_hant": "我在公園打了壘球。回家路上買了冰。",
+      "coverage": "same-word-cue-other-clause,sense:softball",
+      "semantic_checks": [
+        "アイス只在另一句出現；不可因此把第一句ソフト解作霜淇淋。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明冰品種類。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ソフト",
+      "sense": "ソフト: unrelated-clause cue"
+    },
+    {
+      "id": "N07",
+      "jp": "旅行の写真をアルバムに入れました。",
+      "zh_hant": "我把旅行照片放進相簿裡。",
+      "coverage": "clear-context,sense:photo-album",
+      "semantic_checks": [
+        "放照片的アルバム是相簿。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明相簿名稱。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "アルバム",
+      "sense": "アルバム: photo album"
+    },
+    {
+      "id": "N08",
+      "jp": "好きな歌手のアルバムを買いました。",
+      "zh_hant": "我買了喜歡的歌手的音樂專輯。",
+      "coverage": "clear-context,sense:music-album",
+      "semantic_checks": [
+        "歌手的アルバム是音樂專輯。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明專輯名稱。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "アルバム",
+      "sense": "アルバム: music album"
+    },
+    {
+      "id": "N09",
+      "jp": "アルバムを見ました。",
+      "zh_hant": "我看了アルバム。",
+      "coverage": "weak-context,preserve-uncertainty",
+      "semantic_checks": [
+        "保留アルバム原詞或以不確定方式翻譯。"
+      ],
+      "semantic_unknowns": [
+        "無法判斷是相簿或音樂專輯；見る也不會單獨排除任一意思。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "アルバム",
+      "sense": "アルバム: weak context"
+    },
+    {
+      "id": "N10",
+      "jp": "アルバムに写真を入れました。新しい曲も聞きました。",
+      "zh_hant": "我把照片放進相簿。也聽了新歌。",
+      "coverage": "same-word-cue-other-clause,sense:photo-album",
+      "semantic_checks": [
+        "曲は另一句的線索；第一句アルバム仍由照片受詞定為相簿。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明歌曲名稱。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "アルバム",
+      "sense": "アルバム: unrelated-clause cue"
+    },
+    {
+      "id": "N11",
+      "jp": "そのドラマは来月からテレビで始まります。",
+      "zh_hant": "那部電視劇下個月起會在電視上播出。",
+      "coverage": "clear-context,sense:tv-series",
+      "semantic_checks": [
+        "電視播出情境中的ドラマ是電視劇。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明集數或頻道。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ドラマ",
+      "sense": "ドラマ: television drama"
+    },
+    {
+      "id": "N12",
+      "jp": "学校で上演されたドラマを見ました。",
+      "zh_hant": "我看了學校演出的戲劇。",
+      "coverage": "clear-context,sense:stage-play",
+      "semantic_checks": [
+        "上演明確表示舞台戲劇作品。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明演出團體。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ドラマ",
+      "sense": "ドラマ: dramatic work"
+    },
+    {
+      "id": "N13",
+      "jp": "文化祭で上演するドラマに、舞台の指示とせりふを書き足しました。",
+      "zh_hant": "文化祭要上演的劇本中補上舞台指示和台詞。",
+      "coverage": "clear-context,sense:script",
+      "semantic_checks": [
+        "ドラマ本身包含舞台指示和台詞，並供文化祭上演；ドラマ指劇本。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明作者或演出者。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ドラマ",
+      "sense": "ドラマ: script"
+    },
+    {
+      "id": "N14",
+      "jp": "その再会は、町じゅうが見守るドラマになりました。",
+      "zh_hant": "那場重逢成了全鎮居民關注的戲劇性事件。",
+      "coverage": "clear-context,sense:dramatic-event",
+      "semantic_checks": [
+        "ドラマになりました表示一場戲劇性的事件或發展，不是戲劇作品。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明重逢者的身分或後續。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ドラマ",
+      "sense": "ドラマ: dramatic event"
+    },
+    {
+      "id": "N15",
+      "jp": "ドラマを見ました。",
+      "zh_hant": "我看了ドラマ。",
+      "coverage": "weak-context,preserve-uncertainty",
+      "semantic_checks": [
+        "保留ドラマ原詞或以不確定方式翻譯。"
+      ],
+      "semantic_unknowns": [
+        "無法單靠原句確定是電視劇、舞台戲劇或其他戲劇作品。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ドラマ",
+      "sense": "ドラマ: weak context"
+    },
+    {
+      "id": "N16",
+      "jp": "ドラマに舞台の指示とせりふを書き足しました。夜はテレビのニュースを見ました。",
+      "zh_hant": "劇本中補上舞台指示和台詞。晚上看了電視新聞。",
+      "coverage": "same-word-cue-other-clause,sense:script",
+      "semantic_checks": [
+        "ドラマ本身有舞台指示和台詞；後句テレビ是另一句線索，不改變ドラマ的劇本義。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明作者、演出者或新聞內容。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ドラマ",
+      "sense": "ドラマ: unrelated-clause cue"
+    },
+    {
+      "id": "N17",
+      "jp": "駅の前のポストに手紙を入れました。",
+      "zh_hant": "我把信投進車站前的郵筒。",
+      "coverage": "clear-context,sense:mailbox",
+      "semantic_checks": [
+        "投信件用的ポスト是郵筒。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明郵件內容。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ポスト",
+      "sense": "ポスト: mailbox"
+    },
+    {
+      "id": "N18",
+      "jp": "店長のポストが空いています。",
+      "zh_hant": "店長的職位目前空缺。",
+      "coverage": "clear-context,sense:job-position",
+      "semantic_checks": [
+        "空缺的ポスト是職位。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明職責。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ポスト",
+      "sense": "ポスト: position"
+    },
+    {
+      "id": "N19",
+      "jp": "サッカーの試合で、ボールがゴールのポストに当たりました。",
+      "zh_hant": "足球比賽中，球打中了球門柱。",
+      "coverage": "clear-context,sense:goalpost",
+      "semantic_checks": [
+        "サッカーの試合與ゴール在同一句；ポスト是球門柱。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明球是否進門或比賽結果。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ポスト",
+      "sense": "ポスト: goalpost"
+    },
+    {
+      "id": "N20",
+      "jp": "ポストは古いです。",
+      "zh_hant": "ポスト很舊。",
+      "coverage": "weak-context,preserve-uncertainty",
+      "semantic_checks": [
+        "保留ポスト原詞，不替語境不足的詞義作選擇。"
+      ],
+      "semantic_unknowns": [
+        "無法判斷是郵筒或職位等其他意思。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ポスト",
+      "sense": "ポスト: weak context"
+    },
+    {
+      "id": "N21",
+      "jp": "ポストに手紙を入れました。仕事は明日からです。",
+      "zh_hant": "我把信投進郵筒。工作從明天開始。",
+      "coverage": "same-word-cue-other-clause,sense:mailbox",
+      "semantic_checks": [
+        "仕事在另一句；手紙を入れる限定ポスト為郵筒。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明工作內容。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ポスト",
+      "sense": "ポスト: unrelated-clause cue"
+    },
+    {
+      "id": "N22",
+      "jp": "引用した『ポスト』という語は、ここでは役職の意味です。",
+      "zh_hant": "引述的「ポスト」一詞在這裡是職位的意思。",
+      "coverage": "quote-preservation,sense:job-position",
+      "semantic_checks": [
+        "引號中的詞可依句意辨義；保留引述詞界線。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明具體職稱。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ポスト",
+      "sense": "ポスト: quoted term"
+    },
+    {
+      "id": "N23",
+      "jp": "このバッテリーは、朝から夕方まで使えます。",
+      "zh_hant": "這顆電池從早上到傍晚都能使用。",
+      "coverage": "clear-context,sense:battery",
+      "semantic_checks": [
+        "可使用一段時間的バッテリー是電池。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明裝置種類。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "バッテリー",
+      "sense": "バッテリー: battery"
+    },
+    {
+      "id": "N24",
+      "jp": "野球チームの投手と捕手のバッテリーは、とても息が合っています。",
+      "zh_hant": "棒球隊的投手和捕手搭檔非常有默契。",
+      "coverage": "clear-context,sense:baseball-pitcher-catcher",
+      "semantic_checks": [
+        "同一句明示棒球隊、投手和捕手；バッテリー指投捕搭檔。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明球員姓名。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "バッテリー",
+      "sense": "バッテリー: baseball battery"
+    },
+    {
+      "id": "N25",
+      "jp": "バッテリーを見ました。",
+      "zh_hant": "看了バッテリー。",
+      "coverage": "weak-context,preserve-uncertainty",
+      "semantic_checks": [
+        "保留バッテリー原詞，或使用不指定詞義的自然說法。"
+      ],
+      "semantic_unknowns": [
+        "無法判斷是電池或棒球投捕搭檔；原文未明示人物。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "バッテリー",
+      "sense": "バッテリー: weak context"
+    },
+    {
+      "id": "N26",
+      "jp": "バッテリーを充電しました。野球の試合は明日です。",
+      "zh_hant": "我替電池充了電。棒球比賽在明天。",
+      "coverage": "same-word-cue-other-clause,sense:battery",
+      "semantic_checks": [
+        "野球在另一句；第一句充電直接支持電池義，且不推斷裝置。"
+      ],
+      "semantic_unknowns": [
+        "未說明電池種類或用途。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "バッテリー",
+      "sense": "バッテリー: unrelated-clause cue"
+    },
+    {
+      "id": "N27",
+      "jp": "駅の窓口のカウンターで切符を買いました。",
+      "zh_hant": "我在車站窗口櫃檯買了車票。",
+      "coverage": "clear-context,sense:counter-desk",
+      "semantic_checks": [
+        "買車票的地點カウンター是櫃檯。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明車票種類。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "カウンター",
+      "sense": "カウンター: service counter"
+    },
+    {
+      "id": "N28",
+      "jp": "入口に人数を数えるカウンターがあります。",
+      "zh_hant": "入口有一個計算人數的計數器。",
+      "coverage": "clear-context,sense:counter-device",
+      "semantic_checks": [
+        "計算人數的カウンター是計數器。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明計數器型式。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "カウンター",
+      "sense": "カウンター: counting device"
+    },
+    {
+      "id": "N29",
+      "jp": "サッカーの試合で、相手の攻撃にカウンターを仕掛けました。",
+      "zh_hant": "足球比賽中，我方對對手的進攻發動反擊。",
+      "coverage": "clear-context,sense:counterattack",
+      "semantic_checks": [
+        "同一句的サッカーの試合與攻撃限定カウンター為反擊戰術。"
+      ],
+      "semantic_unknowns": [
+        "原文未指出球員或比賽結果。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "カウンター",
+      "sense": "カウンター: counterattack"
+    },
+    {
+      "id": "N30",
+      "jp": "カウンターを使いました。",
+      "zh_hant": "我使用了カウンター。",
+      "coverage": "weak-context,preserve-uncertainty",
+      "semantic_checks": [
+        "保留カウンター原詞或以不確定方式翻譯。"
+      ],
+      "semantic_unknowns": [
+        "無法判斷是櫃檯、計數器或反擊手段。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "カウンター",
+      "sense": "カウンター: weak context"
+    },
+    {
+      "id": "N31",
+      "jp": "カウンターで払いました。帰りに数を数えました。",
+      "zh_hant": "我在櫃檯付款。回程時數了數量。",
+      "coverage": "same-word-cue-other-clause,sense:counter-desk",
+      "semantic_checks": [
+        "數を数える在另一句；第一句助詞で和払う表示櫃檯。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明付款金額。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "カウンター",
+      "sense": "カウンター: unrelated-clause cue"
+    },
+    {
+      "id": "N32",
+      "jp": "人数を数えるカウンターの画面に `カウンター.reset()` と表示されています。",
+      "zh_hant": "計算人數的計數器畫面顯示 `カウンター.reset()`。",
+      "coverage": "inline-code-preservation,do-not-translate-code",
+      "semantic_checks": [
+        "外部カウンター由「人數を數える」限定為計數器；保留反引號內Unicode識別字及標點。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明程式碼的功能。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "カウンター",
+      "sense": "カウンター: inline code safeguard"
+    },
+    {
+      "id": "N33",
+      "jp": "長いケーブルを床に置きました。",
+      "zh_hant": "我把長纜線放在地上。",
+      "coverage": "clear-context,sense:cable",
+      "semantic_checks": [
+        "置在地上的ケーブル是一般纜線。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明用途。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ケーブル",
+      "sense": "ケーブル: general cable"
+    },
+    {
+      "id": "N34",
+      "jp": "橋を支える鋼製ケーブルを点検しました。",
+      "zh_hant": "我檢查了支撐橋梁的鋼製纜索。",
+      "coverage": "clear-context,sense:steel-cable",
+      "semantic_checks": [
+        "鋼製與支撐橋梁的語境明示ケーブル是鋼索。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明檢查結果。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ケーブル",
+      "sense": "ケーブル: steel cable"
+    },
+    {
+      "id": "N35",
+      "jp": "山のケーブルに乗って展望台へ行きました。",
+      "zh_hant": "搭山上的纜車前往觀景台。",
+      "coverage": "clear-context,sense:cable-car",
+      "semantic_checks": [
+        "在山上搭乘並前往展望台的ケーブル指索道運具；保留山區和目的地。"
+      ],
+      "semantic_unknowns": [
+        "原文未指定運具的具體型式。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ケーブル",
+      "sense": "ケーブル: cable transport shorthand"
+    },
+    {
+      "id": "N36",
+      "jp": "ケーブルを見ました。",
+      "zh_hant": "我看了ケーブル。",
+      "coverage": "weak-context,preserve-uncertainty",
+      "semantic_checks": [
+        "保留ケーブル原詞或以不確定方式翻譯。"
+      ],
+      "semantic_unknowns": [
+        "無法判斷是一般纜線、鋼索或索道運具。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ケーブル",
+      "sense": "ケーブル: weak context"
+    },
+    {
+      "id": "N37",
+      "jp": "電話機と壁をつなぐケーブルを修理しました。来週は山のケーブルに乗ります。",
+      "zh_hant": "我修好了連接電話和牆壁的纜線。下週要搭山上的纜車。",
+      "coverage": "same-word-cue-other-clause,sense:cable",
+      "semantic_checks": [
+        "第一句明示ケーブル連接電話和牆壁，指纜線；第二句的山のケーブル是另一句的索道線索，不可回頭改變第一句詞義。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明纜線規格或下週行程細節。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ケーブル",
+      "sense": "ケーブル: unrelated-clause cue"
+    },
+    {
+      "id": "N38",
+      "jp": "ライブのチケットを買いました。『アルバム』は店で探します。",
+      "zh_hant": "我買了現場演出的門票。「アルバム」會在店裡找。",
+      "coverage": "quote-preservation,weak-context,preserve-uncertainty",
+      "semantic_checks": [
+        "保留引號內容；不能只因ライブ便把アルバム指定為音樂專輯。"
+      ],
+      "semantic_unknowns": [
+        "沒說明要找的是相簿還是音樂專輯。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "アルバム",
+      "sense": "アルバム: quoted weak-context term"
+    },
+    {
+      "id": "N39",
+      "jp": "野球の話をしました。バッテリーを買いました。",
+      "zh_hant": "聊了棒球。買了電池。",
+      "coverage": "same-word-cue-other-clause,sense:battery",
+      "semantic_checks": [
+        "野球の話在另一句；買った物バッテリー依物品語境解作電池。"
+      ],
+      "semantic_unknowns": [
+        "未說明電池規格、用途或行動者。"
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "バッテリー",
+      "sense": "バッテリー: unrelated-clause cue"
+    },
+    {
+      "id": "N40",
+      "jp": "ドラマは好きです。",
+      "zh_hant": "我喜歡戲劇作品。",
+      "coverage": "caller-glossary-lock,source-span",
+      "semantic_checks": [
+        "本題專用的呼叫端詞彙鎖定將ドラマ譯為戲劇作品；未指定作品類型。"
+      ],
+      "semantic_unknowns": [],
+      "visibility": "development-visible",
+      "heldout": false,
+      "allowed_variants": [],
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex subagent noun_dev_author",
+        "license": "MIT"
+      },
+      "level_approx": "N5",
+      "lemma": "ドラマ",
+      "sense": "ドラマ: caller glossary lock",
+      "expected_glossary_hit": {
+        "kind": "object",
+        "canonical": "ドラマ",
+        "source_span": {
+          "start_char": 0,
+          "end_char": 3
+        },
+        "target_text": "戲劇作品"
+      },
+      "fixture": {
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [
+            {
+              "canonical": "ドラマ",
+              "surfaces": [
+                "ドラマ"
+              ],
+              "targets": {
+                "zh-Hant": "戲劇作品"
+              }
+            }
+          ],
+          "domain_terms": []
+        }
+      }
+    }
+  ],
+  "provenance": {
+    "author": "Codex subagent noun_dev_author",
+    "license": "MIT",
+    "origin": "first_party_original",
+    "note": "All Japanese and Taiwan Traditional Chinese examples are original. No dictionary examples or definitions are reproduced."
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": "ja",
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  }
+}

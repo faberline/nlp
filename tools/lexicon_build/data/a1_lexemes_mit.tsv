@@ -59,3 +59,6 @@
 義姉	ja	740	NOUN	NOUN	-	配偶的姊姊、嫂嫂、繼姊、養姊或結拜姊姊	src=first_party_mit
 義弟	ja	1039	NOUN	NOUN	-	配偶的弟弟、妹夫、繼弟、養弟或結拜弟弟	src=first_party_mit
 義妹	ja	740	NOUN	NOUN	-	配偶的妹妹、弟媳、繼妹、養妹或結拜妹妹	src=first_party_mit
+#
+# Hiragana tobacco noun for segmentation
+たばこ	ja	508	NOUN	NOUN	-	菸	src=first_party_mit

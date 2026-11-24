@@ -1,11 +1,14 @@
 //! Resolve common homographic nouns from their own Japanese syntactic context.
 
 use super::{
-    Atom, ClauseAlignment, Document, Span, TargetVariant, Upos, dasu_case_link,
+    Atom, ClauseAlignment, Document, LOCKED_OBJECT_ATOM, Span, TargetVariant, Upos, dasu_case_link,
     localize_close_quote, localize_open_quote, localize_punct, nominal_possession,
+    render_temporal_made_atom, translate_single_ja_term,
 };
 
 const MARKER: &str = "__ja_common_noun_sense:";
+const CONNECTING: &str = "__ja_common_noun_connecting_cable";
+const CONNECTED_WALL: &str = "__ja_common_noun_connected_wall";
 
 fn supported(surface: &str) -> bool {
     matches!(
@@ -74,9 +77,44 @@ pub(super) fn bind(atoms: &mut [Atom], doc: &Document, chars: &[char]) {
     for (index, gloss) in readings {
         atoms[index].lemma = Some(format!("{MARKER}{gloss}"));
     }
+    for index in 1..atoms.len() {
+        let [action, cable] = &atoms[index - 1..=index] else {
+            continue;
+        };
+        if !action.is_locked
+            && !cable.is_locked
+            && render(&cable.surface, cable.lemma.as_deref()) == Some("纜線")
+            && action.upos == Some(Upos::Verb)
+            && like(action, &["つなぐ", "繋ぐ"])
+            && action.deprel == "acl"
+            && cable.doc_tok_idx.is_some()
+            && action.head == cable.doc_tok_idx
+            && action.span.end_char == cable.span.start_char
+        {
+            let predicate = action.doc_tok_idx;
+            atoms[index - 1].lemma = Some(CONNECTING.to_owned());
+            for endpoint in &mut atoms[..index - 1] {
+                if !endpoint.is_locked
+                    && predicate.is_some()
+                    && endpoint.head == predicate
+                    && endpoint.deprel == "obj"
+                    && endpoint.upos == Some(Upos::Noun)
+                    && like(endpoint, &["壁"])
+                {
+                    endpoint.lemma = Some(CONNECTED_WALL.to_owned());
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn render<'a>(surface: &'a str, lemma: Option<&'a str>) -> Option<&'a str> {
+    if lemma == Some(CONNECTING) {
+        return Some("連接");
+    }
+    if lemma == Some(CONNECTED_WALL) {
+        return Some("牆壁");
+    }
     if !supported(surface) {
         return None;
     }
@@ -212,6 +250,529 @@ pub(super) fn render_transfer(source: &[Atom], doc: &Document, sentence: usize) 
         _ => return None,
     };
     Some(format!("{subject}把{item}{action}{aspect}{place}"))
+}
+
+fn attached_to(noun: &Atom, case: &Atom, verb: &Atom, relation: &str, particle: &str) -> bool {
+    verb.doc_tok_idx.is_some()
+        && noun.head == verb.doc_tok_idx
+        && noun.deprel == relation
+        && case.surface == particle
+        && dasu_case_link(noun, case)
+}
+
+fn finite_affirmative(verb: &Atom, tail: &[Atom]) -> Option<&'static str> {
+    if verb.is_locked
+        || verb.upos != Some(Upos::Verb)
+        || verb.deprel != "root"
+        || verb.doc_tok_idx.is_none()
+        || !tail.iter().all(|atom| {
+            !atom.is_locked
+                && atom.upos == Some(Upos::Aux)
+                && atom.deprel == "aux"
+                && atom.head == verb.doc_tok_idx
+        })
+    {
+        return None;
+    }
+    let ending: String = tail.iter().map(|atom| atom.surface.as_str()).collect();
+    match ending.as_str() {
+        "" if verb.lemma.as_deref() == Some(verb.surface.as_str()) => Some(""),
+        "ます" => Some(""),
+        "ました" | "た" => Some("了"),
+        _ => None,
+    }
+}
+
+fn noun_phrase(atoms: &[Atom], doc: &Document, sentence: usize) -> Option<String> {
+    nominal_possession::noun_phrase(atoms, doc, sentence, TargetVariant::ZhHant)
+}
+
+fn availability_window(atoms: &[Atom], doc: &Document, sentence: usize) -> Option<String> {
+    let (index, verb) = atoms
+        .iter()
+        .enumerate()
+        .find(|(_, atom)| like(atom, &["使える"]))?;
+    if !finite_affirmative(verb, &atoms[index + 1..])?.is_empty() || atoms.iter().any(boundary) {
+        return None;
+    }
+    let [topic @ .., from, first_case, to, last_case] = &atoms[..index] else {
+        return None;
+    };
+    if !attached_to(from, first_case, verb, "obl", "から")
+        || !attached_to(to, last_case, verb, "obl", "まで")
+    {
+        return None;
+    }
+    let subject = match topic {
+        [] => String::new(),
+        [name @ .., head, case]
+            if matches!(case.surface.as_str(), "は" | "が")
+                && attached_to(head, case, verb, "nsubj", &case.surface) =>
+        {
+            noun_phrase(&topic[..name.len() + 1], doc, sentence)?
+        }
+        _ => return None,
+    };
+    let start = render_temporal_made_atom(from)?;
+    let end = render_temporal_made_atom(to)?;
+    Some(format!("{subject}從{start}到{end}都能使用"))
+}
+
+fn competition_action(atoms: &[Atom], doc: &Document, sentence: usize) -> Option<String> {
+    if atoms.iter().any(boundary) {
+        return None;
+    }
+    let (index, verb) = atoms
+        .iter()
+        .enumerate()
+        .find(|(_, atom)| atom.deprel == "root")?;
+    let aspect = finite_affirmative(verb, &atoms[index + 1..])?;
+    let arguments = &atoms[..index];
+    if like(verb, &["当たる"])
+        && let [ball, subject_case, modifiers @ .., post, goal_case] = arguments
+        && like(ball, &["ボール"])
+        && render(&post.surface, post.lemma.as_deref()) == Some("球門柱")
+        && attached_to(ball, subject_case, verb, "nsubj", "が")
+        && attached_to(post, goal_case, verb, "obl", "に")
+        && (modifiers.is_empty()
+            || matches!(modifiers, [goal, genitive]
+                if like(goal, &["ゴール"]) && goal.head == post.doc_tok_idx
+                    && goal.deprel == "nmod" && genitive.surface == "の"
+                    && dasu_case_link(goal, genitive)))
+    {
+        return Some(format!("球撞到{aspect}球門柱"));
+    }
+    let [opposition @ .., attack, direction, counter, object_case] = arguments else {
+        return None;
+    };
+    if !like(verb, &["仕掛ける"])
+        || !like(attack, &["攻撃"])
+        || render(&counter.surface, counter.lemma.as_deref()) != Some("反擊")
+        || !attached_to(attack, direction, verb, "obl", "に")
+        || !attached_to(counter, object_case, verb, "obj", "を")
+    {
+        return None;
+    }
+    let opposition = noun_phrase(&arguments[..opposition.len() + 1], doc, sentence)?;
+    Some(format!("對{opposition}發動{aspect}反擊"))
+}
+
+fn competition_setting(atoms: &[Atom]) -> Option<String> {
+    let [sport, genitive, match_noun, position] = atoms else {
+        return None;
+    };
+    if atoms.iter().any(boundary)
+        || sport.head != match_noun.doc_tok_idx
+        || sport.deprel != "nmod"
+        || genitive.surface != "の"
+        || !dasu_case_link(sport, genitive)
+        || !like(match_noun, &["試合"])
+        || match_noun.deprel != "obl"
+        || position.surface != "で"
+        || !dasu_case_link(match_noun, position)
+    {
+        return None;
+    }
+    let sport = match sport.surface.as_str() {
+        "サッカー" => "足球",
+        "野球" => "棒球",
+        _ => return None,
+    };
+    Some(format!("{sport}比賽中"))
+}
+
+fn object_preference(atoms: &[Atom], doc: &Document, sentence: usize) -> Option<String> {
+    let [noun, topic, liking, ending @ ..] = atoms else {
+        return None;
+    };
+    if !supported(&noun.surface)
+        && !(noun.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM)
+            && nominal_possession::whole_nominal_lock(noun, doc))
+    {
+        return None;
+    }
+    let simple_copula = match ending {
+        [] => true,
+        [copula] => {
+            !copula.is_locked
+                && copula.head == liking.doc_tok_idx
+                && copula.deprel == "cop"
+                && matches!(copula.surface.as_str(), "です" | "だ")
+        }
+        _ => false,
+    };
+    if liking.is_locked
+        || liking.upos != Some(Upos::Adj)
+        || liking.deprel != "root"
+        || !like(liking, &["好き", "大好き"])
+        || !attached_to(noun, topic, liking, "nsubj", "は")
+        || !simple_copula
+    {
+        return None;
+    }
+    let degree = if like(liking, &["大好き"]) {
+        "很"
+    } else {
+        ""
+    };
+    let object = noun_phrase(std::slice::from_ref(noun), doc, sentence)?;
+    Some(format!("{degree}喜歡{object}"))
+}
+
+fn counter_at_location(atoms: &[Atom], doc: &Document, sentence: usize) -> Option<String> {
+    let index = atoms.iter().position(|atom| atom.deprel == "root")?;
+    let existence = &atoms[index];
+    let [place, position, count @ .., item, subject] = &atoms[..index] else {
+        return None;
+    };
+    let [number @ .., people, object_case, predicate] = count else {
+        return None;
+    };
+    // This is the counting instrument reading. An ordinary counter or a
+    // broader relative with its own location still uses the regular engine.
+    if atoms.iter().any(boundary)
+        || !like(place, &["入口", "出口"])
+        || !like(predicate, &["数える", "計測する"])
+        || !like(existence, &["ある"])
+        || !finite_affirmative(existence, &atoms[index + 1..])?.is_empty()
+        || !like(people, &["人数", "人員"])
+        || render(&item.surface, item.lemma.as_deref()) != Some("計數器")
+        || predicate.deprel != "acl"
+        || predicate.head != item.doc_tok_idx
+        || !attached_to(item, subject, existence, "nsubj", "が")
+        || !attached_to(people, object_case, predicate, "obj", "を")
+        || (!attached_to(place, position, existence, "obl", "に")
+            && !attached_to(place, position, predicate, "obl", "に"))
+    {
+        return None;
+    }
+    let place = translate_single_ja_term(&place.surface, place.lemma.as_deref(), place.upos);
+    let amount = noun_phrase(&count[..number.len() + 1], doc, sentence)?;
+    Some(format!("{place}有計算{amount}的計數器"))
+}
+
+fn performance_seen(atoms: &[Atom], doc: &Document, sentence: usize) -> Option<String> {
+    let index = atoms.iter().position(|atom| atom.deprel == "root")?;
+    let watch = &atoms[index];
+    let aspect = finite_affirmative(watch, &atoms[index + 1..])?;
+    let [
+        location @ ..,
+        performance,
+        make,
+        passive,
+        past,
+        work,
+        object,
+    ] = &atoms[..index]
+    else {
+        return None;
+    };
+    if atoms.iter().any(boundary)
+        || !like(watch, &["見る"])
+        || !like(performance, &["上演", "公演"])
+        || make.upos != Some(Upos::Verb)
+        || !like(make, &["する"])
+        || make.doc_tok_idx.is_none()
+        || work.doc_tok_idx.is_none()
+        || make.head != work.doc_tok_idx
+        || make.deprel != "acl"
+        || performance.head != make.doc_tok_idx
+        || ![passive, past].iter().all(|atom| {
+            atom.upos == Some(Upos::Aux) && atom.head == make.doc_tok_idx && atom.deprel == "aux"
+        })
+        || passive.lemma.as_deref() != Some("れる")
+        || past.surface != "た"
+        || render(&work.surface, work.lemma.as_deref()) != Some("戲劇")
+        || !attached_to(work, object, watch, "obj", "を")
+    {
+        return None;
+    }
+    let performed_at = match location {
+        [] => "演出的".to_owned(),
+        [modifiers @ .., place, marker] if attached_to(place, marker, make, "obl", "で") => {
+            let place = noun_phrase(&location[..modifiers.len() + 1], doc, sentence)?;
+            format!("在{place}演出的")
+        }
+        _ => return None,
+    };
+    Some(format!("看{aspect}{performed_at}戲劇"))
+}
+
+fn pitching_pair(atoms: &[Atom], doc: &Document, sentence: usize) -> Option<String> {
+    let [
+        prefix @ ..,
+        pitcher,
+        together,
+        catcher,
+        genitive,
+        battery,
+        topic,
+    ] = atoms
+    else {
+        return None;
+    };
+    if atoms.iter().any(boundary)
+        || !like(pitcher, &["投手"])
+        || !like(catcher, &["捕手"])
+        || render(&battery.surface, battery.lemma.as_deref()) != Some("投捕搭檔")
+        || catcher.head != battery.doc_tok_idx
+        || catcher.deprel != "nmod"
+        || together.surface != "と"
+        || !dasu_case_link(pitcher, together)
+        || genitive.surface != "の"
+        || !dasu_case_link(catcher, genitive)
+        || battery.deprel != "nsubj"
+        || topic.surface != "は"
+        || !dasu_case_link(battery, topic)
+    {
+        return None;
+    }
+    let owner = match prefix {
+        [] => String::new(),
+        [parts @ .., team, possessive]
+            if team.head == pitcher.doc_tok_idx
+                && team.deprel == "nmod"
+                && possessive.surface == "の"
+                && dasu_case_link(team, possessive) =>
+        {
+            format!(
+                "{}的",
+                noun_phrase(&prefix[..parts.len() + 1], doc, sentence)?
+            )
+        }
+        _ => return None,
+    };
+    Some(format!("{owner}投捕搭檔"))
+}
+
+pub(super) fn contextual_nominal_prefix(atoms: &[Atom]) -> Option<(&'static str, usize)> {
+    if let [baseball, team, ..] = atoms
+        && !baseball.is_locked
+        && !team.is_locked
+        && like(baseball, &["野球"])
+        && like(team, &["チーム"])
+        && team.doc_tok_idx.is_some()
+        && baseball.head == team.doc_tok_idx
+        && baseball.deprel == "compound"
+        && baseball.span.end_char == team.span.start_char
+    {
+        return Some(("棒球隊", 2));
+    }
+    None
+}
+
+fn mountain_ride(atoms: &[Atom]) -> Option<(&Atom, &Atom)> {
+    if let [mountain, genitive, ride, ..] = atoms
+        && !mountain.is_locked
+        && !ride.is_locked
+        && like(mountain, &["山"])
+        && ride.doc_tok_idx.is_some()
+        && mountain.head == ride.doc_tok_idx
+        && mountain.deprel == "nmod"
+        && genitive.surface == "の"
+        && dasu_case_link(mountain, genitive)
+        && render(&ride.surface, ride.lemma.as_deref()) == Some("纜車")
+    {
+        return Some((mountain, ride));
+    }
+    None
+}
+
+fn sentence_body(atoms: &[Atom]) -> Option<(&[Atom], String)> {
+    let [body @ .., punctuation] = atoms else {
+        return None;
+    };
+    if punctuation.is_locked
+        || !matches!(punctuation.surface.as_str(), "。" | "！" | "？" | "!" | "?")
+    {
+        return None;
+    }
+    Some((body, localize_punct(&punctuation.surface)))
+}
+
+fn cable_ride(atoms: &[Atom], doc: &Document, sentence: usize) -> Option<String> {
+    let index = atoms.iter().position(|atom| like(atom, &["乗る"]))?;
+    let boarding = &atoms[index];
+    let [time @ .., _, _, ride, direction] = &atoms[..index] else {
+        return None;
+    };
+    if atoms.iter().any(boundary)
+        || boarding.upos != Some(Upos::Verb)
+        || !attached_to(ride, direction, boarding, "obl", "に")
+    {
+        return None;
+    }
+    mountain_ride(&atoms[time.len()..time.len() + 3])?;
+    let time = match time {
+        [] => String::new(),
+        [when, marker]
+            if matches!(marker.surface.as_str(), "は" | "に")
+                && (attached_to(when, marker, boarding, "nsubj", &marker.surface)
+                    || attached_to(when, marker, boarding, "obl", &marker.surface)) =>
+        {
+            render_temporal_made_atom(when)?
+        }
+        _ => return None,
+    };
+    if boarding.deprel == "root" {
+        let aspect = finite_affirmative(boarding, &atoms[index + 1..])?;
+        return Some(format!("{time}搭乘{aspect}山上的纜車"));
+    }
+    let [connector, destination @ ..] = &atoms[index + 1..] else {
+        return None;
+    };
+    let go_index = destination.iter().position(|atom| atom.deprel == "root")?;
+    let go = &destination[go_index];
+    let aspect = finite_affirmative(go, &destination[go_index + 1..])?;
+    let [place_parts @ .., place, case] = &destination[..go_index] else {
+        return None;
+    };
+    if boarding.deprel != "advcl"
+        || boarding.head != go.doc_tok_idx
+        || connector.surface != "て"
+        || connector.deprel != "mark"
+        || connector.head != boarding.doc_tok_idx
+        || boarding.span.end_char != connector.span.start_char
+        || !like(go, &["行く"])
+        || !matches!(case.surface.as_str(), "に" | "へ")
+        || !attached_to(place, case, go, "obl", &case.surface)
+    {
+        return None;
+    }
+    let place = noun_phrase(&destination[..place_parts.len() + 1], doc, sentence)?;
+    Some(format!("{time}搭乘山上的纜車去{aspect}{place}"))
+}
+
+fn watching_community(
+    atoms: &[Atom],
+    marker: &Atom,
+    watch: &Atom,
+    chars: &[char],
+) -> Option<&'static str> {
+    let first = atoms.first()?;
+    let last = atoms.last()?;
+    if first.upos != Some(Upos::Noun)
+        || !atoms
+            .windows(2)
+            .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+        || marker.surface != "が"
+        || marker.deprel != "case"
+        || marker.upos != Some(Upos::Adp)
+        || last.span.end_char != marker.span.start_char
+        || marker.head.is_none()
+        || watch.doc_tok_idx.is_none()
+        || !atoms.iter().any(|actor| {
+            actor.doc_tok_idx == marker.head
+                && actor.head == watch.doc_tok_idx
+                && actor.deprel == "nsubj"
+        })
+    {
+        return None;
+    }
+    let suffix: String = chars
+        .get(first.span.end_char..marker.span.start_char)?
+        .iter()
+        .collect();
+    if suffix != "じゅう" {
+        return None;
+    }
+    match first.surface.as_str() {
+        "町" | "街" => Some("全鎮居民"),
+        "村" => Some("全村居民"),
+        "市" => Some("全市居民"),
+        _ => None,
+    }
+}
+
+fn watched_event(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    chars: &[char],
+) -> Option<(String, usize, usize)> {
+    let comma = atoms
+        .iter()
+        .position(|atom| matches!(atom.surface.as_str(), "、" | "，"))?;
+    let [topic @ .., event, topic_case] = &atoms[..comma] else {
+        return None;
+    };
+    let tail = &atoms[comma + 1..];
+    let end = tail.iter().position(|atom| atom.deprel == "root")?;
+    let result_verb = &tail[end];
+    let [community @ .., actor_case, watch, drama, result_case] = &tail[..end] else {
+        return None;
+    };
+    let aspect = finite_affirmative(result_verb, &tail[end + 1..])?;
+    if atoms.iter().any(boundary)
+        || !like(watch, &["見守る"])
+        || watch.deprel != "acl"
+        || watch.head != drama.doc_tok_idx
+        || !like(result_verb, &["なる"])
+        || render(&drama.surface, drama.lemma.as_deref()) != Some("戲劇性事件")
+        || !attached_to(drama, result_case, result_verb, "obl", "に")
+        || (!attached_to(event, topic_case, result_verb, "nsubj", "は")
+            && !attached_to(event, topic_case, watch, "nsubj", "は"))
+    {
+        return None;
+    }
+    let people = watching_community(community, actor_case, watch, chars)?;
+    let event_text = match topic {
+        [det]
+            if det.head == event.doc_tok_idx && det.surface == "その" && like(event, &["再会"]) =>
+        {
+            "那場重逢".to_owned()
+        }
+        _ => noun_phrase(&atoms[..comma - 1], doc, sentence)?,
+    };
+    let head = event_text.chars().count();
+    let result = if aspect.is_empty() {
+        "成為"
+    } else {
+        "成了"
+    };
+    Some((
+        format!("{event_text}{result}{people}關注的戲劇性事件"),
+        topic_case.span.end_char,
+        head,
+    ))
+}
+
+pub(super) fn contextual_sentence(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    chars: &[char],
+) -> Option<(String, Vec<ClauseAlignment>)> {
+    let (body, punctuation) = sentence_body(atoms)?;
+    let (mut text, source_cut, target_cut) = match watched_event(body, doc, sentence, chars) {
+        Some(pieces) => pieces,
+        None => {
+            let ride = cable_ride(body, doc, sentence)?;
+            let length = ride.chars().count() + punctuation.chars().count();
+            (
+                ride,
+                doc.segmentation.sentences.get(sentence)?.span.end_char,
+                length,
+            )
+        }
+    };
+    text.push_str(&punctuation);
+    let alignments = align_boundary(doc, sentence, source_cut, target_cut, text.chars().count());
+    Some((text, alignments))
+}
+
+pub(super) fn render_argument_frame(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence: usize,
+) -> Option<String> {
+    availability_window(atoms, doc, sentence)
+        .or_else(|| competition_action(atoms, doc, sentence))
+        .or_else(|| competition_setting(atoms))
+        .or_else(|| object_preference(atoms, doc, sentence))
+        .or_else(|| counter_at_location(atoms, doc, sentence))
+        .or_else(|| performance_seen(atoms, doc, sentence))
+        .or_else(|| pitching_pair(atoms, doc, sentence))
 }
 
 /// Keep the script and the material being written with their own predicate,
@@ -828,5 +1389,26 @@ mod tests {
                 end_char: 3
             }
         );
+    }
+
+    #[test]
+    fn adopted_context_preserves_the_main_action_and_its_arguments() {
+        let bank = adopted_bank();
+        for (id, expected) in [
+            ("N12", "看了在學校演出的戲劇。"),
+            ("N14", "那場重逢成了全鎮居民關注的戲劇性事件。"),
+            ("N19", "足球比賽中，球撞到了球門柱。"),
+            ("N23", "這顆電池，從早上到傍晚都能使用。"),
+            ("N24", "棒球隊的投捕搭檔，非常有默契。"),
+            ("N28", "入口有計算人數的計數器。"),
+            ("N29", "足球比賽中，對對方的攻擊發動了反擊。"),
+            ("N35", "搭乘山上的纜車去了展望臺。"),
+            ("N40", "喜歡戲劇作品。"),
+        ] {
+            assert_eq!(run(&bank, id).target_text, expected, "{id}");
+        }
+        let paired = run(&bank, "N37").target_text;
+        assert!(paired.contains("連接電話機和牆壁的纜線"), "{paired}");
+        assert!(paired.ends_with("下週搭乘山上的纜車。"), "{paired}");
     }
 }

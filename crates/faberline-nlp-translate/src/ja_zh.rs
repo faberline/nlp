@@ -12926,7 +12926,14 @@ fn translate_clause_bunsetsus(
         && !passive_agent_needed
         && !pre_verb_mods.iter().any(|m| m == "讓")
         && (carrying::restored_carry(source, &predicates, ctx.following, ctx.glossary_carry)
-            || carrying::with_motion(source, &predicates, ctx.following, doc, ctx.source_chars))
+            || carrying::with_motion(
+                source,
+                &predicates,
+                ctx.following,
+                doc,
+                ctx.source_chars,
+                ctx.source_locks,
+            ))
     {
         let negative = pre_verb_mods
             .iter()

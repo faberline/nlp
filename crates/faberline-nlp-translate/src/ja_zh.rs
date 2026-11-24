@@ -11,6 +11,7 @@ mod application_form;
 mod calendar;
 pub(crate) use calendar::DateContext;
 mod carrying;
+mod common_noun_sense;
 mod copular_time;
 mod counted_object;
 mod daytime;
@@ -240,11 +241,17 @@ pub(crate) fn translate_ja_sentence(
             (Vec::new(), Vec::new())
         };
     if target == TargetVariant::ZhHant {
+        if let Some(definition) =
+            common_noun_sense::quoted_definition(&atoms, doc, sentence_idx, chars)
+        {
+            return definition;
+        }
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
         daytime::bind_form_time(&mut atoms, chars, doc);
         application_form::normalize(&mut atoms, chars, doc);
         reception::normalize(&mut atoms);
+        common_noun_sense::bind(&mut atoms, doc, chars);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
         calendar::bind_day_arguments(&mut atoms, doc, || {
             direct_quote.is_some()
@@ -253,6 +260,15 @@ pub(crate) fn translate_ja_sentence(
         });
         daytime::join_recipient_pauses(&mut atoms);
         nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target, chars);
+        if direct_quote.is_none()
+            && written_form_continuation.is_none()
+            && let Some(addition) = common_noun_sense::script_addition(&atoms, doc, sentence_idx)
+                .or_else(|| {
+                    common_noun_sense::contextual_sentence(&atoms, doc, sentence_idx, chars)
+                })
+        {
+            return addition;
+        }
     }
 
     if atoms.is_empty() {
@@ -6648,6 +6664,17 @@ fn translate_clause_atoms(
         return (text, false);
     }
 
+    if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let Some(text) =
+            common_noun_sense::render_argument_frame(core_non_punct(atoms), doc, sentence_idx)
+                .or_else(|| {
+                    common_noun_sense::teamwork_idiom(core_non_punct(atoms)).map(str::to_owned)
+                })
+    {
+        return (text, false);
+    }
+
     if let Some(request) =
         te_help_request(core_non_punct(atoms), doc, ctx.prior_letter_distribution)
         && let Some(rendered) = render_te_help_request(request, doc, sentence_idx, ctx, target)
@@ -6878,6 +6905,13 @@ fn translate_clause_atoms(
         localize_proposal_arguments(&mut grouped, predicate, body, target);
     }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
+    if target == TargetVariant::ZhHant
+        && condition_tail.is_none()
+        && proposal.is_none()
+        && let Some(text) = common_noun_sense::render_transfer(body, doc, sentence_idx)
+    {
+        return (text, false);
+    }
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
         && let Some(homework) = render_homework_transfer(
@@ -25349,6 +25383,9 @@ fn demonstrative_classifier(word: &str, noun: &Atom) -> &'static str {
         "資料" | "文件" | "報告" | "報紙" => "份",
         "商店" | "餐廳" | "公司" => "家",
         "寺" | "寺廟" | "橋" => "座",
+        "電池" if common_noun_sense::render(&noun.surface, noun.lemma.as_deref()) == Some(word) => {
+            "顆"
+        }
         "箱" | "人" | "答案" | "條件" | "蛋糕" | "城鎮" | "藥" => "個",
         _ if is_demonstrative_person_noun(noun) => "個",
         // Keep a deictic without adding an unsupported unit (e.g. 這水).
@@ -25356,11 +25393,19 @@ fn demonstrative_classifier(word: &str, noun: &Atom) -> &'static str {
     }
 }
 
-fn render_bunsetsu_np(b: &Bunsetsu, _target: TargetVariant) -> String {
+fn render_bunsetsu_np(b: &Bunsetsu, target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;
     while i < b.atoms.len() {
         let a = &b.atoms[i];
+        if target == TargetVariant::ZhHant
+            && let Some((phrase, consumed)) =
+                common_noun_sense::contextual_nominal_prefix(&b.atoms[i..])
+        {
+            out.push_str(phrase);
+            i += consumed;
+            continue;
+        }
         if !a.is_locked
             && a.surface == "子"
             && a.upos == Some(Upos::Noun)
@@ -26219,6 +26264,9 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
 }
 
 fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upos>) -> String {
+    if let Some(reading) = common_noun_sense::render(surface, lemma) {
+        return reading.to_owned();
+    }
     if surface == "注文" && lemma == Some(order_noun::CONFIRMED_ORDER) {
         return order_noun::CONFIRMED_ORDER.to_owned();
     }

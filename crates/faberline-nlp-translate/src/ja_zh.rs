@@ -10,6 +10,7 @@ use std::collections::HashMap;
 mod application_form;
 mod calendar;
 pub(crate) use calendar::DateContext;
+mod common_noun_sense;
 mod copular_time;
 mod counted_object;
 mod daytime;
@@ -224,11 +225,17 @@ pub(crate) fn translate_ja_sentence(
     }
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
     if target == TargetVariant::ZhHant {
+        if let Some(definition) =
+            common_noun_sense::quoted_definition(&atoms, doc, sentence_idx, chars)
+        {
+            return definition;
+        }
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
         daytime::bind_form_time(&mut atoms, chars, doc);
         application_form::normalize(&mut atoms, chars, doc);
         reception::normalize(&mut atoms);
+        common_noun_sense::bind(&mut atoms, doc, chars);
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
         calendar::bind_day_arguments(&mut atoms, doc, || {
             direct_quote.is_some()
@@ -6857,6 +6864,13 @@ fn translate_clause_atoms(
         localize_proposal_arguments(&mut grouped, predicate, body, target);
     }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
+    if target == TargetVariant::ZhHant
+        && condition_tail.is_none()
+        && proposal.is_none()
+        && let Some(text) = common_noun_sense::render_transfer(body, doc, sentence_idx)
+    {
+        return (text, false);
+    }
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
         && let Some(homework) = render_homework_transfer(
@@ -25881,6 +25895,9 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
 }
 
 fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upos>) -> String {
+    if let Some(reading) = common_noun_sense::render(surface, lemma) {
+        return reading.to_owned();
+    }
     if surface == "注文" && lemma == Some(order_noun::CONFIRMED_ORDER) {
         return order_noun::CONFIRMED_ORDER.to_owned();
     }

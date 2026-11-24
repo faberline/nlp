@@ -1029,7 +1029,7 @@ fn translate_single_sentence(
         } else {
             None
         };
-        let (render_doc, render_tokens, render_locks, protected_omission) = match &repaired {
+        let (render_doc, render_tokens, render_locks, predicate_terms) = match &repaired {
             Some((source, tokens, locks, omission)) => {
                 (*source, tokens.as_slice(), locks, omission.as_ref())
             }
@@ -1041,7 +1041,7 @@ fn translate_single_sentence(
             render_doc,
             render_tokens,
             render_locks,
-            protected_omission,
+            predicate_terms,
             &conditioning,
             options.target,
             direct_quote,
@@ -1057,7 +1057,10 @@ fn translate_single_sentence(
             .iter()
             .map(|clause| clause.target_span)
             .collect();
-        let report = lock_table.restore_with_spans(&masked_zh, &mut clause_spans);
+        let report = match predicate_terms {
+            Some(terms) => terms.restore_terms(&lock_table, &masked_zh, &mut clause_spans),
+            None => lock_table.restore_with_spans(&masked_zh, &mut clause_spans),
+        };
         for (clause, span) in clause_alignments.iter_mut().zip(clause_spans) {
             clause.target_span = span;
         }

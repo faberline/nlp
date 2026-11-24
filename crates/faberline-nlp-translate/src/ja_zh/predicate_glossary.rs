@@ -1,7 +1,7 @@
 //! Apply verb glossary terms after the original syntax has supplied the grammar.
 
-use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
-use crate::schema::GlossaryKind;
+use crate::lock::{LockOrigin, LockedSpan, RestoreReport, SpanLockTable};
+use crate::schema::{GlossaryKind, TranslateUnknownKind};
 
 use super::{
     Atom, Document, Segment, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu,
@@ -32,12 +32,21 @@ pub(super) struct PredicateTerm {
     pub(super) has_negation: bool,
     pub(super) has_past: bool,
     pub(super) has_result_link: bool,
+    pub(super) includes_native_object: bool,
+}
+
+struct SharedObject {
+    verb: usize,
+    object: usize,
+    suffix_chars: Option<usize>,
 }
 
 #[derive(Default)]
 pub(crate) struct PredicateTerms {
     terms: Vec<PredicateTerm>,
     question_verb: Option<Span>,
+    site: Option<usize>,
+    shared_object: Option<SharedObject>,
 }
 
 impl PredicateTerms {
@@ -61,6 +70,7 @@ impl PredicateTerms {
                 || target.starts_with(['已', '曾'])
                 || target.starts_with("未曾"),
             has_result_link: coverage == Coverage::Complete && target.ends_with('就'),
+            includes_native_object: false,
         });
     }
 
@@ -82,6 +92,73 @@ impl PredicateTerms {
                 .iter()
                 .any(|atom| atom.upos == Some(Upos::Verb) && !atom.is_locked && atom.span == verb)
         })
+    }
+
+    pub(crate) fn restore_terms(
+        &self,
+        locks: &SpanLockTable,
+        masked: &str,
+        spans: &mut [Span],
+    ) -> RestoreReport {
+        let site = self.site.filter(|&index| {
+            let term = &locks.locks[index];
+            masked.matches(&term.placeholder).count() == 1
+                && masked.matches(&format!("在{}", term.placeholder)).count() == 1
+        });
+        let shared = self.shared_object.as_ref().filter(|plan| {
+            let verb = &locks.locks[plan.verb];
+            let object = &locks.locks[plan.object];
+            masked.matches(&verb.placeholder).count() == 1
+                && masked.matches(&object.placeholder).count() == 1
+                && masked
+                    .split_once(&verb.placeholder)
+                    .is_some_and(|(_, tail)| tail.trim_start().starts_with(&object.placeholder))
+        });
+        if site.is_none() && shared.is_none() {
+            return locks.restore_with_spans(masked, spans);
+        }
+        let mut render = locks.clone();
+        if let Some(index) = site {
+            render.locks[index].replacement.remove(0);
+        }
+        if let Some(plan) = shared {
+            render.locks[plan.object].replacement.clear();
+        }
+        let mut report = render.restore_with_spans(masked, spans);
+        if let Some(index) = site
+            && let Some(hit) = report.restored.iter_mut().find(|hit| hit.index == index)
+        {
+            hit.target_span.start_char -= 1;
+        }
+        if let Some(plan) = shared {
+            let verb_end = report
+                .restored
+                .iter()
+                .find(|hit| hit.index == plan.verb)
+                .map(|hit| hit.target_span.end_char);
+            if let Some(length) = plan.suffix_chars
+                && let Some(end) = verb_end
+                && let Some(object) = report
+                    .restored
+                    .iter_mut()
+                    .find(|hit| hit.index == plan.object)
+            {
+                // Both source terms match the same already-emitted target object.
+                object.target_span = Span {
+                    start_char: end - length,
+                    end_char: end,
+                };
+            } else {
+                report.restored.retain(|hit| hit.index != plan.object);
+                report.issues.push((
+                    TranslateUnknownKind::PlaceholderDropped,
+                    locks.locks[plan.object].source_span,
+                    "The predicate glossary term includes the object with a different target wording."
+                        .to_owned(),
+                ));
+            }
+        }
+        report
     }
 }
 
@@ -162,6 +239,19 @@ fn simple_past(verb: &Atom, tail: &[Atom]) -> bool {
         })
 }
 
+fn remove_question<'a>(atoms: &'a [Atom], verb: &Atom, punct: Option<&str>) -> (&'a [Atom], bool) {
+    if let Some((last, rest)) = atoms.split_last()
+        && last.surface == "か"
+        && last.upos == Some(Upos::Part)
+        && last.deprel == "discourse"
+        && last.head == verb.doc_tok_idx
+    {
+        (rest, true)
+    } else {
+        (atoms, matches!(punct, Some("？" | "?")))
+    }
+}
+
 fn object<'a>(atoms: &'a [Atom], verb: &Atom) -> Option<(&'a Atom, &'a Atom)> {
     let id = verb.doc_tok_idx?;
     let mut pairs = atoms.windows(2).filter_map(|pair| {
@@ -212,6 +302,7 @@ fn keep_arguments(locks: &mut SpanLockTable, arguments: &[(&Atom, &Atom, Argumen
 fn gaze(
     before: &[Atom],
     after: &[Atom],
+    punct: Option<&str>,
     doc: &Document,
     locks: &SpanLockTable,
 ) -> Option<(SpanLockTable, PredicateTerms)> {
@@ -220,6 +311,7 @@ fn gaze(
         .position(|atom| atom.deprel == "root" && atom.upos == Some(Upos::Verb))?;
     let look = &after[index];
     let (open, connector) = connected_verb(before, look)?;
+    let (after, question) = remove_question(after, look, punct);
     if open.lemma.as_deref() != Some("開ける")
         || !simple_past(look, &after[index + 1..])
         || after[..index].iter().any(|atom| atom.deprel == "nsubj")
@@ -228,7 +320,7 @@ fn gaze(
     }
     let (outside, outside_case) = outward_look::outside_case(after, look, doc)?;
     let (window, window_case) = object(before, open)?;
-    let (mut render, terms) = separate_verbs(
+    let (mut render, mut terms) = separate_verbs(
         locks,
         &[
             (open.span, through(open, connector)),
@@ -242,6 +334,9 @@ fn gaze(
             (outside, outside_case, Argument::Outside),
         ],
     )?;
+    if question {
+        terms.question_verb = Some(look.span);
+    }
     (!terms.is_empty()).then_some((render, terms))
 }
 
@@ -259,16 +354,7 @@ fn meal_contrast(
         .position(|atom| atom.deprel == "root" && atom.upos == Some(Upos::Verb))?;
     let go = &after[index];
     let (meal, connector) = connected_verb(before, go)?;
-    let last = after.last()?;
-    let has_ka = last.surface == "か"
-        && last.upos == Some(Upos::Part)
-        && last.deprel == "discourse"
-        && last.head == go.doc_tok_idx;
-    let after = if has_ka {
-        &after[..after.len() - 1]
-    } else {
-        after
-    };
+    let (after, question) = remove_question(after, go, punct);
     let (render, mut terms) = separate_verbs(
         locks,
         &[
@@ -281,7 +367,7 @@ fn meal_contrast(
     }
     let (render, _) =
         polarity_contrast::render_topics(sentence, before, after, doc, chars, &render)?;
-    if has_ka || matches!(punct, Some("？" | "?")) {
+    if question {
         terms.question_verb = Some(go.span);
     }
     Some((render, terms))
@@ -406,9 +492,73 @@ fn polite_request(
         .then_some((site, marker))
     }) {
         arguments.push((site, marker, Argument::Site));
+        terms.site = locks
+            .locks
+            .iter()
+            .find(|lock| {
+                (lock.source_span == site.span || lock.source_span == through(site, marker))
+                    && lock.replacement.starts_with('在')
+            })
+            .map(|lock| lock.index);
     }
     keep_arguments(&mut render, &arguments)?;
+    merge_request_object(&mut terms, locks, before, verb, noun, marker);
     (!terms.is_empty()).then_some((render, terms))
+}
+
+fn merge_request_object(
+    terms: &mut PredicateTerms,
+    locks: &SpanLockTable,
+    clause: &[Atom],
+    verb: &Atom,
+    noun: &Atom,
+    marker: &Atom,
+) {
+    let Some(term) = terms
+        .terms
+        .iter_mut()
+        .find(|term| term.verb == verb.span && term.coverage != Coverage::Stem)
+    else {
+        return;
+    };
+    let Some(predicate_lock) = locks
+        .locks
+        .iter()
+        .find(|lock| lock.placeholder == term.placeholder)
+    else {
+        return;
+    };
+    if clause
+        .iter()
+        .any(|atom| atom.head == noun.doc_tok_idx && atom.doc_tok_idx != marker.doc_tok_idx)
+    {
+        return;
+    }
+    let embedded = match (verb.lemma.as_deref(), noun.surface.as_str()) {
+        (Some("撮る"), "写真") => &["拍照", "照片", "相片"][..],
+        (Some("吸う"), "たばこ") => &["菸", "煙"][..],
+        _ => return,
+    };
+    let alias = &predicate_lock.replacement;
+    if !embedded.iter().any(|suffix| alias.ends_with(suffix)) {
+        return;
+    }
+    let object = locks
+        .locks
+        .iter()
+        .find(|lock| lock.source_span == noun.span || lock.source_span == through(noun, marker));
+    if let Some(object) = object {
+        let suffix_chars = alias
+            .ends_with(&object.replacement)
+            .then(|| object.replacement.chars().count());
+        terms.shared_object = Some(SharedObject {
+            verb: predicate_lock.index,
+            object: object.index,
+            suffix_chars,
+        });
+    } else {
+        term.includes_native_object = true;
+    }
 }
 
 pub(crate) fn restore(
@@ -451,42 +601,17 @@ pub(crate) fn restore(
     if !matches!(comma.as_str(), "、" | "，" | ",") {
         return None;
     }
-    if matches!(trailing_punct.as_deref(), Some("？" | "?")) {
-        return meal_contrast(
-            sentence,
-            before,
-            after,
-            trailing_punct.as_deref(),
-            doc,
-            chars,
-            locks,
-        );
-    }
-    if !matches!(trailing_punct.as_deref(), None | Some("。" | ".")) {
+    let punct = trailing_punct.as_deref();
+    if !matches!(punct, None | Some("。" | "." | "？" | "?")) {
         return None;
     }
-    gaze(before, after, doc, locks)
+    gaze(before, after, punct, doc, locks)
+        .or_else(|| meal_contrast(sentence, before, after, punct, doc, chars, locks))
         .or_else(|| {
-            meal_contrast(
-                sentence,
-                before,
-                after,
-                trailing_punct.as_deref(),
-                doc,
-                chars,
-                locks,
-            )
-        })
-        .or_else(|| {
-            linked_destination(
-                sentence,
-                before,
-                after,
-                trailing_punct.as_deref(),
-                doc,
-                chars,
-                locks,
-            )
+            if matches!(punct, Some("？" | "?")) {
+                return None;
+            }
+            linked_destination(sentence, before, after, punct, doc, chars, locks)
         })
 }
 
@@ -677,5 +802,72 @@ mod tests {
             replay(&format!("{source}か"), terms, "早餐吃，未曾前往學校嗎？");
             replay(&format!("{source}か。"), terms, "早餐吃，未曾前往學校嗎？");
         }
+    }
+
+    #[test]
+    fn complete_site_and_object_terms_share_the_existing_target_text() {
+        replay(
+            "ここでたばこを吸わないでください。",
+            &[
+                (Place, "ここで", "在這裡"),
+                (Object, "たばこを", "菸"),
+                (DomainTerm, "吸わないでください", "請不要抽菸"),
+            ],
+            "在這裡請不要抽菸。",
+        );
+        replay(
+            "ここで写真を撮らないでください。",
+            &[
+                (Place, "ここで", "在這裡"),
+                (Object, "写真を", "照片"),
+                (DomainTerm, "撮らないでください", "請不要拍照片"),
+            ],
+            "在這裡請不要拍照片。",
+        );
+        replay(
+            "ここで写真を撮らないでください。",
+            &[(DomainTerm, "撮らないでください", "請不要拍照")],
+            "在這裡請不要拍照。",
+        );
+    }
+
+    #[test]
+    fn incompatible_object_alias_is_reported_without_a_false_hit() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let mut glossary = TranslationGlossary::new();
+        for (group, source, target) in [
+            (&mut glossary.objects, "写真を", "照片"),
+            (
+                &mut glossary.domain_terms,
+                "撮らないでください",
+                "請不要拍照",
+            ),
+        ] {
+            group.push(GlossaryEntry {
+                canonical: source.to_owned(),
+                surfaces: vec![source.to_owned()],
+                targets: [(TargetVariant::ZhHant, target.to_owned())].into(),
+                ..GlossaryEntry::default()
+            });
+        }
+        let source = "ここで写真を撮らないでください。";
+        let output =
+            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_eq!(output.target_text, "在這裡請不要拍照。");
+        let [hit] = output.glossary_hits.as_slice() else {
+            panic!("only the emitted phrase matches");
+        };
+        assert_eq!(hit.canonical, "撮らないでください");
+        let [issue] = output.unknown.as_slice() else {
+            panic!("report the incompatible object term");
+        };
+        assert_eq!(issue.kind, crate::TranslateUnknownKind::PlaceholderDropped);
+        assert_eq!(
+            issue.source_span,
+            faberline_nlp::Span {
+                start_char: 3,
+                end_char: 6
+            }
+        );
     }
 }

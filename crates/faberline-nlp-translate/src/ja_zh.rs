@@ -13018,6 +13018,13 @@ fn translate_clause_bunsetsus(
         }
         verb_core = "抽".to_owned();
     }
+    if ctx
+        .predicate_term
+        .is_some_and(|term| term.includes_native_object)
+        && objs.len() == 1
+    {
+        objs.clear();
+    }
     if elapsed_progressive_relative && !elapsed_progressive_negative {
         pre_verb_mods.retain(|m| m != "正在");
         pre_verb_mods.push("已經".to_owned());

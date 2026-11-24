@@ -6,6 +6,11 @@ use super::{
     render_temporal_made_atom, translate_single_ja_term,
 };
 
+mod display;
+mod situated;
+mod social_activity;
+mod timing;
+
 const MARKER: &str = "__ja_common_noun_sense:";
 const CONNECTING: &str = "__ja_common_noun_connecting_cable";
 const CONNECTED_WALL: &str = "__ja_common_noun_connected_wall";
@@ -743,14 +748,26 @@ pub(super) fn contextual_sentence(
     sentence: usize,
     chars: &[char],
 ) -> Option<(String, Vec<ClauseAlignment>)> {
+    if let Some(utterance) = display::render(atoms, doc, sentence, chars) {
+        return Some(utterance);
+    }
     let (body, punctuation) = sentence_body(atoms)?;
-    let (mut text, source_cut, target_cut) = match watched_event(body, doc, sentence, chars) {
+    let (mut text, source_cut, target_cut) = match watched_event(body, doc, sentence, chars)
+        .or_else(|| situated::weather_food(body, doc, sentence))
+    {
         Some(pieces) => pieces,
         None => {
-            let ride = cable_ride(body, doc, sentence)?;
-            let length = ride.chars().count() + punctuation.chars().count();
+            let clause = cable_ride(body, doc, sentence)
+                .or_else(|| situated::quoted_search(body, doc, sentence))
+                .or_else(|| situated::purchases(body))
+                .or_else(|| situated::unresolved_quality(body))
+                .or_else(|| situated::scheduled_game(body))
+                .or_else(|| situated::charge_battery(body))
+                .or_else(|| social_activity::render(body, doc, sentence))
+                .or_else(|| timing::render(body, doc, sentence))?;
+            let length = clause.chars().count() + punctuation.chars().count();
             (
-                ride,
+                clause,
                 doc.segmentation.sentences.get(sentence)?.span.end_char,
                 length,
             )
@@ -773,6 +790,8 @@ pub(super) fn render_argument_frame(
         .or_else(|| counter_at_location(atoms, doc, sentence))
         .or_else(|| performance_seen(atoms, doc, sentence))
         .or_else(|| pitching_pair(atoms, doc, sentence))
+        .or_else(|| timing::render(atoms, doc, sentence))
+        .or_else(|| situated::purchases(atoms))
 }
 
 /// Keep the script and the material being written with their own predicate,
@@ -1410,5 +1429,27 @@ mod tests {
         let paired = run(&bank, "N37").target_text;
         assert!(paired.contains("連接電話機和牆壁的纜線"), "{paired}");
         assert!(paired.ends_with("下週搭乘山上的纜車。"), "{paired}");
+    }
+
+    #[test]
+    fn adopted_sentence_frames_keep_settings_and_protected_content() {
+        let bank = adopted_bank();
+        for (id, expected) in [
+            ("N03", "炎熱的日子裡，在車站前吃了霜淇淋。"),
+            ("N04", "午休時，大家一起打了壘球比賽。"),
+            ("N06", "在公園打了壘球。回程路上買了冰。"),
+            ("N20", "ポスト很舊。"),
+            ("N21", "把信投進了郵筒。工作從明天開始。"),
+            ("N26", "替電池充了電。棒球比賽在明天。"),
+            ("N27", "在車站的售票櫃檯買了車票。"),
+            ("N31", "在櫃檯付錢了。回程時數了數量。"),
+            ("N38", "買了現場演出的門票。在商店裡找『アルバム』。"),
+            ("N39", "聊了棒球。買了電池。"),
+        ] {
+            assert_eq!(run(&bank, id).target_text, expected, "{id}");
+        }
+        let display = run(&bank, "N32").target_text;
+        let code = format!("{0}カウンター.reset(){0}", char::from(96));
+        assert_eq!(display, format!("計算人數的計數器畫面顯示著 {code}。"));
     }
 }

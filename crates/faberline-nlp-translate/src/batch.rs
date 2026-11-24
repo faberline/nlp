@@ -15,7 +15,8 @@ use crate::schema::{
     TranslationGlossary, TranslationTrack, sha256_hex,
 };
 use crate::{
-    LoadedTranslateModel, doc_options_for_translate, render_bilingual_markdown, translate_document,
+    LoadedTranslateModel, doc_options_for_translate, render_bilingual_markdown,
+    translate_document_inner,
 };
 
 #[derive(Deserialize)]
@@ -307,7 +308,7 @@ fn process_one_chapter(
     #[cfg(not(feature = "narrative"))]
     let _ = chapter_num;
 
-    let tr_doc = translate_document(
+    let tr_doc = translate_document_inner(
         &src_text,
         &doc,
         #[cfg(feature = "narrative")]
@@ -315,6 +316,7 @@ fn process_one_chapter(
         &cfg.options,
         glossary,
         seq2seq,
+        true,
     )?;
 
     fs::write(&json_path, serde_json::to_string_pretty(&tr_doc)? + "\n")?;

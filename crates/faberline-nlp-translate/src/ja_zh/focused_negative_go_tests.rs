@@ -32,7 +32,11 @@ fn focus_keeps_the_physical_goal_of_a_negated_go() {
         );
     }
     let contrast = translate("映画は見て、図書館へは行きませんでした。", &glossary);
-    assert!(contrast.target_text.ends_with("，沒有去圖書館。"));
+    assert!(
+        contrast.target_text.ends_with("，但沒有去圖書館。"),
+        "{}",
+        contrast.target_text
+    );
 }
 
 #[test]

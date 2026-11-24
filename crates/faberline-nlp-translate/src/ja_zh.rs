@@ -29,6 +29,7 @@ mod order_noun;
 mod outward_look;
 mod payment_potential;
 mod place_goal_glossary;
+pub(crate) mod polarity_contrast;
 mod reception;
 mod return_endpoint;
 mod trip_after_meal;
@@ -933,6 +934,14 @@ pub(crate) fn translate_ja_sentence(
                     following: &segments[seg_idx + 1..],
                     glossary_carry: &glossary_carry,
                     glossary_goals: &glossary_goals,
+                    affirmative_meal: match (trailing_punct.as_deref(), segments.get(seg_idx + 1)) {
+                        (Some("、" | "，"), Some(Segment::Clause { atoms: trip, .. }))
+                            if target == TargetVariant::ZhHant && !inside_quote =>
+                        {
+                            polarity_contrast::affirmative_meal(trimmed_atoms, trip, doc, chars)
+                        }
+                        _ => None,
+                    },
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
                             if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
@@ -1128,6 +1137,21 @@ pub(crate) fn translate_ja_sentence(
                     tgt_start = out.chars().count();
                     aligned_target.end_char = tgt_start;
                     rendered.insert_str(0, "接著");
+                }
+                if target == TargetVariant::ZhHant
+                    && !inside_quote
+                    && !rendered.is_empty()
+                    && !rendered.starts_with(['但', '卻'])
+                    && let Some((previous_index, _, byte_end, char_end)) = previous_clause_comma
+                    && previous_index.checked_add(1) == Some(seg_idx)
+                    && out.len() == byte_end
+                    && tgt_start == char_end
+                    && let Some(Segment::Clause {
+                        atoms: previous, ..
+                    }) = segments.get(previous_index)
+                    && polarity_contrast::matches(previous, trimmed_atoms, doc, chars)
+                {
+                    rendered.insert(0, '但');
                 }
                 let byte_start = out.len();
                 out.push_str(&rendered);
@@ -5843,6 +5867,7 @@ struct ClauseDiscourseCtx<'a> {
     following: &'a [Segment],
     glossary_carry: &'a [carrying::GlossaryCarry],
     glossary_goals: &'a [focused_goal_glossary::FocusedGoal],
+    affirmative_meal: Option<polarity_contrast::AffirmativeMeal>,
     preceding_activity: &'a [Atom],
     prior_meal: Option<usize>,
     recovered_meal_trip: Option<trip_after_meal::RecoveredTrip>,
@@ -11681,6 +11706,30 @@ fn translate_clause_bunsetsus(
     let recovered_goal = ctx
         .recovered_meal_trip
         .and_then(|frame| frame.restore_arguments(&mut bunsetsus));
+    let affirmative_meal = ctx.affirmative_meal.and_then(|meal| {
+        let topic = bunsetsus.iter().position(|group| {
+            group.role == BunsetsuRole::Subj
+                && group.case_particle.as_deref() == Some("は")
+                && group
+                    .atoms
+                    .iter()
+                    .any(|atom| atom.doc_tok_idx == Some(meal.topic))
+        })?;
+        bunsetsus
+            .iter()
+            .filter(|group| group.role == BunsetsuRole::Predicate)
+            .flat_map(|group| &group.atoms)
+            .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(meal.predicate))
+            .then_some((meal, topic))
+    });
+    // An explicit time can lead the clause. Keep a bare meal topic in front.
+    if let Some((meal, topic)) = affirmative_meal
+        && meal.time_first
+    {
+        bunsetsus[topic].role = BunsetsuRole::Obj;
+    }
+    let allow_pro_drop_inject = allow_pro_drop_inject && affirmative_meal.is_none();
+
     let focused_days = if target == TargetVariant::ZhHant {
         calendar::take_focused_days(&mut bunsetsus, source)
     } else {
@@ -12858,6 +12907,14 @@ fn translate_clause_bunsetsus(
         );
     if meeting_partner.is_some() {
         passive_agent_needed = false;
+    }
+    if affirmative_meal.is_some()
+        && verb_core == "吃"
+        && pre_verb_mods.is_empty()
+        && post_verb_mods.is_empty()
+        && !passive_agent_needed
+    {
+        pre_verb_mods.push("有".to_owned());
     }
     if let Some(state) = bounded_state {
         verb_core = state.to_owned();

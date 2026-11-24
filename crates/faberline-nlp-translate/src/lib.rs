@@ -15,7 +15,7 @@ pub mod render;
 pub mod schema;
 pub mod variant;
 
-use std::{collections::HashMap, path::Path};
+use std::{cell::OnceCell, collections::HashMap, path::Path};
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::model::{Backend, ModelError};
@@ -138,7 +138,7 @@ pub fn analyze_and_translate(
         None => None,
     };
 
-    translate_document(
+    translate_document_inner(
         text,
         &doc,
         #[cfg(feature = "narrative")]
@@ -146,6 +146,7 @@ pub fn analyze_and_translate(
         options,
         glossary,
         loaded_seq2seq.as_ref(),
+        models_dir.is_none(),
     )
 }
 
@@ -159,6 +160,27 @@ pub fn translate_document(
     options: &TranslateOptions,
     glossary: &TranslationGlossary,
     seq2seq: Option<&LoadedTranslateModel>,
+) -> anyhow::Result<TranslatedDocument> {
+    translate_document_inner(
+        text,
+        doc,
+        #[cfg(feature = "narrative")]
+        narrative,
+        options,
+        glossary,
+        seq2seq,
+        false,
+    )
+}
+
+fn translate_document_inner(
+    text: &str,
+    doc: &Document,
+    #[cfg(feature = "narrative")] narrative: Option<&ChapterNarrative>,
+    options: &TranslateOptions,
+    glossary: &TranslationGlossary,
+    seq2seq: Option<&LoadedTranslateModel>,
+    builtin_cpu_analysis: bool,
 ) -> anyhow::Result<TranslatedDocument> {
     #[cfg(not(feature = "narrative"))]
     let narrative: Option<&()> = None;
@@ -260,6 +282,7 @@ pub fn translate_document(
         Vec::with_capacity(doc.segmentation.opaque.len());
     let mut out_unknown: Vec<TranslateUnknown> = Vec::new();
     let mut consumed_direct_reports = HashMap::new();
+    let original_topic_source = builtin_cpu_analysis.then(OnceCell::new);
     let mut dates = ja_zh::DateContext::default();
     let mut honorifics = ja_zh::HonorificContext::default();
 
@@ -371,6 +394,7 @@ pub fn translate_document(
                     seq2seq,
                     direct_quote_placements.get(&si),
                     &written_quotes,
+                    original_topic_source.as_ref(),
                     &mut dates,
                     &mut honorifics,
                 );
@@ -763,6 +787,7 @@ fn translate_single_sentence(
     seq2seq: Option<&LoadedTranslateModel>,
     direct_quote: Option<&ja_zh::DirectQuotePlacement>,
     written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
+    original_topic_source: Option<&OnceCell<Option<Document>>>,
     dates: &mut ja_zh::DateContext,
     honorifics: &mut ja_zh::HonorificContext,
 ) -> SentenceOutcome {
@@ -929,12 +954,58 @@ fn translate_single_sentence(
             );
             ja_zh::prior_letter_distribution(idx, chars, doc, &locks)
         });
+        let repaired = if options.target == TargetVariant::ZhHant
+            && doc.options.enrich_morphology
+            && doc.options.cpu_syntax
+            && direct_quote.is_none()
+            && written_quotes.is_empty()
+            && ja_zh::polarity_contrast::may_restore_topics(&raw_sent, chars, &lock_table)
+        {
+            let repair = |source: &Document, tokens: &[&Token]| {
+                ja_zh::polarity_contrast::restore_topics(
+                    sentence_idx,
+                    source,
+                    tokens,
+                    chars,
+                    &lock_table,
+                )
+            };
+            repair(doc, sent_tokens)
+                .map(|locks| (doc, sent_tokens.to_vec(), locks))
+                .or_else(|| {
+                    // Only the built-in CPU entry points can identify the hints
+                    // added by the glossary. Keep external analysis as supplied.
+                    let source = original_topic_source?
+                        .get_or_init(|| {
+                            let text: String = chars.iter().collect();
+                            let source_options =
+                                doc_options_for_translate(options, &TranslationGlossary::new());
+                            let source = analyze_document(&text, &source_options);
+                            (doc.segmentation == source.segmentation).then_some(source)
+                        })
+                        .as_ref()?;
+                    let first = source
+                        .tokens
+                        .partition_point(|token| token.sentence < sentence_idx);
+                    let last = source
+                        .tokens
+                        .partition_point(|token| token.sentence <= sentence_idx);
+                    let tokens = source.tokens[first..last].iter().collect::<Vec<_>>();
+                    repair(source, &tokens).map(|locks| (source, tokens, locks))
+                })
+        } else {
+            None
+        };
+        let (render_doc, render_tokens, render_locks) = match &repaired {
+            Some((source, tokens, locks)) => (*source, tokens.as_slice(), locks),
+            None => (doc, sent_tokens, &lock_table),
+        };
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
-            doc,
-            sent_tokens,
-            &lock_table,
+            render_doc,
+            render_tokens,
+            render_locks,
             &conditioning,
             options.target,
             direct_quote,

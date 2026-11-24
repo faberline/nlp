@@ -7600,11 +7600,55 @@ fn try_translate_homework_transfer(
 }
 
 #[cfg(test)]
-mod homework_object_glossary_tests {
+mod homework_glossary_tests {
     use crate::{
         GlossaryKind, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
     };
     use faberline_nlp::doc::model::Backend;
+
+    fn check_lock(source: &str, expected: &str, category: &str, kind: GlossaryKind, term: &str) {
+        let glossary: TranslationGlossary = serde_json::from_value(serde_json::json!({
+            "schema": "nlp.translate.glossary.v1",
+            (category): [{
+                "canonical": term,
+                "surfaces": [term],
+                "targets": {"zh-Hant": "課後作業"}
+            }]
+        }))
+        .unwrap();
+        for hint in [None, Some(TargetVariant::Ja)] {
+            let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+            options.source_hint = hint;
+            let translated =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(
+                translated.target_text, expected,
+                "{source} with {category}/{term}"
+            );
+            let [hit] = translated.glossary_hits.as_slice() else {
+                panic!("expected one glossary match");
+            };
+            let span_text = |text: &str, start, end| {
+                text.chars()
+                    .skip(start)
+                    .take(end - start)
+                    .collect::<String>()
+            };
+            assert_eq!((hit.kind, hit.canonical.as_str()), (kind, term));
+            assert_eq!(
+                span_text(source, hit.source_span.start_char, hit.source_span.end_char),
+                term
+            );
+            assert_eq!(
+                span_text(
+                    &translated.target_text,
+                    hit.target_span.start_char,
+                    hit.target_span.end_char
+                ),
+                "課後作業"
+            );
+        }
+    }
 
     #[test]
     fn locked_homework_keeps_submission_assignment_and_extraction_distinct() {
@@ -7616,51 +7660,26 @@ mod homework_object_glossary_tests {
                 "我從書桌的抽屜拿出課後作業。",
             ),
         ] {
-            for term in ["宿題", "宿題を"] {
-                let glossary: TranslationGlossary = serde_json::from_value(serde_json::json!({
-                    "schema": "nlp.translate.glossary.v1",
-                    "objects": [{
-                        "canonical": term,
-                        "surfaces": [term],
-                        "targets": {"zh-Hant": "課後作業"}
-                    }]
-                }))
-                .unwrap();
-                for hint in [None, Some(TargetVariant::Ja)] {
-                    let mut options = TranslateOptions::new(TargetVariant::ZhHant);
-                    options.source_hint = hint;
-                    let translated =
-                        analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
-                            .unwrap();
-                    assert_eq!(translated.target_text, expected, "{source} with {term}");
-                    let [hit] = translated.glossary_hits.as_slice() else {
-                        panic!("expected one homework glossary match");
-                    };
-                    let span_text = |text: &str, start, end| {
-                        text.chars()
-                            .skip(start)
-                            .take(end - start)
-                            .collect::<String>()
-                    };
-                    assert_eq!(
-                        (hit.kind, hit.canonical.as_str()),
-                        (GlossaryKind::Object, term)
-                    );
-                    assert_eq!(
-                        span_text(source, hit.source_span.start_char, hit.source_span.end_char),
-                        term
-                    );
-                    assert_eq!(
-                        span_text(
-                            &translated.target_text,
-                            hit.target_span.start_char,
-                            hit.target_span.end_char
-                        ),
-                        "課後作業"
-                    );
+            for (category, kind) in [
+                ("objects", GlossaryKind::Object),
+                ("domain_terms", GlossaryKind::DomainTerm),
+            ] {
+                for term in ["宿題", "宿題を"] {
+                    check_lock(source, expected, category, kind, term);
                 }
             }
         }
+    }
+
+    #[test]
+    fn locked_homework_stays_opaque_under_a_different_governor() {
+        check_lock(
+            "生徒は先生に本を出して宿題を読みます。",
+            "生徒給老師拿出書，課後作業讀。",
+            "domain_terms",
+            GlossaryKind::DomainTerm,
+            "宿題を",
+        );
     }
 }
 

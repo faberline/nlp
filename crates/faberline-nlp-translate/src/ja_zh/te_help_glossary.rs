@@ -3,7 +3,12 @@ use super::*;
 // The caller lexicon can combine a direct object and を into one token
 // tagged as a verb. Recover the argument from the ordinary clause analysis,
 // then run the same request matcher on the original atoms and placeholder.
-pub(super) fn restore_object(atoms: &[Atom], doc: &Document, chars: &[char]) -> Option<Vec<Atom>> {
+pub(super) fn restore_object(
+    atoms: &[Atom],
+    doc: &Document,
+    chars: &[char],
+    lock_table: &SpanLockTable,
+) -> Option<Vec<Atom>> {
     let body = core_non_punct(atoms);
     if body.last()?.surface != "か"
         || !body.windows(3).any(|group| {
@@ -15,7 +20,24 @@ pub(super) fn restore_object(atoms: &[Atom], doc: &Document, chars: &[char]) -> 
     }
     let mut locks = body.iter().enumerate().filter(|(_, atom)| atom.is_locked);
     let (index, lock) = locks.next()?;
-    if lock.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM) || locks.next().is_some() {
+    if locks.next().is_some()
+        || !lock_table.locks.iter().any(|entry| {
+            entry.mandatory
+                && entry.source_span == lock.span
+                && entry.placeholder == lock.surface
+                && match entry.origin {
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Object,
+                        ..
+                    } => lock.lemma.as_deref() == Some(LOCKED_OBJECT_ATOM),
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::DomainTerm,
+                        ..
+                    } => true,
+                    _ => false,
+                }
+        })
+    {
         return None;
     }
     let offset = body.first()?.span.start_char;
@@ -78,6 +100,9 @@ pub(super) fn restore_object(atoms: &[Atom], doc: &Document, chars: &[char]) -> 
     // here is the object whose relation was verified in the ordinary analysis.
     restored.doc_tok_idx = None;
     restored.upos = Some(Upos::Noun);
+    // Only the render atom gains the verified object role. The original
+    // lock still reports the category and span supplied by the caller.
+    restored.lemma = Some(LOCKED_OBJECT_ATOM.to_owned());
     let mut start = index;
     match demonstrative {
         Some((det, word)) if lock.span.start_char == at_source(noun).start_char => {
@@ -112,15 +137,27 @@ pub(super) fn restore_object(atoms: &[Atom], doc: &Document, chars: &[char]) -> 
 
 #[cfg(test)]
 mod tests {
-    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use crate::{
+        GlossaryKind, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+    };
     use faberline_nlp::doc::model::Backend;
 
-    fn translate(source: &str, term: &str, label: &str) -> crate::TranslatedDocument {
+    fn translate(
+        source: &str,
+        kind: GlossaryKind,
+        term: &str,
+        label: &str,
+    ) -> crate::TranslatedDocument {
         let mut options = TranslateOptions::new(TargetVariant::ZhHant);
         options.source_hint = Some(TargetVariant::Ja);
+        let category = match kind {
+            GlossaryKind::Object => "objects",
+            GlossaryKind::DomainTerm => "domain_terms",
+            _ => unreachable!(),
+        };
         let glossary = serde_json::from_value::<TranslationGlossary>(serde_json::json!({
             "schema": "nlp.translate.glossary.v1",
-            "objects": [{
+            (category): [{
                 "canonical": term,
                 "surfaces": [term],
                 "targets": {"zh-Hant": label}
@@ -132,6 +169,7 @@ mod tests {
         let [hit] = translated.glossary_hits.as_slice() else {
             panic!("expected one glossary hit for {term}");
         };
+        assert_eq!(hit.kind, kind);
         let from_span = |text: &str, start, end| -> String {
             text.chars().skip(start).take(end - start).collect()
         };
@@ -152,32 +190,41 @@ mod tests {
 
     #[test]
     fn object_case_locks_keep_the_assistance_request() {
-        for (source, opening) in [
-            ("この荷物を持っていただけますか。", "可以請您幫我"),
-            ("この荷物を持っていただけませんか。", "可以麻煩您幫我"),
-        ] {
-            for (term, label) in [
-                ("荷物", "器材"),
-                ("荷物を", "器材"),
-                ("この荷物を", "這件器材"),
+        for kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+            for (source, opening) in [
+                ("この荷物を持っていただけますか。", "可以請您幫我"),
+                ("この荷物を持っていただけませんか。", "可以麻煩您幫我"),
             ] {
-                let result = translate(source, term, label);
-                assert_eq!(
-                    result.target_text,
-                    format!("{opening}拿著這件器材嗎？"),
-                    "{term}"
-                );
+                for (term, label) in [
+                    ("荷物", "器材"),
+                    ("荷物を", "器材"),
+                    ("この荷物を", "這件器材"),
+                ] {
+                    let result = translate(source, kind, term, label);
+                    assert_eq!(
+                        result.target_text,
+                        format!("{opening}拿著這件器材嗎？"),
+                        "{term}"
+                    );
+                }
             }
+            assert_eq!(
+                translate("写真を撮ってもらえますか。", kind, "写真を", "紀錄照").target_text,
+                "可以幫我拍攝紀錄照嗎？"
+            );
         }
-        assert_eq!(
-            translate("写真を撮ってもらえますか。", "写真を", "紀錄照").target_text,
-            "可以幫我拍攝紀錄照嗎？"
-        );
     }
 
     #[test]
     fn case_lock_does_not_make_a_nominal_request_an_assistance_request() {
-        let result = translate("この資料をいただけませんか。", "この資料を", "這份講義");
-        assert!(!result.target_text.contains("幫我"));
+        for kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+            let result = translate(
+                "この資料をいただけませんか。",
+                kind,
+                "この資料を",
+                "這份講義",
+            );
+            assert!(!result.target_text.contains("幫我"));
+        }
     }
 }

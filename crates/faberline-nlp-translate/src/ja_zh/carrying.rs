@@ -56,7 +56,7 @@ pub(super) fn with_motion(
         .any(|atom| !atom.is_locked && atom.doc_tok_idx == Some(object))
 }
 
-fn portable_object(
+pub(super) fn portable_object(
     doc: &Document,
     chars: &[char],
     hold: usize,
@@ -178,7 +178,7 @@ fn linked_actions(
     .then_some((hold_id, motion_id))
 }
 
-fn is_motion(lemma: Option<&str>) -> bool {
+pub(super) fn is_motion(lemma: Option<&str>) -> bool {
     matches!(
         lemma,
         Some(

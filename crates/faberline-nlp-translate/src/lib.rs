@@ -282,7 +282,7 @@ fn translate_document_inner(
         Vec::with_capacity(doc.segmentation.opaque.len());
     let mut out_unknown: Vec<TranslateUnknown> = Vec::new();
     let mut consumed_direct_reports = HashMap::new();
-    let original_topic_source = builtin_cpu_analysis.then(OnceCell::new);
+    let source_without_glossary = builtin_cpu_analysis.then(OnceCell::new);
     let mut dates = ja_zh::DateContext::default();
     let mut honorifics = ja_zh::HonorificContext::default();
 
@@ -394,7 +394,7 @@ fn translate_document_inner(
                     seq2seq,
                     direct_quote_placements.get(&si),
                     &written_quotes,
-                    original_topic_source.as_ref(),
+                    source_without_glossary.as_ref(),
                     &mut dates,
                     &mut honorifics,
                 );
@@ -787,7 +787,7 @@ fn translate_single_sentence(
     seq2seq: Option<&LoadedTranslateModel>,
     direct_quote: Option<&ja_zh::DirectQuotePlacement>,
     written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
-    original_topic_source: Option<&OnceCell<Option<Document>>>,
+    source_without_glossary: Option<&OnceCell<Option<Document>>>,
     dates: &mut ja_zh::DateContext,
     honorifics: &mut ja_zh::HonorificContext,
 ) -> SentenceOutcome {
@@ -954,28 +954,47 @@ fn translate_single_sentence(
             );
             ja_zh::prior_letter_distribution(idx, chars, doc, &locks)
         });
-        let repaired = if options.target == TargetVariant::ZhHant
+        let can_repair = options.target == TargetVariant::ZhHant
             && doc.options.enrich_morphology
             && doc.options.cpu_syntax
             && direct_quote.is_none()
-            && written_quotes.is_empty()
-            && ja_zh::polarity_contrast::may_restore_topics(&raw_sent, chars, &lock_table)
-        {
+            && written_quotes.is_empty();
+        let restore_topics = can_repair
+            && ja_zh::polarity_contrast::may_restore_topics(&raw_sent, chars, &lock_table);
+        let restore_omission =
+            can_repair && ja_zh::naide_locks::may_restore(&raw_sent, &lock_table);
+        let repaired = if restore_topics || restore_omission {
             let repair = |source: &Document, tokens: &[&Token]| {
-                ja_zh::polarity_contrast::restore_topics(
-                    sentence_idx,
-                    source,
-                    tokens,
-                    chars,
-                    &lock_table,
-                )
+                if restore_omission
+                    && let Some((locks, omission)) = ja_zh::naide_locks::restore(
+                        sentence_idx,
+                        source,
+                        tokens,
+                        chars,
+                        &lock_table,
+                    )
+                {
+                    return Some((locks, Some(omission)));
+                }
+                restore_topics
+                    .then(|| {
+                        ja_zh::polarity_contrast::restore_topics(
+                            sentence_idx,
+                            source,
+                            tokens,
+                            chars,
+                            &lock_table,
+                        )
+                    })
+                    .flatten()
+                    .map(|locks| (locks, None))
             };
             repair(doc, sent_tokens)
-                .map(|locks| (doc, sent_tokens.to_vec(), locks))
+                .map(|(locks, omission)| (doc, sent_tokens.to_vec(), locks, omission))
                 .or_else(|| {
                     // Only the built-in CPU entry points can identify the hints
                     // added by the glossary. Keep external analysis as supplied.
-                    let source = original_topic_source?
+                    let source = source_without_glossary?
                         .get_or_init(|| {
                             let text: String = chars.iter().collect();
                             let source_options =
@@ -991,14 +1010,17 @@ fn translate_single_sentence(
                         .tokens
                         .partition_point(|token| token.sentence <= sentence_idx);
                     let tokens = source.tokens[first..last].iter().collect::<Vec<_>>();
-                    repair(source, &tokens).map(|locks| (source, tokens, locks))
+                    repair(source, &tokens)
+                        .map(|(locks, omission)| (source, tokens, locks, omission))
                 })
         } else {
             None
         };
-        let (render_doc, render_tokens, render_locks) = match &repaired {
-            Some((source, tokens, locks)) => (*source, tokens.as_slice(), locks),
-            None => (doc, sent_tokens, &lock_table),
+        let (render_doc, render_tokens, render_locks, protected_omission) = match &repaired {
+            Some((source, tokens, locks, omission)) => {
+                (*source, tokens.as_slice(), locks, omission.as_ref())
+            }
+            None => (doc, sent_tokens, &lock_table, None),
         };
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
@@ -1006,6 +1028,7 @@ fn translate_single_sentence(
             render_doc,
             render_tokens,
             render_locks,
+            protected_omission,
             &conditioning,
             options.target,
             direct_quote,

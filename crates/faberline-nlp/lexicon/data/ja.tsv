@@ -47413,8 +47413,8 @@
 従って	ja	661	CCONJ	CCONJ	-	-	-
 従る	ja	1172	VERB	VERB	-	-	infl=ichidan
 従事	ja	765	-	NOUN|VERB	-	從事	-
-従兄弟	ja	740	NOUN	NOUN	-	表兄弟	src=first_party_mit
-従姉妹	ja	740	NOUN	NOUN	-	表姊妹	src=first_party_mit
+従兄弟	ja	740	NOUN	NOUN	-	堂表親	src=first_party_mit
+従姉妹	ja	740	NOUN	NOUN	-	堂表親	src=first_party_mit
 従属	ja	763	-	NOUN|VERB	-	從屬	src=unihan_zh_hant
 従来	ja	880	-	ADV|NOUN	-	從來	-
 従業	ja	762	-	NOUN|VERB	-	從業	-
@@ -57522,7 +57522,7 @@
 産科	ja	1030	NOUN	NOUN	-	產科	-
 産道	ja	1029	NOUN	NOUN	-	產道	-
 産院	ja	1000	NOUN	NOUN	-	-	-
-甥	ja	1135	NOUN	NOUN	-	外甥	src=first_party_mit
+甥	ja	1135	NOUN	NOUN	-	兄弟姊妹的兒子	src=first_party_mit
 甦る	ja	1159	VERB	VERB	-	-	infl=godan_ra
 甦生	ja	763	-	NOUN|VERB	-	-	-
 用いる	ja	1160	VERB	VERB	-	採用	infl=ichidan;src=first_party_mit

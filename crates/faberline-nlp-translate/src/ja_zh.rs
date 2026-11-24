@@ -10,6 +10,7 @@ use std::collections::HashMap;
 mod application_form;
 mod calendar;
 pub(crate) use calendar::DateContext;
+mod carrying;
 mod copular_time;
 mod counted_object;
 mod daytime;
@@ -225,6 +226,11 @@ pub(crate) fn translate_ja_sentence(
         return definition.render(doc, sentence_idx, target);
     }
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
+    let glossary_carry = if target == TargetVariant::ZhHant && direct_quote.is_none() {
+        carrying::restore_case(&mut atoms, chars, sent_span, doc, lock_table)
+    } else {
+        Vec::new()
+    };
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
@@ -871,6 +877,7 @@ pub(crate) fn translate_ja_sentence(
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
                     following: &segments[seg_idx + 1..],
+                    glossary_carry: &glossary_carry,
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
                             if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
@@ -5503,6 +5510,7 @@ struct ClauseDiscourseCtx<'a> {
     contrasts_recurrence: bool,
     source_chars: &'a [char],
     following: &'a [Segment],
+    glossary_carry: &'a [carrying::GlossaryCarry],
     preceding_activity: &'a [Atom],
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
     prepared_for_predicate: Option<usize>,
@@ -12458,6 +12466,19 @@ fn translate_clause_bunsetsus(
     if let Some(state) = bounded_state {
         verb_core = state.to_owned();
         post_verb_mods.retain(|m| m != "著");
+    }
+    if target == TargetVariant::ZhHant
+        && verb_core == "拿著"
+        && !ctx.inside_quote
+        && !passive_agent_needed
+        && !pre_verb_mods.iter().any(|m| m == "讓")
+        && (carrying::restored_carry(source, &predicates, ctx.following, ctx.glossary_carry)
+            || carrying::with_motion(source, &predicates, ctx.following, doc, ctx.source_chars))
+    {
+        let negative = pre_verb_mods
+            .iter()
+            .any(|modifier| matches!(modifier.as_str(), "不" | "沒有" | "不要" | "請不要"));
+        verb_core = if negative { "帶" } else { "帶著" }.to_owned();
     }
     if past_until && adverbs.iter().any(|adv| adv == "一直") {
         pre_verb_mods.retain(|modifier| modifier != "一直");

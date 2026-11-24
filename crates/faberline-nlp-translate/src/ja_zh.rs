@@ -244,6 +244,12 @@ pub(crate) fn translate_ja_sentence(
         });
         daytime::join_recipient_pauses(&mut atoms);
         nominal_possession::join_choice_commas(&mut atoms, doc, sentence_idx, target, chars);
+        if direct_quote.is_none()
+            && written_form_continuation.is_none()
+            && let Some(addition) = common_noun_sense::script_addition(&atoms, doc, sentence_idx)
+        {
+            return addition;
+        }
     }
 
     if atoms.is_empty() {

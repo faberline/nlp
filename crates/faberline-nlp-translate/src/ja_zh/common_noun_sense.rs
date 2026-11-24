@@ -2,7 +2,7 @@
 
 use super::{
     Atom, ClauseAlignment, Document, Span, TargetVariant, Upos, dasu_case_link,
-    localize_close_quote, localize_open_quote, nominal_possession,
+    localize_close_quote, localize_open_quote, localize_punct, nominal_possession,
 };
 
 const MARKER: &str = "__ja_common_noun_sense:";
@@ -133,31 +133,7 @@ pub(super) fn quoted_definition(
         ""
     };
     let text = format!("{subject}{location}是{role}的意思{punctuation}");
-    let end = text.chars().count();
-    let alignments = doc
-        .segmentation
-        .clauses
-        .iter()
-        .enumerate()
-        .filter(|(_, clause)| clause.sentence == sentence)
-        .map(|(index, clause)| ClauseAlignment {
-            sentence,
-            clause: index,
-            source_span: clause.span,
-            target_span: Span {
-                start_char: if clause.span.start_char >= pivot {
-                    subject_end
-                } else {
-                    0
-                },
-                end_char: if clause.span.end_char <= pivot {
-                    subject_end
-                } else {
-                    end
-                },
-            },
-        })
-        .collect();
+    let alignments = align_boundary(doc, sentence, pivot, subject_end, text.chars().count());
     Some((text, alignments))
 }
 
@@ -236,6 +212,230 @@ pub(super) fn render_transfer(source: &[Atom], doc: &Document, sentence: usize) 
         _ => return None,
     };
     Some(format!("{subject}把{item}{action}{aspect}{place}"))
+}
+
+/// Keep the script and the material being written with their own predicate,
+/// even when a reading pause follows the destination.
+pub(super) fn script_addition(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence: usize,
+) -> Option<(String, Vec<ClauseAlignment>)> {
+    let (body, punctuation) = match atoms {
+        [body @ .., end] if matches!(end.surface.as_str(), "。" | "！" | "？" | "!" | "?") => {
+            if end.is_locked {
+                return None;
+            }
+            (body, localize_punct(&end.surface))
+        }
+        _ => (atoms, String::new()),
+    };
+    if body.iter().any(boundary)
+        || !body.iter().any(|atom| {
+            atom.surface == "ドラマ" && render(&atom.surface, atom.lemma.as_deref()) == Some("劇本")
+        })
+    {
+        return None;
+    }
+    let root_index = body.iter().position(|atom| atom.deprel == "root")?;
+    let root = &body[root_index];
+    let root_id = root.doc_tok_idx?;
+    if root.upos != Some(Upos::Verb) {
+        return None;
+    }
+    let verb_index = if like(root, &["書き足す"]) {
+        root_index
+    } else {
+        let before = root_index.checked_sub(1)?;
+        let stem = &body[before];
+        if !(like(root, &["足す"])
+            && stem.surface == "書き"
+            && like(stem, &["書く"])
+            && stem.upos == Some(Upos::Verb)
+            && stem.head == Some(root_id)
+            && stem.deprel == "advcl"
+            && stem.span.end_char == root.span.start_char)
+        {
+            return None;
+        }
+        before
+    };
+    let stem = &body[verb_index];
+    let stem_id = stem.doc_tok_idx?;
+    let ending = &body[root_index + 1..];
+    if ending
+        .iter()
+        .any(|atom| atom.upos != Some(Upos::Aux) || atom.head != Some(root_id))
+    {
+        return None;
+    }
+    let finite: String = body[verb_index..]
+        .iter()
+        .map(|atom| atom.surface.as_str())
+        .collect();
+    let action = match finite.as_str() {
+        "書き足す" | "書き足します" => "補寫",
+        "書き足した" | "書き足しました" => "補寫了",
+        _ => return None,
+    };
+    let owns_case = |noun: &Atom, particle: &Atom| {
+        matches!(noun.head, Some(head) if head == stem_id || head == root_id)
+            && dasu_case_link(noun, particle)
+    };
+    let [arguments @ .., object_head, object_case] = &body[..verb_index] else {
+        return None;
+    };
+    if object_head.deprel != "obj"
+        || object_case.surface != "を"
+        || !owns_case(object_head, object_case)
+    {
+        return None;
+    }
+    let place_index = arguments.windows(2).position(|pair| {
+        let place = &pair[0];
+        let particle = &pair[1];
+        place.deprel == "obl"
+            && particle.surface == "に"
+            && render(&place.surface, place.lemma.as_deref()) == Some("劇本")
+            && owns_case(place, particle)
+    })?;
+    let location = &arguments[..=place_index];
+    let placement_case = &arguments[place_index + 1];
+    if !owns_nominal(location) {
+        return None;
+    }
+    let material = &body[place_index + 2..verb_index - 1];
+    let material = match material {
+        [comma, remaining @ ..] if matches!(comma.surface.as_str(), "、" | "，") => {
+            if !location
+                .iter()
+                .any(|atom| atom.doc_tok_idx.is_some() && atom.doc_tok_idx == comma.head)
+            {
+                return None;
+            }
+            remaining
+        }
+        _ => material,
+    };
+    if !owns_nominal(material) {
+        return None;
+    }
+    let place = nominal_possession::noun_phrase(location, doc, sentence, TargetVariant::ZhHant)?;
+    let item = written_material(material, doc, sentence)?;
+    let prefix = format!("{place}裡");
+    let pivot = prefix.chars().count();
+    let output = format!("{prefix}{action}{item}{punctuation}");
+    let alignments = align_boundary(
+        doc,
+        sentence,
+        placement_case.span.end_char,
+        pivot,
+        output.chars().count(),
+    );
+    Some((output, alignments))
+}
+
+fn align_boundary(
+    doc: &Document,
+    sentence: usize,
+    source_cut: usize,
+    target_cut: usize,
+    target_end: usize,
+) -> Vec<ClauseAlignment> {
+    doc.segmentation
+        .clauses
+        .iter()
+        .enumerate()
+        .filter(|(_, clause)| clause.sentence == sentence)
+        .map(|(index, clause)| ClauseAlignment {
+            sentence,
+            clause: index,
+            source_span: clause.span,
+            target_span: Span {
+                start_char: if clause.span.start_char >= source_cut {
+                    target_cut
+                } else {
+                    0
+                },
+                end_char: if clause.span.end_char <= source_cut {
+                    target_cut
+                } else {
+                    target_end
+                },
+            },
+        })
+        .collect()
+}
+
+fn owns_nominal(atoms: &[Atom]) -> bool {
+    let Some((head, modifiers)) = atoms.split_last() else {
+        return false;
+    };
+    let Some(head_id) = head.doc_tok_idx else {
+        return false;
+    };
+    modifiers.iter().all(|atom| {
+        if atom.upos == Some(Upos::Punct) {
+            return false;
+        }
+        let mut governor = atom.head;
+        for _ in modifiers {
+            let Some(id) = governor else {
+                return false;
+            };
+            if id == head_id {
+                return true;
+            }
+            governor = modifiers
+                .iter()
+                .find(|part| part.doc_tok_idx == Some(id))
+                .and_then(|part| part.head);
+        }
+        false
+    })
+}
+
+fn written_material(atoms: &[Atom], doc: &Document, sentence: usize) -> Option<String> {
+    let noun_phrase =
+        |parts| nominal_possession::noun_phrase(parts, doc, sentence, TargetVariant::ZhHant);
+    let dialogue = |line: &Atom| {
+        line.upos == Some(Upos::Noun) && like(line, &["せりふ", "セリフ", "台詞", "科白"])
+    };
+    if let [line] = atoms
+        && dialogue(line)
+    {
+        return Some("台詞".to_owned());
+    }
+    if let [left @ .., conjunction, line] = atoms
+        && dialogue(line)
+        && conjunction.surface == "と"
+        && let Some(other) = left.last()
+        && owns_nominal(left)
+        && (dasu_case_link(other, conjunction)
+            || (conjunction.deprel == "cc" && conjunction.head == line.doc_tok_idx))
+        && conjunction.span.end_char == line.span.start_char
+    {
+        return Some(format!("{}和台詞", noun_phrase(left)?));
+    }
+    let [left @ .., start, middle, end] = atoms else {
+        return noun_phrase(atoms);
+    };
+    // The analyzer can tokenize とせりふ as とせ / り / ふ. Keep the
+    // coordination only when each fragment belongs to the object.
+    if start.surface == "とせ" && middle.surface == "り" && end.surface == "ふ" {
+        let left_head = left.last()?;
+        if !(start.head == end.doc_tok_idx
+            && middle.head == start.doc_tok_idx
+            && left_head.head == start.doc_tok_idx
+            && left_head.span.end_char == start.span.start_char
+            && start.span.end_char == middle.span.start_char
+            && middle.span.end_char == end.span.start_char)
+        {
+            return None;
+        }
+        return Some(format!("{}和台詞", noun_phrase(left)?));
+    }
+    noun_phrase(atoms)
 }
 
 pub(super) fn teamwork_idiom(atoms: &[Atom]) -> Option<&'static str> {
@@ -582,6 +782,16 @@ mod tests {
         assert!(run(&bank, "N24").target_text.contains("非常有默契"));
         let placement = run(&bank, "N33").target_text;
         assert!(placement.contains("纜線放在地板上"));
+        for id in ["N13", "N16"] {
+            let text = run(&bank, id).target_text;
+            assert!(
+                text.contains("劇本裡補寫了") && text.contains("和台詞"),
+                "{id}: {text}"
+            );
+        }
+        let festival = run(&bank, "N13").target_text;
+        assert!(festival.contains("校慶上演") && !festival.contains("在在"));
+        assert!(run(&bank, "N16").target_text.contains("電視的新聞"));
     }
 
     #[test]

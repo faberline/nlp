@@ -13,8 +13,8 @@ Strict A2 rules:
      matching apply_a1_lexemes.py / build_ja.py so diffs only touch modified/inserted rows.
   2. Never modify `cost` or any column other than `counterpart` (col 6) and `meta` (col 7)
      on existing rows; fill unglossed (`cols[6] == '-'`) rows. Reviewed exceptions
-     replace the `午後` identity gloss and four A4 glosses with first-party
-     source glosses after matching the previously shipped rows. Five audited
+     replace the `午後` identity gloss, three first-party noun glosses, and four
+     A4 glosses after matching the previously shipped rows. Five audited
      mixed-POS corrections are applied after the existing overlays, matching
      each previously shipped row exactly.
   3. Only insert missing rows (<= 35 total) for the explicit closed paradigms and
@@ -38,6 +38,13 @@ GLOSS_TSV = Path(__file__).resolve().parent / "data" / "first_party_mit_ja_zh.ts
 A4_GLOSS_TSV = Path(__file__).resolve().parent / "data" / "a4_first_party_mit_ja_zh.tsv"
 CLDR_TERRITORY_TSV = Path(__file__).resolve().parent / "data" / "cldr_territory_ja_zh_hant.tsv"
 REVIEWED_345_TSV = Path(__file__).resolve().parent / "data" / "reviewed_345_ja_zh.tsv"
+
+# Preserve every field except the reviewed counterpart.
+REVIEWED_FIRST_PARTY_NOUN_REPLACEMENTS = {
+    ("ケーブル", "ja", "519", "NOUN", "NOUN", "-", "電線", "src=first_party_mit"),
+    ("ドラマ", "ja", "520", "NOUN", "NOUN", "-", "連續劇", "src=first_party_mit"),
+    ("マンション", "ja", "466", "NOUN", "NOUN", "-", "大樓", "src=first_party_mit"),
+}
 
 # Match every field of the previously shipped A4 rows before replacing their glosses.
 REVIEWED_A4_GLOSS_REPLACEMENTS = {
@@ -211,7 +218,8 @@ def main() -> int:
                     and r[6] == surf
                     and cp not in ("-", surf)
                 )
-                if (r[6] == "-" or reviewed_identity) and cp != "-":
+                reviewed_noun = upos == "NOUN" and tuple(r) in REVIEWED_FIRST_PARTY_NOUN_REPLACEMENTS
+                if (r[6] == "-" or reviewed_identity or reviewed_noun) and cp not in ("-", r[6]):
                     r[6] = cp
                     r[7] = merge_meta(r[7], "-")
                     updated_count += 1

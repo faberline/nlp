@@ -327,9 +327,13 @@ pub(crate) fn translate_ja_sentence(
                 trailing_punct: Some(comma),
                 ..
             },
-            Segment::Clause { atoms: trip, .. },
+            Segment::Clause {
+                atoms: trip,
+                trailing_punct: trip_punct,
+                ..
+            },
         ] if matches!(comma.as_str(), "、" | "，") && target == TargetVariant::ZhHant => {
-            trip_after_meal::recover(meal, trip, doc, chars, lock_table)
+            trip_after_meal::recover(meal, trip, trip_punct.as_deref(), doc, chars, lock_table)
         }
         _ => None,
     };
@@ -938,7 +942,9 @@ pub(crate) fn translate_ja_sentence(
                                 && target == TargetVariant::ZhHant && !inside_quote =>
                         {
                             trip_after_meal::prior_meal(meal, trip, doc, chars)
-                                .or(recovered_meal_trip.map(|frame| frame.meal_predicate))
+                                .or(recovered_meal_trip
+                                    .filter(|frame| frame.omission.is_none())
+                                    .map(|frame| frame.meal_predicate))
                         }
                         _ => None,
                     },
@@ -956,8 +962,9 @@ pub(crate) fn translate_ja_sentence(
                                 ..
                             }),
                         ) if target == TargetVariant::ZhHant && !inside_quote => {
-                            naide_adverbial(trimmed_atoms, next, next_punct.as_deref(), chars).or_else(
-                                || {
+                            naide_adverbial(trimmed_atoms, next, next_punct.as_deref(), chars)
+                                .or(recovered_meal_trip.and_then(|frame| frame.omission))
+                                .or_else(|| {
                                     let (action, _, _) = naide_ending(trimmed_atoms)?;
                                     let (intermediate, _, _) = naide_ending(next)?;
                                     if action.head != intermediate.doc_tok_idx {

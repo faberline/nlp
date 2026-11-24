@@ -1,4 +1,4 @@
-//! Recognize a meal followed by a completed trip.
+//! Recognize a trip after a meal or its omission.
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Options, SyntaxToken, analyze_document};
@@ -7,8 +7,9 @@ use crate::lock::LockOrigin;
 use crate::schema::GlossaryKind;
 
 use super::{
-    Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, SpanLockTable,
-    Token, Upos, build_sentence_atoms, dasu_case_link, finished_go, group_into_bunsetsus,
+    Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM, NaideAdverbial,
+    SpanLockTable, Token, Upos, build_sentence_atoms, dasu_case_link, finished_go,
+    group_into_bunsetsus, naide_adverbial, naide_ending,
 };
 
 fn source_identity<'a>(atom: &Atom, doc: &'a Document) -> Option<(&'a SyntaxToken, &'a Token)> {
@@ -66,6 +67,7 @@ fn is_meal_noun(source: &[char]) -> bool {
 #[derive(Clone, Copy)]
 pub(super) struct RecoveredTrip {
     pub(super) meal_predicate: usize,
+    pub(super) omission: Option<NaideAdverbial>,
     motion_predicate: usize,
     wide_meal: Option<Span>,
     wide_place: Option<Span>,
@@ -106,6 +108,7 @@ impl RecoveredTrip {
 pub(super) fn recover(
     before: &[Atom],
     trip: &[Atom],
+    trip_punct: Option<&str>,
     doc: &Document,
     chars: &[char],
     locks: &SpanLockTable,
@@ -153,7 +156,13 @@ pub(super) fn recover(
     let [meal_lock, goal_lock] = arguments;
     let covered_span =
         |lock: Option<(Span, bool)>| lock.filter(|(_, wide)| *wide).map(|(span, _)| span);
-    let [.., eat, _] = before else { return None };
+    let omitted = naide_ending(before).filter(|_| covered_span(goal_lock).is_some());
+    let eat = if let Some((eat, _, _)) = omitted {
+        eat
+    } else {
+        let [.., eat, _] = before else { return None };
+        eat
+    };
     let go = trip.iter().find(|atom| atom.upos == Some(Upos::Verb))?;
     let meal = source_link(eat, doc)?;
     let motion = source_link(go, doc)?;
@@ -205,10 +214,41 @@ pub(super) fn recover(
     let original_trip = part(trip)?;
     // A fused place term can intercept the dependency in the hinted parse.
     // Require the original meal-to-trip link in the recovered parse.
-    let original_meal_predicate = prior_meal(&original_meal, &original_trip, &analysis, local)?;
-    let [.., meal_noun, meal_case, original_eat, _] = original_meal.as_slice() else {
-        return None;
-    };
+    let (meal_noun, meal_case, original_eat, original_meal_predicate, omission) =
+        if let Some((eat, negative, connective)) = omitted {
+            let [leading @ .., meal, case, original_eat, _, _] = original_meal.as_slice() else {
+                return None;
+            };
+            let proof = naide_adverbial(&original_meal, &original_trip, trip_punct, local)?;
+            let action = source_link(original_eat, &analysis)?;
+            if !proof.past
+                || !is_meal_noun(local.get(meal.span.start_char..meal.span.end_char)?)
+                || meal.deprel != "obj"
+                || !linked_noun(meal, action, LOCKED_OBJECT_ATOM, &analysis)
+                || case.surface != "を"
+                || !dasu_case_link(meal, case)
+                || source_link(case, &analysis).is_none()
+                || !only_adverbs(leading, action, &analysis)
+                || absolute(analysis.tokens.get(proof.negative)?.span) != negative.span
+                || absolute(analysis.tokens.get(proof.connective)?.span) != connective.span
+            {
+                return None;
+            }
+            let mapped = NaideAdverbial {
+                action: eat.doc_tok_idx?,
+                negative: negative.doc_tok_idx?,
+                connective: connective.doc_tok_idx?,
+                ..proof
+            };
+            (meal, case, original_eat, proof.action, Some(mapped))
+        } else {
+            let original_meal_predicate =
+                prior_meal(&original_meal, &original_trip, &analysis, local)?;
+            let [.., meal, case, original_eat, _] = original_meal.as_slice() else {
+                return None;
+            };
+            (meal, case, original_eat, original_meal_predicate, None)
+        };
     let [place, marker, original_go, ..] = original_trip.as_slice() else {
         return None;
     };
@@ -245,6 +285,7 @@ pub(super) fn recover(
     };
     Some(RecoveredTrip {
         meal_predicate: meal.token,
+        omission,
         motion_predicate: motion.token,
         wide_meal: covered_span(meal_lock),
         wide_place: covered_span(goal_lock),
@@ -386,6 +427,63 @@ mod domain_term_tests {
                     assert_eq!(extract(source, hit.source_span), original);
                     assert_eq!(extract(&result.target_text, hit.target_span), replacement);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn complete_glossary_keeps_an_omitted_meal_and_its_destination() {
+        let source = "朝ご飯を食べないで、学校へ行きました。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let document = analyze_document(
+            source,
+            &doc_options_for_translate(&options, &TranslationGlossary::new()),
+        );
+        let entry = |surface: &str, target: &str| GlossaryEntry {
+            canonical: surface.into(),
+            surfaces: vec![surface.into()],
+            targets: [(TargetVariant::ZhHant, target.into())].into(),
+            ..GlossaryEntry::default()
+        };
+        for use_domain_terms in [false, true] {
+            let meal = entry("朝ご飯を", "早點");
+            let place = entry("学校へ", "新校舍");
+            let mut glossary = TranslationGlossary::new();
+            let kinds = if use_domain_terms {
+                glossary.domain_terms.extend([meal, place]);
+                [GlossaryKind::DomainTerm, GlossaryKind::DomainTerm]
+            } else {
+                glossary.objects.push(meal);
+                glossary.places.push(place);
+                [GlossaryKind::Object, GlossaryKind::Place]
+            };
+            let translated =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            let direct = translate_document(
+                source,
+                &document,
+                #[cfg(feature = "narrative")]
+                None,
+                &options,
+                &glossary,
+                None,
+            )
+            .unwrap();
+            assert_eq!(translated.target_text, "沒有吃早點就去了新校舍。");
+            assert_eq!(translated.target_text, direct.target_text);
+            assert_eq!(translated.glossary_hits, direct.glossary_hits);
+            assert_eq!(translated.glossary_hits.len(), 2);
+            let span = |start_char, end_char| faberline_nlp::Span {
+                start_char,
+                end_char,
+            };
+            for (hit, (kind, original, target)) in translated.glossary_hits.iter().zip([
+                (kinds[0], span(0, 4), span(3, 5)),
+                (kinds[1], span(10, 13), span(8, 11)),
+            ]) {
+                assert_eq!(hit.kind, kind);
+                assert_eq!(hit.source_span, original);
+                assert_eq!(hit.target_span, target);
             }
         }
     }

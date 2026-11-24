@@ -16,6 +16,7 @@ mod counted_object;
 mod daytime;
 mod finished_go;
 mod finite_adjective;
+mod focused_goal_glossary;
 mod handover;
 mod homework_desire;
 mod homework_relative;
@@ -27,6 +28,9 @@ mod payment_potential;
 mod place_goal_glossary;
 mod reception;
 mod return_endpoint;
+
+#[cfg(test)]
+mod focused_negative_go_tests;
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
@@ -226,11 +230,15 @@ pub(crate) fn translate_ja_sentence(
         return definition.render(doc, sentence_idx, target);
     }
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
-    let glossary_carry = if target == TargetVariant::ZhHant && direct_quote.is_none() {
-        carrying::restore_case(&mut atoms, chars, sent_span, doc, lock_table)
-    } else {
-        Vec::new()
-    };
+    let (glossary_carry, glossary_goals) =
+        if target == TargetVariant::ZhHant && direct_quote.is_none() {
+            (
+                carrying::restore_case(&mut atoms, chars, sent_span, doc, lock_table),
+                focused_goal_glossary::restore(&mut atoms, chars, sent_span, doc, lock_table),
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
     if target == TargetVariant::ZhHant {
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
@@ -878,6 +886,7 @@ pub(crate) fn translate_ja_sentence(
                     source_chars: chars,
                     following: &segments[seg_idx + 1..],
                     glossary_carry: &glossary_carry,
+                    glossary_goals: &glossary_goals,
                     preceding_activity: match segments[..seg_idx].last() {
                         Some(Segment::Clause { atoms, trailing_punct: Some(comma), .. })
                             if !inside_quote && matches!(comma.as_str(), "、" | "，") => atoms,
@@ -5511,6 +5520,7 @@ struct ClauseDiscourseCtx<'a> {
     source_chars: &'a [char],
     following: &'a [Segment],
     glossary_carry: &'a [carrying::GlossaryCarry],
+    glossary_goals: &'a [focused_goal_glossary::FocusedGoal],
     preceding_activity: &'a [Atom],
     measured_activity: Option<&'a std::cell::Cell<Option<MeasuredActivity>>>,
     prepared_for_predicate: Option<usize>,
@@ -11412,8 +11422,18 @@ fn translate_clause_bunsetsus(
         transfer_dative: bool,
         physical_goal_head: Option<usize>,
         household_goal_head: Option<usize>,
+        focused_goal_head: Option<usize>,
         completed_go_place: Option<String>,
     }
+
+    let focused_goal = |group: &Bunsetsu| {
+        if target == TargetVariant::ZhHant {
+            focused_physical_goal_head(group, doc, ctx.source_chars)
+                .or_else(|| focused_goal_glossary::restored_head(group, ctx.glossary_goals))
+        } else {
+            None
+        }
+    };
 
     struct PlacedSubj {
         text: String,
@@ -12272,6 +12292,7 @@ fn translate_clause_bunsetsus(
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
                         household_goal_head: bare_household_goal_head(&b),
+                        focused_goal_head: focused_goal(&b),
                         completed_go_place,
                     });
                 }
@@ -12321,6 +12342,7 @@ fn translate_clause_bunsetsus(
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
                         household_goal_head: bare_household_goal_head(&b),
+                        focused_goal_head: focused_goal(&b),
                         completed_go_place,
                     });
                 }
@@ -12906,6 +12928,7 @@ fn translate_clause_bunsetsus(
                     transfer_dative: false,
                     physical_goal_head: None,
                     household_goal_head: None,
+                    focused_goal_head: None,
                     completed_go_place: None,
                 });
             }
@@ -13170,10 +13193,12 @@ fn translate_clause_bunsetsus(
     let has_until = obliques
         .iter()
         .any(|o| o.case_particle.as_deref() == Some("まで"));
-    let direct_negative_physical_go = negative_go_head.is_some()
-        && only_goal.is_some_and(|o| o.physical_goal_head == negative_go_head)
-        && single_goal
-        && !has_until;
+    let goes_to_arg = |arg: &PlacedArg| {
+        negative_go_head
+            .is_some_and(|head| arg.physical_goal_head.or(arg.focused_goal_head) == Some(head))
+    };
+    let direct_negative_physical_go =
+        only_goal.is_some_and(goes_to_arg) && single_goal && !has_until;
     let household_entry = single_goal
         && !has_until
         && household_entry_head.is_some_and(|predicate| {
@@ -13189,7 +13214,7 @@ fn translate_clause_bunsetsus(
     let format_directional_goal = |arg: &PlacedArg, raw_np: &str| {
         if household_entry && arg.household_goal_head == household_entry_head {
             "屋".to_owned()
-        } else if direct_negative_physical_go && arg.physical_goal_head == negative_go_head {
+        } else if direct_negative_physical_go && goes_to_arg(arg) {
             raw_np.to_owned()
         } else if seated_until && arg.case_particle.as_deref() == Some("に") {
             let place = raw_np.strip_prefix('到').unwrap_or(raw_np);
@@ -13696,7 +13721,7 @@ fn translate_clause_bunsetsus(
             parts.push(format!("連{raw_np}都"));
         } else if direct_negative_physical_go
             && o.case_particle.as_deref() == Some("へ")
-            && o.physical_goal_head == negative_go_head
+            && goes_to_arg(&o)
         {
             if let Some(place) = o.text.strip_prefix('往') {
                 goal_tails.push(place.to_owned());
@@ -24390,6 +24415,66 @@ fn bare_household_goal_head(b: &Bunsetsu) -> Option<usize> {
 
 fn physical_goal_head(b: &Bunsetsu) -> Option<usize> {
     let (particle, content) = b.atoms.split_last()?;
+    physical_goal_head_for_case(b, particle, content)
+}
+
+fn focused_physical_goal_head(b: &Bunsetsu, doc: &Document, chars: &[char]) -> Option<usize> {
+    let [content @ .., case, focus] = b.atoms.as_slice() else {
+        return None;
+    };
+    let noun = content.last()?;
+    if noun.is_locked && (content.len() != 1 || noun.lemma.as_deref() != Some(LOCKED_PLACE_ATOM)) {
+        return None;
+    }
+    if !matches!(case.surface.as_str(), "に" | "へ")
+        || focus.surface != "は"
+        || focus.upos != Some(Upos::Adp)
+        || focus.deprel != "case"
+        || focus.head != noun.doc_tok_idx
+        || focus.is_locked
+        || case.span.end_char != focus.span.start_char
+        || !dasu_case_link(noun, case)
+        || !matches!(noun.deprel.as_str(), "nsubj" | "obl")
+    {
+        return None;
+    }
+
+    // The parser can mark the focused place as a subject. Keep the original
+    // case links so only the place attached to the negated verb qualifies.
+    for atom in [noun, case, focus] {
+        let id = atom.doc_tok_idx?;
+        let token = doc.tokens.get(id)?;
+        let link = doc.syntax.get(id)?;
+        if token.span != atom.span
+            || (!atom.is_locked && token.upos != atom.upos)
+            || link.token != id
+            || link.span != atom.span
+            || link.sentence != token.sentence
+            || link.head != atom.head
+            || link.deprel != atom.deprel
+        {
+            return None;
+        }
+    }
+    if !noun.is_locked {
+        return physical_goal_head_for_case(b, case, content);
+    }
+
+    // The whole lock preserves rendering, but the original noun must still
+    // pass the same physical-place check as an unlocked argument.
+    let token = doc.tokens.get(noun.doc_tok_idx?)?;
+    let source = chars.get(noun.span.start_char..noun.span.end_char)?;
+    let original = Atom {
+        surface: source.iter().collect(),
+        lemma: token.lemma.clone(),
+        upos: token.upos,
+        is_locked: false,
+        ..noun.clone()
+    };
+    physical_goal_head_for_case(b, case, std::slice::from_ref(&original))
+}
+
+fn physical_goal_head_for_case(b: &Bunsetsu, particle: &Atom, content: &[Atom]) -> Option<usize> {
     if !matches!(b.case_particle.as_deref(), Some("に" | "へ" | "まで"))
         || Some(particle.surface.as_str()) != b.case_particle.as_deref()
         || particle.upos != Some(Upos::Adp)

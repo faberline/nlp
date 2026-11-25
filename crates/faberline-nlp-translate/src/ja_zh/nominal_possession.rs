@@ -104,7 +104,7 @@ pub(super) fn choice_phrase(
             "帽子" => "頂",
             "手錶" => "支",
             "證明書" => "份",
-            _ => noun_classifier(&word, &original),
+            _ => noun_classifier(&word, &original, (!noun.is_locked).then_some(target)),
         };
         let text = if noun.is_locked {
             &noun.surface
@@ -412,7 +412,7 @@ pub(super) fn original_pos(atom: &Atom, doc: &Document) -> Option<Upos> {
     (atom.span == token.span).then_some(token.upos).flatten()
 }
 
-fn noun_classifier(word: &str, noun: &Atom) -> &'static str {
+fn noun_classifier(word: &str, noun: &Atom, target: Option<TargetVariant>) -> &'static str {
     match word {
         "鑰匙" | "傘" => "把",
         "房間" => "間",
@@ -420,7 +420,7 @@ fn noun_classifier(word: &str, noun: &Atom) -> &'static str {
         "帽子" => "頂",
         "筆記本" | "課本" => "本",
         "鞋子" => "雙",
-        _ => super::demonstrative_classifier(word, noun),
+        _ => super::demonstrative_classifier(word, noun, target),
     }
 }
 
@@ -621,7 +621,11 @@ fn describe_noun(
     let classifier = if demonstrative.is_empty() {
         ""
     } else {
-        noun_classifier(&word, head)
+        noun_classifier(
+            &word,
+            head,
+            (!head.is_locked).then_some(TargetVariant::ZhHant),
+        )
     };
     let text = if head.is_locked {
         head.surface.as_str()
@@ -798,7 +802,7 @@ fn render_ellipsis(
             source.is_locked = false;
             source.upos = doc.tokens.get(noun.doc_tok_idx?)?.upos;
             let word = super::translate_single_ja_term(&source.surface, None, source.upos);
-            let classifier = noun_classifier(&word, &source);
+            let classifier = noun_classifier(&word, &source, (!noun.is_locked).then_some(target));
             format!(
                 "{}{classifier}{}",
                 if det.surface == "この" {

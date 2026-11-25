@@ -40,6 +40,7 @@ pub(crate) mod polarity_contrast;
 pub(crate) mod polite_joint;
 pub(crate) mod predicate_glossary;
 mod reception;
+mod recipient_scope;
 mod return_endpoint;
 mod trip_after_meal;
 
@@ -232,7 +233,7 @@ pub(crate) fn translate_ja_sentence<'source>(
     lock_table: &SpanLockTable,
     predicate_terms: Option<&predicate_glossary::PredicateTerms>,
     fare_source: Option<&dyn Fn(Span) -> Option<FareRoles>>,
-    unhinted_nominal_request: &dyn Fn() -> Option<&'source Document>,
+    unhinted_source: &dyn Fn() -> Option<&'source Document>,
     conditioning: &mut SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -1141,21 +1142,35 @@ pub(crate) fn translate_ja_sentence<'source>(
                                 &chars[sent_span.start_char..sent_span.end_char],
                             ),
                     };
-                    if trimmed_atoms.iter().any(|atom| atom.is_locked) {
-                        if context.extensions {
-                            nominal_receiving_glossary::render(
-                                trimmed_atoms,
-                                chars,
-                                doc,
-                                sent_tokens,
-                                sentence_idx,
-                                lock_table,
-                                unhinted_nominal_request,
-                                context,
-                            )
-                        } else {
-                            None
-                        }
+                    if context.extensions
+                        && seg_idx == 0
+                        && let Some(text) = recipient_scope::render_question(
+                            trimmed_atoms,
+                            chars,
+                            doc,
+                            sent_tokens,
+                            sentence_idx,
+                            lock_table,
+                            unhinted_source,
+                        )
+                    {
+                        Some(text)
+                    } else if trimmed_atoms.iter().any(|atom| atom.is_locked) {
+                        context
+                            .extensions
+                            .then(|| {
+                                nominal_receiving_glossary::render(
+                                    trimmed_atoms,
+                                    chars,
+                                    doc,
+                                    sent_tokens,
+                                    sentence_idx,
+                                    lock_table,
+                                    unhinted_source,
+                                    context,
+                                )
+                            })
+                            .flatten()
                     } else {
                         render_nominal_receiving_request(
                             trimmed_atoms,
@@ -7433,6 +7448,9 @@ fn translate_clause_atoms(
         payment_potential::localize_money_verb(&mut norm_atoms, body, target);
         daytime::bind(&mut norm_atoms, body, doc);
         order_noun::bind(&mut norm_atoms, body, ctx.source_chars);
+        if !ctx.inside_quote {
+            recipient_scope::mark_exclusions(&mut norm_atoms);
+        }
     }
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
     if target == TargetVariant::ZhHant
@@ -14199,6 +14217,25 @@ fn translate_clause_bunsetsus(
 
     let mut transfer_prefix = None;
     let mut transfer_recipient = None;
+    if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && verb_core == "發放"
+        && transfer.is_none()
+        && objs.is_empty()
+        && !passive_agent_needed
+        && recipient_scope::distributes_only_to(source)
+        && let [recipient] = iobjs.as_slice()
+        && recipient.transfer_dative
+        && let Some(person) = recipient
+            .text
+            .strip_prefix('對')
+            .and_then(|text| text.strip_suffix('只'))
+        && !person.is_empty()
+    {
+        transfer_recipient = Some(person.to_owned());
+        iobjs.clear();
+        verb_core = "只發給".to_owned();
+    }
     if let Some(transfer) = transfer
         && subjects.len() <= 1
     {
@@ -26417,6 +26454,11 @@ fn render_bunsetsu_np(b: &Bunsetsu, target: TargetVariant) -> String {
     let mut i = 0usize;
     while i < b.atoms.len() {
         let a = &b.atoms[i];
+        if a.lemma.as_deref() == Some(recipient_scope::EXCLUSION_OUTSIDE) {
+            out.push('外');
+            i += 1;
+            continue;
+        }
         if target == TargetVariant::ZhHant
             && let Some((phrase, consumed)) =
                 common_noun_sense::contextual_nominal_prefix(&b.atoms[i..])

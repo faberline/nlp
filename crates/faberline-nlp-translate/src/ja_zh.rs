@@ -29,6 +29,7 @@ mod household_entry;
 mod meeting_voice;
 pub(crate) mod naide_locks;
 mod nominal_possession;
+mod nominal_receiving_glossary;
 mod omitted_departure;
 mod order_noun;
 mod outward_look;
@@ -49,7 +50,7 @@ use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, FrameRole, SemanticClass, Token, Upos};
 
 use crate::conditioning::zh_pronoun_for_hint;
-use crate::lock::{LockOrigin, SpanLockTable};
+use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
 use crate::schema::{ClauseAlignment, GlossaryKind, SentenceConditioning, TargetVariant};
 use crate::variant::{convert_zh_text_to_target, convert_zh_text_to_target_with_spans};
 
@@ -223,7 +224,7 @@ pub(crate) struct DirectQuotePlacement {
 /// returning the masked target string (with `[[PHk]]` placeholders intact for `SpanLockTable::restore`)
 /// and `ClauseAlignment` entries relative to sentence start (0-based within the sentence).
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn translate_ja_sentence(
+pub(crate) fn translate_ja_sentence<'source>(
     sentence_idx: usize,
     chars: &[char],
     doc: &Document,
@@ -231,6 +232,7 @@ pub(crate) fn translate_ja_sentence(
     lock_table: &SpanLockTable,
     predicate_terms: Option<&predicate_glossary::PredicateTerms>,
     fare_source: Option<&dyn Fn(Span) -> Option<FareRoles>>,
+    unhinted_nominal_request: &dyn Fn() -> Option<&'source Document>,
     conditioning: &mut SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
@@ -1125,9 +1127,45 @@ pub(crate) fn translate_ja_sentence(
                     meeting_evidence: Some(meeting_evidence.clone()),
                 };
                 let receiving_request = if target == TargetVariant::ZhHant
-                    && nominal_receiving_request_position(&segments, seg_idx, doc, sentence_idx)
+                    && nominal_receiving_request_position(&segments, seg_idx, doc)
                 {
-                    try_translate_nominal_receiving_request(trimmed_atoms, doc, sentence_idx)
+                    let context = NominalRequestContext {
+                        prior_sentence: sentence_idx > 0
+                            && doc.segmentation.sentences[sentence_idx - 1].paragraph
+                                == doc.segmentation.sentences[sentence_idx].paragraph,
+                        separate_time: seg_idx > 0,
+                        extensions: !inside_quote
+                            && direct_quote.is_none()
+                            && written_form_continuation.is_none()
+                            && !nominal_receiving_glossary::has_quote_marks(
+                                &chars[sent_span.start_char..sent_span.end_char],
+                            ),
+                    };
+                    if trimmed_atoms.iter().any(|atom| atom.is_locked) {
+                        if context.extensions {
+                            nominal_receiving_glossary::render(
+                                trimmed_atoms,
+                                chars,
+                                doc,
+                                sent_tokens,
+                                sentence_idx,
+                                lock_table,
+                                unhinted_nominal_request,
+                                context,
+                            )
+                        } else {
+                            None
+                        }
+                    } else {
+                        render_nominal_receiving_request(
+                            trimmed_atoms,
+                            doc,
+                            sentence_idx,
+                            None,
+                            chars,
+                            context,
+                        )
+                    }
                 } else {
                     None
                 };
@@ -1440,6 +1478,7 @@ pub(crate) fn translate_ja_fragment(
             &lock_table,
             None,
             Some(&|_| None),
+            &|| None,
             &mut cond,
             target,
             None,
@@ -6730,21 +6769,12 @@ fn nominal_receiving_request_position(
     segments: &[Segment],
     seg_idx: usize,
     doc: &Document,
-    sentence_idx: usize,
 ) -> bool {
     let [prefix @ .., Segment::Clause { trailing_punct, .. }] = segments else {
         return false;
     };
     if seg_idx != prefix.len()
         || !matches!(trailing_punct.as_deref(), None | Some("。" | "？" | "?"))
-    {
-        return false;
-    }
-    // A preceding sentence in the same paragraph can supply a restriction
-    // or a third-person receiver even when this question has no subject.
-    if sentence_idx > 0
-        && doc.segmentation.sentences[sentence_idx - 1].paragraph
-            == doc.segmentation.sentences[sentence_idx].paragraph
     {
         return false;
     }
@@ -6758,21 +6788,37 @@ fn nominal_receiving_request_position(
             },
         ] if matches!(comma.as_str(), "、" | "，" | ",") => match atoms.as_slice() {
             [time] => direct_quote_time(time, doc).is_some(),
-            [date, no, period] => {
-                !date.is_locked
-                    && !no.is_locked
-                    && !period.is_locked
-                    && matches!(date.surface.as_str(), "今日" | "明日" | "昨日")
-                    && no.surface == "の"
-                    && matches!(
-                        period.surface.as_str(),
-                        "朝" | "午前" | "午後" | "昼" | "夜"
-                    )
-            }
+            [date, no, period] => nominal_receiving_daypart(date, no, period),
             _ => false,
         },
         _ => false,
     }
+}
+
+fn nominal_receiving_daypart(date: &Atom, no: &Atom, period: &Atom) -> bool {
+    !date.is_locked
+        && !no.is_locked
+        && !period.is_locked
+        && matches!(date.surface.as_str(), "今日" | "明日" | "昨日")
+        && no.surface == "の"
+        && matches!(
+            period.surface.as_str(),
+            "朝" | "午前" | "午後" | "昼" | "夜"
+        )
+}
+
+fn has_courtesy_time_prefix(phrase: &[Atom]) -> bool {
+    matches!(phrase, [prefix, noun, _]
+        if prefix.surface == "お"
+            && noun.surface == "時間"
+            && prefix.span.end_char == noun.span.start_char)
+}
+
+#[derive(Clone, Copy)]
+struct NominalRequestContext {
+    prior_sentence: bool,
+    separate_time: bool,
+    extensions: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -6827,6 +6873,7 @@ fn render_nominal_receiving_count(
     noun: &Atom,
     numeral: &str,
     unit: &str,
+    covered_determiner: bool,
 ) -> Option<String> {
     let zh = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
     let counter = counted_object::classifier(unit, &zh)?;
@@ -6837,17 +6884,23 @@ fn render_nominal_receiving_count(
         let [det, head, _] = object.atoms.as_slice() else {
             return None;
         };
-        quantity.push(attached_demonstrative(det, head)?);
+        let demonstrative = attached_demonstrative(det, head)?;
+        if !covered_determiner {
+            quantity.push(demonstrative);
+        }
         object.atoms.remove(0);
     }
     counted_object::push_quantity(&mut quantity, numeral, counter);
     Some(quantity)
 }
 
-fn try_translate_nominal_receiving_request(
+fn render_nominal_receiving_request(
     atoms: &[Atom],
     doc: &Document,
     sentence_idx: usize,
+    lock: Option<&LockedSpan>,
+    source: &[char],
+    context: NominalRequestContext,
 ) -> Option<String> {
     let [args @ .., verb, masu, neg, question] = atoms else {
         return None;
@@ -6875,6 +6928,28 @@ fn try_translate_nominal_receiving_request(
     {
         return None;
     }
+
+    let (args, time) = if context.extensions
+        && !context.separate_time
+        && let [date, no, period, rest @ ..] = args
+        && nominal_receiving_daypart(date, no, period)
+        && dasu_case_link(date, no)
+        && no.span.end_char == period.span.start_char
+        && period.deprel == "advmod"
+        && (period.head == Some(predicate)
+            || rest.first().is_some_and(|amount| {
+                period.head == amount.doc_tok_idx
+                    && matches!(
+                        nominal_receiving_amount(std::slice::from_ref(amount), predicate),
+                        Some(NominalReceivingAmount::Approximate(_))
+                    )
+            })) {
+        let date = render_temporal_made_atom(date)?;
+        let period = render_temporal_made_atom(period)?;
+        (rest, format!("{date}{period}，"))
+    } else {
+        (args, String::new())
+    };
 
     let case_index = args
         .iter()
@@ -6919,23 +6994,61 @@ fn try_translate_nominal_receiving_request(
     }) {
         return None;
     }
+    if lock.is_some()
+        && modifiers
+            .iter()
+            .any(|a| a.upos == Some(Upos::Det) && attached_demonstrative(a, noun).is_none())
+    {
+        return None;
+    }
     let normalized = normalize_ja_atoms(&apply_phrase_matches(phrase));
     let mut object = classify_bunsetsu(normalized, doc, sentence_idx);
     if object.role != BunsetsuRole::Obj || object.case_particle.as_deref() != Some("を") {
         return None;
     }
+    let covered_determiner = matches!((lock, modifiers), (Some(term), [det, ..])
+        if det.upos == Some(Upos::Det) && term.source_span.start_char == det.span.start_char);
     let amount_text = match amount {
         Some(NominalReceivingAmount::Count { numeral, unit }) => {
-            render_nominal_receiving_count(&mut object, noun, numeral, unit)?
+            render_nominal_receiving_count(&mut object, noun, numeral, unit, covered_determiner)?
         }
         Some(NominalReceivingAmount::Approximate(text)) => text.to_owned(),
         None => String::new(),
     };
-    let object = render_bunsetsu_np(&object, TargetVariant::ZhHant);
-    if object.is_empty() || has_kana_no_hangul(&object) {
+    let raw_object = render_bunsetsu_np(&object, TargetVariant::ZhHant);
+    if raw_object.is_empty() || has_kana_no_hangul(&raw_object) {
         return None;
     }
-    if object == "時間" {
+    let time_request = raw_object == "時間";
+    // Earlier sentences can supply a restriction or a third-party receiver.
+    // An explicit time with a courteous request for a small amount is distinct.
+    if (context.prior_sentence || !time.is_empty())
+        && !(context.extensions
+            && (context.separate_time || !time.is_empty())
+            && time_request
+            && has_courtesy_time_prefix(phrase)
+            && matches!(amount, Some(NominalReceivingAmount::Approximate(_))))
+    {
+        return None;
+    }
+    let object = if let Some(lock) = lock {
+        let qualifier = usize::from(
+            matches!(amount, Some(NominalReceivingAmount::Count { .. }))
+                && !covered_determiner
+                && phrase.first().is_some_and(|a| a.upos == Some(Upos::Det)),
+        );
+        nominal_receiving_glossary::render_object(
+            &phrase[qualifier..],
+            lock,
+            doc,
+            sentence_idx,
+            source,
+            time_request,
+        )?
+    } else {
+        raw_object
+    };
+    if time_request {
         if matches!(amount, Some(NominalReceivingAmount::Count { .. })) {
             return None;
         }
@@ -6944,9 +7057,9 @@ fn try_translate_nominal_receiving_request(
         } else {
             &amount_text
         };
-        return Some(format!("可以占用您{quantity}{object}嗎"));
+        return Some(format!("{time}可以占用您{quantity}{object}嗎"));
     }
-    Some(format!("可以給我{amount_text}{object}嗎"))
+    Some(format!("{time}可以給我{amount_text}{object}嗎"))
 }
 
 // A final yes/no question can ask whether someone asked an embedded duration

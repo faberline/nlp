@@ -3,11 +3,13 @@
 use std::collections::BTreeMap;
 
 use faberline_nlp::Span;
+use faberline_nlp::doc::analyze_document;
 use faberline_nlp::doc::model::Backend;
 use faberline_nlp_translate::{
-    GlossaryEntry, PronounClass, SpeechRegister, TRANSLATE_SCHEMA, TargetVariant, TranslateOptions,
-    TranslatedDocument, TranslationGlossary, TranslationTrack, analyze_and_translate,
-    doc_options_for_translate, render_bilingual_jsonl, sha256_hex,
+    GlossaryEntry, GlossaryKind, PronounClass, SpeechRegister, TRANSLATE_SCHEMA, TargetVariant,
+    TranslateOptions, TranslatedDocument, TranslationGlossary, TranslationTrack,
+    analyze_and_translate, doc_options_for_translate, render_bilingual_jsonl, sha256_hex,
+    translate_document,
 };
 
 fn assert_valid_ja_zh_doc(src: &str, doc: &TranslatedDocument) {
@@ -2173,27 +2175,183 @@ fn nominal_receiving_request_keeps_eligibility_assistance_and_ability_paths() {
 }
 
 #[test]
-fn nominal_receiving_request_leaves_a_locked_object_on_its_existing_path() {
-    let source = "この資料をいただけませんか。";
+fn nominal_receiving_request_preserves_the_locked_object_and_its_demonstrative() {
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    for kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+        for (source, surface, label, expected) in [
+            (
+                "この資料をいただけませんか。",
+                "資料",
+                "講義",
+                "可以給我這份講義嗎？",
+            ),
+            (
+                "この資料をいただけませんか。",
+                "資料を",
+                "講義",
+                "可以給我這份講義嗎？",
+            ),
+            (
+                "この資料をいただけませんか。",
+                "この資料",
+                "這份講義",
+                "可以給我這份講義嗎？",
+            ),
+            (
+                "この資料をいただけませんか。",
+                "この資料を",
+                "這份講義",
+                "可以給我這份講義嗎？",
+            ),
+            (
+                "この紙を一枚いただけませんか。",
+                "紙を",
+                "表單",
+                "可以給我這一張表單嗎？",
+            ),
+            (
+                "この紙を一枚いただけませんか。",
+                "この紙",
+                "樣張",
+                "可以給我一張樣張嗎？",
+            ),
+        ] {
+            let glossary = nominal_request_glossary(kind, surface, label);
+            let doc =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_nominal_request_hit(source, &doc, kind, surface, label);
+            assert_eq!(doc.target_text, expected, "{surface} ({kind:?})");
+        }
+    }
+}
+
+fn nominal_request_glossary(kind: GlossaryKind, surface: &str, label: &str) -> TranslationGlossary {
     let mut glossary = TranslationGlossary::new();
-    glossary.objects.push(GlossaryEntry {
-        canonical: "資料".to_owned(),
-        surfaces: vec!["資料".to_owned()],
-        targets: BTreeMap::from([(TargetVariant::ZhHant, "資料原件".to_owned())]),
+    let entries = match kind {
+        GlossaryKind::Object => &mut glossary.objects,
+        GlossaryKind::DomainTerm => &mut glossary.domain_terms,
+        _ => unreachable!("only nominal glossary entries"),
+    };
+    entries.push(GlossaryEntry {
+        canonical: surface.to_owned(),
+        surfaces: vec![surface.to_owned()],
+        targets: BTreeMap::from([(TargetVariant::ZhHant, label.to_owned())]),
         ..GlossaryEntry::default()
     });
-    let doc = analyze_and_translate(
-        source,
-        &TranslateOptions::new(TargetVariant::ZhHant),
-        &glossary,
+    glossary
+}
+
+fn assert_nominal_request_hit(
+    source: &str,
+    doc: &TranslatedDocument,
+    kind: GlossaryKind,
+    surface: &str,
+    label: &str,
+) {
+    assert_valid_ja_zh_doc(source, doc);
+    let [hit] = doc.glossary_hits.as_slice() else {
+        panic!(
+            "expected one hit for {surface}, got {:?}",
+            doc.glossary_hits
+        );
+    };
+    assert_eq!(hit.kind, kind);
+    assert_eq!(hit.canonical, surface);
+    assert_eq!(slice_chars(source, hit.source_span), surface);
+    assert_eq!(slice_chars(&doc.target_text, hit.target_span), label);
+}
+
+#[test]
+fn nominal_receiving_request_keeps_the_time_after_an_eligibility_question() {
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let context = "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。";
+    let prior = analyze_and_translate(
+        context,
+        &options,
+        &TranslationGlossary::new(),
         None,
         Backend::Onnx,
     )
     .unwrap();
-    assert_valid_ja_zh_doc(source, &doc);
-    assert!(doc.target_text.contains("資料原件"), "{}", doc.target_text);
-    assert!(doc.target_text.contains("不能得到"), "{}", doc.target_text);
-    assert_eq!(doc.glossary_hits.len(), 1);
+    for prefix in ["", context] {
+        let expected = format!(
+            "{}明天下午，可以占用您一點談話時間嗎？",
+            if prefix.is_empty() {
+                ""
+            } else {
+                &prior.target_text
+            }
+        );
+        for daypart in ["明日の午後、", "明日の午後"] {
+            let source = format!("{prefix}{daypart}少しお時間をいただけませんか。");
+            for kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+                for surface in ["時間", "時間を", "お時間", "お時間を"] {
+                    let label = "談話時間";
+                    let glossary = nominal_request_glossary(kind, surface, label);
+                    let doc =
+                        analyze_and_translate(&source, &options, &glossary, None, Backend::Onnx)
+                            .unwrap();
+                    assert_nominal_request_hit(&source, &doc, kind, surface, label);
+                    assert_eq!(doc.target_text, expected, "{source} {surface} ({kind:?})");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn nominal_receiving_request_respects_supplied_dependencies() {
+    let source = "この資料をいただけませんか。";
+    let kind = GlossaryKind::Object;
+    let surface = "資料を";
+    let label = "講義";
+    let glossary = nominal_request_glossary(kind, surface, label);
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let analysis = analyze_document(
+        source,
+        &doc_options_for_translate(&options, &TranslationGlossary::new()),
+    );
+    let render = |doc: &faberline_nlp::doc::Document| {
+        translate_document(
+            source,
+            doc,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            &glossary,
+            None,
+        )
+        .unwrap()
+    };
+    let valid = render(&analysis);
+    assert_nominal_request_hit(source, &valid, kind, surface, label);
+    assert_eq!(valid.target_text, "可以給我這份講義嗎？");
+    for (token, conflicting_relation) in [
+        ("資料", Some("nsubj")),
+        ("を", Some("dep")),
+        ("この", Some("dep")),
+        ("ん", None),
+        ("か", None),
+    ] {
+        let mut conflict = analysis.clone();
+        let arc = conflict
+            .syntax
+            .iter_mut()
+            .find(|arc| slice_chars(source, arc.span) == token)
+            .unwrap();
+        if let Some(relation) = conflicting_relation {
+            arc.deprel = relation.to_owned();
+        } else {
+            arc.head = None;
+        }
+        let output = render(&conflict);
+        assert_nominal_request_hit(source, &output, kind, surface, label);
+        assert!(
+            !output.target_text.contains("可以給我"),
+            "{token}: {}",
+            output.target_text
+        );
+    }
 }
 
 #[test]

@@ -21,6 +21,7 @@ mod direct_smoking;
 mod fare_boundaries;
 pub(crate) mod finished_go;
 mod finite_adjective;
+pub(crate) mod first_step;
 mod focused_goal_glossary;
 mod handover;
 mod homework_desire;
@@ -12188,6 +12189,7 @@ fn translate_clause_bunsetsus(
     let mut subjects: Vec<String> = Vec::new();
     let mut obliques: Vec<PlacedArg> = Vec::new();
     let mut temporal_others: Vec<String> = Vec::new();
+    let mut first_steps = Vec::new();
     let state_interval = if target == TargetVariant::ZhHant {
         finite_adjective::take_time_interval(&mut bunsetsus, source, doc, &ctx.adjective)
     } else {
@@ -12739,6 +12741,18 @@ fn translate_clause_bunsetsus(
         }
         if timed_result.is_some_and(|f| f.time == SettingTime::From(idx)) {
             setting_origin = Some(format!("從{}", setting_time_label(&b, target)));
+            continue;
+        }
+        if target == TargetVariant::ZhHant
+            && !ctx.inside_quote
+            && let Some(label) = first_step::render(
+                &b,
+                source,
+                ctx.source_chars,
+                ctx.source_locks.map_or(&[], |table| table.locks.as_slice()),
+            )
+        {
+            first_steps.push(label);
             continue;
         }
         if daypart_groups.contains(&idx)
@@ -14445,6 +14459,9 @@ fn translate_clause_bunsetsus(
         adverbs = remaining;
     }
     let has_front_modal = !front_modals.is_empty();
+    if !matches!(joint_manner, Some((JointManner::Everyone, false, _))) {
+        temporal_others.append(&mut first_steps);
+    }
     let mut manner_adverbs = Vec::new();
     if !has_front_modal {
         parts.append(&mut temporal_others);
@@ -14658,6 +14675,7 @@ fn translate_clause_bunsetsus(
     if !counted_companion {
         parts.extend(joint_participants.take());
     }
+    parts.extend(first_steps);
     // A span of days before a negation measures how long the action did
     // not occur. It does not imply that an event of that length took place.
     if predicate_is_negative

@@ -969,6 +969,8 @@ fn translate_single_sentence(
             && ja_zh::finished_go::may_restore_companion_locks(&raw_sent, chars, &lock_table);
         let restore_joint =
             can_repair && ja_zh::polite_joint::may_restore(&raw_sent, chars, &lock_table);
+        let restore_first_step =
+            can_repair && ja_zh::first_step::may_restore(&raw_sent, &lock_table);
         // Only built-in CPU entry points can identify hints added by the glossary.
         // Keep external analysis as supplied and preserve sentence boundaries.
         let unhinted_source = || {
@@ -987,6 +989,7 @@ fn translate_single_sentence(
             || restore_verbs
             || restore_companions
             || restore_joint
+            || restore_first_step
         {
             let repair = |source: &Document, tokens: &[&Token]| {
                 if restore_omission
@@ -1046,20 +1049,47 @@ fn translate_single_sentence(
                     .flatten()
                     .map(|locks| (locks, None))
             };
-            repair(doc, sent_tokens)
-                .map(|(locks, omission)| (doc, sent_tokens.to_vec(), locks, omission))
-                .or_else(|| {
-                    let source = unhinted_source()?;
-                    let first = source
-                        .tokens
-                        .partition_point(|token| token.sentence < sentence_idx);
-                    let last = source
-                        .tokens
-                        .partition_point(|token| token.sentence <= sentence_idx);
-                    let tokens = source.tokens[first..last].iter().collect::<Vec<_>>();
-                    repair(source, &tokens)
-                        .map(|(locks, omission)| (source, tokens, locks, omission))
+            let unhinted_tokens = || {
+                let source = unhinted_source()?;
+                let first = source
+                    .tokens
+                    .partition_point(|token| token.sentence < sentence_idx);
+                let last = source
+                    .tokens
+                    .partition_point(|token| token.sentence <= sentence_idx);
+                Some((
+                    source,
+                    source.tokens[first..last].iter().collect::<Vec<_>>(),
+                ))
+            };
+            let step = |source: &Document, tokens: &[&Token], retain_prior_repair: bool| {
+                let prior = repair(source, tokens);
+                if retain_prior_repair && prior.is_none() {
+                    return None;
+                }
+                let (locks, terms) = prior.unwrap_or_else(|| (lock_table.clone(), None));
+                ja_zh::first_step::restore(sentence_idx, source, tokens, chars, locks, terms)
+            };
+            let first_step = restore_first_step
+                .then(|| {
+                    step(doc, sent_tokens, false)
+                        .map(|(locks, terms)| (doc, sent_tokens.to_vec(), locks, terms))
+                        .or_else(|| {
+                            let (source, tokens) = unhinted_tokens()?;
+                            let retain_prior_repair = repair(doc, sent_tokens).is_some();
+                            step(source, &tokens, retain_prior_repair)
+                                .map(|(locks, terms)| (source, tokens, locks, terms))
+                        })
                 })
+                .flatten();
+            first_step.or_else(|| {
+                repair(doc, sent_tokens)
+                    .map(|(locks, terms)| (doc, sent_tokens.to_vec(), locks, terms))
+                    .or_else(|| {
+                        let (source, tokens) = unhinted_tokens()?;
+                        repair(source, &tokens).map(|(locks, terms)| (source, tokens, locks, terms))
+                    })
+            })
         } else {
             None
         };

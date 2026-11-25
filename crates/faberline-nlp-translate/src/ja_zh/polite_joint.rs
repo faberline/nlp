@@ -9,7 +9,7 @@ use super::{
     predicate_glossary, split_ja_atoms,
 };
 
-fn is_polite_ending(verb: &Atom, tail: &[Atom]) -> bool {
+pub(super) fn is_polite_ending(verb: &Atom, tail: &[Atom]) -> bool {
     let (polite, question) = match tail {
         [polite] => (polite, None),
         [polite, question] => (polite, Some(question)),

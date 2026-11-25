@@ -2262,6 +2262,84 @@ fn assert_nominal_request_hit(
 }
 
 #[test]
+fn first_step_keeps_the_adverb_and_verb_glossary_spans() {
+    let source = "私は初めに名前を書きます。";
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let empty = TranslationGlossary::new();
+    let stock = analyze_and_translate(source, &options, &empty, None, Backend::Onnx).unwrap();
+    assert_valid_ja_zh_doc(source, &stock);
+    assert_eq!(stock.target_text, "我先寫名字。");
+
+    for term in ["初め", "初めに"] {
+        let kind = GlossaryKind::DomainTerm;
+        let mut glossary = nominal_request_glossary(kind, term, "首先");
+        let plain =
+            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_nominal_request_hit(source, &plain, kind, term, "首先");
+        assert_eq!(plain.target_text, "我首先寫名字。");
+
+        let stem = nominal_request_glossary(kind, "書き", "填寫");
+        glossary.domain_terms.extend(stem.domain_terms);
+        let translated =
+            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(source, &translated);
+        assert_eq!(translated.target_text, "我首先填寫名字。");
+        let [adverb, verb] = translated.glossary_hits.as_slice() else {
+            panic!("expected the sequence adjunct and verb hits");
+        };
+        assert_eq!(adverb.kind, kind);
+        assert_eq!(slice_chars(source, adverb.source_span), term);
+        assert_eq!(
+            slice_chars(&translated.target_text, adverb.target_span),
+            "首先"
+        );
+        assert_eq!(verb.kind, kind);
+        assert_eq!(slice_chars(source, verb.source_span), "書き");
+        assert_eq!(
+            slice_chars(&translated.target_text, verb.target_span),
+            "填寫"
+        );
+    }
+}
+
+#[test]
+fn first_step_respects_the_supplied_action_attachment() {
+    let source = "私は初めに名前を書きます。";
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let empty = TranslationGlossary::new();
+    let mut analysis = analyze_document(source, &doc_options_for_translate(&options, &empty));
+    let kind = GlossaryKind::DomainTerm;
+    let glossary = nominal_request_glossary(kind, "初めに", "首先");
+    let translate = |analysis: &Document, glossary: &TranslationGlossary| {
+        translate_document(
+            source,
+            analysis,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            glossary,
+            None,
+        )
+        .unwrap()
+    };
+    let linked = translate(&analysis, &glossary);
+    assert_nominal_request_hit(source, &linked, kind, "初めに", "首先");
+    assert_eq!(linked.target_text, "我首先寫名字。");
+    assert_eq!(translate(&analysis, &empty).target_text, "我先寫名字。");
+
+    let adjunct = analysis
+        .syntax
+        .iter_mut()
+        .find(|arc| slice_chars(source, arc.span) == "初め")
+        .unwrap();
+    assert!(adjunct.head.is_some());
+    adjunct.head = None;
+    let detached = translate(&analysis, &glossary);
+    assert_nominal_request_hit(source, &detached, kind, "初めに", "首先");
+    assert_ne!(translate(&analysis, &empty).target_text, "我先寫名字。");
+}
+
+#[test]
 fn te_help_request_keeps_caller_glossary_objects() {
     let options = TranslateOptions::new(TargetVariant::ZhHant);
     let affirmative = "この荷物を持っていただけますか。";

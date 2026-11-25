@@ -1,0 +1,262 @@
+{
+  "schema": "faberline.nlp.ja_zh.class_quantity_dev.v1",
+  "version": "1.0.0",
+  "status": "development-visible",
+  "data_adoption_status": "pending_independent_review",
+  "measurement_status": "unmeasured",
+  "source_main": "bde87b91e459b0b1ec429e1f3ed10de371ad24b7",
+  "source_tree": "0b9a753d472130463d80eca45872f964e287f7d3",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "related_adopted_data": {
+    "file": "class_period_dev_v1.json",
+    "sha256": "db558e59eb9a51528694a2408836a93514478769a30443da274d7c958ca8a04d",
+    "id": "CP-N5-03",
+    "relation": "Adopted kanji-number control for the quantity 二時限分. This proposal adds new numeral forms and a duration contrast; the fourth row derives from CP-N5-03 with an opaque literal."
+  },
+  "fixture_note": "Fixed empty-glossary ONNX CPU fixture with beam size one. No engine measurement has been made.",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "CQ-N5-01",
+      "level_approx": "N5-oriented provisional diagnostic; no official JLPT or certification claim",
+      "jp": "明日は1時限分の授業があります。",
+      "zh_hant": "明天有一節課。",
+      "allowed_variants": [
+        "明天有一堂課。"
+      ],
+      "semantic_checks": [
+        "Half-width 1 with 時限分 expresses a quantity of one class period, not an ordinal class position.",
+        "The sentence says that one period's worth of class is available tomorrow.",
+        "Do not add a subject, school, or exact start time."
+      ],
+      "semantic_unknowns": [
+        "The source does not name the subject, school, or attendee."
+      ],
+      "control": {
+        "kind": "class_period_quantity_half_width_one",
+        "contrast_ids": [
+          "CP-N5-03",
+          "CQ-N5-02"
+        ],
+        "stable": [
+          "The phrase counts class-period units with 時限分, without the ordinal suffix 目."
+        ],
+        "changed": [
+          "This row uses half-width 1 and 明日."
+        ],
+        "limits": [
+          "The reference may use 節課 or 堂課."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "CQ-N5-02",
+      "level_approx": "N5-oriented provisional diagnostic; no official JLPT or certification claim",
+      "jp": "来週は３時限分の授業があります。",
+      "zh_hant": "下週有三節課。",
+      "allowed_variants": [
+        "下週有三堂課。",
+        "下週有3節課。",
+        "下週有3堂課。"
+      ],
+      "semantic_checks": [
+        "Full-width ３ with 時限分 expresses a quantity of three class periods, not the third class period.",
+        "The sentence says that three periods' worth of class is available next week.",
+        "Do not add a subject, school, or exact schedule."
+      ],
+      "semantic_unknowns": [
+        "The source does not name the subjects, attendee, or days in the week."
+      ],
+      "control": {
+        "kind": "class_period_quantity_full_width_three",
+        "contrast_ids": [
+          "CP-N5-03",
+          "CQ-N5-01"
+        ],
+        "stable": [
+          "The phrase counts class-period units with 時限分, without the ordinal suffix 目."
+        ],
+        "changed": [
+          "This row uses full-width ３ and 来週."
+        ],
+        "limits": [
+          "The reference may use 三 or 3 and 節課 or 堂課."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "CQ-N5-03",
+      "level_approx": "N5-oriented provisional diagnostic; no official JLPT or certification claim",
+      "jp": "今日は二時間の授業があります。",
+      "zh_hant": "今天有兩個小時的課。",
+      "allowed_variants": [
+        "今天的課有兩小時。"
+      ],
+      "semantic_checks": [
+        "二時間 expresses a two-hour duration, not two class periods and not the second class period.",
+        "Preserve the duration of the class without converting it to a number of periods."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify the subject, attendee, or exact schedule."
+      ],
+      "control": {
+        "kind": "two_hour_duration_near_negative",
+        "contrast_ids": [
+          "CP-N5-03",
+          "CQ-N5-01"
+        ],
+        "stable": [
+          "Both sentences describe class time on a named day and include the number two in kanji."
+        ],
+        "changed": [
+          "This row uses 時間 for a two-hour duration; CP-N5-03 uses 時限分 for two class-period units."
+        ],
+        "limits": [
+          "A two-hour class must not be translated as two separate classes or as the second period."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "CQ-N5-04",
+      "level_approx": "N5-oriented provisional diagnostic; opaque literal and lock-position control; no official JLPT or certification claim",
+      "jp": "今日は`二時限分の授業`があります。",
+      "zh_hant": "今天有`二時限分の授業`。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "This row derives from adopted CP-N5-03 by enclosing 二時限分の授業 in ASCII backticks.",
+        "The protected source phrase remains one literal object after 今日は; do not translate, duplicate, or move it to another clause.",
+        "The surrounding source still states that the period-quantity class is available today."
+      ],
+      "semantic_unknowns": [],
+      "control": {
+        "kind": "opaque_class_period_quantity_literal",
+        "contrast_ids": [
+          "CP-N5-03"
+        ],
+        "stable": [
+          "The original Japanese quantity phrase and day context are retained."
+        ],
+        "changed": [
+          "ASCII backticks protect the complete 二時限分の授業 phrase."
+        ],
+        "limits": [
+          "Literal preservation is checked separately from whole-sentence translation quality."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original_derivative",
+        "license": "MIT",
+        "derived_from": "class_period_dev_v1.json#CP-N5-03"
+      },
+      "lock_expectation": {
+        "kind": "inline_code_candidate",
+        "source_surface": "`二時限分の授業`",
+        "source_span": {
+          "scalar": [
+            3,
+            12
+          ],
+          "utf8_bytes": [
+            9,
+            32
+          ],
+          "slice": "`二時限分の授業`"
+        },
+        "inner_source_span": {
+          "scalar": [
+            4,
+            11
+          ],
+          "utf8_bytes": [
+            10,
+            31
+          ],
+          "slice": "二時限分の授業"
+        },
+        "target_text": "`二時限分の授業`",
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              3,
+              12
+            ],
+            "utf8_bytes": [
+              9,
+              32
+            ],
+            "slice": "`二時限分の授業`"
+          }
+        ],
+        "inner_target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              4,
+              11
+            ],
+            "utf8_bytes": [
+              10,
+              31
+            ],
+            "slice": "二時限分の授業"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "The protected object remains after 今日は and before があります, without added spaces.",
+        "independent_assertions": [
+          "Exact literal bytes and delimiters",
+          "One source occurrence maps to one target occurrence",
+          "Source and target scalar and UTF-8 byte spans select the declared slices",
+          "The literal remains in its object position without inserted spaces",
+          "Complete sentence meaning and naturalness are reviewed separately"
+        ],
+        "runtime_status": "Unmeasured; no engine run was made."
+      }
+    }
+  ]
+}

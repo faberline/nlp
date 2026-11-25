@@ -1049,7 +1049,7 @@ fn translate_single_sentence(
             render_locks,
             predicate_terms,
             can_repair.then_some(&unhinted_fare_roles),
-            &conditioning,
+            &mut conditioning,
             options.target,
             direct_quote,
             written_quotes

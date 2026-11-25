@@ -16,6 +16,7 @@ mod copular_time;
 mod counted_object;
 mod daytime;
 mod direct_smoking;
+mod fare_boundaries;
 mod finished_go;
 mod finite_adjective;
 mod focused_goal_glossary;
@@ -225,7 +226,7 @@ pub(crate) fn translate_ja_sentence(
     lock_table: &SpanLockTable,
     predicate_terms: Option<&predicate_glossary::PredicateTerms>,
     fare_source: Option<&dyn Fn(Span) -> Option<FareRoles>>,
-    conditioning: &SentenceConditioning,
+    conditioning: &mut SentenceConditioning,
     target: TargetVariant,
     direct_quote: Option<&DirectQuotePlacement>,
     written_form_continuation: Option<Span>,
@@ -239,6 +240,15 @@ pub(crate) fn translate_ja_sentence(
     if let Some(definition) = honorifics.definition(&atoms, lock_table) {
         return definition.render(doc, sentence_idx, target);
     }
+    if target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && written_form_continuation.is_none()
+        && let Some(boundary) =
+            fare_boundaries::render(&atoms, doc, sentence_idx, chars, lock_table)
+    {
+        return boundary;
+    }
+
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
     if predicate_terms.is_some() {
         predicate_glossary::normalize_linked_comma(&mut atoms);
@@ -331,6 +341,68 @@ pub(crate) fn translate_ja_sentence(
         sent_span,
         (target == TargetVariant::ZhHant).then_some(chars),
     );
+    if target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && report.is_none()
+        && continuation.is_none()
+        && let Some(source) = fare_source
+    {
+        let fare = match segments.as_slice() {
+            [
+                Segment::Clause {
+                    atoms,
+                    trailing_punct,
+                    ..
+                },
+            ] => payment_potential::render_fare_statement(
+                core_non_punct(atoms),
+                doc,
+                sentence_idx,
+                chars,
+                lock_table,
+                source,
+            )
+            .map(|(mut text, factuality)| {
+                if let Some(punctuation) = trailing_punct
+                    && !text.ends_with('？')
+                {
+                    text.push_str(&localize_punct(punctuation));
+                }
+                (text, factuality)
+            }),
+            _ if matches!(doc_clauses.as_slice(), [(_, span)] if *span == sent_span) => {
+                payment_potential::render_reported_fare(
+                    &segments,
+                    doc,
+                    sentence_idx,
+                    chars,
+                    lock_table,
+                    source,
+                )
+                .map(|text| (text, None))
+            }
+            _ => None,
+        };
+        if let Some((text, factuality)) = fare {
+            if let Some(factuality) = factuality {
+                conditioning.factuality = Some(factuality.to_owned());
+            }
+            let target_span = Span {
+                start_char: 0,
+                end_char: text.chars().count(),
+            };
+            let alignments = doc_clauses
+                .into_iter()
+                .map(|(clause, source_span)| ClauseAlignment {
+                    clause,
+                    sentence: sentence_idx,
+                    source_span,
+                    target_span,
+                })
+                .collect();
+            return (text, alignments);
+        }
+    }
     let recovered_meal_trip = match segments.as_slice() {
         [
             Segment::Clause {
@@ -913,7 +985,7 @@ pub(crate) fn translate_ja_sentence(
                 } else {
                     false
                 };
-                let cond_opt = Some(conditioning);
+                let cond_opt = Some(&*conditioning);
                 let inside_quote =
                     ends_continued_quote(segments.get(seg_idx + 1), doc, sentence_idx, chars);
                 let meeting_evidence = std::rc::Rc::new(std::cell::Cell::new(None));
@@ -939,7 +1011,6 @@ pub(crate) fn translate_ja_sentence(
                         matches!(&segments[i], Segment::Clause { atoms, .. } if calendar::contrasts_recurrence(atoms))),
                     source_chars: chars,
                     source_locks: Some(lock_table),
-                    fare_source,
                     following: &segments[seg_idx + 1..],
                     glossary_carry: &glossary_carry,
                     glossary_goals: &glossary_goals,
@@ -1333,7 +1404,7 @@ pub(crate) fn translate_ja_fragment(
         }
         let sent_tokens: Vec<&Token> = doc.tokens.iter().filter(|t| t.sentence == si).collect();
         let lock_table = SpanLockTable::build(Vec::new());
-        let cond = SentenceConditioning::default();
+        let mut cond = SentenceConditioning::default();
         let (tr, _) = translate_ja_sentence(
             si,
             &chars,
@@ -1342,7 +1413,7 @@ pub(crate) fn translate_ja_fragment(
             &lock_table,
             None,
             Some(&|_| None),
-            &cond,
+            &mut cond,
             target,
             None,
             None,
@@ -5879,7 +5950,6 @@ struct ClauseDiscourseCtx<'a> {
     contrasts_recurrence: bool,
     source_chars: &'a [char],
     source_locks: Option<&'a SpanLockTable>,
-    fare_source: Option<&'a dyn Fn(Span) -> Option<FareRoles>>,
     following: &'a [Segment],
     glossary_carry: &'a [carrying::GlossaryCarry],
     glossary_goals: &'a [focused_goal_glossary::FocusedGoal],
@@ -7013,21 +7083,6 @@ fn translate_clause_atoms(
 
     if target == TargetVariant::ZhHant
         && let Some(text) = payment_potential::render(core_non_punct(atoms), target, false)
-    {
-        return (text, false);
-    }
-
-    if target == TargetVariant::ZhHant
-        && !ctx.inside_quote
-        && let (Some(locks), Some(unhinted_roles)) = (ctx.source_locks, ctx.fare_source)
-        && let Some(text) = payment_potential::render_fare_statement(
-            core_non_punct(atoms),
-            doc,
-            sentence_idx,
-            ctx.source_chars,
-            locks,
-            unhinted_roles,
-        )
     {
         return (text, false);
     }

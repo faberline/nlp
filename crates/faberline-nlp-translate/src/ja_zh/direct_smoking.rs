@@ -50,6 +50,26 @@ fn is_tobacco(word: &[char]) -> bool {
     matches!(word, ['た', 'ば', 'こ'] | ['タ', 'バ', 'コ'] | ['煙', '草'])
 }
 
+fn conflicts_with_object(
+    doc: &Document,
+    verb: &SyntaxToken,
+    noun_span: Span,
+    case_span: Span,
+) -> bool {
+    let link_at = |span| {
+        doc.syntax
+            .iter()
+            .find(|arc| arc.sentence == verb.sentence && arc.span == span)
+    };
+    // A merged glossary token can lack separate noun and case arcs. When
+    // those arcs do exist, reanalysis must respect the supplied attachments.
+    let noun = link_at(noun_span);
+    noun.is_some_and(|arc| (arc.deprel.as_str(), arc.head) != ("obj", Some(verb.token)))
+        || link_at(case_span).is_some_and(|arc| {
+            arc.deprel != "case" || !noun.is_some_and(|noun| arc.head == Some(noun.token))
+        })
+}
+
 pub(super) fn restore_locked_object<'a>(
     groups: &mut [Bunsetsu],
     source: &'a [Atom],
@@ -92,6 +112,20 @@ pub(super) fn restore_locked_object<'a>(
         return None;
     }
     let verb = suu_verb(source.iter(), doc, chars)?;
+    if conflicts_with_object(
+        doc,
+        verb,
+        Span {
+            start_char: lock.span.start_char,
+            end_char: noun_end,
+        },
+        Span {
+            start_char: noun_end,
+            end_char: case_end,
+        },
+    ) {
+        return None;
+    }
     let start = source.first()?.span.start_char;
     let original = chars.get(start..source.last()?.span.end_char)?;
     let analysis = analyze_document(
@@ -265,6 +299,69 @@ mod term_glossary_tests {
         )
         .unwrap();
         assert!(!output.target_text.contains("吸氣"));
+    }
+
+    #[test]
+    fn bare_locked_tobacco_obeys_explicit_supplied_arcs() {
+        let source = "たばこを吸う。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let original = analyze_document(
+            source,
+            &doc_options_for_translate(&options, &TranslationGlossary::new()),
+        );
+        for (surface, end) in [("たばこ", 3), ("たばこを", 4)] {
+            let glossary = TranslationGlossary {
+                domain_terms: vec![GlossaryEntry {
+                    canonical: surface.into(),
+                    surfaces: vec![surface.into()],
+                    targets: [(TargetVariant::ZhHant, "雪茄".into())].into(),
+                    ..GlossaryEntry::default()
+                }],
+                ..TranslationGlossary::new()
+            };
+            let translate = |document: &faberline_nlp::doc::Document| {
+                translate_document(
+                    source,
+                    document,
+                    #[cfg(feature = "narrative")]
+                    None,
+                    &options,
+                    &glossary,
+                    None,
+                )
+                .unwrap()
+            };
+            assert_eq!(translate(&original).target_text, "抽雪茄。");
+
+            for (start, role) in [(0, "nsubj"), (3, "dep")] {
+                let mut reassigned = original.clone();
+                let arc = reassigned
+                    .syntax
+                    .iter_mut()
+                    .find(|arc| arc.span.start_char == start)
+                    .unwrap();
+                arc.deprel = role.into();
+                let fallback = translate(&reassigned);
+                assert!(!fallback.target_text.contains('抽'), "{surface}, {role}");
+                let [hit] = fallback.glossary_hits.as_slice() else {
+                    panic!("expected the original caller term");
+                };
+                assert_eq!(
+                    hit.source_span,
+                    Span {
+                        start_char: 0,
+                        end_char: end
+                    }
+                );
+                let hit_text: String = fallback
+                    .target_text
+                    .chars()
+                    .skip(hit.target_span.start_char)
+                    .take(hit.target_span.end_char - hit.target_span.start_char)
+                    .collect();
+                assert_eq!(hit_text, "雪茄");
+            }
+        }
     }
 
     #[test]

@@ -1,0 +1,303 @@
+{
+  "schema": "faberline.nlp.ja_zh.class_period_dev.v1",
+  "version": "1.0.0",
+  "status": "development-visible",
+  "data_adoption_status": "pending_independent_review",
+  "measurement_status": "unmeasured",
+  "source_main": "caf5670dec05ce886fcfd08b196fc8c2ea8cd674",
+  "source_tree": "58bacbdef99fcfb2acdf8dfba64cdc3de8f375cc",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "related_adopted_data": {
+    "file": "clock_boundary_lock_dev_v1.json",
+    "sha256": "6bc9fc2dd0560ae9305a4a183a727fe80d07a310bdd65a250255a674378742d3",
+    "id": "CB-B24",
+    "relation": "CB-B24 supplies the adopted kanji-number topic example. CP-N5-05 derives from its sentence by adding inline-code delimiters around 二時限目."
+  },
+  "fixture_note": "Fixed empty-glossary ONNX CPU fixture. Beam size is one. No engine measurement has been made.",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "CP-N5-01",
+      "level_approx": "N5-oriented provisional diagnostic; no official JLPT or certification claim",
+      "jp": "3時限目に数学を勉強します。",
+      "zh_hant": "第三節課學數學。",
+      "allowed_variants": [
+        "第3節課學數學。",
+        "第三堂課學數學。",
+        "第3堂課學數學。"
+      ],
+      "semantic_checks": [
+        "Half-width 3 with 時限目 denotes the third class period, not 3 o'clock.",
+        "The ordinal period is a time adjunct for studying mathematics.",
+        "Preserve the math action and do not add an actor, location, or exact clock time."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify who studies or the school."
+      ],
+      "control": {
+        "kind": "ordinal_period_as_time",
+        "contrast_ids": [
+          "CB-B24",
+          "CP-N5-02"
+        ],
+        "stable": [
+          "The Japanese identifies a numbered class period with 時限目."
+        ],
+        "changed": [
+          "This row uses half-width 3 and places the period in a time role."
+        ],
+        "limits": [
+          "The reference may use 第三 or 第3 and 節課 or 堂課."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "CP-N5-02",
+      "level_approx": "N5-oriented provisional diagnostic; no official JLPT or certification claim",
+      "jp": "４時限目を選びました。",
+      "zh_hant": "選了第四節課。",
+      "allowed_variants": [
+        "選了第4節課。",
+        "選了第四堂課。",
+        "選擇了第四節課。"
+      ],
+      "semantic_checks": [
+        "Full-width ４ with 時限目 denotes the fourth class period, not 4 o'clock.",
+        "The fourth period is the object of 選びました.",
+        "Preserve the completed choice without inventing the chooser."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify who made the choice or what class is chosen."
+      ],
+      "control": {
+        "kind": "ordinal_period_as_object",
+        "contrast_ids": [
+          "CB-B24",
+          "CP-N5-01"
+        ],
+        "stable": [
+          "The Japanese identifies a numbered class period with 時限目."
+        ],
+        "changed": [
+          "This row uses full-width ４, an object role, and a completed choice."
+        ],
+        "limits": [
+          "The reference may use 第四 or 第4 and 節課 or 堂課."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "CP-N5-03",
+      "level_approx": "N5-oriented provisional diagnostic; no official JLPT or certification claim",
+      "jp": "今日は二時限分の授業があります。",
+      "zh_hant": "今天有兩節課。",
+      "allowed_variants": [
+        "今天有兩堂課。"
+      ],
+      "semantic_checks": [
+        "二時限分 expresses a quantity of two class periods and has no ordinal suffix 目.",
+        "The sentence says that classes amounting to two periods are available today; it does not mean the second period.",
+        "Do not change this duration or quantity into a class-period ordinal."
+      ],
+      "semantic_unknowns": [
+        "The source does not name the subjects or say who attends the classes."
+      ],
+      "control": {
+        "kind": "class_period_quantity_without_ordinal_suffix",
+        "contrast_ids": [
+          "CB-B24",
+          "CP-N5-01"
+        ],
+        "stable": [
+          "The sentence refers to class periods and includes the number two."
+        ],
+        "changed": [
+          "分 marks a two-period quantity; the ordinal suffix 目 is absent."
+        ],
+        "limits": [
+          "Two periods are a quantity, not a position in a day's schedule."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "CP-N5-04",
+      "level_approx": "N5-oriented provisional diagnostic; no official JLPT or certification claim",
+      "jp": "右の目が痛いです。",
+      "zh_hant": "右眼很痛。",
+      "allowed_variants": [
+        "右眼痛。",
+        "右眼疼。"
+      ],
+      "semantic_checks": [
+        "目 is the body-part noun eye, not the ordinal suffix in 時限目.",
+        "Preserve that the right eye is painful."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify whose eye it is or give a cause."
+      ],
+      "control": {
+        "kind": "independent_lexical_me",
+        "contrast_ids": [
+          "CB-B24"
+        ],
+        "stable": [
+          "Both sources contain the character 目."
+        ],
+        "changed": [
+          "This row uses standalone 目 as a body-part noun."
+        ],
+        "limits": [
+          "The body-part reading must not become a class ordinal."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "CP-N5-05",
+      "level_approx": "N5-oriented provisional diagnostic; inline-code literal and lock-position control; no official JLPT or certification claim",
+      "jp": "`二時限目`は音楽です。",
+      "zh_hant": "`二時限目`是音樂課。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The source derives from adopted CB-B24 with ASCII backticks around the ordinal phrase.",
+        "The topic states that the second class period is music class.",
+        "Preserve the protected source literal exactly once and keep it in the topic position."
+      ],
+      "semantic_unknowns": [],
+      "control": {
+        "kind": "opaque_ordinal_period_literal",
+        "contrast_ids": [
+          "CB-B24"
+        ],
+        "stable": [
+          "The Japanese topic and predicate match CB-B24."
+        ],
+        "changed": [
+          "ASCII backticks protect 二時限目 as a literal."
+        ],
+        "limits": [
+          "Literal preservation is checked separately from full-sentence naturalness."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original_derivative",
+        "license": "MIT",
+        "derived_from": "clock_boundary_lock_dev_v1.json#CB-B24"
+      },
+      "lock_expectation": {
+        "kind": "inline_code_candidate",
+        "source_surface": "`二時限目`",
+        "source_span": {
+          "scalar": [
+            0,
+            6
+          ],
+          "utf8_bytes": [
+            0,
+            14
+          ],
+          "slice": "`二時限目`"
+        },
+        "inner_source_span": {
+          "scalar": [
+            1,
+            5
+          ],
+          "utf8_bytes": [
+            1,
+            13
+          ],
+          "slice": "二時限目"
+        },
+        "target_text": "`二時限目`",
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              0,
+              6
+            ],
+            "utf8_bytes": [
+              0,
+              14
+            ],
+            "slice": "`二時限目`"
+          }
+        ],
+        "inner_target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              1,
+              5
+            ],
+            "utf8_bytes": [
+              1,
+              13
+            ],
+            "slice": "二時限目"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "The protected topic remains at the start of the sentence before は and the predicate.",
+        "independent_assertions": [
+          "Exact literal bytes and delimiters",
+          "One source occurrence maps to one target occurrence",
+          "Source and target scalar and UTF-8 byte spans select the declared slices",
+          "The protected topic remains before the predicate",
+          "Complete sentence meaning and naturalness are reviewed separately"
+        ],
+        "runtime_status": "Unmeasured; no engine run was made."
+      }
+    }
+  ]
+}

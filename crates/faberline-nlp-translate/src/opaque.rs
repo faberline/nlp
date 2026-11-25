@@ -432,7 +432,7 @@ pub(super) fn parse_cjk_or_ascii_num(s: &str) -> Option<u32> {
     let mut total = 0u32;
     let mut current = 0u32;
     let mut all_digits = s.chars().count() >= 2;
-    let mut digit_acc = 0u32;
+    let mut digit_acc = Some(0u32);
 
     for ch in s.chars() {
         let d = match ch {
@@ -450,7 +450,7 @@ pub(super) fn parse_cjk_or_ascii_num(s: &str) -> Option<u32> {
         };
         if let Some(v) = d {
             current = v;
-            digit_acc = digit_acc.saturating_mul(10).saturating_add(v);
+            digit_acc = digit_acc.and_then(|n| n.checked_mul(10)?.checked_add(v));
         } else {
             all_digits = false;
             let mult = match ch {
@@ -461,18 +461,18 @@ pub(super) fn parse_cjk_or_ascii_num(s: &str) -> Option<u32> {
                 _ => return None,
             };
             if mult == 10000 {
-                total = (total + if current == 0 { 1 } else { current }) * 10000;
+                total = total.checked_add(current.max(1))?.checked_mul(mult)?;
                 current = 0;
             } else {
-                total += (if current == 0 { 1 } else { current }) * mult;
+                total = total.checked_add(current.max(1) * mult)?;
                 current = 0;
             }
         }
     }
     if all_digits {
-        Some(digit_acc)
+        digit_acc
     } else {
-        Some(total + current)
+        total.checked_add(current)
     }
 }
 
@@ -542,4 +542,20 @@ fn parse_roman(s: &str) -> Option<u32> {
         }
     }
     if sum > 0 { Some(sum) } else { None }
+}
+
+#[cfg(test)]
+mod numeral_tests {
+    use super::parse_cjk_or_ascii_num;
+
+    #[test]
+    fn cjk_numbers_that_overflow_are_rejected() {
+        assert_eq!(
+            parse_cjk_or_ascii_num("四二九四九六七二九五"),
+            Some(u32::MAX)
+        );
+        assert_eq!(parse_cjk_or_ascii_num("四二九四九六七二九六"), None);
+        assert_eq!(parse_cjk_or_ascii_num("万万万"), None);
+        assert_eq!(parse_cjk_or_ascii_num("一万零二"), Some(10_002));
+    }
 }

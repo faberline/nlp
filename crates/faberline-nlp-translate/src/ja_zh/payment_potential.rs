@@ -736,13 +736,15 @@ pub(crate) struct FareRoles {
     medium_with_case: Span,
     stem: Span,
     native_medium: &'static str,
+    ending: FareEnding,
+    report: Option<FareReport>,
 }
 
 impl FareRoles {
     fn render(&self, overrides: &[&crate::lock::LockedSpan]) -> Option<String> {
         let mut amount = "票款";
         let mut method = self.native_medium.to_owned();
-        let mut action = "付";
+        let mut action = None;
         for lock in overrides {
             if lock.source_span == self.amount {
                 amount = &lock.placeholder;
@@ -759,12 +761,25 @@ impl FareRoles {
                     }
                 )
             {
-                action = &lock.placeholder;
+                action = Some(lock.placeholder.as_str());
             } else {
                 return None;
             }
         }
-        Some(format!("{method}{action}{amount}"))
+        if self.report.is_none() && self.ending.is_affirmative_present() {
+            return Some(format!("{method}{}{amount}", action.unwrap_or("付")));
+        }
+        // Extended forms recover grammar for a protected stem. Keep the
+        // ordinary renderer for statements that do not carry such a term.
+        let action = action?;
+        let marker = match (self.ending.negative, self.ending.past) {
+            (true, true) => "沒有",
+            (true, false) => "不",
+            (false, true) => "已",
+            (false, false) => "會",
+        };
+        let closing = if self.ending.question { "嗎？" } else { "" };
+        Some(format!("{amount}{marker}{method}{action}{closing}"))
     }
 }
 
@@ -775,20 +790,128 @@ pub(super) fn render_fare_statement(
     chars: &[char],
     locks: &SpanLockTable,
     unhinted_roles: &dyn Fn(Span) -> Option<FareRoles>,
-) -> Option<String> {
+) -> Option<(String, Option<&'static str>)> {
     let sentence_span = doc.segmentation.sentences.get(sentence)?.span;
-    let start = source.first()?.span.start_char;
-    let end = source.last()?.span.end_char;
-    // Only a complete affirmative payment statement uses this word order.
+    let span = atom_span(source)?;
+    if !chars
+        .get(sentence_span.start_char..span.start_char)?
+        .iter()
+        .all(|c| c.is_whitespace())
+        || !chars
+            .get(span.end_char..sentence_span.end_char)?
+            .iter()
+            .all(|c| matches!(c, '。' | '.' | '?' | '？') || c.is_whitespace())
+    {
+        return None;
+    }
+    let (mut roles, overrides) = recover_fare(source, doc, sentence, chars, locks, unhinted_roles)?;
+    if roles.report.is_some() {
+        return None;
+    }
+    roles.ending.question |= chars[span.end_char..sentence_span.end_char]
+        .iter()
+        .any(|c| matches!(c, '?' | '？'));
+    let factuality = if roles.ending.question {
+        Some("hypothetical")
+    } else if roles.ending.negative {
+        Some("negated")
+    } else {
+        None
+    };
+    Some((roles.render(&overrides)?, factuality))
+}
+
+pub(super) fn render_reported_fare(
+    segments: &[Segment],
+    doc: &Document,
+    sentence: usize,
+    chars: &[char],
+    locks: &SpanLockTable,
+    unhinted_roles: &dyn Fn(Span) -> Option<FareRoles>,
+) -> Option<String> {
+    let [
+        Segment::Clause {
+            atoms: prefix,
+            trailing_punct: None,
+            ..
+        },
+        Segment::Quote {
+            open_q,
+            inner_atoms,
+            close_q,
+            ..
+        },
+        Segment::Clause {
+            atoms: suffix,
+            trailing_punct,
+            ..
+        },
+    ] = segments
+    else {
+        return None;
+    };
+    let inner = core_non_punct(inner_atoms);
+    if inner_atoms.iter().any(is_quote_mark)
+        || suffix.iter().any(|atom| atom.is_locked)
+        || !matches!(trailing_punct.as_deref(), None | Some("。" | "."))
+    {
+        return None;
+    }
+    let (mut roles, overrides) = recover_fare(inner, doc, sentence, chars, locks, unhinted_roles)?;
+    let report = roles.report.as_ref()?;
+    let (case, speaker) = prefix.split_last()?;
+    if !matches!(case.surface.as_str(), "は" | "が")
+        || case.is_locked
+        || atom_span(speaker)? != report.speaker
+        || atom_span(core_non_punct(suffix))? != report.clause
+    {
+        return None;
+    }
+    let who = render_direct_quote_person(speaker, doc, locks).or_else(|| {
+        // The source proof already established a speech subject. Some role
+        // nouns have no person class in the supplied token analysis.
+        speaker
+            .iter()
+            .all(|atom| {
+                !atom.is_locked && matches!(atom.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+            })
+            .then(|| nominal(speaker, TargetVariant::ZhHant))
+    })?;
+    let speech = if report.past { "曾說" } else { "說" };
+    let inner_span = atom_span(inner)?;
+    let inner_end = inner_atoms.last()?.span.end_char;
+    roles.ending.question |= chars
+        .get(inner_span.end_char..inner_end)?
+        .iter()
+        .any(|c| matches!(c, '?' | '？'));
+    let spoken = roles.render(&overrides)?;
+    let terminal = if spoken.ends_with('？') { "" } else { "。" };
+    let open = localize_open_quote(*open_q, TargetVariant::ZhHant);
+    let close = localize_close_quote(*close_q, TargetVariant::ZhHant);
+    Some(format!("{who}{speech}：{open}{spoken}{terminal}{close}"))
+}
+
+fn atom_span(atoms: &[Atom]) -> Option<Span> {
+    Some(Span {
+        start_char: atoms.first()?.span.start_char,
+        end_char: atoms.last()?.span.end_char,
+    })
+}
+
+fn recover_fare<'a>(
+    source: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    chars: &[char],
+    locks: &'a SpanLockTable,
+    unhinted_roles: &dyn Fn(Span) -> Option<FareRoles>,
+) -> Option<(FareRoles, Vec<&'a crate::lock::LockedSpan>)> {
+    let content = atom_span(source)?;
+    let Span {
+        start_char: start,
+        end_char: end,
+    } = content;
     if !chars.get(start..end)?.starts_with(&['切', '符', '代'])
-        || !chars
-            .get(sentence_span.start_char..start)?
-            .iter()
-            .all(|ch| ch.is_whitespace())
-        || !chars
-            .get(end..sentence_span.end_char)?
-            .iter()
-            .all(|ch| matches!(ch, '。' | '.') || ch.is_whitespace())
         || doc
             .segmentation
             .opaque
@@ -803,7 +926,7 @@ pub(super) fn render_fare_statement(
         .filter(|lock| lock.source_span.start_char < end && start < lock.source_span.end_char)
         .collect();
     if overrides.is_empty() {
-        return fare_roles(source)?.render(&[]);
+        return Some((fare_roles(source, None)?, overrides));
     }
     if overrides.iter().any(|lock| {
         !lock.mandatory
@@ -824,13 +947,9 @@ pub(super) fn render_fare_statement(
 
     // The lock can hide で. Prove the roles using the source analysis while
     // keeping the active placeholders and their original ranges.
-    let content = Span {
-        start_char: start,
-        end_char: end,
-    };
     let roles = fare_roles_for_sentence(doc, sentence, chars, content)
         .or_else(|| unhinted_roles(content))?;
-    roles.render(&overrides)
+    Some((roles, overrides))
 }
 
 pub(crate) fn fare_roles_for_sentence(
@@ -848,18 +967,141 @@ pub(crate) fn fare_roles_for_sentence(
     let tokens: Vec<_> = doc.tokens[first..last].iter().collect();
     let original = build_sentence_atoms(sentence, chars, doc, &tokens, &SpanLockTable::default());
     let original = core_non_punct(&original);
-    if original.first()?.span.start_char != content.start_char
-        || original.last()?.span.end_char != content.end_char
+    let first = original.partition_point(|atom| atom.span.end_char <= content.start_char);
+    let last = original.partition_point(|atom| atom.span.start_char < content.end_char);
+    let body = original.get(first..last)?;
+    if atom_span(body)? != content {
+        return None;
+    }
+    if first == 0 && last == original.len() {
+        return fare_roles(body, None);
+    }
+    let (report, governor) = fare_report(&original[..first], &original[last..], body)?;
+    let mut roles = fare_roles(body, Some(governor))?;
+    roles.report = Some(report);
+    Some(roles)
+}
+
+#[derive(Clone, Copy)]
+struct FareEnding {
+    negative: bool,
+    past: bool,
+    question: bool,
+}
+
+impl FareEnding {
+    fn is_affirmative_present(self) -> bool {
+        !self.negative && !self.past && !self.question
+    }
+
+    fn parse(verb: &Atom, suffix: &[Atom]) -> Option<Self> {
+        let (aux, question) = match suffix.split_last() {
+            Some((last, aux))
+                if last.surface == "か"
+                    && last.upos == Some(Upos::Part)
+                    && last.deprel == "discourse"
+                    && last.head == verb.doc_tok_idx =>
+            {
+                (aux, true)
+            }
+            _ => (suffix, false),
+        };
+        if suffix.first()?.span.start_char != verb.span.end_char
+            || suffix
+                .windows(2)
+                .any(|pair| pair[0].span.end_char != pair[1].span.start_char)
+            || suffix.iter().any(|atom| atom.is_locked)
+            || aux.iter().any(|atom| {
+                atom.upos != Some(Upos::Aux)
+                    || atom.deprel != "aux"
+                    || atom.head != verb.doc_tok_idx
+            })
+        {
+            return None;
+        }
+        let (negative, past) = match joined(aux).as_str() {
+            "ます" => (false, false),
+            "ました" => (false, true),
+            "ません" => (true, false),
+            "ませんでした" => (true, true),
+            _ => return None,
+        };
+        Some(Self {
+            negative,
+            past,
+            question,
+        })
+    }
+}
+
+struct FareReport {
+    speaker: Span,
+    clause: Span,
+    past: bool,
+}
+
+fn fare_report(before: &[Atom], after: &[Atom], body: &[Atom]) -> Option<(FareReport, usize)> {
+    let [speaker @ .., topic, open] = before else {
+        return None;
+    };
+    let after = match after {
+        [punct, rest @ ..]
+            if matches!(punct.surface.as_str(), "。" | "." | "？" | "?") && !punct.is_locked =>
+        {
+            rest
+        }
+        _ => after,
+    };
+    let [close, marker, verb, ending @ ..] = after else {
+        return None;
+    };
+    let report = verb.doc_tok_idx?;
+    let speech = FareEnding::parse(verb, ending)?;
+    let speaker_head = speaker.last()?;
+    if !matches!(
+        (open.surface.as_str(), close.surface.as_str()),
+        ("「", "」") | ("『", "』")
+    ) || !matches!(topic.surface.as_str(), "は" | "が")
+        || !dasu_case_link(speaker_head, topic)
+        || speaker_head.deprel != "nsubj"
+        || !(speaker_head.head == Some(report)
+            || body.iter().any(|a| {
+                a.lemma.as_deref() == Some("支払う") && a.doc_tok_idx == speaker_head.head
+            }))
+        || !speaker
+            .iter()
+            .all(|a| matches!(a.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron)))
+        || marker.surface != "と"
+        || marker.head != Some(report)
+        || verb.upos != Some(Upos::Verb)
+        || verb.lemma.as_deref() != Some("言う")
+        || verb.deprel != "root"
+        || verb.head.is_some()
+        || speech.negative
+        || speech.question
     {
         return None;
     }
-    fare_roles(original)
+    let clause = atom_span(&after[1..])?;
+    Some((
+        FareReport {
+            speaker: atom_span(speaker)?,
+            clause,
+            past: speech.past,
+        },
+        report,
+    ))
 }
 
-fn fare_roles(source: &[Atom]) -> Option<FareRoles> {
-    let [charge @ .., topic, medium, by, verb, polite] = source else {
+fn fare_roles(source: &[Atom], parent: Option<usize>) -> Option<FareRoles> {
+    let verb_idx = source.iter().position(|atom| {
+        atom.upos == Some(Upos::Verb) && atom.lemma.as_deref() == Some("支払う")
+    })?;
+    let [charge @ .., topic, medium, by] = &source[..verb_idx] else {
         return None;
     };
+    let verb = &source[verb_idx];
+    let ending = FareEnding::parse(verb, &source[verb_idx + 1..])?;
     if source.iter().any(|atom| atom.is_locked) {
         return None;
     }
@@ -888,15 +1130,11 @@ fn fare_roles(source: &[Atom]) -> Option<FareRoles> {
         || medium.head != Some(governor)
         || by.surface != "で"
         || !dasu_case_link(medium, by)
-        || verb.upos != Some(Upos::Verb)
-        || verb.lemma.as_deref() != Some("支払う")
-        || verb.deprel != "root"
-        || verb.head.is_some()
-        || polite.surface != "ます"
-        || polite.upos != Some(Upos::Aux)
-        || polite.deprel != "aux"
-        || polite.head != Some(governor)
-        || verb.span.end_char != polite.span.start_char
+        || verb.head != parent
+        || match parent {
+            Some(_) => !matches!(verb.deprel.as_str(), "advcl" | "ccomp"),
+            None => verb.deprel != "root",
+        }
     {
         return None;
     }
@@ -917,6 +1155,8 @@ fn fare_roles(source: &[Atom]) -> Option<FareRoles> {
         },
         stem: verb.span,
         native_medium,
+        ending,
+        report: None,
     })
 }
 
@@ -941,6 +1181,62 @@ mod tests {
         )
         .unwrap()
         .target_text
+    }
+
+    #[test]
+    fn adopted_protected_fare_keeps_endings_and_boundaries() {
+        let bank: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/data/ja_zh/payment_fare_stem_dev_v1.json"
+        ))
+        .unwrap();
+        for row in bank["items"].as_array().unwrap() {
+            assert_eq!(row["visibility"], "development-visible");
+            assert_eq!(row["heldout"], false);
+            let id = row["id"].as_str().unwrap();
+            let source = row["jp"].as_str().unwrap();
+            let fixture = &row["fixture"];
+            let options = serde_json::from_value(fixture["translate_options"].clone()).unwrap();
+            let glossary = serde_json::from_value(fixture["glossary"].clone()).unwrap();
+            let translated =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(
+                translated.target_text,
+                row["zh_hant"].as_str().unwrap(),
+                "{id}"
+            );
+            let factuality = match id {
+                "PFST-N5-02" | "PFST-N5-03" => Some("negated"),
+                "PFST-N5-04" | "PFST-N5-05" => Some("hypothetical"),
+                _ => None,
+            };
+            if let Some(expected) = factuality {
+                assert_eq!(
+                    translated.sentences[0].conditioning.factuality.as_deref(),
+                    Some(expected),
+                    "{id}"
+                );
+            }
+            let expected = row["lock_expectation"]["expected_hits"].as_array().unwrap();
+            assert_eq!(translated.glossary_hits.len(), expected.len(), "{id}");
+            for reference in expected {
+                let scalar = |span: &serde_json::Value| Span {
+                    start_char: span[0].as_u64().unwrap() as usize,
+                    end_char: span[1].as_u64().unwrap() as usize,
+                };
+                let source_span = scalar(&reference["source_span"]["scalar"]);
+                let canonical = reference["canonical"].as_str().unwrap();
+                let hit = translated
+                    .glossary_hits
+                    .iter()
+                    .find(|hit| hit.source_span == source_span && hit.canonical == canonical)
+                    .unwrap_or_else(|| panic!("{id}: missing hit for {canonical}"));
+                assert_eq!(
+                    hit.target_span,
+                    scalar(&reference["target_spans"][0]["scalar"]),
+                    "{id}"
+                );
+            }
+        }
     }
 
     #[test]

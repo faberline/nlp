@@ -1,0 +1,174 @@
+{
+  "schema": "faberline.nlp.ja_zh.smoking_breath_dev.v1",
+  "version": "1.0.0",
+  "status": "development-visible",
+  "data_adoption_status": "pending_independent_review",
+  "measurement_status": "unmeasured",
+  "source_main": "2156a676b579d6db3e93a9ea3b6c074d952be392",
+  "source_tree": "dcf67e2e629454b48336a6885d6ec144f17c24d9",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "scope_note": "S01-S05 have uncontested draft reference translations. S06 now has a revised proposed reference, 吸氣了。, based on an independent positive language review. This revised reference still requires final frozen-version review before adoption or measurement.",
+  "adopted_controls": [
+    {
+      "source": "#355 D05",
+      "source_text": "ここでたばこを吸わないでください。",
+      "sha256": "c7374084a170b31e5fb927c5ccfba50395b049fa0f2b773f787ad2d6df3a4070",
+      "relation": "S04 is the paired no-location polite prohibition. Both retain the request not to smoke; only the adopted D05 names a place."
+    }
+  ],
+  "items": [
+    {
+      "id": "S01",
+      "jp": "たばこを吸う。",
+      "zh_hant": "抽菸。",
+      "allowed_variants": [
+        "吸菸。"
+      ],
+      "semantic_checks": [
+        "A non-past statement about smoking; do not add present or future time."
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "S02",
+      "jp": "タバコを吸った。",
+      "zh_hant": "抽了菸。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Past affirmative smoking event; preserve completion without adding an actor."
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "S03",
+      "jp": "煙草を吸わない。",
+      "zh_hant": "不抽菸。",
+      "allowed_variants": [
+        "不吸菸。"
+      ],
+      "semantic_checks": [
+        "Non-past negative smoking statement; do not turn it into a prohibition."
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "S04",
+      "jp": "たばこを吸わないでください。",
+      "zh_hant": "請不要抽菸。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Polite request or prohibition; do not add a location or legal-signage setting."
+      ],
+      "paired_control": "#355 D05",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "S05",
+      "jp": "息を吸う。",
+      "zh_hant": "吸氣。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Non-past inhalation; do not translate it as smoking or add a specific time."
+      ],
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "S06",
+      "jp": "息を吸った。",
+      "zh_hant": "吸氣了。",
+      "allowed_variants": [],
+      "reference_status": "revised_reference_pending_final_frozen_review",
+      "semantic_checks": [
+        "Past inhalation event; preserve the completed event.",
+        "Do not add a specific actor, quantity, effort, purpose, or setting.",
+        "The prior disputed translations remain documented as objections and are not allowed variants."
+      ],
+      "review_note": "An independent reviewer, without reading this file or engine output, judged 吸氣了。 natural and faithful, with no added person, quantity, or scene. The data author independently finds it acceptable as a past-event reference. Final frozen-version review remains required.",
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ],
+  "follow_up": [
+    {
+      "id": "S06",
+      "jp": "息を吸った。",
+      "status": "revised_reference_pending_final_frozen_review",
+      "proposed_reference": "吸氣了。",
+      "prior_objections_not_variants": [
+        {
+          "candidate": "吸了氣。",
+          "reason": "Prior reviewers raised a naturalness objection for this isolated sentence."
+        },
+        {
+          "candidate": "吸了一口氣。",
+          "reason": "Prior reviewers disputed whether the explicit quantity 一口 is supported by the source."
+        },
+        {
+          "candidate": "吸入了空氣。",
+          "reason": "This makes air an explicit object absent from the source and sounds technical."
+        }
+      ],
+      "review_basis": [
+        "https://github.com/faberline/nlp/issues/358#issuecomment-7047500075",
+        "https://github.com/faberline/nlp/issues/358#issuecomment-7048173386",
+        "https://github.com/faberline/nlp/issues/358#issuecomment-7048245801",
+        "https://github.com/faberline/nlp/issues/358#issuecomment-7048862498"
+      ],
+      "next_step": "Independently review this revised reference against the final frozen data version before adoption or measurement."
+    }
+  ]
+}

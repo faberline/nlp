@@ -1,0 +1,128 @@
+{
+  "schema": "faberline.nlp.ja_zh.departure_origin_lock_dev.v1",
+  "version": 1,
+  "status": "Proposed first-party development data. Independent review and formal owner adoption are pending. No new row has been translated.",
+  "source_main": "af8a8cf6b0263dc7a0da646ff5d46195b3652a1e",
+  "source_tree": "7ec0412270dac233e4beb28477b84d11109186be",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "authoring_note": "Rows 1 and 2 reuse the public #543 Japanese sentence with newly authored Taiwan Traditional Chinese references. Row 3 reuses only the Japanese sentence adopted as issue86_standing_dev_export_059c10a::jz062; its glossary fixture, target, spans, and acceptance proposal are new to this file and pending independent adoption. Row 4 is a new first-party Japanese sentence and reference. Expected translations were authored without running the current engine."
+  },
+  "reused_existing_controls": [
+    {
+      "file": "issue86_standing_dev_export_059c10a::jz062",
+      "public_source": "https://github.com/faberline/nlp/issues/417",
+      "evidence": {"inputs.json_sha256": "4531f431045289d4f6053b219ee71fc90b96837e7173a739a61b401abbe30d54", "comparison.json_sha256": "8373f1f52f8c97c1fa883fcafabff1c6b3547d506a0b842b57c846b89c3b045f", "index_zero_based": 172},
+      "relationship": "Only the adopted Japanese source sentence is reused. This proposal's row 3 glossary fixture, Taiwan Traditional Chinese target, target spans, and acceptance criteria are new and remain pending independent review."
+    }
+  ],
+  "reused_standing_controls": [],
+  "fixture_defaults": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "DOL-N5-01",
+      "level_approx": "N5-oriented provisional diagnostic; not an official JLPT claim",
+      "jp": "水を飲まずに兄の家を出た。",
+      "zh_hant": "沒有喝水就離開住處了，那是哥哥的家。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "水を飲まずに is retained as not drinking water before departure.",
+        "兄の modifies the origin residence.",
+        "The exact full alias 家を出た → 離開住處了 is preserved once and remains contiguous.",
+        "No actor is added."
+      ],
+      "semantic_unknowns": [
+        "The source does not state why the person did not drink water.",
+        "The person is not named."
+      ],
+      "control": {
+        "kind": "public_issue_543_full_origin_alias",
+        "stable": ["Same public source and exact full alias as the #543 proposal."],
+        "changed": ["The Taiwan Traditional Chinese reference is independently authored; a short follow-up identifies that this is 哥哥的家 while keeping the exact alias intact."],
+        "limits": ["Do not insert 哥哥的 inside 離開住處了.", "Independent review should assess the naturalness of the follow-up under the exact-alias constraint."]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {"origin": "first_party_original", "license": "MIT", "authoring_note": "Public #543 Japanese source; newly authored Taiwan Traditional Chinese reference. No current-engine output was used."},
+      "fixture": {
+        "translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"},
+        "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": [{"canonical": "家を出た", "surfaces": ["家を出た"], "targets": {"zh-Hant": "離開住處了"}}]},
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "expected_hits": [{"canonical": "家を出た", "kind": "domain_term", "target_text": "離開住處了", "source_span": {"scalar": [8, 12], "utf8_bytes": [24, 36], "slice": "家を出た"}, "target_spans": [{"reference_index": 0, "scalar": [5, 10], "utf8_bytes": [15, 30], "slice": "離開住處了"}], "expected_occurrences_per_source_occurrence": 1}],
+        "expected_no_hits": [],
+        "target_text": "沒有喝水就離開住處了，那是哥哥的家。",
+        "independent_assertions": ["Exact source and target Unicode-scalar and UTF-8 byte spans.", "The active alias is a contiguous literal and occurs once.", "Preserve the no-water event before the completed departure.", "Represent 兄の as the origin possessor without inserting text into the alias or adding an actor.", "Do not duplicate the residence or completed aspect."],
+        "runtime_status": "Unobserved: proposal only. No new row has been translated."
+      }
+    },
+    {
+      "id": "DOL-N5-02",
+      "level_approx": "N5-oriented provisional diagnostic; not an official JLPT claim",
+      "jp": "水を飲まずに兄の家を出た。",
+      "zh_hant": "沒有喝水就從哥哥的家離開了。",
+      "allowed_variants": [],
+      "semantic_checks": ["Water was not drunk before departure.", "The origin is the older brother’s home.", "The completed past departure is retained by 出た → 離開了 exactly once.", "No actor is added."],
+      "semantic_unknowns": ["The source does not state why the person did not drink water.", "The person is not named."],
+      "control": {"kind": "public_issue_543_verb_only_alias", "stable": ["Same public source as DOL-N5-01."], "changed": ["Only 出た is locked, so the origin phrase 哥哥的家 can be composed naturally before 離開了."], "limits": ["This row does not claim that the full phrase 家を出た is locked."]},
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {"origin": "first_party_original", "license": "MIT", "authoring_note": "Public #543 Japanese source; newly authored Taiwan Traditional Chinese reference. No current-engine output was used."},
+      "fixture": {"translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"}, "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": [{"canonical": "出た", "surfaces": ["出た"], "targets": {"zh-Hant": "離開了"}}]}, "models_directory": null, "backend": "Onnx"},
+      "lock_expectation": {"kind": "glossary", "expected_hits": [{"canonical": "出た", "kind": "domain_term", "target_text": "離開了", "source_span": {"scalar": [10, 12], "utf8_bytes": [30, 36], "slice": "出た"}, "target_spans": [{"reference_index": 0, "scalar": [10, 13], "utf8_bytes": [30, 39], "slice": "離開了"}], "expected_occurrences_per_source_occurrence": 1}], "expected_no_hits": [], "target_text": "沒有喝水就從哥哥的家離開了。", "independent_assertions": ["Exact source and target Unicode-scalar and UTF-8 byte spans.", "The active alias is a contiguous literal and occurs once.", "Preserve the no-water event before the completed departure.", "Represent 兄の as the origin possessor and do not add an actor."], "runtime_status": "Unobserved: proposal only. No new row has been translated."}
+    },
+    {
+      "id": "DOL-N5-03",
+      "level_approx": "N5-oriented provisional diagnostic; not an official JLPT claim",
+      "jp": "朝ご飯を食べずに家を出た。",
+      "zh_hant": "沒有吃早餐就離開住處了。",
+      "allowed_variants": [],
+      "semantic_checks": ["朝ご飯を食べずに means the person left without eating breakfast.", "The departure is completed and past.", "The complete origin alias 家を出た → 離開住處了 is continuous and appears once.", "No actor is added."],
+      "semantic_unknowns": ["The source does not identify who left."],
+      "control": {"kind": "adopted_neutral_full_origin_control", "stable": ["This is the already-adopted neutral jz062 control."], "changed": ["The proposal references the public control and does not claim prior output as engine evidence."], "limits": ["Use this as the neutral omission plus full-origin baseline."]},
+      "reused_control": {"file": "issue86_standing_dev_export_059c10a::jz062", "public_source": "https://github.com/faberline/nlp/issues/417", "evidence": {"inputs.json_sha256": "4531f431045289d4f6053b219ee71fc90b96837e7173a739a61b401abbe30d54", "comparison.json_sha256": "8373f1f52f8c97c1fa883fcafabff1c6b3547d506a0b842b57c846b89c3b045f", "index_zero_based": 172}, "relationship": "The Japanese source sentence alone is adopted. This row's fixture, target, spans, and acceptance checks are proposed here and need independent review; no runtime output is claimed."},
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {"origin": "first_party_original", "license": "MIT", "authoring_note": "Adopted public neutral Japanese control; Taiwan Traditional Chinese reference restated for this proposal and not generated by the current engine."},
+      "fixture": {"translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"}, "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [{"canonical": "朝ご飯", "surfaces": ["朝ご飯"], "targets": {"zh-Hant": "早餐"}}], "domain_terms": [{"canonical": "家を出た", "surfaces": ["家を出た"], "targets": {"zh-Hant": "離開住處了"}}]}, "models_directory": null, "backend": "Onnx"},
+      "lock_expectation": {"kind": "glossary", "expected_hits": [{"canonical": "朝ご飯", "kind": "object", "target_text": "早餐", "source_span": {"scalar": [0, 3], "utf8_bytes": [0, 9], "slice": "朝ご飯"}, "target_spans": [{"reference_index": 0, "scalar": [3, 5], "utf8_bytes": [9, 15], "slice": "早餐"}], "expected_occurrences_per_source_occurrence": 1}, {"canonical": "家を出た", "kind": "domain_term", "target_text": "離開住處了", "source_span": {"scalar": [8, 12], "utf8_bytes": [24, 36], "slice": "家を出た"}, "target_spans": [{"reference_index": 0, "scalar": [6, 11], "utf8_bytes": [18, 33], "slice": "離開住處了"}], "expected_occurrences_per_source_occurrence": 1}], "expected_no_hits": [], "target_text": "沒有吃早餐就離開住處了。", "independent_assertions": ["Exact source and target Unicode-scalar and UTF-8 byte spans.", "Each active alias occurs once as one contiguous literal.", "Preserve the omitted breakfast before the completed departure.", "Do not add an actor."], "runtime_status": "Unobserved: proposal only. No new row has been translated."}
+    },
+    {
+      "id": "DOL-N5-04",
+      "level_approx": "N5-oriented provisional diagnostic; not an official JLPT claim",
+      "jp": "昼食を食べずに父の会社を出た。",
+      "zh_hant": "沒有吃午餐就離開公司了，那是父親的公司。",
+      "allowed_variants": [],
+      "semantic_checks": ["昼食を食べずに means lunch was not eaten before departure.", "The completed departure is from the father’s company.", "会社を出た → 離開公司了 is preserved verbatim, contiguously, and once.", "The source does not state who left."],
+      "semantic_unknowns": ["The source does not state why lunch was not eaten.", "The source does not name the person who left.", "The exact relationship between the father and the company is unknown; the reference identifies the origin but does not assume ownership."],
+      "control": {"kind": "first_party_origin_modifier_generalization", "stable": ["The omitted meal precedes a completed departure.", "The origin modifier 父の is outside the locked alias."], "changed": ["New first-party example uses a different origin entity, modifier, and complete alias."], "limits": ["The follow-up keeps the alias exact and avoids putting 父親的 inside it; independent review should assess its naturalness."]},
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {"origin": "first_party_original", "license": "MIT", "authoring_note": "New first-party Japanese sentence and Taiwan Traditional Chinese reference. No corpus or current-engine output was used."},
+      "fixture": {"translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"}, "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [{"canonical": "昼食", "surfaces": ["昼食"], "targets": {"zh-Hant": "午餐"}}], "domain_terms": [{"canonical": "会社を出た", "surfaces": ["会社を出た"], "targets": {"zh-Hant": "離開公司了"}}]}, "models_directory": null, "backend": "Onnx"},
+      "lock_expectation": {"kind": "glossary", "expected_hits": [{"canonical": "昼食", "kind": "object", "target_text": "午餐", "source_span": {"scalar": [0, 2], "utf8_bytes": [0, 6], "slice": "昼食"}, "target_spans": [{"reference_index": 0, "scalar": [3, 5], "utf8_bytes": [9, 15], "slice": "午餐"}], "expected_occurrences_per_source_occurrence": 1}, {"canonical": "会社を出た", "kind": "domain_term", "target_text": "離開公司了", "source_span": {"scalar": [9, 14], "utf8_bytes": [27, 42], "slice": "会社を出た"}, "target_spans": [{"reference_index": 0, "scalar": [6, 11], "utf8_bytes": [18, 33], "slice": "離開公司了"}], "expected_occurrences_per_source_occurrence": 1}], "expected_no_hits": [], "target_text": "沒有吃午餐就離開公司了，那是父親的公司。", "independent_assertions": ["Exact source and target Unicode-scalar and UTF-8 byte spans.", "Each active alias occurs once as one contiguous literal.", "Preserve the omitted lunch before the completed departure.", "Represent 父の as the origin modifier without inserting text into the alias, adding an actor, or assuming company ownership."], "runtime_status": "Unobserved: proposal only. No new row has been translated."}
+    }
+  ]
+}

@@ -42,6 +42,7 @@ pub(crate) mod predicate_glossary;
 mod reception;
 mod recipient_scope;
 mod return_endpoint;
+mod te_help_glossary;
 mod trip_after_meal;
 
 #[cfg(test)]
@@ -343,6 +344,21 @@ pub(crate) fn translate_ja_sentence<'source>(
         homework_relative::mark_argument_commas(&mut atoms, doc);
         finished_go::mark_reading_pause(&mut atoms, doc, chars);
         place_goal_glossary::restore_destination(&mut atoms, chars, sent_span, doc, lock_table);
+        if direct_quote.is_none()
+            && written_form_continuation.is_none()
+            && report.is_none()
+            && let Some(restored) = te_help_glossary::restore_object(
+                &atoms,
+                chars,
+                doc,
+                sent_tokens,
+                sentence_idx,
+                lock_table,
+                unhinted_source,
+            )
+        {
+            atoms = restored;
+        }
     }
 
     // Split atoms into clauses at `、` / `，` / quoted spans / SCONJ tails.

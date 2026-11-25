@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use faberline_nlp::Span;
-use faberline_nlp::doc::analyze_document;
 use faberline_nlp::doc::model::Backend;
+use faberline_nlp::doc::{Document, analyze_document};
 use faberline_nlp_translate::{
     GlossaryEntry, GlossaryKind, PronounClass, SpeechRegister, TRANSLATE_SCHEMA, TargetVariant,
     TranslateOptions, TranslatedDocument, TranslationGlossary, TranslationTrack,
@@ -2259,6 +2259,71 @@ fn assert_nominal_request_hit(
     assert_eq!(hit.canonical, surface);
     assert_eq!(slice_chars(source, hit.source_span), surface);
     assert_eq!(slice_chars(&doc.target_text, hit.target_span), label);
+}
+
+#[test]
+fn te_help_request_keeps_caller_glossary_objects() {
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let affirmative = "この荷物を持っていただけますか。";
+    let softened = "この荷物を持っていただけませんか。";
+    for kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+        for (source, opening) in [(affirmative, "可以請您幫我"), (softened, "可以麻煩您幫我")]
+        {
+            for (term, label) in [
+                ("荷物", "器材"),
+                ("荷物を", "器材"),
+                ("この荷物を", "這件器材"),
+            ] {
+                let glossary = nominal_request_glossary(kind, term, label);
+                let doc = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                    .unwrap();
+                assert_nominal_request_hit(source, &doc, kind, term, label);
+                assert_eq!(
+                    doc.target_text,
+                    format!("{opening}拿著這件器材嗎？"),
+                    "{source} {kind:?} {term}"
+                );
+            }
+        }
+
+        let photo = "写真を撮ってもらえますか。";
+        for term in ["写真", "写真を"] {
+            let glossary = nominal_request_glossary(kind, term, "紀錄照");
+            let doc =
+                analyze_and_translate(photo, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_nominal_request_hit(photo, &doc, kind, term, "紀錄照");
+            assert_eq!(doc.target_text, "可以幫我拍攝紀錄照嗎？");
+        }
+    }
+
+    let empty = TranslationGlossary::new();
+    let mut analysis = analyze_document(affirmative, &doc_options_for_translate(&options, &empty));
+    let kind = GlossaryKind::Object;
+    let glossary = nominal_request_glossary(kind, "荷物を", "器材");
+    let supplied = |analysis: &Document| {
+        translate_document(
+            affirmative,
+            analysis,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            &glossary,
+            None,
+        )
+        .unwrap()
+    };
+    let linked = supplied(&analysis);
+    assert_nominal_request_hit(affirmative, &linked, kind, "荷物を", "器材");
+    assert_eq!(linked.target_text, "可以請您幫我拿著這件器材嗎？");
+    let object = analysis
+        .syntax
+        .iter_mut()
+        .find(|arc| arc.deprel == "obj" && slice_chars(affirmative, arc.span) == "荷物")
+        .unwrap();
+    object.head = None;
+    let unlinked = supplied(&analysis);
+    assert_nominal_request_hit(affirmative, &unlinked, kind, "荷物を", "器材");
+    assert!(!unlinked.target_text.contains("幫我"));
 }
 
 #[test]

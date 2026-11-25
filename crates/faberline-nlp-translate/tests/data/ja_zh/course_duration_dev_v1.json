@@ -1,0 +1,287 @@
+{
+  "schema": "faberline.nlp.ja_zh.course_duration_dev.v1",
+  "version": "1.0.0",
+  "status": "development-visible",
+  "data_adoption_status": "pending_independent_review",
+  "measurement_status": "unmeasured",
+  "source_main": "5b3da0c7b223cc629c8c0d42e20a2c8f349c113f",
+  "source_tree": "0f33f3a2ba3ab66aa4750d7cacf4a2ee34f386a1",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "related_adopted_data": [
+    {
+      "file": "class_quantity_dev_v1.json",
+      "sha256": "6efe7067794508550e225ca33aec40cce1a76310fbd46333fb13a8aafd7580b3",
+      "ids": [
+        "CQ-N5-03"
+      ],
+      "relation": "Adopted kanji-number control for a two-hour class duration; the new duration rows vary the number, numeral width, time phrase, or course noun."
+    },
+    {
+      "file": "class_period_dev_v1.json",
+      "sha256": "db558e59eb9a51528694a2408836a93514478769a30443da274d7c958ca8a04d",
+      "ids": [
+        "CP-N5-01",
+        "CP-N5-02",
+        "CP-N5-03"
+      ],
+      "relation": "Adopted class-period ordinal and quantity controls; the new rows must retain duration and must not become ordinal periods."
+    },
+    {
+      "file": "clock_boundary_lock_dev_v1.json",
+      "sha256": "6bc9fc2dd0560ae9305a4a183a727fe80d07a310bdd65a250255a674378742d3",
+      "ids": [
+        "CB-B01",
+        "CB-B02",
+        "CB-B03",
+        "CB-B04",
+        "CB-B05",
+        "CB-B06",
+        "CB-B07",
+        "CB-B08",
+        "CB-B09",
+        "CB-B11",
+        "CB-B12",
+        "CB-B13",
+        "CB-B14",
+        "CB-B15",
+        "CB-B16",
+        "CB-B17",
+        "CB-B18",
+        "CB-B19",
+        "CB-B20",
+        "CB-B21",
+        "CB-B22",
+        "CB-B23",
+        "CB-B24"
+      ],
+      "relation": "Adopted true-clock, numeric-boundary, and class-period-ordinal controls. They are comparison sources, not evidence that these new duration examples have been measured."
+    },
+    {
+      "file": "clock_time_dev_v1.json",
+      "sha256": "01db148efcc90ca4fe025a65c6e39fb712ce6643e5c27d3018cbc6e691e1bf69",
+      "ids": [
+        "CLOCK-C01",
+        "CLOCK-C02",
+        "CLOCK-C03",
+        "CLOCK-C04",
+        "CLOCK-C05",
+        "CLOCK-C06",
+        "CLOCK-C07",
+        "CLOCK-C08",
+        "CLOCK-C09",
+        "CLOCK-C10",
+        "CLOCK-C11",
+        "CLOCK-C12",
+        "CLOCK-C13"
+      ],
+      "relation": "Adopted clock-time and duration comparisons, including the distinction between an hour duration and a clock time."
+    }
+  ],
+  "fixture_note": "Fixed empty-glossary ONNX CPU fixture with beam size one. No engine measurement has been made.",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "CD-N5-01",
+      "level_approx": "N5-oriented provisional diagnostic; no official JLPT or certification claim",
+      "jp": "来週は3時間の授業があります。",
+      "zh_hant": "下週有三小時的課。",
+      "allowed_variants": [
+        "下週的課有三小時。"
+      ],
+      "semantic_checks": [
+        "Half-width 3 with 時間 denotes a three-hour duration for a class, not three class periods and not the third period.",
+        "Preserve the next-week time reference and class-duration meaning.",
+        "Do not add a subject, attendee, school, instructor, or location."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify the subject, attendee, school, or location."
+      ],
+      "control": {
+        "kind": "class_duration_half_width_three_hours",
+        "contrast_ids": [
+          "CQ-N5-03",
+          "CD-N5-02"
+        ],
+        "stable": [
+          "Both describe the duration of a class."
+        ],
+        "changed": [
+          "This row uses half-width 3, 来週, and 授業."
+        ],
+        "limits": [
+          "Three hours must not become three class periods or the third class period."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "CD-N5-02",
+      "level_approx": "N5-oriented provisional diagnostic; no official JLPT or certification claim",
+      "jp": "明日は１時間の講習があります。",
+      "zh_hant": "明天有一小時的研習。",
+      "allowed_variants": [
+        "明天有一小時的講習。",
+        "明天的研習有一小時。"
+      ],
+      "semantic_checks": [
+        "Full-width １ with 時間 denotes a one-hour duration for a training course, not one class period.",
+        "Preserve 明日 and the distinct 講習 course noun.",
+        "Do not infer an instructor, attendee, school, or location."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify the course topic, instructor, attendee, or location."
+      ],
+      "control": {
+        "kind": "training_course_duration_full_width_one_hour",
+        "contrast_ids": [
+          "CD-N5-01",
+          "CQ-N5-03"
+        ],
+        "stable": [
+          "The sentence gives a duration in hours."
+        ],
+        "changed": [
+          "This row uses full-width １, 明日, and 講習 instead of 授業."
+        ],
+        "limits": [
+          "研習, 講習, and the word order may vary naturally while retaining the one-hour duration."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "CD-N5-03",
+      "level_approx": "N5-oriented provisional diagnostic; opaque literal and lock-position control; no official JLPT or certification claim",
+      "jp": "今日は`二時間の授業`があります。",
+      "zh_hant": "今天有`二時間の授業`。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "This row derives from adopted CQ-N5-03 by enclosing 二時間の授業 in ASCII backticks.",
+        "Preserve the entire protected literal exactly once without translation or inserted spaces.",
+        "Keep the protected phrase after the day topic and before the existence predicate."
+      ],
+      "semantic_unknowns": [],
+      "control": {
+        "kind": "opaque_hour_duration_literal",
+        "contrast_ids": [
+          "CQ-N5-03"
+        ],
+        "stable": [
+          "The original day context and two-hour course phrase are retained."
+        ],
+        "changed": [
+          "ASCII backticks protect the complete 二時間の授業 phrase."
+        ],
+        "limits": [
+          "Literal preservation is checked separately from whole-sentence translation quality."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original_derivative",
+        "license": "MIT",
+        "derived_from": "class_quantity_dev_v1.json#CQ-N5-03"
+      },
+      "lock_expectation": {
+        "kind": "inline_code_candidate",
+        "source_surface": "`二時間の授業`",
+        "source_span": {
+          "scalar": [
+            3,
+            11
+          ],
+          "utf8_bytes": [
+            9,
+            29
+          ],
+          "slice": "`二時間の授業`"
+        },
+        "inner_source_span": {
+          "scalar": [
+            4,
+            10
+          ],
+          "utf8_bytes": [
+            10,
+            28
+          ],
+          "slice": "二時間の授業"
+        },
+        "target_text": "`二時間の授業`",
+        "target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              3,
+              11
+            ],
+            "utf8_bytes": [
+              9,
+              29
+            ],
+            "slice": "`二時間の授業`"
+          }
+        ],
+        "inner_target_spans": [
+          {
+            "reference_index": 0,
+            "scalar": [
+              4,
+              10
+            ],
+            "utf8_bytes": [
+              10,
+              28
+            ],
+            "slice": "二時間の授業"
+          }
+        ],
+        "expected_occurrences_per_source_occurrence": 1,
+        "relative_position": "The protected phrase remains after 今日は and before あります, with no inserted spaces.",
+        "independent_assertions": [
+          "Exact literal bytes and delimiters",
+          "One source occurrence maps to one target occurrence",
+          "Source and target scalar and UTF-8 byte spans select the declared slices",
+          "The literal remains in its object position without inserted spaces",
+          "Complete sentence meaning and naturalness are reviewed separately"
+        ],
+        "runtime_status": "Unmeasured; no engine run was made."
+      }
+    }
+  ]
+}

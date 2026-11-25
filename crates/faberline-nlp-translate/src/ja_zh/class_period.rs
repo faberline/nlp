@@ -15,6 +15,34 @@ fn is_digit(ch: char) -> bool {
     matches!(ch, '0'..='9' | '０'..='９') || "〇零一二三四五六七八九十百千万萬".contains(ch)
 }
 
+fn is_attached_modifier(
+    part: &Atom,
+    parts: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    number_start: usize,
+) -> bool {
+    let Some(index) = part.doc_tok_idx else {
+        return false;
+    };
+    let (Some(token), Some(link)) = (doc.tokens.get(index), doc.syntax.get(index)) else {
+        return false;
+    };
+    let relation = link.deprel.as_str();
+    let ordinal_prefix = part.span.end_char == number_start;
+    token.sentence == sentence
+        && token.span == part.span
+        && (link.token, link.sentence, link.span) == (index, sentence, part.span)
+        && (matches!(relation, "compound" | "nummod")
+            || (ordinal_prefix && matches!(relation, "amod" | "det")))
+        // Every modifier reaches the final head through later parts of this ordinal.
+        && link.head.is_some_and(|head| {
+            parts.iter().any(|other| {
+                other.doc_tok_idx == Some(head) && other.span.start_char >= part.span.end_char
+            })
+        })
+}
+
 fn ordinal(
     atoms: &[Atom],
     doc: &Document,
@@ -32,7 +60,7 @@ fn ordinal(
     let end = after_prefix + digits + 3;
     let used = atoms.partition_point(|atom| atom.span.end_char <= end);
     let parts = &atoms[..used];
-    let head = parts.last()?;
+    let (head, modifiers) = parts.split_last()?;
     let index = head.doc_tok_idx?;
     let original = doc.tokens.get(index)?;
     let link = doc.syntax.get(index)?;
@@ -49,16 +77,14 @@ fn ordinal(
         head.head,
         head.deprel.as_str(),
     ) || original.span != head.span
-        || parts.iter().any(|part| {
-            part.doc_tok_idx
-                .and_then(|id| doc.tokens.get(id))
-                .is_none_or(|token| token.sentence != original.sentence)
-        })
         || head.span.end_char != end
         || head.upos != Some(Upos::Noun)
         || !parts
             .windows(2)
             .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+        || !modifiers
+            .iter()
+            .all(|part| is_attached_modifier(part, parts, doc, original.sentence, after_prefix))
     {
         return None;
     }
@@ -156,6 +182,55 @@ mod tests {
                 analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
             assert_eq!(translation.target_text, expected, "{source}");
         }
+    }
+
+    #[test]
+    fn a_caller_supplied_attachment_can_keep_period_parts_separate() {
+        let source = "二時限目は音楽です。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        let document = faberline_nlp::doc::analyze_document(
+            source,
+            &crate::doc_options_for_translate(&options, &glossary),
+        );
+        let translate = |doc: &faberline_nlp::doc::Document| {
+            crate::translate_document(
+                source,
+                doc,
+                #[cfg(feature = "narrative")]
+                None,
+                &options,
+                &glossary,
+                None,
+            )
+            .unwrap()
+            .target_text
+        };
+        assert_eq!(translate(&document), "第二節課是音樂。");
+
+        let predicate = document
+            .syntax
+            .iter()
+            .find(|arc| arc.deprel == "root")
+            .unwrap()
+            .token;
+        let mut separate_number = document.clone();
+        let number = separate_number
+            .syntax
+            .iter_mut()
+            .find(|arc| arc.span.start_char == 0)
+            .unwrap();
+        number.head = Some(predicate);
+        assert!(!translate(&separate_number).contains("第二節課"));
+
+        let mut separate_unit = document;
+        let unit = separate_unit
+            .syntax
+            .iter_mut()
+            .find(|arc| arc.span.start_char == 1)
+            .unwrap();
+        unit.deprel = "obj".to_owned();
+        assert!(!translate(&separate_unit).contains("第二節課"));
     }
 
     #[test]

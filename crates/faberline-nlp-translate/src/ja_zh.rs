@@ -13171,15 +13171,28 @@ fn translate_clause_bunsetsus(
     if target == TargetVariant::ZhHant
         && verb_core == "吮吸"
         && let [object] = objs.as_mut_slice()
-        && let Some(tobacco) = restored_tobacco
-            .or_else(|| direct_smoking::tobacco_object(source, &predicates, doc, ctx.source_chars))
+        && let Some(sense) = restored_tobacco
+            .map(direct_smoking::SenseObject::Tobacco)
+            .or_else(|| direct_smoking::sense_object(source, &predicates, doc, ctx.source_chars))
     {
-        if !tobacco.is_locked
-            && let Some(modifiers) = object.strip_suffix(&tobacco.surface)
-        {
-            *object = format!("{modifiers}菸");
+        match sense {
+            direct_smoking::SenseObject::Tobacco(tobacco) => {
+                if !tobacco.is_locked
+                    && let Some(modifiers) = object.strip_suffix(&tobacco.surface)
+                {
+                    *object = format!("{modifiers}菸");
+                }
+                verb_core = "抽".to_owned();
+            }
+            direct_smoking::SenseObject::Breath(breath) if breath.is_locked => {
+                verb_core = "吸".to_owned();
+            }
+            direct_smoking::SenseObject::Breath(_) if object == "呼吸" => {
+                verb_core = "吸氣".to_owned();
+                objs.clear();
+            }
+            direct_smoking::SenseObject::Breath(_) => {}
         }
-        verb_core = "抽".to_owned();
     }
     let departure_origin_note = if let Some(term) = ctx.predicate_term
         && term.includes_native_object

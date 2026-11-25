@@ -204,7 +204,7 @@ pub(super) fn segments(
     None
 }
 
-fn completed_verb(after: &[Atom], governor: usize) -> Option<(&[Atom], &Atom)> {
+pub(super) fn completed_verb(after: &[Atom], governor: usize) -> Option<(&[Atom], &Atom)> {
     let index = after
         .iter()
         .position(|atom| atom.doc_tok_idx == Some(governor))?;
@@ -241,7 +241,7 @@ fn completed_verb(after: &[Atom], governor: usize) -> Option<(&[Atom], &Atom)> {
     Some((arguments, verb))
 }
 
-fn physical_origin(arguments: &[Atom], governor: usize) -> Option<Span> {
+pub(super) fn physical_origin(arguments: &[Atom], governor: usize) -> Option<(&Atom, &Atom)> {
     let mut sources = arguments
         .iter()
         .filter(|atom| atom.head == Some(governor) && atom.deprel == "obj");
@@ -262,10 +262,7 @@ fn physical_origin(arguments: &[Atom], governor: usize) -> Option<Span> {
             && marker.head == Some(place_id)
             && marker.span.start_char == place.span.end_char
     })?;
-    Some(Span {
-        start_char: place.span.start_char,
-        end_char: marker.span.end_char,
-    })
+    Some((place, marker))
 }
 
 fn departure_source(
@@ -337,13 +334,13 @@ fn departure_source(
     let tail = after.first()?.span.start_char.checked_sub(start)?;
     let tail_start = original.partition_point(|atom| atom.span.start_char < tail);
     let (arguments, _) = completed_verb(&original[tail_start..], original_governor)?;
-    let source = physical_origin(arguments, original_governor)?;
-    let end = start + source.end_char;
-    (lock.span.start_char == start + source.start_char
-        && [end, end - 1].contains(&lock.span.end_char))
+    let (origin, marker) = physical_origin(arguments, original_governor)?;
+    let noun_end = start + origin.span.end_char;
+    (lock.span.start_char == start + origin.span.start_char
+        && [noun_end, start + marker.span.end_char].contains(&lock.span.end_char))
     .then_some(Some(ProtectedOrigin {
         lock: lock.span,
-        noun_end: end - 1,
+        noun_end,
     }))
 }
 

@@ -5,8 +5,8 @@ use crate::schema::{GlossaryKind, TranslateUnknownKind};
 
 use super::{
     Atom, Document, Segment, Span, Token, Upos, build_sentence_atoms, classify_bunsetsu,
-    dasu_case_link, household_entry, naide_adverbial, naide_ending, outward_look,
-    physical_goal_head, polarity_contrast, split_ja_atoms, trip_after_meal,
+    dasu_case_link, household_entry, naide_adverbial, naide_ending, omitted_departure,
+    outward_look, physical_goal_head, polarity_contrast, split_ja_atoms, trip_after_meal,
 };
 
 pub(crate) fn kind(lock: &LockedSpan) -> Option<GlossaryKind> {
@@ -164,7 +164,7 @@ impl PredicateTerms {
 
 pub(crate) fn may_restore(text: &str, locks: &SpanLockTable) -> bool {
     !text.contains(['「', '」', '『', '』', '"', '“', '”'])
-        && (text.contains(['て', 'で']) || text.contains("ください"))
+        && (text.contains(['て', 'で']) || text.contains("ください") || text.contains("ずに"))
         && locks
             .locks
             .iter()
@@ -270,6 +270,7 @@ enum Argument {
     Object,
     Outside,
     Destination,
+    Origin,
     Site,
 }
 
@@ -281,7 +282,7 @@ fn keep_arguments(locks: &mut SpanLockTable, arguments: &[(&Atom, &Atom, Argumen
         let original = kind(lock)?;
         let renderer_kind = match (argument, original) {
             (
-                Argument::Destination | Argument::Site,
+                Argument::Destination | Argument::Origin | Argument::Site,
                 GlossaryKind::Place | GlossaryKind::DomainTerm,
             ) => GlossaryKind::Place,
             (Argument::Outside, GlossaryKind::Place) => GlossaryKind::Object,
@@ -561,6 +562,50 @@ fn merge_request_object(
     }
 }
 
+fn departure_term(
+    clauses: &[Segment],
+    frame: omitted_departure::OmittedDeparture,
+    locks: &SpanLockTable,
+) -> Option<(SpanLockTable, PredicateTerms)> {
+    let [
+        Segment::Clause { atoms: before, .. },
+        Segment::Clause { atoms: after, .. },
+    ] = clauses
+    else {
+        return None;
+    };
+    let (arguments, verb) = omitted_departure::completed_verb(after, frame.governor)?;
+    let (origin, marker) = omitted_departure::physical_origin(arguments, frame.governor)?;
+    let finite = through(verb, after.last()?);
+    // A whole predicate can own the origin only when no modifier is left
+    // outside the span that replaces it.
+    let with_origin = (marker.span.end_char == verb.span.start_char
+        && arguments
+            .iter()
+            .all(|atom| atom.head != origin.doc_tok_idx || atom.span == marker.span))
+    .then_some(Span {
+        start_char: origin.span.start_char,
+        end_char: finite.end_char,
+    });
+    let locked = locks.locks.iter().find(|lock| {
+        kind(lock) == Some(GlossaryKind::DomainTerm)
+            && (lock.source_span == finite || with_origin == Some(lock.source_span))
+    })?;
+    let mut render = locks.clone();
+    render.locks.retain(|lock| lock.index != locked.index);
+    let mut retained_arguments = vec![(origin, marker, Argument::Origin)];
+    if let Some(action) = before.iter().find(|a| a.doc_tok_idx == Some(frame.action))
+        && let Some((noun, case)) = object(before, action)
+    {
+        retained_arguments.push((noun, case, Argument::Object));
+    }
+    keep_arguments(&mut render, &retained_arguments)?;
+    let mut terms = PredicateTerms::default();
+    terms.add(verb.span, locked, Coverage::Complete);
+    terms.terms[0].includes_native_object = with_origin == Some(locked.source_span);
+    Some((render, terms))
+}
+
 pub(crate) fn restore(
     sentence: usize,
     doc: &Document,
@@ -569,7 +614,17 @@ pub(crate) fn restore(
     locks: &SpanLockTable,
 ) -> Option<(SpanLockTable, PredicateTerms)> {
     let span = doc.segmentation.sentences.get(sentence)?.span;
-    let mut atoms = build_sentence_atoms(sentence, chars, doc, tokens, &SpanLockTable::new());
+    let empty = SpanLockTable::new();
+    let mut atoms = build_sentence_atoms(sentence, chars, doc, tokens, &empty);
+    if atoms.iter().any(|atom| atom.surface == "ず")
+        && let Some((clauses, frame)) = omitted_departure::segments(&atoms, doc, chars, &empty)
+        && let Some((render, terms)) = departure_term(&clauses, frame, locks)
+    {
+        let masked = build_sentence_atoms(sentence, chars, doc, tokens, &render);
+        if omitted_departure::segments(&masked, doc, chars, &render).is_some() {
+            return Some((render, terms));
+        }
+    }
     normalize_linked_comma(&mut atoms);
     let segments = split_ja_atoms(&atoms, doc, span, Some(chars));
     if let [
@@ -695,6 +750,63 @@ mod tests {
                 .unwrap();
             assert_eq!(&hit.kind, kind);
             assert_eq!(&cut(expected, hit.target_span), alias);
+        }
+    }
+
+    #[test]
+    fn complete_departure_terms_keep_the_omission_and_origin() {
+        let source = "朝ご飯を食べずに家を出た。";
+        for (term, alias, expected) in [
+            ("出た", "離開了", "沒有吃早餐就從家離開了。"),
+            ("出た", "離開", "沒有吃早餐就從家離開了。"),
+            ("家を出た", "離開住處了", "沒有吃早餐就離開住處了。"),
+        ] {
+            replay(source, &[(DomainTerm, term, alias)], expected);
+            replay(
+                source,
+                &[(Object, "朝ご飯を", "早餐"), (DomainTerm, term, alias)],
+                expected,
+            );
+        }
+        replay(
+            "水を飲まずに部屋を出た。",
+            &[(Place, "部屋を", "書房"), (DomainTerm, "出た", "啟程了")],
+            "沒有喝水就從書房啟程了。",
+        );
+        replay(
+            "水を飲まずに兄の家を出た。",
+            &[(DomainTerm, "出た", "離開了")],
+            "沒有喝水就從哥哥的家離開了。",
+        );
+    }
+
+    #[test]
+    fn departure_term_requires_an_affirmative_departure_and_full_origin() {
+        use super::{LockOrigin, Span, SpanLockTable, restore};
+
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let doc_options = doc_options_for_translate(&options, &TranslationGlossary::new());
+        for source in ["朝ご飯を食べずに家を出た？", "水を飲まずに兄の家を出た。"]
+        {
+            let doc = analyze_document(source, &doc_options);
+            let chars: Vec<_> = source.chars().collect();
+            let tokens: Vec<_> = doc.tokens.iter().collect();
+            let surface = "家を出た";
+            let start_char = source.split_once(surface).unwrap().0.chars().count();
+            let lock = SpanLockTable::build(vec![(
+                1,
+                Span {
+                    start_char,
+                    end_char: start_char + surface.chars().count(),
+                },
+                "離開住處了".to_owned(),
+                LockOrigin::Glossary {
+                    canonical: surface.to_owned(),
+                    kind: DomainTerm,
+                },
+                true,
+            )]);
+            assert!(restore(0, &doc, &tokens, &chars, &lock).is_none());
         }
     }
 

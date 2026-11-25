@@ -2141,7 +2141,7 @@ fn nominal_receiving_request_keeps_eligibility_assistance_and_ability_paths() {
     for (source, expected) in [
         (
             "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。",
-            "這份資料給參加者只發放。參加者以外面的人不能得到資料嗎？",
+            "這份資料只發給參加者。參加者以外的人不能領取資料嗎？",
         ),
         (
             "この荷物を持っていただけますか。",
@@ -2297,6 +2297,120 @@ fn nominal_receiving_request_keeps_the_time_after_an_eligibility_question() {
             }
         }
     }
+}
+
+#[test]
+fn receiving_eligibility_preserves_the_restriction_and_the_glossary() {
+    let source = "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。";
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    for kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+        for (term, label, distributed, received, count) in [
+            ("資料", "講義", "這份講義", "講義", 2),
+            ("資料を", "講義", "這份資料", "講義", 1),
+            ("この資料", "本資料", "本資料", "資料", 1),
+            ("この資料を", "本資料", "這份資料", "資料", 0),
+        ] {
+            let glossary = nominal_request_glossary(kind, term, label);
+            let output =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_valid_ja_zh_doc(source, &output);
+            assert_eq!(
+                output.target_text,
+                format!("{distributed}只發給參加者。參加者以外的人不能領取{received}嗎？")
+            );
+            assert_eq!(output.glossary_hits.len(), count);
+            for hit in &output.glossary_hits {
+                assert_eq!(hit.kind, kind);
+                assert_eq!(hit.canonical, term);
+                assert_eq!(slice_chars(source, hit.source_span), term);
+                assert_eq!(slice_chars(&output.target_text, hit.target_span), label);
+            }
+        }
+    }
+    let mut glossary = nominal_request_glossary(GlossaryKind::Object, "この資料", "本資料");
+    glossary.domain_terms =
+        nominal_request_glossary(GlossaryKind::DomainTerm, "資料を", "講義").domain_terms;
+    let output = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+    assert_valid_ja_zh_doc(source, &output);
+    assert_eq!(
+        output.target_text,
+        "本資料只發給參加者。參加者以外的人不能領取講義嗎？"
+    );
+    let [topic, item] = output.glossary_hits.as_slice() else {
+        panic!(
+            "expected the topic and item, got {:?}",
+            output.glossary_hits
+        );
+    };
+    assert_eq!(topic.kind, GlossaryKind::Object);
+    assert_eq!(slice_chars(source, topic.source_span), "この資料");
+    assert_eq!(
+        slice_chars(&output.target_text, topic.target_span),
+        "本資料"
+    );
+    assert_eq!(item.kind, GlossaryKind::DomainTerm);
+    assert_eq!(slice_chars(source, item.source_span), "資料を");
+    assert_eq!(slice_chars(&output.target_text, item.target_span), "講義");
+}
+
+#[test]
+fn receiving_eligibility_respects_supplied_dependencies_and_paragraphs() {
+    let source = "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。";
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let kind = GlossaryKind::Object;
+    let term = "資料を";
+    let label = "講義";
+    let glossary = nominal_request_glossary(kind, term, label);
+    let mut analysis = analyze_document(
+        source,
+        &doc_options_for_translate(&options, &TranslationGlossary::new()),
+    );
+    // The caller can supply tokens with their own syntax despite carrying
+    // glossary lexicon hints. Those hints do not authorize a new analysis.
+    analysis.options.lexicon.push(term.to_owned());
+    let render = |doc: &faberline_nlp::doc::Document| {
+        translate_document(
+            source,
+            doc,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            &glossary,
+            None,
+        )
+        .unwrap()
+    };
+    let valid = render(&analysis);
+    assert_nominal_request_hit(source, &valid, kind, term, label);
+    assert_eq!(
+        valid.target_text,
+        "這份資料只發給參加者。參加者以外的人不能領取講義嗎？"
+    );
+    for (sentence, token) in [(0, "だけ"), (0, "者"), (1, "を"), (1, "資料")] {
+        let mut conflicting = analysis.clone();
+        let arc = conflicting
+            .syntax
+            .iter_mut()
+            .find(|arc| arc.sentence == sentence && slice_chars(source, arc.span) == token)
+            .unwrap();
+        arc.head = None;
+        let output = render(&conflicting);
+        assert_nominal_request_hit(source, &output, kind, term, label);
+        assert!(
+            !output.target_text.contains("領取"),
+            "{token}: {}",
+            output.target_text
+        );
+    }
+    let separated = source.replacen('。', "。\n\n", 1);
+    let output =
+        analyze_and_translate(&separated, &options, &glossary, None, Backend::Onnx).unwrap();
+    assert_nominal_request_hit(&separated, &output, kind, term, label);
+    assert!(
+        output
+            .target_text
+            .ends_with("參加者以外的人不能得到講義嗎？")
+    );
 }
 
 #[test]

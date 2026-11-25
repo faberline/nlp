@@ -1072,7 +1072,7 @@ fn translate_single_sentence(
         let unhinted_fare_roles = |content| {
             ja_zh::fare_roles_for_sentence(unhinted_source()?, sentence_idx, chars, content)
         };
-        let unhinted_nominal_request = || can_repair.then(unhinted_source).flatten();
+        let unhinted_clause_source = || can_repair.then(unhinted_source).flatten();
         let (masked_zh, mut clause_alignments) = ja_zh::translate_ja_sentence(
             sentence_idx,
             chars,
@@ -1081,7 +1081,7 @@ fn translate_single_sentence(
             render_locks,
             predicate_terms,
             can_repair.then_some(&unhinted_fare_roles),
-            &unhinted_nominal_request,
+            &unhinted_clause_source,
             &mut conditioning,
             options.target,
             direct_quote,

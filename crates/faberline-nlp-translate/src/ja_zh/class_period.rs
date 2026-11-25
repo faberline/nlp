@@ -1,8 +1,8 @@
-//! Read a numbered classroom period without treating 目 as a body part.
+//! Read a classroom period as an ordinal or a quantity of lessons.
 
 use super::{Atom, Document, Upos, normalize_decimal_digits};
 use crate::lock::{LockOrigin, SpanLockTable};
-use crate::opaque::parse_cjk_or_ascii_num;
+use crate::opaque::{parse_cjk_or_ascii_num, to_zh_numeral};
 use crate::schema::GlossaryKind;
 
 const CLASS_PERIOD: &str = "__ja_class_period";
@@ -35,7 +35,7 @@ fn is_attached_modifier(
         && (link.token, link.sentence, link.span) == (index, sentence, part.span)
         && (matches!(relation, "compound" | "nummod")
             || (ordinal_prefix && matches!(relation, "amod" | "det")))
-        // Every modifier reaches the final head through later parts of this ordinal.
+        // Every modifier reaches the final head through later parts of this phrase.
         && link.head.is_some_and(|head| {
             parts.iter().any(|other| {
                 other.doc_tok_idx == Some(head) && other.span.start_char >= part.span.end_char
@@ -43,7 +43,39 @@ fn is_attached_modifier(
         })
 }
 
-fn ordinal(
+fn glossary_fragment_or<'a>(
+    parts: &'a [Atom],
+    locks: &SpanLockTable,
+    start: usize,
+    end: usize,
+    fallback: &'a str,
+) -> Option<&'a str> {
+    let mut protected = parts.iter().filter(|atom| atom.is_locked);
+    match (protected.next(), protected.next()) {
+        (None, None) => Some(fallback),
+        (Some(atom), None)
+            if atom.span.start_char == start
+                && atom.span.end_char == end
+                && locks.locks.iter().any(|lock| {
+                    lock.mandatory
+                        && lock.source_span == atom.span
+                        && lock.placeholder == atom.surface
+                        && matches!(
+                            lock.origin,
+                            LockOrigin::Glossary {
+                                kind: GlossaryKind::DomainTerm | GlossaryKind::Object,
+                                ..
+                            }
+                        )
+                }) =>
+        {
+            Some(&atom.surface)
+        }
+        _ => None,
+    }
+}
+
+fn class_phrase(
     atoms: &[Atom],
     doc: &Document,
     chars: &[char],
@@ -54,16 +86,35 @@ fn ordinal(
     let after_prefix = start + usize::from(chars.get(start) == Some(&'第'));
     let number = chars.get(after_prefix..)?;
     let digits = number.iter().take_while(|&&ch| is_digit(ch)).count();
-    if digits == 0 || number.get(digits..digits + 3) != Some(&['時', '限', '目']) {
+    if digits == 0 {
         return None;
     }
-    let end = after_prefix + digits + 3;
+    let suffix = &number[digits..];
+    let ordinal = suffix.starts_with(&['時', '限', '目']);
+    let suffix_len = if ordinal {
+        3
+    } else if after_prefix == start && suffix.starts_with(&['時', '限', '分', 'の', '授', '業'])
+    {
+        6
+    } else {
+        return None;
+    };
+    let end = after_prefix + digits + suffix_len;
     let used = atoms.partition_point(|atom| atom.span.end_char <= end);
     let parts = &atoms[..used];
     let (head, modifiers) = parts.split_last()?;
     let index = head.doc_tok_idx?;
     let original = doc.tokens.get(index)?;
     let link = doc.syntax.get(index)?;
+    let noun_head = if ordinal {
+        head.upos == Some(Upos::Noun)
+    } else {
+        original.upos == Some(Upos::Noun)
+            && matches!(
+                link.deprel.as_str(),
+                "nsubj" | "obj" | "iobj" | "obl" | "root"
+            )
+    };
     if (
         link.token,
         link.sentence,
@@ -78,7 +129,7 @@ fn ordinal(
         head.deprel.as_str(),
     ) || original.span != head.span
         || head.span.end_char != end
-        || head.upos != Some(Upos::Noun)
+        || !noun_head
         || !parts
             .windows(2)
             .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
@@ -88,37 +139,27 @@ fn ordinal(
     {
         return None;
     }
-    let numeral = normalize_decimal_digits(&number[..digits].iter().collect::<String>());
-    if parse_cjk_or_ascii_num(&numeral)? == 0 {
+    let digits = normalize_decimal_digits(&number[..digits].iter().collect::<String>());
+    let number = parse_cjk_or_ascii_num(&digits)?;
+    if number == 0 {
         return None;
     }
-    let mut protected = parts.iter().filter(|atom| atom.is_locked);
-    let unit = match (protected.next(), protected.next()) {
-        (None, None) => "節課",
-        (Some(atom), None)
-            if atom.span.start_char == end - 3
-                && atom.span.end_char == end - 1
-                && locks.locks.iter().any(|lock| {
-                    lock.mandatory
-                        && lock.source_span == atom.span
-                        && lock.placeholder == atom.surface
-                        && matches!(
-                            lock.origin,
-                            LockOrigin::Glossary {
-                                kind: GlossaryKind::DomainTerm | GlossaryKind::Object,
-                                ..
-                            }
-                        )
-                }) =>
-        {
-            &atom.surface
-        }
-        _ => return None,
-    };
     let mut period = head.clone();
     period.span.start_char = start;
-    period.surface = format!("第{numeral}{unit}");
-    period.lemma = Some(CLASS_PERIOD.to_owned());
+    if ordinal {
+        let unit = glossary_fragment_or(parts, locks, end - 3, end - 1, "節課")?;
+        period.surface = format!("第{digits}{unit}");
+        period.lemma = Some(CLASS_PERIOD.to_owned());
+    } else {
+        let lesson = glossary_fragment_or(parts, locks, end - 2, end, "課")?;
+        let count = if number == 2 {
+            "兩".to_owned()
+        } else {
+            to_zh_numeral(number)
+        };
+        period.surface = format!("{count}節{lesson}");
+        period.upos = Some(Upos::Noun);
+    }
     period.is_locked = true;
     Some((period, used))
 }
@@ -140,7 +181,7 @@ pub(super) fn normalize(
         });
         if !atoms[index].is_locked
             && !inside_number
-            && let Some((period, used)) = ordinal(&atoms[index..], doc, chars, locks)
+            && let Some((period, used)) = class_phrase(&atoms[index..], doc, chars, locks)
         {
             atoms.splice(index..index + used, [period]);
         }
@@ -154,6 +195,81 @@ mod tests {
         Backend, GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary,
         analyze_and_translate,
     };
+
+    #[test]
+    fn class_quantities_keep_the_time_and_existential_clause() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("今日は二時限分の授業があります。", "今天有兩節課。"),
+            ("明日は1時限分の授業があります。", "明天有一節課。"),
+            ("来週は３時限分の授業があります。", "下週有三節課。"),
+        ] {
+            let translation =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(translation.target_text, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn lesson_duration_and_opaque_text_are_not_class_quantities() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        let duration = analyze_and_translate(
+            "今日は二時間の授業があります。",
+            &options,
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert!(!duration.target_text.contains("節課"));
+
+        let literal = analyze_and_translate(
+            "今日は`二時限分の授業`があります。",
+            &options,
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(literal.target_text, "今天有`二時限分の授業`。");
+    }
+
+    #[test]
+    fn class_quantity_preserves_the_caller_lesson_name() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary {
+            domain_terms: vec![GlossaryEntry {
+                canonical: "授業".to_owned(),
+                surfaces: vec!["授業".to_owned()],
+                targets: [(TargetVariant::ZhHant, "課程".to_owned())].into(),
+                ..GlossaryEntry::default()
+            }],
+            ..TranslationGlossary::new()
+        };
+        let translation = analyze_and_translate(
+            "今日は二時限分の授業があります。",
+            &options,
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(translation.target_text, "今天有兩節課程。");
+        let [hit] = translation.glossary_hits.as_slice() else {
+            panic!("expected one glossary hit");
+        };
+        assert_eq!(hit.canonical, "授業");
+        assert_eq!(
+            (hit.source_span.start_char, hit.source_span.end_char),
+            (8, 10)
+        );
+        assert_eq!(
+            (hit.target_span.start_char, hit.target_span.end_char),
+            (5, 7)
+        );
+    }
 
     #[test]
     fn a_class_period_keeps_its_subject_link() {

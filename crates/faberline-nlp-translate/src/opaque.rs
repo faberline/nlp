@@ -476,7 +476,7 @@ pub(super) fn parse_cjk_or_ascii_num(s: &str) -> Option<u32> {
     }
 }
 
-fn to_zh_numeral(n: u32) -> String {
+pub(super) fn to_zh_numeral(n: u32) -> String {
     const DIGITS: [char; 10] = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
     if n == 0 {
         return "零".to_owned();

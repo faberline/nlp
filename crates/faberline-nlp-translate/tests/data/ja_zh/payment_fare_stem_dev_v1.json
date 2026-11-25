@@ -832,8 +832,7 @@
       ],
       "semantic_unknowns": [
         "The negative past question can seek confirmation or carry rhetorical force without more context. The reference records a literal negative question.",
-        "The payer and recipient are not stated. The source does not specify whether the card is a credit card. The caller glossary target 用信用卡 supplies that detail, so it is not inferred from Japanese.",
-        "The source does not specify whether the card is a credit card. The caller glossary target 用信用卡 supplies that detail, so it is not inferred from Japanese."
+        "The payer and recipient are not stated. The source does not specify whether the card is a credit card. The caller glossary target 用信用卡 supplies that detail, so it is not inferred from Japanese."
       ],
       "control": {
         "kind": "negative_past_payment_question",

@@ -1,4 +1,4 @@
-//! Select the smoking sense of 吸う when its original object is tobacco.
+//! Select the tobacco or breath sense of 吸う from its original object.
 
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Options, SyntaxToken, Token, analyze_document};
@@ -21,16 +21,24 @@ fn source_identity<'a>(atom: &Atom, doc: &'a Document) -> Option<(&'a SyntaxToke
         .then_some((link, token))
 }
 
-fn smoking_verb<'a>(
+fn is_suu(token: &Token, chars: &[char]) -> bool {
+    match token.lemma.as_deref() {
+        Some(lemma) => lemma == "吸う",
+        None => chars.get(token.span.start_char..token.span.end_char) == Some(&['吸', 'う']),
+    }
+}
+
+fn suu_verb<'a>(
     atoms: impl Iterator<Item = &'a Atom>,
     doc: &'a Document,
+    chars: &[char],
 ) -> Option<&'a SyntaxToken> {
     let mut verbs = atoms
         .filter(|atom| !atom.is_locked && atom.upos == Some(Upos::Verb))
         .filter_map(|atom| {
             let (link, token) = source_identity(atom, doc)?;
             (token.upos == Some(Upos::Verb)
-                && token.lemma.as_deref() == Some("吸う")
+                && is_suu(token, chars)
                 && matches!(link.deprel.as_str(), "root" | "advcl" | "conj"))
             .then_some(link)
         });
@@ -40,6 +48,26 @@ fn smoking_verb<'a>(
 
 fn is_tobacco(word: &[char]) -> bool {
     matches!(word, ['た', 'ば', 'こ'] | ['タ', 'バ', 'コ'] | ['煙', '草'])
+}
+
+fn conflicts_with_object(
+    doc: &Document,
+    verb: &SyntaxToken,
+    noun_span: Span,
+    case_span: Span,
+) -> bool {
+    let link_at = |span| {
+        doc.syntax
+            .iter()
+            .find(|arc| arc.sentence == verb.sentence && arc.span == span)
+    };
+    // A merged glossary token can lack separate noun and case arcs. When
+    // those arcs do exist, reanalysis must respect the supplied attachments.
+    let noun = link_at(noun_span);
+    noun.is_some_and(|arc| (arc.deprel.as_str(), arc.head) != ("obj", Some(verb.token)))
+        || link_at(case_span).is_some_and(|arc| {
+            arc.deprel != "case" || !noun.is_some_and(|noun| arc.head == Some(noun.token))
+        })
 }
 
 pub(super) fn restore_locked_object<'a>(
@@ -83,7 +111,21 @@ pub(super) fn restore_locked_object<'a>(
     if objects.next().is_some() {
         return None;
     }
-    let verb = smoking_verb(source.iter(), doc)?;
+    let verb = suu_verb(source.iter(), doc, chars)?;
+    if conflicts_with_object(
+        doc,
+        verb,
+        Span {
+            start_char: lock.span.start_char,
+            end_char: noun_end,
+        },
+        Span {
+            start_char: noun_end,
+            end_char: case_end,
+        },
+    ) {
+        return None;
+    }
     let start = source.first()?.span.start_char;
     let original = chars.get(start..source.last()?.span.end_char)?;
     let analysis = analyze_document(
@@ -118,7 +160,7 @@ pub(super) fn restore_locked_object<'a>(
         || object.deprel != "obj"
         || analysis.tokens[object.token].upos != Some(Upos::Noun)
         || absolute(governor.span) != verb.span
-        || analysis.tokens[governor.token].lemma.as_deref() != Some("吸う")
+        || !is_suu(&analysis.tokens[governor.token], original)
         || analysis.syntax.iter().any(|link| {
             link.head == Some(governor.token) && link.deprel == "obj" && link.token != object.token
         })
@@ -148,13 +190,18 @@ pub(super) fn restore_locked_object<'a>(
     Some(lock)
 }
 
-pub(super) fn tobacco_object<'a>(
+pub(super) enum SenseObject<'a> {
+    Tobacco(&'a Atom),
+    Breath(&'a Atom),
+}
+
+pub(super) fn sense_object<'a>(
     source: &'a [Atom],
     predicates: &[Bunsetsu],
     doc: &Document,
     chars: &[char],
-) -> Option<&'a Atom> {
-    let verb = smoking_verb(predicates.iter().flat_map(|group| &group.atoms), doc)?;
+) -> Option<SenseObject<'a>> {
+    let verb = suu_verb(predicates.iter().flat_map(|group| &group.atoms), doc, chars)?;
     let mut objects = doc
         .syntax
         .iter()
@@ -181,16 +228,23 @@ pub(super) fn tobacco_object<'a>(
         } else {
             noun.upos == token.upos
         };
-        (trusted_noun
-            && token.upos == Some(Upos::Noun)
-            && noun_link.sentence == verb.sentence
-            && case_link.sentence == verb.sentence
-            && case_token.upos == Some(Upos::Adp)
-            && chars
-                .get(noun.span.start_char..noun.span.end_char)
-                .is_some_and(is_tobacco)
-            && chars.get(marker.span.start_char..marker.span.end_char) == Some(&['を']))
-        .then_some(noun)
+        if !trusted_noun
+            || token.upos != Some(Upos::Noun)
+            || noun_link.sentence != verb.sentence
+            || case_link.sentence != verb.sentence
+            || case_token.upos != Some(Upos::Adp)
+            || chars.get(marker.span.start_char..marker.span.end_char) != Some(&['を'])
+        {
+            return None;
+        }
+        let word = chars.get(noun.span.start_char..noun.span.end_char)?;
+        if is_tobacco(word) {
+            Some(SenseObject::Tobacco(noun))
+        } else if word == ['息'] {
+            Some(SenseObject::Breath(noun))
+        } else {
+            None
+        }
     })
 }
 
@@ -203,6 +257,147 @@ mod term_glossary_tests {
         GlossaryEntry, GlossaryKind, TargetVariant, TranslateOptions, TranslationGlossary,
         analyze_and_translate, doc_options_for_translate, translate_document,
     };
+
+    #[test]
+    fn direct_objects_select_smoking_or_breathing_with_the_original_tense() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            ("たばこを吸う。", "抽菸。"),
+            ("タバコを吸った。", "抽了菸。"),
+            ("煙草を吸わない。", "不抽菸。"),
+            ("たばこを吸わないでください。", "請不要抽菸。"),
+            ("息を吸う。", "吸氣。"),
+            ("息を吸った。", "吸氣了。"),
+        ] {
+            let output =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(output.target_text, expected, "{source}");
+        }
+    }
+
+    #[test]
+    fn breathing_needs_the_supplied_objects_own_attachment() {
+        let source = "息を吸う。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        let mut doc = analyze_document(source, &doc_options_for_translate(&options, &glossary));
+        let noun = doc
+            .syntax
+            .iter_mut()
+            .find(|arc| arc.span.start_char == 0 && arc.deprel == "obj")
+            .unwrap();
+        noun.deprel = "nsubj".to_owned();
+        let output = translate_document(
+            source,
+            &doc,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            &glossary,
+            None,
+        )
+        .unwrap();
+        assert!(!output.target_text.contains("吸氣"));
+    }
+
+    #[test]
+    fn bare_locked_tobacco_obeys_explicit_supplied_arcs() {
+        let source = "たばこを吸う。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let original = analyze_document(
+            source,
+            &doc_options_for_translate(&options, &TranslationGlossary::new()),
+        );
+        for (surface, end) in [("たばこ", 3), ("たばこを", 4)] {
+            let glossary = TranslationGlossary {
+                domain_terms: vec![GlossaryEntry {
+                    canonical: surface.into(),
+                    surfaces: vec![surface.into()],
+                    targets: [(TargetVariant::ZhHant, "雪茄".into())].into(),
+                    ..GlossaryEntry::default()
+                }],
+                ..TranslationGlossary::new()
+            };
+            let translate = |document: &faberline_nlp::doc::Document| {
+                translate_document(
+                    source,
+                    document,
+                    #[cfg(feature = "narrative")]
+                    None,
+                    &options,
+                    &glossary,
+                    None,
+                )
+                .unwrap()
+            };
+            assert_eq!(translate(&original).target_text, "抽雪茄。");
+
+            for (start, role) in [(0, "nsubj"), (3, "dep")] {
+                let mut reassigned = original.clone();
+                let arc = reassigned
+                    .syntax
+                    .iter_mut()
+                    .find(|arc| arc.span.start_char == start)
+                    .unwrap();
+                arc.deprel = role.into();
+                let fallback = translate(&reassigned);
+                assert!(!fallback.target_text.contains('抽'), "{surface}, {role}");
+                let [hit] = fallback.glossary_hits.as_slice() else {
+                    panic!("expected the original caller term");
+                };
+                assert_eq!(
+                    hit.source_span,
+                    Span {
+                        start_char: 0,
+                        end_char: end
+                    }
+                );
+                let hit_text: String = fallback
+                    .target_text
+                    .chars()
+                    .skip(hit.target_span.start_char)
+                    .take(hit.target_span.end_char - hit.target_span.start_char)
+                    .collect();
+                assert_eq!(hit_text, "雪茄");
+            }
+        }
+    }
+
+    #[test]
+    fn a_bare_smoking_verb_can_keep_the_glossary_term_covering_wo() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary {
+            domain_terms: vec![GlossaryEntry {
+                canonical: "たばこを".to_owned(),
+                surfaces: vec!["たばこを".to_owned()],
+                targets: [(TargetVariant::ZhHant, "雪茄".to_owned())].into(),
+                ..GlossaryEntry::default()
+            }],
+            ..TranslationGlossary::new()
+        };
+        let output =
+            analyze_and_translate("たばこを吸う。", &options, &glossary, None, Backend::Onnx)
+                .unwrap();
+        assert_eq!(output.target_text, "抽雪茄。");
+        let [hit] = output.glossary_hits.as_slice() else {
+            panic!("expected the caller's tobacco term");
+        };
+        assert_eq!(
+            hit.source_span,
+            Span {
+                start_char: 0,
+                end_char: 4
+            }
+        );
+        assert_eq!(
+            hit.target_span,
+            Span {
+                start_char: 1,
+                end_char: 3
+            }
+        );
+    }
 
     #[test]
     fn tobacco_domain_term_keeps_its_declared_category_and_object_role() {

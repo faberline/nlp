@@ -7499,6 +7499,13 @@ fn translate_clause_atoms(
     if let Some(departure) = ctx.completed_departure {
         departure.restore_source(&mut grouped, atoms);
     }
+    if target == TargetVariant::ZhHant
+        && !ctx.inside_quote
+        && let Some(locks) = ctx.source_locks
+        && locks.locks.iter().any(is_object_or_domain_lock)
+    {
+        grouped = fold_locked_document_demonstratives(grouped, doc, ctx.source_chars, locks);
+    }
     let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
@@ -17427,15 +17434,19 @@ fn attached_demonstrative(det: &Atom, noun: &Atom) -> Option<char> {
 }
 
 fn attached_demonstrative_at(det: &Atom, noun: &Atom, nominal_start: usize) -> Option<char> {
+    if noun.is_locked || noun.upos != Some(Upos::Noun) {
+        return None;
+    }
+    source_demonstrative(det, noun.doc_tok_idx?, nominal_start)
+}
+
+fn source_demonstrative(det: &Atom, noun_index: usize, nominal_start: usize) -> Option<char> {
     if det.is_locked
-        || noun.is_locked
         || det.upos != Some(Upos::Det)
-        || noun.upos != Some(Upos::Noun)
         || det.span.end_char != nominal_start
         || det.deprel != "det"
         || det.doc_tok_idx.is_none()
-        || noun.doc_tok_idx.is_none()
-        || det.head != noun.doc_tok_idx
+        || det.head != Some(noun_index)
     {
         return None;
     }
@@ -17444,6 +17455,70 @@ fn attached_demonstrative_at(det: &Atom, noun: &Atom, nominal_start: usize) -> O
         "その" | "あの" => Some('那'),
         _ => None,
     }
+}
+
+fn is_object_or_domain_lock(lock: &LockedSpan) -> bool {
+    matches!(
+        predicate_glossary::kind(lock),
+        Some(GlossaryKind::Object | GlossaryKind::DomainTerm)
+    )
+}
+
+fn locked_document_demonstrative(
+    det: &Atom,
+    noun: &Atom,
+    doc: &Document,
+    source: &[char],
+    locks: &SpanLockTable,
+) -> Option<String> {
+    let noun_index = noun.doc_tok_idx?;
+    let pointer = source_demonstrative(det, noun_index, noun.span.start_char)?;
+    let token = doc.tokens.get(noun_index)?;
+    if !noun.is_locked
+        || token.span != noun.span
+        || token.upos != Some(Upos::Noun)
+        || doc.tokens.get(noun_index + 1).is_some_and(|next| {
+            next.sentence == token.sentence
+                && next.span.start_char == token.span.end_char
+                && matches!(next.upos, Some(Upos::Noun | Upos::Propn))
+        })
+        || !locks.locks.iter().any(|lock| {
+            lock.source_span == noun.span
+                && lock.placeholder == noun.surface
+                && is_object_or_domain_lock(lock)
+        })
+    {
+        return None;
+    }
+    // The glossary supplies the noun text. The original noun supplies its unit.
+    let original: String = source
+        .get(noun.span.start_char..noun.span.end_char)?
+        .iter()
+        .collect();
+    let word = translate_single_ja_term(&original, token.lemma.as_deref(), token.upos);
+    let classifier = demonstrative_classifier(&word, noun);
+    (classifier == "份").then(|| format!("{pointer}{classifier}"))
+}
+
+fn fold_locked_document_demonstratives(
+    groups: Vec<Bunsetsu>,
+    doc: &Document,
+    source: &[char],
+    locks: &SpanLockTable,
+) -> Vec<Bunsetsu> {
+    let mut merged: Vec<Bunsetsu> = Vec::with_capacity(groups.len());
+    for mut group in groups {
+        if let Some(previous) = merged.last()
+            && let [det] = previous.atoms.as_slice()
+            && let Some(noun) = group.atoms.first()
+            && let Some(prefix) = locked_document_demonstrative(det, noun, doc, source, locks)
+        {
+            merged.pop();
+            prepend_locked_atom(&mut group, prefix);
+        }
+        merged.push(group);
+    }
+    merged
 }
 
 /// A demonstrative already has an attached noun here. Use complete person nouns,
@@ -28866,6 +28941,88 @@ mod existence_rule_tests {
         assert_eq!(slice(source, hit.source_span), "その本");
         assert_eq!(slice(&doc.target_text, hit.target_span), "藏書甲");
         assert_eq!(doc.target_text.matches("藏書甲").count(), 1);
+    }
+
+    #[test]
+    fn document_classifier_preserves_glossary_spans_and_supplied_attachment() {
+        use crate::{doc_options_for_translate, translate_document};
+        use faberline_nlp::doc::analyze_document;
+
+        let source = "この資料は参加者だけに配ります。参加者以外の人は資料をいただけませんか。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let analysis = analyze_document(
+            source,
+            &doc_options_for_translate(&options, &TranslationGlossary::new()),
+        );
+        let mut detached = analysis.clone();
+        let det = detached
+            .syntax
+            .iter_mut()
+            .find(|arc| arc.span.start_char == 0 && arc.deprel == "det")
+            .unwrap();
+        det.head = None;
+        let slice = |text: &str, span: Span| {
+            text.chars()
+                .skip(span.start_char)
+                .take(span.end_char - span.start_char)
+                .collect::<String>()
+        };
+        for kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+            for (surface, prefix, count) in [
+                ("資料", "這份講義", 2),
+                ("この資料", "講義", 1),
+                ("資料を", "這份資料", 1),
+            ] {
+                let entry = GlossaryEntry {
+                    canonical: surface.to_owned(),
+                    surfaces: vec![surface.to_owned()],
+                    targets: BTreeMap::from([(TargetVariant::ZhHant, "講義".to_owned())]),
+                    ..GlossaryEntry::default()
+                };
+                let mut glossary = TranslationGlossary::new();
+                match kind {
+                    GlossaryKind::Object => glossary.objects.push(entry),
+                    GlossaryKind::DomainTerm => glossary.domain_terms.push(entry),
+                    _ => unreachable!(),
+                }
+                let verify = |output: &crate::TranslatedDocument| {
+                    assert_eq!(output.glossary_hits.len(), count);
+                    for hit in &output.glossary_hits {
+                        assert_eq!(hit.kind, kind);
+                        assert_eq!(hit.canonical, surface);
+                        assert_eq!(slice(source, hit.source_span), surface);
+                        assert_eq!(slice(&output.target_text, hit.target_span), "講義");
+                    }
+                };
+                let output = translate(source, &glossary);
+                assert!(
+                    output.target_text.starts_with(prefix),
+                    "{}",
+                    output.target_text
+                );
+                verify(&output);
+                if surface == "資料" {
+                    let render = |doc: &Document| {
+                        translate_document(
+                            source,
+                            doc,
+                            #[cfg(feature = "narrative")]
+                            None,
+                            &options,
+                            &glossary,
+                            None,
+                        )
+                        .unwrap()
+                    };
+                    let supplied = render(&analysis);
+                    assert_eq!(supplied.target_text, output.target_text);
+                    verify(&supplied);
+                    let uncovered = render(&detached);
+                    assert!(!uncovered.target_text.starts_with("這份講義"));
+                    verify(&uncovered);
+                }
+            }
+        }
     }
 
     #[test]

@@ -621,11 +621,7 @@ fn describe_noun(
     let classifier = if demonstrative.is_empty() {
         ""
     } else {
-        noun_classifier(
-            &word,
-            head,
-            (!head.is_locked).then_some(TargetVariant::ZhHant),
-        )
+        noun_classifier(&word, head, None)
     };
     let text = if head.is_locked {
         head.surface.as_str()
@@ -802,7 +798,7 @@ fn render_ellipsis(
             source.is_locked = false;
             source.upos = doc.tokens.get(noun.doc_tok_idx?)?.upos;
             let word = super::translate_single_ja_term(&source.surface, None, source.upos);
-            let classifier = noun_classifier(&word, &source, (!noun.is_locked).then_some(target));
+            let classifier = noun_classifier(&word, &source, None);
             format!(
                 "{}{classifier}{}",
                 if det.surface == "この" {

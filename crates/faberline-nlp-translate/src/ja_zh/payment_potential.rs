@@ -133,7 +133,7 @@ pub(super) fn quoted_clause(
             }
             _ => (clause, ""),
         };
-        return render(body, target, true).map(|mut text| {
+        return render(body, target, true, None).map(|mut text| {
             text.push_str(suffix);
             text
         });
@@ -643,12 +643,82 @@ struct Arguments<'a> {
     object: Option<(Sense, String)>,
 }
 
+fn payment_instrument(head: &Atom, modifier: Option<&Atom>) -> bool {
+    is_payment_medium(head, modifier) || matches!(head.surface.as_str(), "スマホ" | "携帯")
+}
+
+// A glossary replacement still denotes a payment instrument when the
+// complete source noun and its case attach to this same payment verb.
+fn locked_payment_instrument(
+    source: &[Atom],
+    governor: usize,
+    doc: &Document,
+    chars: &[char],
+    locks: &SpanLockTable,
+) -> Option<Span> {
+    let mut locked = source.iter().enumerate().filter(|(_, atom)| atom.is_locked);
+    let (index, noun) = locked.next()?;
+    let case = source.get(index + 1)?;
+    if locked.next().is_some()
+        || noun.deprel != "obl"
+        || noun.head != Some(governor)
+        || case.surface != "で"
+        || !dasu_case_link(noun, case)
+        || !locks.locks.iter().any(|lock| {
+            lock.mandatory
+                && lock.source_span == noun.span
+                && lock.placeholder == noun.surface
+                && matches!(
+                    lock.origin,
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Object | GlossaryKind::DomainTerm,
+                        ..
+                    }
+                )
+        })
+    {
+        return None;
+    }
+
+    let noun_index = noun.doc_tok_idx?;
+    let case_index = case.doc_tok_idx?;
+    let token = doc.tokens.get(noun_index)?;
+    let sentence = doc.tokens.get(governor)?.sentence;
+    if token.span != noun.span
+        || token.sentence != sentence
+        || !matches!(token.upos, Some(Upos::Noun | Upos::Propn))
+        || ![(noun_index, noun), (case_index, case)]
+            .iter()
+            .all(|&(i, atom)| {
+                doc.syntax.get(i).is_some_and(|arc| {
+                    (
+                        arc.token,
+                        arc.sentence,
+                        arc.span,
+                        arc.head,
+                        arc.deprel.as_str(),
+                    ) == (i, sentence, atom.span, atom.head, atom.deprel.as_str())
+                })
+            })
+    {
+        return None;
+    }
+    let mut original = noun.clone();
+    original.surface = chars
+        .get(noun.span.start_char..noun.span.end_char)?
+        .iter()
+        .collect();
+    original.lemma.clone_from(&token.lemma);
+    payment_instrument(&original, None).then_some(noun.span)
+}
+
 impl<'a> Arguments<'a> {
     fn read(
         mut words: &'a [Atom],
         governor: usize,
         target: TargetVariant,
         explicit_payment: bool,
+        locked_instrument: Option<Span>,
     ) -> Option<Self> {
         let mut args = Self::default();
         let dust_object = words
@@ -723,8 +793,8 @@ impl<'a> Arguments<'a> {
                 ("で", "obl" | "nsubj") if head.deprel == "obl" || focused => {
                     let brush =
                         dust_object.is_some() && matches!(head.surface.as_str(), "ブラシ" | "刷毛");
-                    let instrument = is_payment_medium(head, phrase.iter().rev().nth(1))
-                        || matches!(head.surface.as_str(), "スマホ" | "携帯")
+                    let instrument = locked_instrument == Some(head.span)
+                        || payment_instrument(head, phrase.iter().rev().nth(1))
                         || brush;
                     if instrument {
                         if args.instrument.is_some() {
@@ -759,13 +829,27 @@ impl<'a> Arguments<'a> {
     }
 }
 
-pub(super) fn render(source: &[Atom], target: TargetVariant, reported: bool) -> Option<String> {
+pub(super) fn render(
+    source: &[Atom],
+    target: TargetVariant,
+    reported: bool,
+    source_context: Option<(&Document, &[char], &SpanLockTable)>,
+) -> Option<String> {
     let verb_index = source.iter().position(potential)?;
     let verb = &source[verb_index];
     let governor = verb.doc_tok_idx?;
-    if source.iter().any(|a| a.is_locked) {
-        return None;
-    }
+    let explicit_payment = verb.lemma.as_deref().unwrap_or(&verb.surface) == "支払える";
+    let locked_instrument = if source.iter().any(|a| a.is_locked) {
+        let (doc, chars, locks) = source_context?;
+        if !explicit_payment {
+            return None;
+        }
+        Some(locked_payment_instrument(
+            source, governor, doc, chars, locks,
+        )?)
+    } else {
+        None
+    };
     let tail = &source[verb_index + 1..];
     let (tail, question) = match tail.split_last() {
         Some((q, t)) if q.surface == "か" && q.head == Some(governor) => (t, true),
@@ -786,8 +870,13 @@ pub(super) fn render(source: &[Atom], target: TargetVariant, reported: bool) -> 
         "なかった" | "ませんでした" => "沒能",
         _ => return None,
     };
-    let explicit_payment = verb.lemma.as_deref().unwrap_or(&verb.surface) == "支払える";
-    let args = Arguments::read(&source[..verb_index], governor, target, explicit_payment)?;
+    let args = Arguments::read(
+        &source[..verb_index],
+        governor,
+        target,
+        explicit_payment,
+        locked_instrument,
+    )?;
     let (sense, obj) = match args.object {
         Some(pair) => pair,
         None if explicit_payment
@@ -1280,6 +1369,64 @@ mod tests {
         )
         .unwrap()
         .target_text
+    }
+
+    #[test]
+    fn locked_instrument_keeps_payment_question_polarity_and_spans() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let mut glossary = TranslationGlossary::new();
+        glossary.objects.push(glossary_entry("スマホ", "手機"));
+        for (source, question) in [
+            (
+                "この店の支払い方法を調べています。お客さんはスマホで支払えますか。",
+                "客人能用手機付款嗎？",
+            ),
+            (
+                "この店の支払い方法を調べています。お客さんはスマホで支払えませんか。",
+                "客人不能用手機付款嗎？",
+            ),
+        ] {
+            let output =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(
+                output.target_text,
+                format!("正在調查這家商店的付款方式。{question}")
+            );
+            let [hit] = output.glossary_hits.as_slice() else {
+                panic!("expected one instrument glossary hit");
+            };
+            let slice = |text: &str, span: Span| -> String {
+                text.chars()
+                    .skip(span.start_char)
+                    .take(span.end_char - span.start_char)
+                    .collect()
+            };
+            assert_eq!(slice(source, hit.source_span), "スマホ");
+            assert_eq!(slice(&output.target_text, hit.target_span), "手機");
+
+            let mut supplied = analyze_document(
+                source,
+                &crate::doc_options_for_translate(&options, &glossary),
+            );
+            let relation = supplied
+                .syntax
+                .iter_mut()
+                .find(|arc| arc.span == hit.source_span)
+                .unwrap();
+            relation.deprel = "obj".to_owned();
+            let fallback = crate::translate_document(
+                source,
+                &supplied,
+                #[cfg(feature = "narrative")]
+                None,
+                &options,
+                &glossary,
+                None,
+            )
+            .unwrap();
+            assert!(!fallback.target_text.ends_with(question));
+            assert_eq!(fallback.glossary_hits.len(), 1);
+        }
     }
 
     #[test]

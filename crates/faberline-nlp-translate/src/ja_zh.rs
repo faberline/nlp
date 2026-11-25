@@ -7105,7 +7105,14 @@ fn translate_clause_atoms(
     }
 
     if target == TargetVariant::ZhHant
-        && let Some(text) = payment_potential::render(core_non_punct(atoms), target, false)
+        && let Some(text) = payment_potential::render(
+            core_non_punct(atoms),
+            target,
+            false,
+            ctx.source_locks
+                .filter(|_| !ctx.inside_quote)
+                .map(|locks| (doc, ctx.source_chars, locks)),
+        )
     {
         return (text, false);
     }

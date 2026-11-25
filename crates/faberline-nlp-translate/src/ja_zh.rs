@@ -7361,6 +7361,9 @@ fn translate_clause_atoms(
     }
     mark_residence_place(&mut grouped, body);
     mark_joint_question(&mut grouped, &norm_atoms, body);
+    if target == TargetVariant::ZhHant {
+        mark_polite_joint_agent(&mut grouped, &norm_atoms);
+    }
     if target == TargetVariant::ZhHant
         && localize_elapsed_modal(&mut grouped, body, doc, ctx.inside_quote)
         && let Some(applied) = &ctx.elapsed_modal_applied
@@ -16262,6 +16265,48 @@ fn render_joint_people(number: &str) -> String {
     format!("{number}人")
 }
 
+fn mark_polite_joint_agent(groups: &mut [Bunsetsu], source: &[Atom]) {
+    let (source, question) = match source {
+        [prefix @ .., ka] if ka.surface == "か" => (prefix, Some(ka)),
+        _ => (source, None),
+    };
+    let [.., verb, polite] = source else { return };
+    let Some(head) = verb.doc_tok_idx else { return };
+    if verb.is_locked
+        || verb.upos != Some(Upos::Verb)
+        || verb.deprel != "root"
+        || polite.is_locked
+        || polite.surface != "ます"
+        || polite.upos != Some(Upos::Aux)
+        || polite.deprel != "aux"
+        || polite.head != Some(head)
+        || verb.span.end_char != polite.span.start_char
+        || question.is_some_and(|ka| {
+            ka.is_locked
+                || ka.deprel != "discourse"
+                || ka.head != Some(head)
+                || polite.span.end_char != ka.span.start_char
+        })
+    {
+        return;
+    }
+    for group in groups {
+        if group.role == BunsetsuRole::Obl
+            && let [everyone, de] = group.atoms.as_slice()
+            && matches!(everyone.surface.as_str(), "みんな" | "皆")
+            && de.surface == "で"
+            && everyone.head == Some(head)
+            && linked_joint_case(everyone, de)
+        {
+            group.role = BunsetsuRole::JointManner {
+                manner: JointManner::Everyone,
+                invitation: false,
+                wh_question: false,
+            };
+        }
+    }
+}
+
 // An overt joint participant or a joint manner can invite the listener.
 // With an overt third party, the same finite form asks a negative question.
 fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[Atom]) {
@@ -24185,6 +24230,19 @@ mod motion_endpoint_tests {
         assert_eq!(translate("駅まで行きませんか。"), "不去車站嗎？");
         assert_eq!(translate("公園まで行きませんか。"), "不去公園嗎？");
         assert_eq!(translate("公園まで走りませんか。"), "不跑到公園嗎？");
+    }
+
+    #[test]
+    fn polite_joint_agent_preserves_statement_and_question() {
+        for (source, expected) in [
+            ("みんなで歌います。", "大家一起哼唱。"),
+            ("みんなで歌いますか。", "大家一起哼唱嗎？"),
+            ("みんなで歌いましょう。", "大家一起哼唱吧。"),
+            ("みんなで歌いましょうか。", "大家一起哼唱，好嗎？"),
+            ("図書館で新聞を読みます。", "在圖書館讀報紙。"),
+        ] {
+            assert_eq!(translate(source), expected, "{source}");
+        }
     }
 
     #[test]

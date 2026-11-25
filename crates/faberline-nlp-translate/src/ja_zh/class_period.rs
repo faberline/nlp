@@ -43,7 +43,7 @@ fn is_attached_modifier(
         })
 }
 
-fn glossary_fragment_or<'a>(
+pub(super) fn glossary_fragment_or<'a>(
     parts: &'a [Atom],
     locks: &SpanLockTable,
     start: usize,

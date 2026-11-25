@@ -15,6 +15,7 @@ mod carrying;
 mod common_noun_sense;
 mod copular_time;
 mod counted_object;
+mod course_duration;
 mod daytime;
 mod direct_smoking;
 mod fare_boundaries;
@@ -274,6 +275,7 @@ pub(crate) fn translate_ja_sentence(
             return definition;
         }
         class_period::normalize(&mut atoms, doc, chars, lock_table);
+        course_duration::normalize(&mut atoms, doc, chars, lock_table);
         outward_look::restore_case(&mut atoms, chars, sent_span, doc, lock_table);
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);

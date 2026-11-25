@@ -965,6 +965,8 @@ fn translate_single_sentence(
             can_repair && ja_zh::naide_locks::may_restore(&raw_sent, &lock_table);
         let restore_verbs =
             can_repair && ja_zh::predicate_glossary::may_restore(&raw_sent, &lock_table);
+        let restore_companions = can_repair
+            && ja_zh::finished_go::may_restore_companion_locks(&raw_sent, chars, &lock_table);
         // Only built-in CPU entry points can identify hints added by the glossary.
         // Keep external analysis as supplied and preserve sentence boundaries.
         let unhinted_source = || {
@@ -978,7 +980,8 @@ fn translate_single_sentence(
                 })
                 .as_ref()
         };
-        let repaired = if restore_topics || restore_omission || restore_verbs {
+        let repaired = if restore_topics || restore_omission || restore_verbs || restore_companions
+        {
             let repair = |source: &Document, tokens: &[&Token]| {
                 if restore_omission
                     && let Some((locks, omission)) = ja_zh::naide_locks::restore(
@@ -1001,6 +1004,17 @@ fn translate_single_sentence(
                     )
                 {
                     return Some((locks, Some(terms)));
+                }
+                if restore_companions
+                    && let Some(locks) = ja_zh::finished_go::restore_companion_locks(
+                        sentence_idx,
+                        source,
+                        tokens,
+                        chars,
+                        &lock_table,
+                    )
+                {
+                    return Some((locks, None));
                 }
                 restore_topics
                     .then(|| {

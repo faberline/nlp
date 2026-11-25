@@ -2153,11 +2153,11 @@ fn nominal_receiving_request_keeps_eligibility_assistance_and_ability_paths() {
         ),
         (
             "この犬の泳ぐ力を調べています。泳げますか。",
-            "正在調查這狗的游泳能力。能游泳嗎？",
+            "正在調查這隻狗的游泳能力。能游泳嗎？",
         ),
         (
             "この犬の泳ぐ力を調べています。泳げませんか。",
-            "正在調查這狗的游泳能力。不能游泳嗎？",
+            "正在調查這隻狗的游泳能力。不能游泳嗎？",
         ),
         ("写真を撮ってもらえますか。", "可以幫我拍攝照片嗎？"),
     ] {
@@ -2297,6 +2297,55 @@ fn nominal_receiving_request_keeps_the_time_after_an_eligibility_question() {
             }
         }
     }
+}
+
+#[test]
+fn dog_classifier_respects_the_target_glossary_and_supplied_attachment() {
+    let source = "この犬は泳ぎませんか。";
+    let empty = TranslationGlossary::new();
+    let traditional = TranslateOptions::new(TargetVariant::ZhHant);
+    let simplified = TranslateOptions::new(TargetVariant::ZhHans);
+    let baseline =
+        analyze_and_translate(source, &traditional, &empty, None, Backend::Onnx).unwrap();
+    assert_valid_ja_zh_doc(source, &baseline);
+    assert_eq!(baseline.target_text, "這隻狗不游泳嗎？");
+    let simplified =
+        analyze_and_translate(source, &simplified, &empty, None, Backend::Onnx).unwrap();
+    assert_eq!(simplified.target_text, "这狗不游泳吗？");
+
+    for kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+        for (term, label, expected) in [
+            ("犬", "警犬", "這個的警犬不游泳嗎？"),
+            ("この犬", "本犬", "本犬不游泳嗎？"),
+        ] {
+            let glossary = nominal_request_glossary(kind, term, label);
+            let locked =
+                analyze_and_translate(source, &traditional, &glossary, None, Backend::Onnx)
+                    .unwrap();
+            assert_nominal_request_hit(source, &locked, kind, term, label);
+            assert_eq!(locked.target_text, expected);
+        }
+    }
+
+    let mut analysis = analyze_document(source, &doc_options_for_translate(&traditional, &empty));
+    let determiner = analysis
+        .syntax
+        .iter_mut()
+        .find(|arc| arc.deprel == "det" && slice_chars(source, arc.span) == "この")
+        .unwrap();
+    determiner.head = None;
+    let detached = translate_document(
+        source,
+        &analysis,
+        #[cfg(feature = "narrative")]
+        None,
+        &traditional,
+        &empty,
+        None,
+    )
+    .unwrap();
+    assert_valid_ja_zh_doc(source, &detached);
+    assert!(!detached.target_text.contains("隻"));
 }
 
 #[test]

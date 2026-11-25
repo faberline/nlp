@@ -33,6 +33,7 @@ pub(super) struct PredicateTerm {
     pub(super) has_past: bool,
     pub(super) has_result_link: bool,
     pub(super) includes_native_object: bool,
+    pub(super) has_uncovered_origin_modifier: bool,
 }
 
 struct SharedObject {
@@ -71,6 +72,7 @@ impl PredicateTerms {
                 || target.starts_with("未曾"),
             has_result_link: coverage == Coverage::Complete && target.ends_with('就'),
             includes_native_object: false,
+            has_uncovered_origin_modifier: false,
         });
     }
 
@@ -577,13 +579,7 @@ fn departure_term(
     let (arguments, verb) = omitted_departure::completed_verb(after, frame.governor)?;
     let (origin, marker) = omitted_departure::physical_origin(arguments, frame.governor)?;
     let finite = through(verb, after.last()?);
-    // A whole predicate can own the origin only when no modifier is left
-    // outside the span that replaces it.
-    let with_origin = (marker.span.end_char == verb.span.start_char
-        && arguments
-            .iter()
-            .all(|atom| atom.head != origin.doc_tok_idx || atom.span == marker.span))
-    .then_some(Span {
+    let with_origin = (marker.span.end_char == verb.span.start_char).then_some(Span {
         start_char: origin.span.start_char,
         end_char: finite.end_char,
     });
@@ -591,6 +587,26 @@ fn departure_term(
         kind(lock) == Some(GlossaryKind::DomainTerm)
             && (lock.source_span == finite || with_origin == Some(lock.source_span))
     })?;
+    let includes_origin = with_origin == Some(locked.source_span);
+    let mut has_uncovered_origin_modifier = false;
+    if includes_origin {
+        for modifier in arguments
+            .iter()
+            .filter(|atom| atom.head == origin.doc_tok_idx && atom.span != marker.span)
+        {
+            // Only keep modifiers linked to the origin before the locked
+            // noun. A second location or an uncertain link is not an apposition.
+            if modifier.span.end_char > locked.source_span.start_char
+                || !matches!(
+                    modifier.deprel.as_str(),
+                    "nmod" | "amod" | "det" | "compound"
+                )
+            {
+                return None;
+            }
+            has_uncovered_origin_modifier = true;
+        }
+    }
     let mut render = locks.clone();
     render.locks.retain(|lock| lock.index != locked.index);
     let mut retained_arguments = vec![(origin, marker, Argument::Origin)];
@@ -602,7 +618,8 @@ fn departure_term(
     keep_arguments(&mut render, &retained_arguments)?;
     let mut terms = PredicateTerms::default();
     terms.add(verb.span, locked, Coverage::Complete);
-    terms.terms[0].includes_native_object = with_origin == Some(locked.source_span);
+    terms.terms[0].includes_native_object = includes_origin;
+    terms.terms[0].has_uncovered_origin_modifier = has_uncovered_origin_modifier;
     Some((render, terms))
 }
 
@@ -781,17 +798,54 @@ mod tests {
     }
 
     #[test]
-    fn departure_term_requires_an_affirmative_departure_and_full_origin() {
+    fn departure_term_preserves_modifiers_in_the_adopted_origin_cases() {
+        let bank: serde_json::Value = serde_json::from_str(include_str!(
+            "../../tests/data/ja_zh/departure_origin_lock_dev_v1.json"
+        ))
+        .unwrap();
+        let rows = bank["items"].as_array().unwrap();
+        assert_eq!(rows.len(), 4);
+        for row in rows {
+            assert_eq!(row["heldout"], false);
+            assert_eq!(row["visibility"], "development-visible");
+            let glossary = &row["fixture"]["glossary"];
+            let terms: Vec<_> = [(Object, "objects"), (DomainTerm, "domain_terms")]
+                .into_iter()
+                .flat_map(|(kind, field)| {
+                    glossary[field]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(move |entry| {
+                            (
+                                kind,
+                                entry["canonical"].as_str().unwrap(),
+                                entry["targets"]["zh-Hant"].as_str().unwrap(),
+                            )
+                        })
+                })
+                .collect();
+            replay(
+                row["jp"].as_str().unwrap(),
+                &terms,
+                row["zh_hant"].as_str().unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn departure_term_requires_an_affirmative_completed_departure() {
         use super::{LockOrigin, Span, SpanLockTable, restore};
 
         let options = TranslateOptions::new(TargetVariant::ZhHant);
         let doc_options = doc_options_for_translate(&options, &TranslationGlossary::new());
-        for source in ["朝ご飯を食べずに家を出た？", "水を飲まずに兄の家を出た。"]
-        {
+        for (source, surface) in [
+            ("朝ご飯を食べずに家を出た？", "家を出た"),
+            ("水を飲まずに部屋を出たわけではない。", "出た"),
+        ] {
             let doc = analyze_document(source, &doc_options);
             let chars: Vec<_> = source.chars().collect();
             let tokens: Vec<_> = doc.tokens.iter().collect();
-            let surface = "家を出た";
             let start_char = source.split_once(surface).unwrap().0.chars().count();
             let lock = SpanLockTable::build(vec![(
                 1,

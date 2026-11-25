@@ -13145,13 +13145,15 @@ fn translate_clause_bunsetsus(
         }
         verb_core = "抽".to_owned();
     }
-    if ctx
-        .predicate_term
-        .is_some_and(|term| term.includes_native_object)
+    let departure_origin_note = if let Some(term) = ctx.predicate_term
+        && term.includes_native_object
+        && (!term.has_uncovered_origin_modifier || completed_departure)
         && objs.len() == 1
     {
-        objs.clear();
-    }
+        objs.pop().filter(|_| term.has_uncovered_origin_modifier)
+    } else {
+        None
+    };
     if elapsed_progressive_relative && !elapsed_progressive_negative {
         pre_verb_mods.retain(|m| m != "正在");
         pre_verb_mods.push("已經".to_owned());
@@ -14684,6 +14686,9 @@ fn translate_clause_bunsetsus(
     }
     if let Some(ss) = sconj_suffix {
         parts.push(ss.to_owned());
+    }
+    if let Some(origin) = departure_origin_note {
+        parts.push(format!("，那是{origin}"));
     }
 
     if let Some((duration_index, following, days)) = measured_preparation

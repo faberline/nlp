@@ -14594,6 +14594,14 @@ fn translate_clause_bunsetsus(
         if verb_core == "往外看" {
             parts.push("往外".to_owned());
         }
+        if completed_departure
+            && term.coverage == predicate_glossary::Coverage::Complete
+            && !term.includes_native_object
+            && let [origin] = objs.as_slice()
+        {
+            parts.push(format!("從{origin}"));
+            objs.clear();
+        }
         parts.push(term.placeholder.clone());
     } else if !verb_core.is_empty() {
         parts.push(verb_core);

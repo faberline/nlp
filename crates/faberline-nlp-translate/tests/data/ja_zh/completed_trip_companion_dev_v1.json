@@ -1,0 +1,142 @@
+{
+  "schema": "faberline.nlp.ja_zh.completed_trip_companion_dev.v1",
+  "version": 1,
+  "status": "Proposed first-party public development data. Independent review and formal owner adoption are pending. No new row has been translated.",
+  "source_main": "5a27c8381c2193bb5b82d4115d7706a841a371e0",
+  "source_tree": "144d0e35c71b12829bfc24cb858509aafb69797a",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "authoring_note": "All six Japanese sentences and Taiwan Traditional Chinese references were written for this proposal without running the translator. Row CT-N5-01 is a new particle variant of adopted jz004; jz004 itself is cited only as a reused control and is not duplicated as a proposal row."
+  },
+  "reused_existing_controls": [
+    {
+      "file": "faberline/nlp issue #353 adopted public case jz004",
+      "source_sentence": "母と一緒に市場へ行った。",
+      "relationship": "Reference only. CT-N5-01 changes the destination particle from へ to に; the adopted jz004 is not duplicated as a new proposal row."
+    }
+  ],
+  "reused_standing_controls": [],
+  "fixture_defaults": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "CT-N5-01",
+      "level_approx": "N5-oriented provisional diagnostic; not an official JLPT claim",
+      "jp": "母と一緒に市場に行った。",
+      "zh_hant": "跟媽媽一起去了市場。",
+      "allowed_variants": ["和母親一起去了市場。"],
+      "semantic_checks": [
+        "母と一緒に marks 母 as the companion, not the destination.",
+        "市場に is the destination of the completed past trip.",
+        "Do not add an unspoken subject such as 我."
+      ],
+      "semantic_unknowns": ["The source does not name the traveler or say why they went."],
+      "control": {
+        "kind": "adopted_jz004_destination_particle_variant",
+        "stable": ["Same companions, together phrase, destination noun, and completed past trip as adopted jz004."],
+        "changed": ["The destination particle is に instead of へ."],
+        "limits": ["Do not require a different Chinese destination word just because the Japanese particle changed."]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {"origin": "first_party_original", "license": "MIT", "authoring_note": "New particle-variant Japanese sentence and reference; adopted jz004 is referenced, not copied as a row."},
+      "fixture": {"translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"}, "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []}, "models_directory": null, "backend": "Onnx"},
+      "lock_expectation": {"kind": "glossary", "expected_hits": [], "expected_no_hits": [], "target_text": "跟媽媽一起去了市場。", "independent_assertions": ["Preserve companion role, destination, and completed past movement.", "Do not infer or add the missing traveler subject."], "runtime_status": "Unobserved: proposal only. No new row has been translated."}
+    },
+    {
+      "id": "CT-N5-02",
+      "level_approx": "N5-oriented provisional diagnostic; not an official JLPT claim",
+      "jp": "姉と公園へ行った。",
+      "zh_hant": "和姊姊一起去了公園。",
+      "allowed_variants": ["和姊姊去了公園。", "跟姊姊去了公園。"],
+      "semantic_checks": ["姉と marks the older sister as companion.", "公園へ is the destination.", "The trip is completed and in the past.", "Do not add an unspoken traveler subject."],
+      "semantic_unknowns": ["The source does not name the traveler or say why they went."],
+      "control": {"kind": "companion_particle_only", "stable": ["A named companion, destination, and completed past trip."], "changed": ["There is no 一緒に phrase."], "limits": ["Do not infer a named subject from 姉と."]},
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {"origin": "first_party_original", "license": "MIT", "authoring_note": "New first-party Japanese sentence and Taiwan Traditional Chinese reference."},
+      "fixture": {"translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"}, "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []}, "models_directory": null, "backend": "Onnx"},
+      "lock_expectation": {"kind": "glossary", "expected_hits": [], "expected_no_hits": [], "target_text": "和姊姊一起去了公園。", "independent_assertions": ["Keep 姉と as a companion, 公園へ as destination, and the trip as completed past.", "Do not add the unspoken traveler subject."], "runtime_status": "Unobserved: proposal only. No new row has been translated."}
+    },
+    {
+      "id": "CT-N5-03",
+      "level_approx": "N5-oriented provisional diagnostic; not an official JLPT claim",
+      "jp": "一緒に公園へ行った。",
+      "zh_hant": "一起去了公園。",
+      "allowed_variants": ["一起去公園了。"],
+      "semantic_checks": ["一緒に says the trip was made together.", "公園へ is the destination.", "The trip is completed and in the past.", "Do not invent a named companion or traveler subject."],
+      "semantic_unknowns": ["The source leaves the traveler and companion identities unstated."],
+      "control": {"kind": "together_phrase_without_named_person", "stable": ["Together meaning, destination, and completed past movement."], "changed": ["No person noun or と phrase names a companion."], "limits": ["The reference says 一起 but does not fill in who traveled together."]},
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {"origin": "first_party_original", "license": "MIT", "authoring_note": "New first-party Japanese sentence and Taiwan Traditional Chinese reference."},
+      "fixture": {"translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"}, "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []}, "models_directory": null, "backend": "Onnx"},
+      "lock_expectation": {"kind": "glossary", "expected_hits": [], "expected_no_hits": [], "target_text": "一起去了公園。", "independent_assertions": ["Preserve the together meaning, destination, and completed past movement.", "Do not name a traveler or companion absent from the source."], "runtime_status": "Unobserved: proposal only. No new row has been translated."}
+    },
+    {
+      "id": "CT-N5-04",
+      "level_approx": "N5-oriented provisional diagnostic; not an official JLPT claim",
+      "jp": "昨日、母と一緒に市場へ行った。",
+      "zh_hant": "昨天，和媽媽一起去了市場。",
+      "allowed_variants": ["昨天和媽媽一起去了市場。", "昨天跟媽媽一起去了市場。", "昨天，跟媽媽一起去了市場。", "昨天和母親一起去了市場。", "昨天，和母親一起去了市場。", "昨天跟母親一起去了市場。", "昨天，跟母親一起去了市場。"],
+      "semantic_checks": ["昨日 marks when the completed trip happened.", "母と一緒に marks 母 as companion, not destination.", "市場へ is the destination.", "Do not add an unspoken traveler subject."],
+      "semantic_unknowns": ["The source does not name the traveler or say why they went."],
+      "control": {"kind": "time_pause_companion_and_direction", "stable": ["Yesterday, the companion, destination, and completed past trip are explicit."], "changed": ["昨日 is followed by a Japanese pause comma."], "limits": ["Keep yesterday attached to the trip; do not turn the pause into a new clause or add a subject."]},
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {"origin": "first_party_original", "license": "MIT", "authoring_note": "New first-party Japanese sentence and Taiwan Traditional Chinese reference."},
+      "fixture": {"translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"}, "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []}, "models_directory": null, "backend": "Onnx"},
+      "lock_expectation": {"kind": "glossary", "expected_hits": [], "expected_no_hits": [], "target_text": "昨天，和媽媽一起去了市場。", "independent_assertions": ["Preserve yesterday, companion, destination, and completed past movement.", "Do not add the unspoken traveler subject."], "runtime_status": "Unobserved: proposal only. No new row has been translated."}
+    },
+    {
+      "id": "CT-N5-05",
+      "level_approx": "N5-oriented provisional diagnostic; not an official JLPT claim",
+      "jp": "母と私が市場へ行った。",
+      "zh_hant": "媽媽和我去了市場。",
+      "allowed_variants": ["母親和我去了市場。"],
+      "semantic_checks": ["母と私 are coordinated subjects who both made the trip.", "市場へ is the destination.", "The trip is completed and in the past."],
+      "semantic_unknowns": ["The source gives no reason for the trip."],
+      "control": {"kind": "compatibility_control_coordinated_subjects", "stable": ["Both coordinated people and the destination remain present in the same grammatical roles."], "changed": ["The conjunction と connects parallel subjects, not a companion phrase modifying an omitted traveler."], "limits": ["This control tests preservation of the two subjects and destination; it does not require unrelated wording changes or an added 一起."]},
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {"origin": "first_party_original", "license": "MIT", "authoring_note": "New first-party Japanese compatibility-control sentence and Taiwan Traditional Chinese reference."},
+      "fixture": {"translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"}, "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []}, "models_directory": null, "backend": "Onnx"},
+      "lock_expectation": {"kind": "glossary", "expected_hits": [], "expected_no_hits": [], "target_text": "媽媽和我去了市場。", "independent_assertions": ["Preserve both coordinated subjects, their shared trip, the destination, and past completion.", "Do not drop or reorder the subjects into a companion plus implicit actor.", "Do not require unrelated lexical or stylistic edits."], "runtime_status": "Unobserved: proposal only. No new row has been translated."}
+    },
+    {
+      "id": "CT-N5-06",
+      "level_approx": "N5-oriented provisional diagnostic; not an official JLPT claim",
+      "jp": "私はりんごとパンを買った。",
+      "zh_hant": "我買了蘋果和麵包。",
+      "allowed_variants": ["我買了蘋果與麵包。"],
+      "semantic_checks": ["私は is the subject.", "りんごとパン are two coordinated objects of 買った.", "The buying event is completed and in the past."],
+      "semantic_unknowns": ["The source does not state where the items were bought or why."],
+      "control": {"kind": "compatibility_control_coordinated_objects", "stable": ["Both coordinated objects and the explicit subject remain present in their original roles."], "changed": ["The conjunction と connects parallel objects, not a travel companion."], "limits": ["This control tests preservation of the subject and both objects; it does not require changes to unrelated established wording."]},
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {"origin": "first_party_original", "license": "MIT", "authoring_note": "New first-party Japanese compatibility-control sentence and Taiwan Traditional Chinese reference."},
+      "fixture": {"translate_options": {"target": "zh-Hant", "source_hint": null, "mask_editorial": false, "omit_masked_editorial": false, "localize_quotes": true, "localize_entities": false, "cjk_latin_spacing": false, "beam_size": 1, "model_id": "doc-translate-v1"}, "glossary": {"schema": "nlp.translate.glossary.v1", "actors": [], "places": [], "objects": [], "domain_terms": []}, "models_directory": null, "backend": "Onnx"},
+      "lock_expectation": {"kind": "glossary", "expected_hits": [], "expected_no_hits": [], "target_text": "我買了蘋果和麵包。", "independent_assertions": ["Preserve the explicit subject and both coordinated objects.", "Do not treat と as a companion marker or drop either object.", "Do not require changes to unrelated established wording."], "runtime_status": "Unobserved: proposal only. No new row has been translated."}
+    }
+  ]
+}

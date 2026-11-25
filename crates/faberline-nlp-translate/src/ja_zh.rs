@@ -18025,6 +18025,63 @@ fn coordinated_elapsed_both_genitive(
     })
 }
 
+fn fold_motion_ability(
+    modifier: &Bunsetsu,
+    noun_group: &mut Bunsetsu,
+    preceding: Option<&Bunsetsu>,
+    source: &[Atom],
+) -> bool {
+    let ([action], [noun, tail @ ..]) =
+        (modifier.atoms.as_slice(), noun_group.atoms.as_mut_slice())
+    else {
+        return false;
+    };
+    let Some(action_id) = action.doc_tok_idx else {
+        return false;
+    };
+    let coordinated_noun = preceding
+        .filter(|group| ends_in_coord_to(group) || ends_in_coord_ya(group))
+        .and_then(|group| group.atoms.last())
+        .and_then(|case| case.head);
+    if action.is_locked
+        || action.upos != Some(Upos::Verb)
+        || action.deprel != "acl"
+        || noun.is_locked
+        || noun.upos != Some(Upos::Noun)
+        || noun.surface != "力"
+        || noun.doc_tok_idx.is_none()
+        || action.head != noun.doc_tok_idx
+        || action.span.end_char != noun.span.start_char
+        || tail.iter().any(|part| {
+            part.is_locked
+                || part.upos != Some(Upos::Adp)
+                || part.deprel != "case"
+                || part.head != noun.doc_tok_idx
+                || part.surface == "で"
+        })
+        || source.iter().any(|part| {
+            part.head == Some(action_id)
+                && !(part.surface == "力"
+                    && part.doc_tok_idx.is_some()
+                    && part.doc_tok_idx == coordinated_noun)
+        })
+    {
+        return false;
+    }
+    // A bare motion verb can name a learned ability. An instrumental で
+    // can describe the means or force that drives a separate action.
+    let ability = match action.lemma.as_deref().unwrap_or(&action.surface) {
+        "泳ぐ" => "游泳能力",
+        "歩く" => "步行能力",
+        "走る" => "跑步能力",
+        _ => return false,
+    };
+    noun.span.start_char = action.span.start_char;
+    noun.surface = ability.to_owned();
+    noun.is_locked = true;
+    true
+}
+
 fn merge_adnominal_bunsetsus(
     bunsetsus: Vec<Bunsetsu>,
     source: &[Atom],
@@ -18237,6 +18294,11 @@ fn merge_adnominal_bunsetsus(
 
                     if target == TargetVariant::ZhHant
                         && homework_relative::fold(&mut res, &pred_b, &mut b, source, doc, target)
+                    {
+                        continue;
+                    }
+                    if target == TargetVariant::ZhHant
+                        && fold_motion_ability(&pred_b, &mut b, res.last(), source)
                     {
                         continue;
                     }
@@ -27801,6 +27863,69 @@ mod existence_rule_tests {
             deprel: String::new(),
             is_locked: false,
         }
+    }
+
+    #[test]
+    fn motion_ability_requires_a_bare_attached_verb_and_noninstrumental_noun() {
+        let text = "この犬の泳ぐ力を調べています。泳げますか。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        let doc = faberline_nlp::doc::analyze_document(
+            text,
+            &crate::doc_options_for_translate(&options, &glossary),
+        );
+        let chars: Vec<_> = text.chars().collect();
+        let tokens: Vec<_> = doc
+            .tokens
+            .iter()
+            .filter(|token| token.sentence == 0)
+            .collect();
+        let source = build_sentence_atoms(0, &chars, &doc, &tokens, &SpanLockTable::default());
+        let example = source
+            .windows(3)
+            .find(|parts| parts[0].surface == "泳ぐ" && parts[1].surface == "力")
+            .unwrap();
+        let modifier = classify_bunsetsu(vec![example[0].clone()], &doc, 0);
+        let noun = classify_bunsetsu(example[1..].to_vec(), &doc, 0);
+        for (lemma, expected) in [
+            ("泳ぐ", "游泳能力"),
+            ("歩く", "步行能力"),
+            ("走る", "跑步能力"),
+        ] {
+            let mut motion = modifier.clone();
+            motion.atoms[0].surface = lemma.to_owned();
+            motion.atoms[0].lemma = Some(lemma.to_owned());
+            let mut phrase = noun.clone();
+            assert!(fold_motion_ability(&motion, &mut phrase, None, &source));
+            assert_eq!(phrase.atoms[0].surface, expected);
+            assert_eq!(phrase.atoms[0].span.start_char, example[0].span.start_char);
+            assert_eq!(phrase.atoms[0].span.end_char, example[1].span.end_char);
+        }
+        let mut physical = modifier.clone();
+        physical.atoms[0].surface = "押す".to_owned();
+        physical.atoms[0].lemma = Some("押す".to_owned());
+        assert!(!fold_motion_ability(
+            &physical,
+            &mut noun.clone(),
+            None,
+            &source
+        ));
+        let mut instrumental = noun.clone();
+        instrumental.atoms[1].surface = "で".to_owned();
+        assert!(!fold_motion_ability(
+            &modifier,
+            &mut instrumental,
+            None,
+            &source
+        ));
+        let mut detached = modifier.clone();
+        detached.atoms[0].head = None;
+        assert!(!fold_motion_ability(
+            &detached,
+            &mut noun.clone(),
+            None,
+            &source
+        ));
     }
 
     #[test]

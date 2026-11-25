@@ -1,0 +1,1565 @@
+{
+  "schema": "faberline.nlp.ja_zh.payment_fare_stem_dev.v1",
+  "version": 1,
+  "status": "Proposed first-party development data. Independent review and formal owner adoption are pending. No new row has been translated.",
+  "source_main": "176932ea354d7a2904d3a9f1c87c033396778e73",
+  "source_tree": "25fa5c53c03e5ff2e0567bb3e04385f402bd2288",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "authoring_note": "New Japanese sentences and Taiwan Traditional Chinese references written for this proposed bank. No corpus, dictionary, book, subtitle, or website text was copied."
+  },
+  "reused_existing_controls": [
+    {
+      "file": "payment_potential_dev_v1.json",
+      "sha256": "55d2958174002be4b8e15f224921efe62d6221edbb309ff168d43970854e2250",
+      "ids": [
+        "PAY-N5-05",
+        "PAY-N5-06"
+      ],
+      "relationship": "References only. The adopted rows are not copied into this bank."
+    }
+  ],
+  "reused_standing_controls": [],
+  "fixture_defaults": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "PFST-N5-01",
+      "level_approx": "N5-oriented provisional diagnostic. Report and opaque controls may exceed N5. No official JLPT or certification claim",
+      "jp": "切符代はカードで支払いました。",
+      "zh_hant": "票款已用信用卡結清。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The fare was actually paid in the past.",
+        "The card is the payment means.",
+        "The reference retains a completed past payment without naming the payer."
+      ],
+      "semantic_unknowns": [
+        "The payer and recipient are not stated.",
+        "The source does not specify whether the card is a credit card. The caller glossary target 用信用卡 supplies that detail, so it is not inferred from Japanese."
+      ],
+      "control": {
+        "kind": "actual_past_card_payment",
+        "contrast_ids": [
+          "PFST-N5-06"
+        ],
+        "stable": [
+          "The ticket fare and card payment means are explicit."
+        ],
+        "changed": [
+          "The simple affirmative predicate is polite past. Unlike PFST-N5-06 it is not reported speech."
+        ],
+        "limits": [
+          "Do not infer who paid or who received the payment."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [
+            {
+              "canonical": "切符代",
+              "surfaces": [
+                "切符代"
+              ],
+              "targets": {
+                "zh-Hant": "票款"
+              }
+            }
+          ],
+          "domain_terms": [
+            {
+              "canonical": "カードで",
+              "surfaces": [
+                "カードで"
+              ],
+              "targets": {
+                "zh-Hant": "用信用卡"
+              }
+            },
+            {
+              "canonical": "支払い",
+              "surfaces": [
+                "支払い"
+              ],
+              "targets": {
+                "zh-Hant": "結清"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "expected_hits": [
+          {
+            "canonical": "切符代",
+            "kind": "object",
+            "target_text": "票款",
+            "source_span": {
+              "scalar": [
+                0,
+                3
+              ],
+              "utf8_bytes": [
+                0,
+                9
+              ],
+              "slice": "切符代"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  0,
+                  2
+                ],
+                "utf8_bytes": [
+                  0,
+                  6
+                ],
+                "slice": "票款"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "カードで",
+            "kind": "domain_term",
+            "target_text": "用信用卡",
+            "source_span": {
+              "scalar": [
+                4,
+                8
+              ],
+              "utf8_bytes": [
+                12,
+                24
+              ],
+              "slice": "カードで"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  3,
+                  7
+                ],
+                "utf8_bytes": [
+                  9,
+                  21
+                ],
+                "slice": "用信用卡"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "支払い",
+            "kind": "domain_term",
+            "target_text": "結清",
+            "source_span": {
+              "scalar": [
+                8,
+                11
+              ],
+              "utf8_bytes": [
+                24,
+                33
+              ],
+              "slice": "支払い"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  7,
+                  9
+                ],
+                "utf8_bytes": [
+                  21,
+                  27
+                ],
+                "slice": "結清"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          }
+        ],
+        "expected_no_hits": [],
+        "target_text": "票款已用信用卡結清。",
+        "independent_assertions": [
+          "exact source and target scalar/UTF-8 byte slices",
+          "one record and target occurrence per active caller term",
+          "inactive or opaque terms produce no glossary hit",
+          "preserve clause polarity, tense, question/report status, and sentence scope",
+          "do not add a payer, recipient, amount, alternative payment method, or unreported event"
+        ],
+        "runtime_status": "Unobserved: proposal only. No new row has been translated."
+      }
+    },
+    {
+      "id": "PFST-N5-02",
+      "level_approx": "N5-oriented provisional diagnostic. Report and opaque controls may exceed N5. No official JLPT or certification claim",
+      "jp": "切符代は現金で支払いません。",
+      "zh_hant": "票款不以現金結清。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The proposition is negative: the fare is not paid in cash.",
+        "The reference does not say whether it was paid by another method or remains unpaid."
+      ],
+      "semantic_unknowns": [
+        "The payer, recipient, reason, and any alternative payment method are unknown.",
+        "The non-past form does not state a single completed payment event."
+      ],
+      "control": {
+        "kind": "negative_nonpast_cash_payment",
+        "contrast_ids": [
+          "PFST-N5-03"
+        ],
+        "stable": [
+          "The fare, payment method, and negative payment proposition are retained."
+        ],
+        "changed": [
+          "Compared with PFST-N5-03, this row has non-past rather than past negative morphology."
+        ],
+        "limits": [
+          "Do not convert the negative into an inability or prohibition."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [
+            {
+              "canonical": "切符代",
+              "surfaces": [
+                "切符代"
+              ],
+              "targets": {
+                "zh-Hant": "票款"
+              }
+            }
+          ],
+          "domain_terms": [
+            {
+              "canonical": "現金で",
+              "surfaces": [
+                "現金で"
+              ],
+              "targets": {
+                "zh-Hant": "以現金"
+              }
+            },
+            {
+              "canonical": "支払い",
+              "surfaces": [
+                "支払い"
+              ],
+              "targets": {
+                "zh-Hant": "結清"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "expected_hits": [
+          {
+            "canonical": "切符代",
+            "kind": "object",
+            "target_text": "票款",
+            "source_span": {
+              "scalar": [
+                0,
+                3
+              ],
+              "utf8_bytes": [
+                0,
+                9
+              ],
+              "slice": "切符代"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  0,
+                  2
+                ],
+                "utf8_bytes": [
+                  0,
+                  6
+                ],
+                "slice": "票款"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "現金で",
+            "kind": "domain_term",
+            "target_text": "以現金",
+            "source_span": {
+              "scalar": [
+                4,
+                7
+              ],
+              "utf8_bytes": [
+                12,
+                21
+              ],
+              "slice": "現金で"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  3,
+                  6
+                ],
+                "utf8_bytes": [
+                  9,
+                  18
+                ],
+                "slice": "以現金"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "支払い",
+            "kind": "domain_term",
+            "target_text": "結清",
+            "source_span": {
+              "scalar": [
+                7,
+                10
+              ],
+              "utf8_bytes": [
+                21,
+                30
+              ],
+              "slice": "支払い"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  6,
+                  8
+                ],
+                "utf8_bytes": [
+                  18,
+                  24
+                ],
+                "slice": "結清"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          }
+        ],
+        "expected_no_hits": [],
+        "target_text": "票款不以現金結清。",
+        "independent_assertions": [
+          "exact source and target scalar/UTF-8 byte slices",
+          "one record and target occurrence per active caller term",
+          "inactive or opaque terms produce no glossary hit",
+          "preserve clause polarity, tense, question/report status, and sentence scope",
+          "do not add a payer, recipient, amount, alternative payment method, or unreported event"
+        ],
+        "runtime_status": "Unobserved: proposal only. No new row has been translated."
+      }
+    },
+    {
+      "id": "PFST-N5-03",
+      "level_approx": "N5-oriented provisional diagnostic. Report and opaque controls may exceed N5. No official JLPT or certification claim",
+      "jp": "切符代は現金で支払いませんでした。",
+      "zh_hant": "票款沒有以現金結清。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The proposition is a past negative: the fare was not paid in cash.",
+        "The reference does not imply that the fare was unpaid by every means."
+      ],
+      "semantic_unknowns": [
+        "The payer, recipient, reason, and any alternative payment method are unknown."
+      ],
+      "control": {
+        "kind": "negative_past_cash_payment",
+        "contrast_ids": [
+          "PFST-N5-02"
+        ],
+        "stable": [
+          "The fare, cash method, and negative proposition are retained."
+        ],
+        "changed": [
+          "Compared with PFST-N5-02, this row adds past tense."
+        ],
+        "limits": [
+          "Do not infer that no payment occurred by another method."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [
+            {
+              "canonical": "切符代",
+              "surfaces": [
+                "切符代"
+              ],
+              "targets": {
+                "zh-Hant": "票款"
+              }
+            }
+          ],
+          "domain_terms": [
+            {
+              "canonical": "現金で",
+              "surfaces": [
+                "現金で"
+              ],
+              "targets": {
+                "zh-Hant": "以現金"
+              }
+            },
+            {
+              "canonical": "支払い",
+              "surfaces": [
+                "支払い"
+              ],
+              "targets": {
+                "zh-Hant": "結清"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "expected_hits": [
+          {
+            "canonical": "切符代",
+            "kind": "object",
+            "target_text": "票款",
+            "source_span": {
+              "scalar": [
+                0,
+                3
+              ],
+              "utf8_bytes": [
+                0,
+                9
+              ],
+              "slice": "切符代"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  0,
+                  2
+                ],
+                "utf8_bytes": [
+                  0,
+                  6
+                ],
+                "slice": "票款"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "現金で",
+            "kind": "domain_term",
+            "target_text": "以現金",
+            "source_span": {
+              "scalar": [
+                4,
+                7
+              ],
+              "utf8_bytes": [
+                12,
+                21
+              ],
+              "slice": "現金で"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  4,
+                  7
+                ],
+                "utf8_bytes": [
+                  12,
+                  21
+                ],
+                "slice": "以現金"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "支払い",
+            "kind": "domain_term",
+            "target_text": "結清",
+            "source_span": {
+              "scalar": [
+                7,
+                10
+              ],
+              "utf8_bytes": [
+                21,
+                30
+              ],
+              "slice": "支払い"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  7,
+                  9
+                ],
+                "utf8_bytes": [
+                  21,
+                  27
+                ],
+                "slice": "結清"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          }
+        ],
+        "expected_no_hits": [],
+        "target_text": "票款沒有以現金結清。",
+        "independent_assertions": [
+          "exact source and target scalar/UTF-8 byte slices",
+          "one record and target occurrence per active caller term",
+          "inactive or opaque terms produce no glossary hit",
+          "preserve clause polarity, tense, question/report status, and sentence scope",
+          "do not add a payer, recipient, amount, alternative payment method, or unreported event"
+        ],
+        "runtime_status": "Unobserved: proposal only. No new row has been translated."
+      }
+    },
+    {
+      "id": "PFST-N5-04",
+      "level_approx": "N5-oriented provisional diagnostic. Report and opaque controls may exceed N5. No official JLPT or certification claim",
+      "jp": "切符代はカードで支払いますか。",
+      "zh_hant": "票款會用信用卡結清嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "This is a positive question about paying the fare by card.",
+        "It does not assert that payment happened."
+      ],
+      "semantic_unknowns": [
+        "The source does not specify whether the card is a credit card. The caller glossary target 用信用卡 supplies that detail, so it is not inferred from Japanese."
+      ],
+      "control": {
+        "kind": "positive_payment_question",
+        "contrast_ids": [
+          "PFST-N5-05"
+        ],
+        "stable": [
+          "The fare and card method are the same."
+        ],
+        "changed": [
+          "This question asks about the positive payment proposition."
+        ],
+        "limits": [
+          "Keep the question mark and do not answer the question."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [
+            {
+              "canonical": "切符代",
+              "surfaces": [
+                "切符代"
+              ],
+              "targets": {
+                "zh-Hant": "票款"
+              }
+            }
+          ],
+          "domain_terms": [
+            {
+              "canonical": "カードで",
+              "surfaces": [
+                "カードで"
+              ],
+              "targets": {
+                "zh-Hant": "用信用卡"
+              }
+            },
+            {
+              "canonical": "支払い",
+              "surfaces": [
+                "支払い"
+              ],
+              "targets": {
+                "zh-Hant": "結清"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "expected_hits": [
+          {
+            "canonical": "切符代",
+            "kind": "object",
+            "target_text": "票款",
+            "source_span": {
+              "scalar": [
+                0,
+                3
+              ],
+              "utf8_bytes": [
+                0,
+                9
+              ],
+              "slice": "切符代"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  0,
+                  2
+                ],
+                "utf8_bytes": [
+                  0,
+                  6
+                ],
+                "slice": "票款"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "カードで",
+            "kind": "domain_term",
+            "target_text": "用信用卡",
+            "source_span": {
+              "scalar": [
+                4,
+                8
+              ],
+              "utf8_bytes": [
+                12,
+                24
+              ],
+              "slice": "カードで"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  3,
+                  7
+                ],
+                "utf8_bytes": [
+                  9,
+                  21
+                ],
+                "slice": "用信用卡"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "支払い",
+            "kind": "domain_term",
+            "target_text": "結清",
+            "source_span": {
+              "scalar": [
+                8,
+                11
+              ],
+              "utf8_bytes": [
+                24,
+                33
+              ],
+              "slice": "支払い"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  7,
+                  9
+                ],
+                "utf8_bytes": [
+                  21,
+                  27
+                ],
+                "slice": "結清"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          }
+        ],
+        "expected_no_hits": [],
+        "target_text": "票款會用信用卡結清嗎？",
+        "independent_assertions": [
+          "exact source and target scalar/UTF-8 byte slices",
+          "one record and target occurrence per active caller term",
+          "inactive or opaque terms produce no glossary hit",
+          "preserve clause polarity, tense, question/report status, and sentence scope",
+          "do not add a payer, recipient, amount, alternative payment method, or unreported event"
+        ],
+        "runtime_status": "Unobserved: proposal only. No new row has been translated."
+      }
+    },
+    {
+      "id": "PFST-N5-05",
+      "level_approx": "N5-oriented provisional diagnostic. Report and opaque controls may exceed N5. No official JLPT or certification claim",
+      "jp": "切符代はカードで支払いませんでしたか。",
+      "zh_hant": "票款沒有用信用卡結清嗎？",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The question keeps a negative past payment proposition about the fare and card.",
+        "The question does not assert that payment happened or did not happen as a fact."
+      ],
+      "semantic_unknowns": [
+        "The negative past question can seek confirmation or carry rhetorical force without more context. The reference records a literal negative question.",
+        "The payer and recipient are not stated. The source does not specify whether the card is a credit card. The caller glossary target 用信用卡 supplies that detail, so it is not inferred from Japanese."
+      ],
+      "control": {
+        "kind": "negative_past_payment_question",
+        "contrast_ids": [
+          "PFST-N5-04"
+        ],
+        "stable": [
+          "The fare and card method are the same."
+        ],
+        "changed": [
+          "This row adds past tense and negation to the payment question."
+        ],
+        "limits": [
+          "Keep the negative past scope and question mark. Do not answer the question or infer a completed payment."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [
+            {
+              "canonical": "切符代",
+              "surfaces": [
+                "切符代"
+              ],
+              "targets": {
+                "zh-Hant": "票款"
+              }
+            }
+          ],
+          "domain_terms": [
+            {
+              "canonical": "カードで",
+              "surfaces": [
+                "カードで"
+              ],
+              "targets": {
+                "zh-Hant": "用信用卡"
+              }
+            },
+            {
+              "canonical": "支払い",
+              "surfaces": [
+                "支払い"
+              ],
+              "targets": {
+                "zh-Hant": "結清"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "expected_hits": [
+          {
+            "canonical": "切符代",
+            "kind": "object",
+            "target_text": "票款",
+            "source_span": {
+              "scalar": [
+                0,
+                3
+              ],
+              "utf8_bytes": [
+                0,
+                9
+              ],
+              "slice": "切符代"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  0,
+                  2
+                ],
+                "utf8_bytes": [
+                  0,
+                  6
+                ],
+                "slice": "票款"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "カードで",
+            "kind": "domain_term",
+            "target_text": "用信用卡",
+            "source_span": {
+              "scalar": [
+                4,
+                8
+              ],
+              "utf8_bytes": [
+                12,
+                24
+              ],
+              "slice": "カードで"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  4,
+                  8
+                ],
+                "utf8_bytes": [
+                  12,
+                  24
+                ],
+                "slice": "用信用卡"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "支払い",
+            "kind": "domain_term",
+            "target_text": "結清",
+            "source_span": {
+              "scalar": [
+                8,
+                11
+              ],
+              "utf8_bytes": [
+                24,
+                33
+              ],
+              "slice": "支払い"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  8,
+                  10
+                ],
+                "utf8_bytes": [
+                  24,
+                  30
+                ],
+                "slice": "結清"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          }
+        ],
+        "expected_no_hits": [],
+        "target_text": "票款沒有用信用卡結清嗎？",
+        "independent_assertions": [
+          "exact source and target scalar/UTF-8 byte slices",
+          "one record and target occurrence per active caller term",
+          "inactive or opaque terms produce no glossary hit",
+          "preserve clause polarity, tense, question/report status, and sentence scope",
+          "do not add a payer, recipient, amount, alternative payment method, or unreported event"
+        ],
+        "runtime_status": "Unobserved: proposal only. No new row has been translated."
+      }
+    },
+    {
+      "id": "PFST-N5-06",
+      "level_approx": "N5-oriented provisional diagnostic. Report and opaque controls may exceed N5. No official JLPT or certification claim",
+      "jp": "店員は「切符代はカードで支払います」と言いました。",
+      "zh_hant": "店員曾說：「票款會用信用卡結清。」",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The source asserts that the clerk said the quoted sentence.",
+        "The quoted sentence is a present/future payment statement. The outer report does not prove that payment occurred.",
+        "The reference preserves the quoted payment-stem alias and its polite present ending."
+      ],
+      "semantic_unknowns": [
+        "The person who would pay is not identified by the quoted sentence.",
+        "The source does not specify whether the card is a credit card. The caller glossary target 用信用卡 supplies that detail, so it is not inferred from Japanese."
+      ],
+      "control": {
+        "kind": "reported_direct_speech_present",
+        "contrast_ids": [
+          "PFST-N5-01"
+        ],
+        "stable": [
+          "The fare and card method are explicit."
+        ],
+        "changed": [
+          "This row reports an utterance with 支払います instead of asserting a completed payment."
+        ],
+        "limits": [
+          "Keep the speech report distinct from the quoted claim. Do not infer a completed transaction."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [
+            {
+              "canonical": "切符代",
+              "surfaces": [
+                "切符代"
+              ],
+              "targets": {
+                "zh-Hant": "票款"
+              }
+            }
+          ],
+          "domain_terms": [
+            {
+              "canonical": "カードで",
+              "surfaces": [
+                "カードで"
+              ],
+              "targets": {
+                "zh-Hant": "用信用卡"
+              }
+            },
+            {
+              "canonical": "支払い",
+              "surfaces": [
+                "支払い"
+              ],
+              "targets": {
+                "zh-Hant": "結清"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "expected_hits": [
+          {
+            "canonical": "切符代",
+            "kind": "object",
+            "target_text": "票款",
+            "source_span": {
+              "scalar": [
+                4,
+                7
+              ],
+              "utf8_bytes": [
+                12,
+                21
+              ],
+              "slice": "切符代"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  6,
+                  8
+                ],
+                "utf8_bytes": [
+                  18,
+                  24
+                ],
+                "slice": "票款"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "カードで",
+            "kind": "domain_term",
+            "target_text": "用信用卡",
+            "source_span": {
+              "scalar": [
+                8,
+                12
+              ],
+              "utf8_bytes": [
+                24,
+                36
+              ],
+              "slice": "カードで"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  9,
+                  13
+                ],
+                "utf8_bytes": [
+                  27,
+                  39
+                ],
+                "slice": "用信用卡"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "支払い",
+            "kind": "domain_term",
+            "target_text": "結清",
+            "source_span": {
+              "scalar": [
+                12,
+                15
+              ],
+              "utf8_bytes": [
+                36,
+                45
+              ],
+              "slice": "支払い"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  13,
+                  15
+                ],
+                "utf8_bytes": [
+                  39,
+                  45
+                ],
+                "slice": "結清"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          }
+        ],
+        "expected_no_hits": [],
+        "target_text": "店員曾說：「票款會用信用卡結清。」",
+        "independent_assertions": [
+          "exact source and target scalar/UTF-8 byte slices",
+          "one record and target occurrence per active caller term",
+          "inactive or opaque terms produce no glossary hit",
+          "preserve clause polarity, tense, question/report status, and sentence scope",
+          "do not add a payer, recipient, amount, alternative payment method, or unreported event"
+        ],
+        "runtime_status": "Unobserved: proposal only. No new row has been translated."
+      }
+    },
+    {
+      "id": "PFST-N5-07",
+      "level_approx": "N5-oriented provisional diagnostic. Report and opaque controls may exceed N5. No official JLPT or certification claim",
+      "jp": "切符代の支払い方法は現金です。",
+      "zh_hant": "票款的付款方式是現金。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The sentence names cash as the payment method for the fare.",
+        "The configured 支払い glossary entry has a legitimate noun reading here and maps to 付款.",
+        "No finite payment act or completed payment is asserted."
+      ],
+      "semantic_unknowns": [
+        "The payer, recipient, timing, and whether any payment occurs are unknown."
+      ],
+      "control": {
+        "kind": "payment_noun_glossary_control",
+        "contrast_ids": [],
+        "stable": [
+          "The fare, payment-method noun, and bare cash term remain in the caller glossary."
+        ],
+        "changed": [
+          "The protected surface 支払い is a noun in 支払い方法, not a finite payment predicate."
+        ],
+        "limits": [
+          "Apply the caller gloss as a noun. Do not turn the phrase into a finite payment action."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [
+            {
+              "canonical": "切符代",
+              "surfaces": [
+                "切符代"
+              ],
+              "targets": {
+                "zh-Hant": "票款"
+              }
+            },
+            {
+              "canonical": "現金",
+              "surfaces": [
+                "現金"
+              ],
+              "targets": {
+                "zh-Hant": "現金"
+              }
+            }
+          ],
+          "domain_terms": [
+            {
+              "canonical": "支払い",
+              "surfaces": [
+                "支払い"
+              ],
+              "targets": {
+                "zh-Hant": "付款"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "expected_hits": [
+          {
+            "canonical": "切符代",
+            "kind": "object",
+            "target_text": "票款",
+            "source_span": {
+              "scalar": [
+                0,
+                3
+              ],
+              "utf8_bytes": [
+                0,
+                9
+              ],
+              "slice": "切符代"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  0,
+                  2
+                ],
+                "utf8_bytes": [
+                  0,
+                  6
+                ],
+                "slice": "票款"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "現金",
+            "kind": "object",
+            "target_text": "現金",
+            "source_span": {
+              "scalar": [
+                10,
+                12
+              ],
+              "utf8_bytes": [
+                30,
+                36
+              ],
+              "slice": "現金"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  8,
+                  10
+                ],
+                "utf8_bytes": [
+                  24,
+                  30
+                ],
+                "slice": "現金"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          },
+          {
+            "canonical": "支払い",
+            "kind": "domain_term",
+            "target_text": "付款",
+            "source_span": {
+              "scalar": [
+                4,
+                7
+              ],
+              "utf8_bytes": [
+                12,
+                21
+              ],
+              "slice": "支払い"
+            },
+            "target_spans": [
+              {
+                "reference_index": 0,
+                "scalar": [
+                  3,
+                  5
+                ],
+                "utf8_bytes": [
+                  9,
+                  15
+                ],
+                "slice": "付款"
+              }
+            ],
+            "expected_occurrences_per_source_occurrence": 1
+          }
+        ],
+        "expected_no_hits": [],
+        "target_text": "票款的付款方式是現金。",
+        "independent_assertions": [
+          "exact source and target scalar/UTF-8 byte slices",
+          "one record and target occurrence per active caller term",
+          "inactive or opaque terms produce no glossary hit",
+          "preserve clause polarity, tense, question/report status, and sentence scope",
+          "do not add a payer, recipient, amount, alternative payment method, or unreported event"
+        ],
+        "runtime_status": "Unobserved: proposal only. No new row has been translated."
+      }
+    },
+    {
+      "id": "PFST-N5-08",
+      "level_approx": "N5-oriented provisional diagnostic. Report and opaque controls may exceed N5. No official JLPT or certification claim",
+      "jp": "例として `切符代はカードで支払います。` を示します。",
+      "zh_hant": "作為範例，列出 `切符代はカードで支払います。`。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The sentence presents an inline-code literal as an example, not as a payment event.",
+        "Text inside the backticks must remain unchanged and must produce no glossary hits."
+      ],
+      "semantic_unknowns": [
+        "No payer, recipient, or actual payment event is asserted."
+      ],
+      "control": {
+        "kind": "opaque_literal_control",
+        "contrast_ids": [],
+        "stable": [
+          "All protected terms occur only inside the opaque literal."
+        ],
+        "changed": [
+          "The payment-looking string is code-formatted example text."
+        ],
+        "limits": [
+          "No translation or glossary substitution is expected inside the inline-code span."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "proposal_status": "pending_independent_data_review_and_formal_owner_adoption",
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      },
+      "fixture": {
+        "translate_options": {
+          "target": "zh-Hant",
+          "source_hint": null,
+          "mask_editorial": false,
+          "omit_masked_editorial": false,
+          "localize_quotes": true,
+          "localize_entities": false,
+          "cjk_latin_spacing": false,
+          "beam_size": 1,
+          "model_id": "doc-translate-v1"
+        },
+        "glossary": {
+          "schema": "nlp.translate.glossary.v1",
+          "actors": [],
+          "places": [],
+          "objects": [
+            {
+              "canonical": "切符代",
+              "surfaces": [
+                "切符代"
+              ],
+              "targets": {
+                "zh-Hant": "票款"
+              }
+            }
+          ],
+          "domain_terms": [
+            {
+              "canonical": "カードで",
+              "surfaces": [
+                "カードで"
+              ],
+              "targets": {
+                "zh-Hant": "用信用卡"
+              }
+            },
+            {
+              "canonical": "支払い",
+              "surfaces": [
+                "支払い"
+              ],
+              "targets": {
+                "zh-Hant": "結清"
+              }
+            }
+          ]
+        },
+        "models_directory": null,
+        "backend": "Onnx"
+      },
+      "lock_expectation": {
+        "kind": "glossary",
+        "expected_hits": [],
+        "expected_no_hits": [
+          {
+            "surface": "切符代",
+            "source_occurrences": 1,
+            "source_spans": [
+              {
+                "scalar": [
+                  6,
+                  9
+                ],
+                "utf8_bytes": [
+                  14,
+                  23
+                ],
+                "slice": "切符代"
+              }
+            ],
+            "reason": "The only occurrence is inside inline code, which is an opaque literal."
+          },
+          {
+            "surface": "カードで",
+            "source_occurrences": 1,
+            "source_spans": [
+              {
+                "scalar": [
+                  10,
+                  14
+                ],
+                "utf8_bytes": [
+                  26,
+                  38
+                ],
+                "slice": "カードで"
+              }
+            ],
+            "reason": "The only occurrence is inside inline code, which is an opaque literal."
+          },
+          {
+            "surface": "支払い",
+            "source_occurrences": 1,
+            "source_spans": [
+              {
+                "scalar": [
+                  14,
+                  17
+                ],
+                "utf8_bytes": [
+                  38,
+                  47
+                ],
+                "slice": "支払い"
+              }
+            ],
+            "reason": "The only occurrence is inside inline code, which is an opaque literal."
+          }
+        ],
+        "target_text": "作為範例，列出 `切符代はカードで支払います。`。",
+        "independent_assertions": [
+          "exact source and target scalar/UTF-8 byte slices",
+          "one record and target occurrence per active caller term",
+          "inactive or opaque terms produce no glossary hit",
+          "preserve clause polarity, tense, question/report status, and sentence scope",
+          "do not add a payer, recipient, amount, alternative payment method, or unreported event"
+        ],
+        "runtime_status": "Unobserved: proposal only. No new row has been translated."
+      }
+    }
+  ]
+}

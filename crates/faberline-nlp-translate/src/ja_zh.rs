@@ -34,6 +34,7 @@ mod payment_potential;
 pub(crate) use payment_potential::{FareRoles, fare_roles_for_sentence};
 mod place_goal_glossary;
 pub(crate) mod polarity_contrast;
+pub(crate) mod polite_joint;
 pub(crate) mod predicate_glossary;
 mod reception;
 mod return_endpoint;
@@ -252,7 +253,8 @@ pub(crate) fn translate_ja_sentence(
     }
 
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);
-    if predicate_terms.is_some() {
+    if let Some(terms) = predicate_terms {
+        terms.expose_polite_joint_stem(&mut atoms);
         predicate_glossary::normalize_linked_comma(&mut atoms);
     }
     let (glossary_carry, glossary_goals) =
@@ -7361,6 +7363,9 @@ fn translate_clause_atoms(
     }
     mark_residence_place(&mut grouped, body);
     mark_joint_question(&mut grouped, &norm_atoms, body);
+    if target == TargetVariant::ZhHant {
+        polite_joint::mark(&mut grouped, &norm_atoms, doc, ctx.source_chars);
+    }
     if target == TargetVariant::ZhHant
         && localize_elapsed_modal(&mut grouped, body, doc, ctx.inside_quote)
         && let Some(applied) = &ctx.elapsed_modal_applied
@@ -12681,7 +12686,11 @@ fn translate_clause_bunsetsus(
                         None
                     }
                     JointManner::Together => None,
-                    JointManner::Everyone => Some("大家".to_owned()),
+                    JointManner::Everyone => Some(if b.atoms[0].is_locked {
+                        b.atoms[0].surface.clone()
+                    } else {
+                        "大家".to_owned()
+                    }),
                     JointManner::Counted => Some(render_joint_people(&b.atoms[0].surface)),
                 };
                 joint_manner = Some((manner, invitation, wh_question));
@@ -16262,17 +16271,10 @@ fn render_joint_people(number: &str) -> String {
     format!("{number}人")
 }
 
-// An overt joint participant or a joint manner can invite the listener.
-// With an overt third party, the same finite form asks a negative question.
-fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[Atom]) {
-    let [body @ .., verb, polite, neg, ka] = source else {
-        return;
-    };
-    let Some(head) = verb.doc_tok_idx else { return };
-    // 勉強し can be split into a bound verbal noun and the finite light verb.
-    // The former owns its objects and manner, the latter owns ませんか.
-    let action = body
-        .last()
+fn joint_action<'a>(body: &'a [Atom], verb: &'a Atom, head: usize) -> &'a Atom {
+    // In 勉強し, the bound verbal noun can own the manner and objects
+    // even though the light verb owns the polite ending.
+    body.last()
         .filter(|word| {
             verb.lemma.as_deref() == Some("する")
                 && !word.is_locked
@@ -16285,7 +16287,17 @@ fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[
                         && hit.upos_candidates.contains(&Upos::Verb)
                 })
         })
-        .unwrap_or(verb);
+        .unwrap_or(verb)
+}
+
+// An overt joint participant or a joint manner can invite the listener.
+// With an overt third party, the same finite form asks a negative question.
+fn mark_joint_question(groups: &mut Vec<Bunsetsu>, source: &[Atom], original: &[Atom]) {
+    let [body @ .., verb, polite, neg, ka] = source else {
+        return;
+    };
+    let Some(head) = verb.doc_tok_idx else { return };
+    let action = joint_action(body, verb, head);
     let lemma = action.lemma.as_deref().unwrap_or(&action.surface);
     let governs = |atom: &Atom| {
         atom.head == Some(head) || action.doc_tok_idx.is_some() && atom.head == action.doc_tok_idx

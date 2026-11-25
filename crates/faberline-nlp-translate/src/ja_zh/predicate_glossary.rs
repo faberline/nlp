@@ -45,12 +45,28 @@ struct SharedObject {
 #[derive(Default)]
 pub(crate) struct PredicateTerms {
     terms: Vec<PredicateTerm>,
+    polite_joint_stem: Option<Span>,
     question_verb: Option<Span>,
     site: Option<usize>,
     shared_object: Option<SharedObject>,
 }
 
 impl PredicateTerms {
+    pub(super) fn add_polite_joint_stem(&mut self, verb: Span, lock: &LockedSpan) {
+        self.add(verb, lock, Coverage::Stem);
+        self.polite_joint_stem = Some(verb);
+    }
+
+    pub(super) fn expose_polite_joint_stem(&self, atoms: &mut [Atom]) {
+        if let Some(span) = self.polite_joint_stem
+            && let Some(stem) = atoms
+                .iter_mut()
+                .find(|atom| !atom.is_locked && atom.span == span)
+        {
+            stem.upos = Some(Upos::Verb);
+        }
+    }
+
     pub(super) fn add(&mut self, verb: Span, lock: &LockedSpan, coverage: Coverage) {
         let target = lock.replacement.trim();
         let request = ["請", "麻煩", "拜託"]

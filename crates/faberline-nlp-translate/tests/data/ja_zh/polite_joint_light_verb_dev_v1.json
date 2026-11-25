@@ -1,0 +1,168 @@
+{
+  "schema": "faberline.nlp.ja_zh.polite_joint_light_verb_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "proposal_status": "pending_independent_adoption",
+  "measurement_status": "unmeasured",
+  "source_main": "1443a3f4c0b2e8d3c0ea39cdefd0df9d59fdd614",
+  "source_tree": "4cafade5035fdad69d12b7b6930447573f2c4e46",
+  "proposal_source": "https://github.com/faberline/nlp/pull/457",
+  "proposal_note": "These three proposed rows follow the public split-light-verb case shape in #457. They have not received formal data adoption or engine measurement.",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT"
+  },
+  "related_adopted_data": {
+    "file": "volitional_dev_v1.json",
+    "sha256": "9f5fdbc8a80ca90af982efbca42a78ac3e9de5a6e79a2728566137830b4f0f6a",
+    "ids": [
+      "VOL-N5-01",
+      "VOL-N5-03"
+    ],
+    "relation": "The adopted rows establish the joint-action statement and question contrast. These new rows use 作業 as a split light verb."
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "PLJV-N5-01",
+      "level_approx": "N5",
+      "jp": "みんなで作業します。",
+      "zh_hant": "大家一起工作。",
+      "allowed_variants": [
+        "大家一同工作。",
+        "大家一起作業。"
+      ],
+      "semantic_checks": [
+        "みんなで marks the group that performs the shared 作業 action.",
+        "ます。 states the action as an ordinary polite statement, not an invitation.",
+        "The Taiwanese Chinese translation keeps the group and shared action without adding a time or place."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify the members of the group or the person speaking.",
+        "The source gives no time or location."
+      ],
+      "control": {
+        "kind": "joint_action_polite_statement",
+        "contrast_ids": [
+          "PLJV-N5-02",
+          "PLJV-N5-03"
+        ],
+        "stable": [
+          "The shared action is 作業します in all three rows."
+        ],
+        "changed": [
+          "This row uses みんなで for the joint actor and ends with ます。 for a statement."
+        ],
+        "limits": [
+          "The source does not specify who the group includes."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "PLJV-N5-02",
+      "level_approx": "N5",
+      "jp": "みんなで作業しますか。",
+      "zh_hant": "大家一起工作嗎？",
+      "allowed_variants": [
+        "大家一同工作嗎？",
+        "大家一起作業嗎？"
+      ],
+      "semantic_checks": [
+        "みんなで marks the group that performs the shared 作業 action.",
+        "ますか。 asks an ordinary information question about the action; it is not a proposal.",
+        "The question keeps the affirmative proposition that the group performs 作業 together."
+      ],
+      "semantic_unknowns": [
+        "Context can affect whether this short question sounds invitational.",
+        "The source does not identify the group members, the addressee, or the time."
+      ],
+      "control": {
+        "kind": "joint_action_polite_information_question",
+        "contrast_ids": [
+          "PLJV-N5-01",
+          "PLJV-N5-03"
+        ],
+        "stable": [
+          "The shared action is 作業します in all three rows."
+        ],
+        "changed": [
+          "This row uses みんなで for the joint actor and ends with ますか。 for an information question."
+        ],
+        "limits": [
+          "The Taiwanese Chinese question should not add a proposal or invitation."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "PLJV-N5-03",
+      "level_approx": "N5",
+      "jp": "図書館で作業しますか。",
+      "zh_hant": "在圖書館工作嗎？",
+      "allowed_variants": [
+        "在圖書館作業嗎？"
+      ],
+      "semantic_checks": [
+        "で marks 図書館 as the location of 作業.",
+        "ますか。 asks an ordinary information question.",
+        "This control does not name a group or add a joint actor."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify who works or the time."
+      ],
+      "control": {
+        "kind": "locative_polite_information_question",
+        "contrast_ids": [
+          "PLJV-N5-02"
+        ],
+        "stable": [
+          "The action and polite information-question ending match PLJV-N5-02."
+        ],
+        "changed": [
+          "This row uses 図書館で for a location instead of みんなで for a joint actor."
+        ],
+        "limits": [
+          "Do not infer participants or group action from the location marker."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "license": "MIT"
+      }
+    }
+  ]
+}

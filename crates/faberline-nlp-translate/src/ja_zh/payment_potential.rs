@@ -734,6 +734,7 @@ pub(crate) struct FareRoles {
     amount: Span,
     medium: Span,
     medium_with_case: Span,
+    stem: Span,
     native_medium: &'static str,
 }
 
@@ -741,6 +742,7 @@ impl FareRoles {
     fn render(&self, overrides: &[&crate::lock::LockedSpan]) -> Option<String> {
         let mut amount = "票款";
         let mut method = self.native_medium.to_owned();
+        let mut action = "付";
         for lock in overrides {
             if lock.source_span == self.amount {
                 amount = &lock.placeholder;
@@ -748,11 +750,21 @@ impl FareRoles {
                 method = format!("用{}", lock.placeholder);
             } else if lock.source_span == self.medium_with_case {
                 method.clone_from(&lock.placeholder);
+            } else if lock.source_span == self.stem
+                && matches!(
+                    lock.origin,
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::DomainTerm,
+                        ..
+                    }
+                )
+            {
+                action = &lock.placeholder;
             } else {
                 return None;
             }
         }
-        Some(format!("{method}付{amount}"))
+        Some(format!("{method}{action}{amount}"))
     }
 }
 
@@ -903,6 +915,7 @@ fn fare_roles(source: &[Atom]) -> Option<FareRoles> {
             start_char: medium.span.start_char,
             end_char: by.span.end_char,
         },
+        stem: verb.span,
         native_medium,
     })
 }
@@ -993,7 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn fare_glossary_keeps_the_amount_and_the_payment_method() {
+    fn fare_glossary_keeps_the_amount_payment_method_and_stem() {
         let options = TranslateOptions::new(TargetVariant::ZhHant);
         let slice = |text: &str, span: Span| {
             text.chars()
@@ -1006,22 +1019,38 @@ mod tests {
             ("現金", "用現金", "現鈔", "現金で", "以現鈔"),
         ] {
             let source = format!("窓口で切符を買います。切符代は{method}で支払います。");
-            for (amount, medium, expected) in [
-                (true, None, format!("{native}付車資。")),
+            for (amount, medium, stem, expected) in [
+                (true, None, false, format!("{native}付車資。")),
+                (false, None, true, format!("{native}結清票款。")),
                 (
                     false,
                     Some((method, replacement)),
+                    false,
                     format!("用{replacement}付票款。"),
                 ),
                 (
                     false,
+                    Some((method, replacement)),
+                    true,
+                    format!("用{replacement}結清票款。"),
+                ),
+                (
+                    false,
                     Some((whole, whole_replacement)),
+                    false,
                     format!("{whole_replacement}付票款。"),
                 ),
                 (
                     true,
                     Some((whole, whole_replacement)),
+                    false,
                     format!("{whole_replacement}付車資。"),
+                ),
+                (
+                    true,
+                    Some((whole, whole_replacement)),
+                    true,
+                    format!("{whole_replacement}結清車資。"),
                 ),
             ] {
                 let mut glossary = TranslationGlossary::new();
@@ -1033,6 +1062,10 @@ mod tests {
                 if let Some((word, gloss)) = medium {
                     glossary.domain_terms.push(glossary_entry(word, gloss));
                     expected_hits.push((word, gloss));
+                }
+                if stem {
+                    glossary.domain_terms.push(glossary_entry("支払い", "結清"));
+                    expected_hits.push(("支払い", "結清"));
                 }
                 let result =
                     analyze_and_translate(&source, &options, &glossary, None, Backend::Onnx)
@@ -1055,6 +1088,7 @@ mod tests {
         glossary
             .domain_terms
             .push(glossary_entry("カードで", "以信用卡"));
+        glossary.domain_terms.push(glossary_entry("支払い", "結清"));
         let mut analysis = analyze_document(
             source,
             &crate::doc_options_for_translate(&options, &TranslationGlossary::new()),
@@ -1074,7 +1108,7 @@ mod tests {
         assert!(
             translate(&analysis)
                 .target_text
-                .ends_with("以信用卡付票款。")
+                .ends_with("以信用卡結清票款。")
         );
 
         let medium = analysis
@@ -1090,8 +1124,8 @@ mod tests {
             .unwrap();
         medium.deprel = "obj".to_owned();
         let output = translate(&analysis);
-        assert!(!output.target_text.ends_with("以信用卡付票款。"));
-        assert_eq!(output.glossary_hits.len(), 1);
+        assert!(!output.target_text.ends_with("以信用卡結清票款。"));
+        assert_eq!(output.glossary_hits.len(), 2);
     }
 
     #[test]

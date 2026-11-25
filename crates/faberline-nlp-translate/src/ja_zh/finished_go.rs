@@ -2,9 +2,14 @@
 
 use faberline_nlp::doc::{EntityKind, Token};
 
+use crate::GlossaryKind;
+use crate::lock::{LockOrigin, SpanLockTable};
+
 use super::{
-    Atom, Bunsetsu, BunsetsuRole, CLOCK_ATOM, Document, LOCKED_PLACE_ATOM, SemanticClass, Span,
-    Upos, clock_case_governor, dasu_case_link, is_clock_atom, physical_goal_head,
+    Atom, Bunsetsu, BunsetsuRole, CLOCK_ATOM, Document, LOCKED_PLACE_ATOM, LOCKED_RESIDENT_ATOM,
+    Segment, SemanticClass, Span, Upos, build_sentence_atoms, clock_case_governor, dasu_case_link,
+    group_into_bunsetsus, is_clock_atom, is_companion_person, physical_goal_head,
+    return_companion_owner, split_ja_atoms,
 };
 
 pub(super) struct FinishedGo {
@@ -158,6 +163,7 @@ fn direct_destination(
     predicate: usize,
     doc: &Document,
     source: &[char],
+    is_companion_case: impl Fn(usize) -> bool,
 ) -> Option<DirectGo> {
     let mut clock_marker = None;
     for (i, atom) in atoms.iter().enumerate() {
@@ -173,7 +179,10 @@ fn direct_destination(
         let Some(argument) = link.head.and_then(|head| doc.syntax.get(head)) else {
             continue;
         };
-        if argument.head != Some(predicate) || Some(link.token) == clock_marker {
+        if argument.head != Some(predicate)
+            || Some(link.token) == clock_marker
+            || is_companion_case(link.token)
+        {
             continue;
         }
         match (argument.deprel.as_str(), raw(source, link.span)?) {
@@ -193,18 +202,16 @@ fn direct_destination(
     })
 }
 
-fn physical_destination(
-    group: &Bunsetsu,
+fn source_destination<'a>(
+    group: &'a Bunsetsu,
     going: &DirectGo,
-    doc: &Document,
+    doc: &'a Document,
     source: &[char],
-) -> bool {
+) -> Option<(&'a Atom, &'a Atom, &'a Token)> {
     let [place, marker] = group.atoms.as_slice() else {
-        return false;
+        return None;
     };
-    let Some(noun) = source_head(place, doc) else {
-        return false;
-    };
+    let noun = source_head(place, doc)?;
     if place.doc_tok_idx != Some(going.place)
         || marker.doc_tok_idx != Some(going.marker)
         || place.head != Some(going.predicate)
@@ -224,8 +231,20 @@ fn physical_destination(
                 )
         })
     {
-        return false;
+        return None;
     }
+    Some((place, marker, noun))
+}
+
+fn physical_destination(
+    group: &Bunsetsu,
+    going: &DirectGo,
+    doc: &Document,
+    source: &[char],
+) -> bool {
+    let Some((place, marker, noun)) = source_destination(group, going, doc, source) else {
+        return false;
+    };
     if !place.is_locked {
         return physical_goal_head(group) == Some(going.predicate);
     }
@@ -264,13 +283,26 @@ fn physical_destination(
     physical_goal_head(&source_group) == Some(going.predicate)
 }
 
-pub(super) fn resolve(
+fn companion_market_destination(
+    group: &Bunsetsu,
+    going: &DirectGo,
+    doc: &Document,
+    source: &[char],
+) -> bool {
+    // 市場 has no Location tag. With a proved companion, the direct に/へ
+    // argument of completed 行く still identifies the market as a place.
+    source_destination(group, going, doc, source).is_some_and(|(place, _, _)| {
+        raw(source, place.span) == Some(&['市', '場'])
+            && (!place.is_locked || place.lemma.as_deref() == Some(LOCKED_PLACE_ATOM))
+    })
+}
+
+fn completed_predicate(
     groups: &[Bunsetsu],
-    atoms: &[Atom],
     doc: &Document,
     source: &[char],
     preceding_action: Option<usize>,
-) -> Option<FinishedGo> {
+) -> Option<usize> {
     if doc.text_chars != source.len() {
         return None;
     }
@@ -282,28 +314,250 @@ pub(super) fn resolve(
     if predicates.next().is_some() || group.sconj_tail.is_some() || group.sfp_tail.is_some() {
         return None;
     }
-    let predicate = completed_go(verb, tail, doc, source, preceding_action)?;
-    let going = direct_destination(atoms, predicate, doc, source)?;
+    completed_go(verb, tail, doc, source, preceding_action)
+}
+
+fn has_local_subject(groups: &[Bunsetsu], predicate: usize, doc: &Document) -> bool {
     // The renderer must have the original subject group in this same clause.
     let mut subjects = doc
         .syntax
         .iter()
         .filter(|node| node.head == Some(predicate) && node.deprel == "nsubj");
-    if let Some(subject) = subjects.next()
-        && (subjects.next().is_some()
-            || !groups.iter().flat_map(|group| &group.atoms).any(|atom| {
+    subjects.next().is_none_or(|subject| {
+        subjects.next().is_none()
+            && groups.iter().flat_map(|group| &group.atoms).any(|atom| {
                 atom.doc_tok_idx == Some(subject.token) && source_head(atom, doc).is_some()
-            }))
-    {
+            })
+    })
+}
+
+fn original_actor(atom: &Atom, doc: &Document, source: &[char]) -> Option<Atom> {
+    if !atom.is_locked || atom.lemma.as_deref() != Some(LOCKED_RESIDENT_ATOM) {
         return None;
     }
-    let goal_group = groups
+    let token = source_head(atom, doc)?;
+    if token.span != atom.span {
+        return None;
+    }
+    let mut original = atom.clone();
+    original.surface = raw(source, atom.span)?.iter().collect();
+    original.upos = token.upos;
+    original.lemma.clone_from(&token.lemma);
+    original.is_locked = false;
+    Some(original)
+}
+
+fn companion_owner(
+    noun: &Atom,
+    marker: &Atom,
+    atoms: &[Atom],
+    doc: &Document,
+    source: &[char],
+) -> Option<usize> {
+    let original = original_actor(noun, doc, source);
+    if !is_companion_person(original.as_ref().unwrap_or(noun)) {
+        return None;
+    }
+    let position = atoms
         .iter()
-        .position(|group| physical_destination(group, &going, doc, source))?;
+        .position(|atom| atom.doc_tok_idx == marker.doc_tok_idx)?;
+    if original.is_none() {
+        return return_companion_owner(atoms, position);
+    }
+    // Check the original actor roles while keeping placeholders in the render atoms.
+    let evidence: Vec<_> = atoms
+        .iter()
+        .map(|atom| original_actor(atom, doc, source).unwrap_or_else(|| atom.clone()))
+        .collect();
+    return_companion_owner(&evidence, position)
+}
+
+pub(super) fn mark_companions(
+    groups: &mut [Bunsetsu],
+    atoms: &[Atom],
+    doc: &Document,
+    source: &[char],
+    preceding_action: Option<usize>,
+) {
+    let Some(predicate) = completed_predicate(groups, doc, source, preceding_action) else {
+        return;
+    };
+    let mut person = None;
+    let mut together = None;
+    for (index, group) in groups.iter().enumerate() {
+        let [noun, marker] = group.atoms.as_slice() else {
+            continue;
+        };
+        if noun.head != Some(predicate)
+            || noun.deprel != "obl"
+            || source_head(noun, doc).is_none_or(|original| original.span != noun.span)
+            || source_head(marker, doc).is_none_or(|original| original.span != marker.span)
+            || !dasu_case_link(noun, marker)
+        {
+            continue;
+        }
+        let candidate = (index, marker.doc_tok_idx);
+        let previous = match (raw(source, noun.span), raw(source, marker.span)) {
+            (_, Some(['と']))
+                if companion_owner(noun, marker, atoms, doc, source) == Some(predicate) =>
+            {
+                person.replace(candidate)
+            }
+            (Some(['一', '緒']), Some(['に'])) if !noun.is_locked => together.replace(candidate),
+            _ => continue,
+        };
+        if previous.is_some() {
+            return;
+        }
+    }
+    if person.is_none() && together.is_none() {
+        return;
+    }
+    let allows = |id| {
+        person.is_some_and(|(_, marker)| marker == Some(id))
+            || together.is_some_and(|(_, marker)| marker == Some(id))
+    };
+    let Some(going) = direct_destination(atoms, predicate, doc, source, allows) else {
+        return;
+    };
+    if !has_local_subject(groups, predicate, doc)
+        || !groups.iter().any(|group| {
+            physical_destination(group, &going, doc, source)
+                || companion_market_destination(group, &going, doc, source)
+        })
+    {
+        return;
+    }
+    if let Some((index, _)) = person {
+        groups[index].role = BunsetsuRole::TravelCompanion;
+    }
+    if let Some((index, _)) = together {
+        groups[index].role = BunsetsuRole::TravelTogether;
+    }
+}
+
+fn is_companion_group(group: &Bunsetsu) -> bool {
+    matches!(
+        group.role,
+        BunsetsuRole::TravelCompanion | BunsetsuRole::TravelTogether
+    )
+}
+
+pub(super) fn resolve(
+    groups: &[Bunsetsu],
+    atoms: &[Atom],
+    doc: &Document,
+    source: &[char],
+    preceding_action: Option<usize>,
+) -> Option<FinishedGo> {
+    let predicate = completed_predicate(groups, doc, source, preceding_action)?;
+    let going = direct_destination(atoms, predicate, doc, source, |id| {
+        groups.iter().any(|group| {
+            is_companion_group(group)
+                && group.atoms.last().and_then(|atom| atom.doc_tok_idx) == Some(id)
+        })
+    })?;
+    if !has_local_subject(groups, predicate, doc) {
+        return None;
+    }
+    let has_companions = groups.iter().any(is_companion_group);
+    let goal_group = groups.iter().position(|group| {
+        physical_destination(group, &going, doc, source)
+            || has_companions && companion_market_destination(group, &going, doc, source)
+    })?;
     Some(FinishedGo {
         predicate,
         goal_group,
     })
+}
+
+pub(crate) fn may_restore_companion_locks(
+    text: &str,
+    source: &[char],
+    locks: &SpanLockTable,
+) -> bool {
+    (text.contains('と') || text.contains("一緒に"))
+        && locks.locks.iter().any(|lock| {
+            lock.mandatory
+                && match lock.origin {
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Actor,
+                        ..
+                    } => true,
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Place,
+                        ..
+                    } => matches!(
+                        source.get(lock.source_span.end_char.saturating_sub(1)),
+                        Some('に' | 'へ')
+                    ),
+                    _ => false,
+                }
+        })
+}
+
+/// Expose the original role markers while keeping the caller's replacements.
+pub(crate) fn restore_companion_locks(
+    sentence: usize,
+    doc: &Document,
+    tokens: &[&Token],
+    source: &[char],
+    locks: &SpanLockTable,
+) -> Option<SpanLockTable> {
+    let span = doc.segmentation.sentences.get(sentence)?.span;
+    let original = build_sentence_atoms(sentence, source, doc, tokens, &SpanLockTable::new());
+    let clauses = split_ja_atoms(&original, doc, span, Some(source));
+    let [Segment::Clause { atoms, .. }] = clauses.as_slice() else {
+        return None;
+    };
+    let mut groups = group_into_bunsetsus(atoms, doc, sentence);
+    mark_companions(&mut groups, atoms, doc, source, None);
+    if !groups.iter().any(is_companion_group) {
+        return None;
+    }
+    let going = resolve(&groups, atoms, doc, source, None)?;
+    let mut render = locks.clone();
+    let mut actor = false;
+    let mut place = false;
+    let mut exposed_marker = false;
+    for lock in render.locks.iter_mut().filter(|lock| {
+        lock.source_span.start_char < span.end_char && span.start_char < lock.source_span.end_char
+    }) {
+        if !lock.mandatory {
+            return None;
+        }
+        let group = match lock.origin {
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Actor,
+                ..
+            } if !actor => {
+                actor = true;
+                groups
+                    .iter()
+                    .find(|group| group.role == BunsetsuRole::TravelCompanion)?
+            }
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Place,
+                ..
+            } if !place => {
+                place = true;
+                &groups[going.goal_group]
+            }
+            _ => return None,
+        };
+        let [noun, marker] = group.atoms.as_slice() else {
+            return None;
+        };
+        let end = lock.source_span.end_char;
+        if lock.source_span.start_char != noun.span.start_char
+            || (end != noun.span.end_char && end != marker.span.end_char)
+        {
+            return None;
+        }
+        exposed_marker |= lock.source_span != noun.span;
+        lock.source_span = noun.span;
+    }
+    (actor || exposed_marker).then_some(render)
 }
 
 /// A reading comma after a source-linked time can keep all arguments of the
@@ -324,7 +578,7 @@ fn reading_pause(atoms: &[Atom], doc: &Document, source: &[char]) -> Option<usiz
         _ => ending,
     };
     let predicate = completed_go(verb, tail, doc, source, None)?;
-    let going = direct_destination(atoms, predicate, doc, source)?;
+    let going = direct_destination(atoms, predicate, doc, source, |_| false)?;
     if pause.is_locked
         || pause.deprel != "punct"
         || pause.head != Some(predicate)
@@ -406,6 +660,68 @@ mod tests {
             surfaces: vec![canonical.to_owned()],
             targets: [(TargetVariant::ZhHant, target.to_owned())].into(),
             ..GlossaryEntry::default()
+        }
+    }
+
+    #[test]
+    fn completed_trip_keeps_the_companion_separate_from_the_destination() {
+        let source = "母と一緒に市場へ行った。";
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let stock = analyze_and_translate(
+            source,
+            &options,
+            &TranslationGlossary::new(),
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(stock.target_text, "跟母親一起去了市場。");
+
+        let mut glossary = TranslationGlossary::new();
+        glossary.actors.push(glossary_entry("母と", "媽媽"));
+        glossary.places.push(glossary_entry("市場へ", "公有市場"));
+        let locked =
+            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_eq!(locked.target_text, "跟媽媽一起去了公有市場。");
+        let [actor, place] = locked.glossary_hits.as_slice() else {
+            panic!("expected the companion and destination hits");
+        };
+        assert_eq!(actor.kind, GlossaryKind::Actor);
+        assert_eq!(place.kind, GlossaryKind::Place);
+        for (hit, start, end) in [(actor, 0, 2), (place, 5, 8)] {
+            assert_eq!(
+                hit.source_span,
+                Span {
+                    start_char: start,
+                    end_char: end
+                }
+            );
+        }
+        for (hit, start, end) in [(actor, 1, 3), (place, 7, 11)] {
+            assert_eq!(
+                hit.target_span,
+                Span {
+                    start_char: start,
+                    end_char: end
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn completed_trip_preserves_time_and_coordinated_subjects() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary = TranslationGlossary::new();
+        for (source, expected) in [
+            (
+                "昨日、母と一緒に市場へ行った。",
+                "昨天，跟母親一起去了市場。",
+            ),
+            ("母と私が市場へ行った。", "母親和我往市場去了。"),
+        ] {
+            let result =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(result.target_text, expected, "{source}");
         }
     }
 

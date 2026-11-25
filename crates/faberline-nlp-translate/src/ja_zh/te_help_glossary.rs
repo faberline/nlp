@@ -67,7 +67,11 @@ pub(super) fn restore_object<'source>(
         }
         let request = te_help_request(plain, source, None)?;
         let action = request.action.last()?;
-        let (noun, with_case, det) = direct_object(request.action, action, lock)?;
+        let SourceObject {
+            noun,
+            case_is_locked,
+            determiner,
+        } = direct_object(request.action, action, lock)?;
         // Glossary hints can change token indices. Use the verified source
         // span to find the action in the document that will be rendered.
         let action_index = body
@@ -85,7 +89,7 @@ pub(super) fn restore_object<'source>(
         restored.lemma = Some(LOCKED_OBJECT_ATOM.to_owned());
         restored.deprel = "obj".to_owned();
         restored.head = Some(action_index);
-        let left = if let Some((det, demonstrative)) = det
+        let left = if let Some((det, demonstrative)) = determiner
             && lock.source_span.start_char == noun.span.start_char
         {
             let left = index.checked_sub(1)?;
@@ -102,7 +106,7 @@ pub(super) fn restore_object<'source>(
                     demonstrative_classifier(&word, noun, Some(TargetVariant::ZhHant))
                 }
             };
-            if unit.is_empty() && !with_case {
+            if unit.is_empty() && !case_is_locked {
                 return None;
             }
             restored.span.start_char = det.span.start_char;
@@ -110,7 +114,7 @@ pub(super) fn restore_object<'source>(
                 .surface
                 .insert_str(0, &format!("{demonstrative}{unit}"));
             left
-        } else if with_case {
+        } else if case_is_locked {
             index
         } else {
             return None;
@@ -134,31 +138,42 @@ pub(super) fn restore_object<'source>(
     })
 }
 
+struct SourceObject<'a> {
+    noun: &'a Atom,
+    case_is_locked: bool,
+    determiner: Option<(&'a Atom, char)>,
+}
+
 fn direct_object<'a>(
     action: &'a [Atom],
     verb: &Atom,
     lock: &LockedSpan,
-) -> Option<(&'a Atom, bool, Option<(&'a Atom, char)>)> {
+) -> Option<SourceObject<'a>> {
     let verb_index = verb.doc_tok_idx?;
     action.windows(2).enumerate().find_map(|(index, pair)| {
         let [noun, particle] = pair else { return None };
-        let with_case = lock.source_span.end_char == particle.span.end_char;
+        let case_is_locked = lock.source_span.end_char == particle.span.end_char;
         if !matches!(noun.upos, Some(Upos::Noun | Upos::Propn))
             || noun.head != Some(verb_index)
             || noun.deprel != "obj"
             || particle.surface != "を"
             || !dasu_case_link(noun, particle)
-            || !(with_case || lock.source_span.end_char == noun.span.end_char)
+            || !(case_is_locked || lock.source_span.end_char == noun.span.end_char)
         {
             return None;
         }
-        let det = index
+        let determiner = index
             .checked_sub(1)
             .and_then(|previous| action.get(previous))
             .and_then(|det| attached_demonstrative(det, noun).map(|word| (det, word)));
         (lock.source_span.start_char == noun.span.start_char
-            || with_case
-                && det.is_some_and(|(det, _)| det.span.start_char == lock.source_span.start_char))
-        .then_some((noun, with_case, det))
+            || case_is_locked
+                && determiner
+                    .is_some_and(|(det, _)| det.span.start_char == lock.source_span.start_char))
+        .then_some(SourceObject {
+            noun,
+            case_is_locked,
+            determiner,
+        })
     })
 }

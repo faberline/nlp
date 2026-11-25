@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 mod application_form;
 mod calendar;
+mod class_period;
 pub(crate) use calendar::DateContext;
 mod carrying;
 mod common_noun_sense;
@@ -272,6 +273,7 @@ pub(crate) fn translate_ja_sentence(
         {
             return definition;
         }
+        class_period::normalize(&mut atoms, doc, chars, lock_table);
         outward_look::restore_case(&mut atoms, chars, sent_span, doc, lock_table);
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
@@ -12830,10 +12832,9 @@ fn translate_clause_bunsetsus(
                         is_instrument_de: is_inst,
                         is_spatial_made: is_spatial_made_bunsetsu(&b),
                         temporal_made_time: until,
-                        is_event_time: b
-                            .atoms
-                            .iter()
-                            .any(|a| is_clock_atom(a) || calendar::is_date(a)),
+                        is_event_time: b.atoms.iter().any(|a| {
+                            is_clock_atom(a) || calendar::is_date(a) || class_period::is_period(a)
+                        }),
                         is_building_floor: b.atoms.iter().any(is_building_floor),
                         deadline_endpoint: if b.atoms.iter().any(|a| open_event_time(a).is_some()) {
                             DeadlineEndpoint::Question { calendar: true }
@@ -12850,7 +12851,9 @@ fn translate_clause_bunsetsus(
                             == BunsetsuRole::DeadlineWithDetachedNegation,
                         is_event_time_ni: is_plain_clock_ni(&b)
                             || (b.case_particle.as_deref() == Some("に")
-                                && b.atoms.iter().any(calendar::is_date)),
+                                && b.atoms
+                                    .iter()
+                                    .any(|a| calendar::is_date(a) || class_period::is_period(a))),
                         transfer_dative: b.case_particle.as_deref() == Some("に")
                             && !is_time_or_place_bunsetsu(&b.atoms),
                         physical_goal_head: physical_goal_head(&b),
@@ -18834,7 +18837,7 @@ fn is_payment_medium(method: &Atom, modifier: Option<&Atom>) -> bool {
 fn is_time_or_place_bunsetsu(atoms: &[Atom]) -> bool {
     atoms
         .iter()
-        .any(|a| is_clock_atom(a) || calendar::is_date(a))
+        .any(|a| is_clock_atom(a) || calendar::is_date(a) || class_period::is_period(a))
         || is_place_location_bunsetsu(atoms)
         || atoms.iter().any(|a| {
             matches!(

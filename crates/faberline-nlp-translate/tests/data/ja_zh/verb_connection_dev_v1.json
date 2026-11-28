@@ -1,0 +1,314 @@
+{
+  "title": "Japanese connection and comprehension verb public development contrasts",
+  "schema": "faberline.nlp.ja_zh.verb_connection_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "visibility": "development-visible",
+  "source_main": "f86728ea5665b044c0cdd6735467c92eaf3144a9",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "sentence_provenance": "All six Japanese sentences were written for this draft. No dictionary examples, corpora, or external sentence text were copied.",
+    "reference_provenance": "First-party Taiwan Traditional Chinese references for the original examples, with independent language review.",
+    "external_gloss_source": "None used."
+  },
+  "purpose": "Contrast route, telephone connection and comprehension for 通じる and guard the distinct transitive 通す construction.",
+  "review_and_adoption": {
+    "process": "Independent language review and adoption must be recorded in a separate data-only PR before any rule uses these rows for acceptance.",
+    "author_does_not_accept_own_work": true,
+    "human_review_claim": false,
+    "scope_limit": "The six original rows cover these specific senses and one related-verb control. They do not score the fixed sample or define every sense."
+  },
+  "items": [
+    {
+      "id": "TSUJI-DEV-01",
+      "lemma": "通じる",
+      "sense": "route_reaches_destination",
+      "level_approx": "N3 approx",
+      "jp": "この小道は駅まで通じている。",
+      "zh_hant": "這條小路通到車站。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "小道 is the route, and 駅まで marks its endpoint.",
+        "通じている describes the route reaching the stated destination."
+      ],
+      "semantic_unknowns": [
+        "The source does not state who uses the path or how long it is."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "通じる",
+        "contrast_ids": [
+          "TSUJI-DEV-02",
+          "TSUJI-DEV-03",
+          "TSUJI-DEV-04",
+          "TSUJI-DEV-05",
+          "TSUJI-DEV-06"
+        ],
+        "source_cue": "小道 is a physical route, and 駅まで gives its endpoint.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples the route sense of 通じる."
+        ],
+        "limits": [
+          "This row does not define every route use of 通じる."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TSUJI-DEV-02",
+      "lemma": "通じる",
+      "sense": "telephone_connection_succeeds",
+      "level_approx": "N3 approx",
+      "jp": "店に電話が通じた。",
+      "zh_hant": "打給店裡的電話接通了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "電話が通じた states that the telephone connection reached the store.",
+        "The source does not name a caller."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether anyone spoke or what was said."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "通じる",
+        "contrast_ids": [
+          "TSUJI-DEV-01",
+          "TSUJI-DEV-03",
+          "TSUJI-DEV-04",
+          "TSUJI-DEV-05",
+          "TSUJI-DEV-06"
+        ],
+        "source_cue": "電話 and 店 identify a telephone connection to a destination.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples successful telephone connection for 通じる."
+        ],
+        "limits": [
+          "The source does not state the caller or call purpose."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TSUJI-DEV-03",
+      "lemma": "通じる",
+      "sense": "telephone_connection_fails",
+      "level_approx": "N3 approx",
+      "jp": "この辺りでは携帯電話がつうじない。",
+      "zh_hant": "這一帶手機打不通。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "携帯電話 is the telephone whose connection fails in this area.",
+        "つうじない is a finite negative form of the same verb, written in kana."
+      ],
+      "semantic_unknowns": [
+        "The source does not state why the connection fails or how large the area is."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "通じる",
+        "contrast_ids": [
+          "TSUJI-DEV-01",
+          "TSUJI-DEV-02",
+          "TSUJI-DEV-04",
+          "TSUJI-DEV-05",
+          "TSUJI-DEV-06"
+        ],
+        "source_cue": "携帯電話 identifies a phone connection, while つうじない gives its negative state.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples a finite kana spelling and failed telephone connection."
+        ],
+        "limits": [
+          "The source does not identify a network or technical cause."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TSUJI-DEV-04",
+      "lemma": "通じる",
+      "sense": "explanation_is_understood",
+      "level_approx": "N3 approx",
+      "jp": "この説明は子どもにも通じた。",
+      "zh_hant": "連小孩也理解了這個說明。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "この説明 is the content understood.",
+        "にも marks children as included among those who understood it."
+      ],
+      "semantic_unknowns": [
+        "The source does not say how the explanation was given."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "通じる",
+        "contrast_ids": [
+          "TSUJI-DEV-01",
+          "TSUJI-DEV-02",
+          "TSUJI-DEV-03",
+          "TSUJI-DEV-05",
+          "TSUJI-DEV-06"
+        ],
+        "source_cue": "説明 is understood by children, as marked by にも.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples comprehension for 通じる."
+        ],
+        "limits": [
+          "The source does not state whether every child understood the explanation."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TSUJI-DEV-05",
+      "lemma": "通じる",
+      "sense": "joke_is_not_understood",
+      "level_approx": "N3 approx",
+      "jp": "短い冗談は彼には通じなかった。",
+      "zh_hant": "他沒有理解這個簡短的笑話。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "短い冗談 is the content that does not get through to him.",
+        "通じなかった marks the failed comprehension."
+      ],
+      "semantic_unknowns": [
+        "The source does not explain why he did not understand the joke."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "通じる",
+        "contrast_ids": [
+          "TSUJI-DEV-01",
+          "TSUJI-DEV-02",
+          "TSUJI-DEV-03",
+          "TSUJI-DEV-04",
+          "TSUJI-DEV-06"
+        ],
+        "source_cue": "彼には identifies the person who does not understand the joke.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples failed comprehension for 通じる."
+        ],
+        "limits": [
+          "The source does not state the reason or audience beyond 彼."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TSUJI-DEV-06",
+      "lemma": "通す",
+      "sense": "transitive_pass_through_control",
+      "level_approx": "N3 approx",
+      "jp": "駅員は乗客を改札口から通した。",
+      "zh_hant": "站務員讓乘客通過驗票閘門。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "駅員 is the agent, and 乗客を is the person allowed through.",
+        "改札口から marks the gate as the passage route.",
+        "通した is transitive 通す, not the intransitive lemma 通じる."
+      ],
+      "semantic_unknowns": [
+        "The source does not state why the passenger is being let through."
+      ],
+      "control": {
+        "kind": "distinct_lemma_negative_control",
+        "group_key": "通じる",
+        "contrast_ids": [
+          "TSUJI-DEV-01",
+          "TSUJI-DEV-02",
+          "TSUJI-DEV-03",
+          "TSUJI-DEV-04",
+          "TSUJI-DEV-05"
+        ],
+        "source_cue": "The agent, direct object and passage route mark transitive 通す.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row is a distinct-lemma control, not a 通じる sense."
+        ],
+        "limits": [
+          "Do not use this row to select a lexical gloss for 通じる."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    }
+  ],
+  "source": "https://github.com/faberline/nlp/issues/584",
+  "source_tree": "d5585234bdb309a0720ddfa9dfb194f662ac98be",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "level_note": "Approximate sentence difficulty only. These examples do not establish JLPT coverage."
+}

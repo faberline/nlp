@@ -142,15 +142,15 @@
     },
     {
       "id": "quoted-reading-06",
-      "jp": "私は山田先生を見ました。",
-      "zh_hant": "我看見山田老師了。",
+      "jp": "私は小学校の先生をしている山田さんを見ました。",
+      "zh_hant": "我看見在小學教書的山田老師了。",
       "allowed_variants": [
-        "我看到山田老師了。"
+        "我看到在小學教書的山田老師了。"
       ],
       "semantic_checks": [
-        "Translate 山田先生 as a person addressed by the neutral Taiwan Mandarin term 老師, outside quotation marks.",
         "Translate the explicit subject 私は as 我.",
-        "Do not preserve the person as a quoted text operand."
+        "Translate 山田さん as the person who teaches at an elementary school, using the neutral Taiwan Mandarin term 山田老師.",
+        "Translate this as seeing a person outside quotation marks, not preserving written text."
       ],
       "semantic_unknowns": [
         "The source does not state the teacher’s gender."

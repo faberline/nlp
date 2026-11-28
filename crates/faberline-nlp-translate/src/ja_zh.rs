@@ -250,7 +250,52 @@ pub(crate) fn translate_ja_sentence<'source>(
     honorifics: &mut HonorificContext,
 ) -> (String, Vec<ClauseAlignment>) {
     let sent_span = doc.segmentation.sentences[sentence_idx].span;
-    let atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    let handover = (target == TargetVariant::ZhHant
+        && predicate_terms.is_none()
+        && direct_quote.is_none()
+        && written_form_continuation.is_none()
+        && doc.options.cpu_syntax
+        && doc.options.enrich_morphology
+        && handover::has_handover_glossary(
+            &chars[sent_span.start_char..sent_span.end_char],
+            lock_table,
+        ))
+    .then(|| {
+        let from_unhinted = || {
+            // A glossary hint can merge a whole relative into one token.
+            // Only built-in analysis can supply the unhinted view.
+            let source = unhinted_source()?;
+            let first = source
+                .tokens
+                .partition_point(|token| token.sentence < sentence_idx);
+            let end = source
+                .tokens
+                .partition_point(|token| token.sentence <= sentence_idx);
+            let tokens = source.tokens[first..end].iter().collect::<Vec<_>>();
+            let locks =
+                handover::handover_render_locks(sentence_idx, source, &tokens, chars, lock_table)?;
+            Some((source, Some(tokens), locks))
+        };
+        from_unhinted().or_else(|| {
+            handover::handover_render_locks(sentence_idx, doc, sent_tokens, chars, lock_table)
+                .map(|locks| (doc, None, locks))
+        })
+    })
+    .flatten();
+    let (doc, sent_tokens, lock_table) =
+        handover
+            .as_ref()
+            .map_or((doc, sent_tokens, lock_table), |(source, tokens, locks)| {
+                (
+                    *source,
+                    tokens.as_deref().unwrap_or(sent_tokens),
+                    &locks.table,
+                )
+            });
+    let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    if let Some((_, _, locks)) = handover.as_ref() {
+        locks.apply(&mut atoms);
+    }
     honorifics.enter_sentence(doc.segmentation.sentences[sentence_idx].paragraph, &atoms);
     if let Some(definition) = honorifics.definition(&atoms, lock_table) {
         return definition.render(doc, sentence_idx, target);

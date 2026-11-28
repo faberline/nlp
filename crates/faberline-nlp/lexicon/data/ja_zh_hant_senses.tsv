@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: MIT
 # headword	upos	anchor	sense_id	gloss_zh-Hant_TW	usage_zh-Hant_TW	src
+お話	NOUN	-	conversation	談話	指人們開口談事情的互動，常見於委婉約談或敘述交談時	first_party_mit
+お話	NOUN	-	explanation	說明	指對方講述的事情或針對某個主題作的介紹	first_party_mit
+お話	NOUN	-	story	故事	指說給人聽或寫在書裡的故事，可用於繪本或口頭講述	first_party_mit
 かける	VERB	-	apply	施加	讓物品或人承受壓力、負擔或作用	first_party_mit
 かける	VERB	-	call	打電話	用電話聯絡對方，光是撥出電話不表示對方已接聽	first_party_mit
 かける	VERB	-	cover	蓋上	將毯子或罩布覆在物體或人身上	first_party_mit

@@ -192,7 +192,7 @@ fn subject(
         return Some(format!("哪個{}", render_bunsetsu_np(group, target)));
     }
     let groups = group_into_bunsetsus(&words, doc, sentence);
-    let merged = merge_adnominal_bunsetsus(groups, &words, doc, target);
+    let merged = merge_adnominal_bunsetsus(groups, &words, doc, target, None);
     let [phrase] = merged.as_slice() else {
         return None;
     };

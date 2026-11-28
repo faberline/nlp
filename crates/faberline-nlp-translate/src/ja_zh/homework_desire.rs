@@ -411,7 +411,7 @@ pub(super) fn render(
             label
         });
     let groups = compose_relative_daypart(group_into_bunsetsus(&transfer, doc, sentence));
-    let groups = merge_adnominal_bunsetsus(groups, &clause[..=i], doc, target);
+    let groups = merge_adnominal_bunsetsus(groups, &clause[..=i], doc, target, None);
     try_translate_homework_transfer(
         &groups,
         &clause[..=i],

@@ -2262,6 +2262,74 @@ fn assert_nominal_request_hit(
 }
 
 #[test]
+fn written_opening_uses_the_original_genitive_and_preserves_caller_terms() {
+    let source = "本の始めは大切です。";
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let empty = TranslationGlossary::new();
+    let stock = analyze_and_translate(source, &options, &empty, None, Backend::Onnx).unwrap();
+    assert_valid_ja_zh_doc(source, &stock);
+    assert_eq!(stock.target_text, "書的開頭很重要。");
+
+    for kind in [GlossaryKind::Object, GlossaryKind::DomainTerm] {
+        for surface in ["本", "本の"] {
+            for target in ["手冊", "手冊的"] {
+                let glossary = nominal_request_glossary(kind, surface, target);
+                let translated =
+                    analyze_and_translate(source, &options, &glossary, None, Backend::Onnx)
+                        .unwrap();
+                assert_nominal_request_hit(source, &translated, kind, surface, target);
+                assert_eq!(translated.target_text, "手冊的開頭很重要。");
+            }
+        }
+        let glossary = nominal_request_glossary(kind, "始め", "起首");
+        let translated =
+            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_nominal_request_hit(source, &translated, kind, "始め", "起首");
+        assert_eq!(translated.target_text, "書的起首很重要。");
+    }
+}
+
+#[test]
+fn written_opening_respects_the_supplied_genitive_link() {
+    let source = "本の始めは大切です。";
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let empty = TranslationGlossary::new();
+    let mut analysis = analyze_document(source, &doc_options_for_translate(&options, &empty));
+    let kind = GlossaryKind::DomainTerm;
+    let glossary = nominal_request_glossary(kind, "本の", "手冊");
+    let translate = |doc: &Document| {
+        translate_document(
+            source,
+            doc,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            &glossary,
+            None,
+        )
+        .unwrap()
+    };
+    let linked = translate(&analysis);
+    assert_nominal_request_hit(source, &linked, kind, "本の", "手冊");
+    assert_eq!(linked.target_text, "手冊的開頭很重要。");
+
+    let arc = analysis
+        .syntax
+        .iter_mut()
+        .find(|arc| arc.deprel == "nmod" && slice_chars(source, arc.span) == "本")
+        .unwrap();
+    assert!(arc.head.is_some());
+    arc.head = None;
+    let detached = translate(&analysis);
+    assert_nominal_request_hit(source, &detached, kind, "本の", "手冊");
+    assert!(
+        !detached.target_text.contains("開頭"),
+        "{}",
+        detached.target_text
+    );
+}
+
+#[test]
 fn first_step_keeps_the_adverb_and_verb_glossary_spans() {
     let source = "私は初めに名前を書きます。";
     let options = TranslateOptions::new(TargetVariant::ZhHant);

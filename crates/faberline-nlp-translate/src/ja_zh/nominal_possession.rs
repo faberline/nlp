@@ -16,7 +16,7 @@ pub(super) fn noun_phrase(
     // The original head may be the root precisely because the copula was attached
     // to it. Inside this complement it takes its ordinary nominal modifiers.
     groups.last_mut()?.role = BunsetsuRole::Other;
-    let merged = merge_adnominal_bunsetsus(groups, atoms, doc, target);
+    let merged = merge_adnominal_bunsetsus(groups, atoms, doc, target, None);
     let [phrase] = merged.as_slice() else {
         return None;
     };

@@ -46,6 +46,7 @@ mod recipient_scope;
 mod return_endpoint;
 mod te_help_glossary;
 mod trip_after_meal;
+pub(crate) mod written_opening;
 
 #[cfg(test)]
 mod focused_negative_go_tests;
@@ -7499,6 +7500,7 @@ fn translate_clause_atoms(
         order_noun::bind(&mut norm_atoms, body, ctx.source_chars);
         if !ctx.inside_quote {
             recipient_scope::mark_exclusions(&mut norm_atoms);
+            written_opening::localize_importance(&mut norm_atoms, ctx);
         }
     }
     calendar::normalize(&mut norm_atoms, ctx.contrasts_recurrence);
@@ -7573,7 +7575,7 @@ fn translate_clause_atoms(
     {
         grouped = fold_locked_document_demonstratives(grouped, doc, ctx.source_chars, locks);
     }
-    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target);
+    let mut bunsetsus = merge_adnominal_bunsetsus(grouped, body, doc, target, Some(ctx));
     if target == TargetVariant::ZhHant
         && condition_tail.is_none()
         && proposal.is_none()
@@ -18160,6 +18162,7 @@ fn merge_adnominal_bunsetsus(
     source: &[Atom],
     doc: &Document,
     target: TargetVariant,
+    ctx: Option<&ClauseDiscourseCtx<'_>>,
 ) -> Vec<Bunsetsu> {
     let mut res: Vec<Bunsetsu> = Vec::with_capacity(bunsetsus.len());
 
@@ -18276,8 +18279,13 @@ fn merge_adnominal_bunsetsus(
                     }
 
                     // Pure `N の` modifier (e.g. `美咲の`, `机の`, `3冊の`, `今回の`).
+                    let supplied_genitive = target == TargetVariant::ZhHant
+                        && b.atoms
+                            .first_mut()
+                            .is_some_and(|noun| written_opening::localize(noun, &mod_b.atoms, ctx));
                     mod_b.atoms.pop();
-                    let omit_de = starts_with_num_counter(&mod_b)
+                    let omit_de = supplied_genitive
+                        || starts_with_num_counter(&mod_b)
                         || is_spatial_head_bunsetsu(&b)
                         || mod_b.atoms.first().is_some_and(|a| a.surface == "今回");
                     let mut mod_str = render_bunsetsu_np(&mod_b, target);

@@ -404,6 +404,48 @@ pub(crate) fn translate_ja_sentence<'source>(
         && direct_quote.is_none()
         && written_form_continuation.is_none()
         && predicate_terms.is_none()
+        && doc.options.cpu_syntax
+        && doc.options.enrich_morphology
+        && doc_clauses.len() == 2
+        && chars[sent_span.start_char..sent_span.end_char].contains(&'渡')
+    {
+        let original = || {
+            if lock_table.is_empty() {
+                return None;
+            }
+            let source = unhinted_source()?;
+            let tokens = source
+                .tokens
+                .iter()
+                .filter(|token| token.sentence == sentence_idx)
+                .collect::<Vec<_>>();
+            handover::coordination::render(
+                chars,
+                source,
+                sentence_idx,
+                &tokens,
+                lock_table,
+                &doc_clauses,
+            )
+        };
+        if let Some(translation) = original().or_else(|| {
+            handover::coordination::render(
+                chars,
+                doc,
+                sentence_idx,
+                sent_tokens,
+                lock_table,
+                &doc_clauses,
+            )
+        }) {
+            return translation;
+        }
+    }
+
+    if target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && written_form_continuation.is_none()
+        && predicate_terms.is_none()
         && let [(clause, source_span)] = doc_clauses.as_slice()
         && *source_span == sent_span
         && let Some(text) = crate::quote_source::explicit_request::render(
@@ -26723,6 +26765,13 @@ fn demonstrative_classifier(
     }
 }
 
+fn standalone_noun(word: &str) -> &str {
+    match word {
+        "箱" => "箱子",
+        _ => word,
+    }
+}
+
 fn render_bunsetsu_np(b: &Bunsetsu, target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;
@@ -26788,7 +26837,7 @@ fn render_bunsetsu_np(b: &Bunsetsu, target: TargetVariant) -> String {
             }
             let word = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
             out.push_str(demonstrative_classifier(&word, noun, Some(target)));
-            out.push_str(if word == "箱" { "箱子" } else { &word });
+            out.push_str(standalone_noun(&word));
             i += 2;
             continue;
         }

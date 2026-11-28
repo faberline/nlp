@@ -536,7 +536,7 @@ fn render_frame(
     lemma: &str,
     frame: Frame<'_>,
     aspect: Aspect,
-    locked_school: Option<(Span, &str)>,
+    locked_destination: Option<(Span, &str)>,
 ) -> Option<RenderedFrame> {
     let sense = choose(lemma, &frame)?;
     let subject = frame.subject.map(Nominal::text).unwrap_or_default();
@@ -545,11 +545,11 @@ fn render_frame(
     let past = if aspect == Aspect::Past { "了" } else { "" };
     let mut timing = String::new();
     let is_repeated = matches!(frame.time, Some((TimeKind::Repeated, _, _)));
-    if let Some((span, _)) = locked_school {
+    if let Some((span, _)) = locked_destination {
         let destination = frame.goal?.0;
         if !matches!(sense, Sense::Frequent)
             || aspect != Aspect::Continuing
-            || !school(destination)
+            || (!is_repeated && !school(destination))
             || destination.0.first()?.span.start_char != span.start_char
             || destination.head().span.end_char != span.end_char
         {
@@ -644,12 +644,15 @@ fn render_frame(
                 cut = Some((pause, subject.chars().count() + timing.chars().count()));
             }
             let destination = frame.goal?.0;
-            if let Some((_, school_name)) = locked_school {
-                format!("在{school_name}上學")
-            } else if aspect == Aspect::Continuing && !is_repeated && school(destination) {
-                format!("在{}上學", destination.text())
+            let target =
+                locked_destination.map_or_else(|| destination.text(), |(_, text)| text.to_owned());
+            if aspect == Aspect::Continuing
+                && school(destination)
+                && (!is_repeated || locked_destination.is_some())
+            {
+                format!("在{target}上學")
             } else {
-                format!("{repeated}去{goal}{past}", goal = destination.text())
+                format!("{repeated}去{target}{past}")
             }
         }
         Sense::TurnPage => {
@@ -800,7 +803,7 @@ pub(super) fn render(
     render_proven(atoms, doc, source, sentence, doc_clauses, None)
 }
 
-pub(super) fn render_locked_school<'doc>(
+pub(super) fn render_locked_destination<'doc>(
     source: &[char],
     analysis: &Document,
     sentence: usize,
@@ -809,10 +812,20 @@ pub(super) fn render_locked_school<'doc>(
     locks: &SpanLockTable,
     unhinted: &dyn Fn() -> Option<&'doc Document>,
 ) -> Option<(String, Vec<ClauseAlignment>)> {
-    let [(_, clause_span)] = doc_clauses else {
-        return None;
+    let complete_clause_coverage = match doc_clauses {
+        [(_, clause)] => *clause == sentence_span,
+        [(_, left), (_, right)] => {
+            left.start_char == sentence_span.start_char
+                && left.end_char < right.start_char
+                && right.end_char == sentence_span.end_char
+        }
+        _ => false,
     };
-    if *clause_span != sentence_span {
+    if !complete_clause_coverage {
+        return None;
+    }
+    let text = source.get(sentence_span.start_char..sentence_span.end_char)?;
+    if !text.contains(&'通') && !text.windows(2).any(|pair| pair == ['か', 'よ']) {
         return None;
     }
     let mut in_sentence = locks.locks.iter().filter(|lock| {
@@ -822,10 +835,6 @@ pub(super) fn render_locked_school<'doc>(
     let destination = in_sentence.next()?;
     if in_sentence.next().is_some()
         || !destination.mandatory
-        || !source
-            .get(destination.source_span.start_char..destination.source_span.end_char)?
-            .iter()
-            .any(|ch| matches!(ch, '校' | '学'))
         || !matches!(
             destination.origin,
             LockOrigin::Glossary {
@@ -867,7 +876,7 @@ fn render_proven(
     source: &[char],
     sentence: usize,
     doc_clauses: &[(usize, Span)],
-    locked_school: Option<(Span, &str)>,
+    locked_destination: Option<(Span, &str)>,
 ) -> Option<(String, Vec<ClauseAlignment>)> {
     let finite = core_non_punct(atoms);
     let has_sense_verb = |atom: &Atom| {
@@ -919,7 +928,7 @@ fn render_proven(
     };
     let aspect = aspect(verb, &finite[index + 1..])?;
     let lemma = verb.lemma.as_deref()?;
-    if locked_school.is_some() && lemma != "通う" {
+    if locked_destination.is_some() && lemma != "通う" {
         return None;
     }
     let RenderedFrame { mut text, cut } = if cohesion::is_predicate(verb) {
@@ -930,7 +939,7 @@ fn render_proven(
         lament::render(&finite[..index], verb, aspect)?
     } else {
         let frame = read_frame(&finite[..index], verb)?;
-        render_frame(lemma, frame, aspect, locked_school)?
+        render_frame(lemma, frame, aspect, locked_destination)?
     };
     if text.chars().any(is_kana) {
         return None;
@@ -1225,5 +1234,74 @@ mod tests {
         assert!(result.target_text.contains("指定醫院"));
         assert_ne!(result.target_text, "在指定醫院上學。");
         assert_eq!(result.glossary_hits.len(), 1);
+    }
+
+    #[test]
+    fn recurring_place_glossaries_keep_the_destination_and_cadence() {
+        let bank = public_bank();
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        for (index, id, source_place, target_place, expected, parts) in [
+            (7, "VS-N5-08", "病院", "指定醫院", "我每週都去指定醫院。", 2),
+            (
+                8,
+                "VS-N5-09",
+                "会社",
+                "指定公司",
+                "哥哥平日都去指定公司。",
+                1,
+            ),
+        ] {
+            let row = &bank[index];
+            assert_eq!(row["id"], id);
+            assert_eq!(row["heldout"], false);
+            let source = row["jp"].as_str().unwrap();
+            let mut glossary = TranslationGlossary::new();
+            glossary.places.push(GlossaryEntry {
+                canonical: source_place.into(),
+                surfaces: vec![source_place.into()],
+                targets: [(TargetVariant::ZhHant, target_place.into())].into(),
+                ..GlossaryEntry::default()
+            });
+            let output =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(output.target_text, expected);
+            let [hit] = output.glossary_hits.as_slice() else {
+                panic!("the caller place must appear once: {id}");
+            };
+            let target = output.target_text.chars().collect::<Vec<_>>();
+            assert_eq!(
+                target[hit.target_span.start_char..hit.target_span.end_char]
+                    .iter()
+                    .collect::<String>(),
+                target_place
+            );
+            assert_eq!(output.clause_alignments.len(), parts);
+            assert_eq!(
+                output
+                    .clause_alignments
+                    .last()
+                    .unwrap()
+                    .target_span
+                    .end_char,
+                target.len()
+            );
+            if let [left, right] = output.clause_alignments.as_slice() {
+                assert_eq!(left.target_span.end_char, right.target_span.start_char);
+                assert!(left.target_span.start_char < left.target_span.end_char);
+                assert!(right.target_span.start_char < right.target_span.end_char);
+            }
+            let marker = if id == "VS-N5-08" { "に" } else { "へ" };
+            glossary.places[0].surfaces = vec![format!("{source_place}{marker}")];
+            let overbroad =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_ne!(overbroad.target_text, expected);
+            let [hit] = overbroad.glossary_hits.as_slice() else {
+                panic!("keep the original expanded glossary hit: {id}");
+            };
+            assert_eq!(
+                hit.source_span.end_char - hit.source_span.start_char,
+                source_place.chars().count() + 1
+            );
+        }
     }
 }

@@ -2,6 +2,9 @@
 
 use faberline_nlp::doc::{EntityKind, Token};
 
+use crate::lock::{LockOrigin, SpanLockTable};
+use crate::schema::GlossaryKind;
+
 use super::{
     Atom, Bunsetsu, BunsetsuRole, Document, LOCKED_OBJECT_ATOM, LOCKED_PLACE_ATOM,
     LOCKED_RESIDENT_ATOM, Segment, SemanticClass, Span, TargetVariant, Upos, classroom_role,
@@ -16,6 +19,229 @@ pub(super) struct Handover {
     pub(super) object: String,
     pub(super) recipient: String,
     pub(super) action: &'static str,
+}
+
+pub(super) struct HandoverRenderLocks {
+    pub(super) table: SpanLockTable,
+    course_time: Option<(Span, usize)>,
+    subject_pause: Option<Span>,
+    teacher: Option<Span>,
+}
+
+impl HandoverRenderLocks {
+    pub(super) fn apply(&self, atoms: &mut [Atom]) {
+        for atom in atoms {
+            if self.subject_pause == Some(atom.span) {
+                super::homework_relative::keep_argument_pause(atom);
+            } else if self.teacher == Some(atom.span) && atom.is_locked {
+                super::homework_relative::mark_locked_teacher(atom);
+            } else if let Some((span, governor)) = self.course_time
+                && atom.span == span
+                && atom.is_locked
+            {
+                daytime::mark_locked_course_time(atom, governor);
+            }
+        }
+    }
+}
+
+pub(super) fn has_handover_glossary(text: &[char], locks: &SpanLockTable) -> bool {
+    text.contains(&'渡')
+        && !text
+            .iter()
+            .any(|ch| matches!(ch, '「' | '」' | '『' | '』'))
+        && locks.locks.iter().any(|lock| {
+            matches!(
+                lock.origin,
+                LockOrigin::Glossary {
+                    kind: GlossaryKind::Actor | GlossaryKind::Object | GlossaryKind::DomainTerm,
+                    ..
+                }
+            )
+        })
+}
+
+/// Use the ordinary source parse when a caller's term hides handover syntax.
+/// Only the render copy of a lock gives a grammatical particle back to
+/// the parser. The original table still records the caller's full match.
+pub(super) fn handover_render_locks(
+    sentence: usize,
+    source: &Document,
+    tokens: &[&Token],
+    chars: &[char],
+    locks: &SpanLockTable,
+) -> Option<HandoverRenderLocks> {
+    let mut roots = source
+        .syntax
+        .iter()
+        .filter(|node| node.sentence == sentence && node.deprel == "root");
+    let root = roots.next()?;
+    let verb = root.token;
+    let verb_token = source.tokens.get(verb)?;
+    if roots.next().is_some()
+        || verb_token.sentence != sentence
+        || verb_token.span != root.span
+        || !matches!(verb_token.lemma.as_deref(), Some("渡す" | "手渡す"))
+    {
+        return None;
+    }
+
+    let original =
+        super::build_sentence_atoms(sentence, chars, source, tokens, &SpanLockTable::new());
+    if original.iter().any(|atom| {
+        atom.upos == Some(Upos::Verb) && atom.doc_tok_idx != Some(verb) && atom.deprel != "acl"
+    }) {
+        return None;
+    }
+    let predicate_start = original.iter().position(|a| a.doc_tok_idx == Some(verb))?;
+    let predicate = super::classify_bunsetsu(
+        super::core_non_punct(&original[predicate_start..]).to_vec(),
+        source,
+        sentence,
+    );
+    finite_handover(&[predicate], source)?;
+    let teacher_pause = super::homework_relative::teaching_argument_pause(&original, source);
+    let mut render = HandoverRenderLocks {
+        table: locks.clone(),
+        course_time: None,
+        subject_pause: None,
+        teacher: None,
+    };
+    for lock in &mut render.table.locks {
+        let LockOrigin::Glossary { kind, .. } = lock.origin else {
+            return None;
+        };
+        let span = lock.source_span;
+        if kind == GlossaryKind::DomainTerm {
+            let full = original.iter().enumerate().find_map(|(i, noun)| {
+                if noun.span.start_char != span.start_char {
+                    return None;
+                }
+                let (end, owner, _) = daytime::course_time(noun, &original[i + 1..], &original)?;
+                let short = span.end_char + 1 == end.span.end_char
+                    && chars.get(span.end_char) == Some(&'に');
+                (owner == verb && (span.end_char == end.span.end_char || short)).then_some(Span {
+                    start_char: span.start_char,
+                    end_char: end.span.end_char,
+                })
+            })?;
+            if render.course_time.replace((full, verb)).is_some() {
+                return None;
+            }
+            lock.source_span = full;
+            continue;
+        }
+        let first = source
+            .tokens
+            .partition_point(|token| token.span.start_char < span.start_char);
+        let last = source
+            .tokens
+            .partition_point(|token| token.span.end_char <= span.end_char)
+            .checked_sub(1)?;
+        let covered = source.tokens.get(first..=last)?;
+        if covered.first()?.span.start_char != span.start_char
+            || covered.last()?.span.end_char != span.end_char
+            || !covered
+                .windows(2)
+                .all(|pair| pair[0].span.end_char == pair[1].span.start_char)
+        {
+            return None;
+        }
+        let tail = source.syntax.get(last)?;
+        if tail.token != last || tail.sentence != sentence || tail.span != covered.last()?.span {
+            return None;
+        }
+        let (head, absorbed) = if tail.deprel == "case" {
+            let index = tail.head?;
+            let head = source.syntax.get(index)?;
+            if head.token != index {
+                return None;
+            }
+            (head, Some(tail))
+        } else {
+            (tail, None)
+        };
+        let token = source.tokens.get(head.token)?;
+        if head.sentence != sentence
+            || token.sentence != sentence
+            || token.span != head.span
+            || head.head != Some(verb)
+            || head.token < first
+            || !matches!(token.upos, Some(Upos::Noun | Upos::Propn | Upos::Pron))
+        {
+            return None;
+        }
+        let case = absorbed.or_else(|| {
+            source.syntax.get(last + 1).filter(|node| {
+                node.token == last + 1
+                    && node.sentence == sentence
+                    && node.deprel == "case"
+                    && node.head == Some(head.token)
+                    && node.span.start_char == head.span.end_char
+            })
+        })?;
+        if head.span.end_char != case.span.start_char
+            || !matches!(
+                (kind, head.deprel.as_str(), written_case(chars, case.span)),
+                (GlossaryKind::Object, "obj", Some('を'))
+                    | (GlossaryKind::Actor, "nsubj", Some('は' | 'が'))
+                    | (GlossaryKind::Actor, "obl" | "iobj", Some('に' | 'へ'))
+            )
+        {
+            return None;
+        }
+        // The caller may wrap a whole relative clause, name, or compound.
+        // Each covered token must still belong to this one argument.
+        for index in first..=last {
+            let mut node = index;
+            for _ in first..=last {
+                if node == head.token {
+                    break;
+                }
+                let edge = source.syntax.get(node)?;
+                if edge.token != node || edge.sentence != sentence {
+                    return None;
+                }
+                node = edge.head.filter(|next| (first..=last).contains(next))?;
+            }
+            if node != head.token {
+                return None;
+            }
+        }
+        // Replacing a relative predicate must not strand one of its arguments.
+        // A modifier attached directly to the argument head can stay outside
+        // its lock (e.g. a teaching relative before a locked 先生).
+        let covered = first..=last;
+        if source.syntax.iter().any(|node| {
+            node.sentence == sentence
+                && node.deprel != "punct"
+                && !covered.contains(&node.token)
+                && node
+                    .head
+                    .is_some_and(|parent| parent != head.token && covered.contains(&parent))
+        }) {
+            return None;
+        }
+        lock.source_span.end_char = head.span.end_char;
+        if head.deprel == "nsubj"
+            && let Some(pause) = teacher_pause
+            && original[pause].span.start_char == case.span.end_char
+        {
+            render.subject_pause = Some(original[pause].span);
+            if lock.source_span == head.span {
+                render.teacher = Some(head.span);
+            }
+        }
+    }
+    if render
+        .table
+        .locks
+        .windows(2)
+        .any(|pair| pair[0].source_span.end_char > pair[1].source_span.start_char)
+    {
+        return None;
+    }
+    Some(render)
 }
 
 // The rendered atom can cover an entire name or glossary phrase. Its final

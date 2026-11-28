@@ -35,6 +35,7 @@ mod nominal_receiving_glossary;
 mod omitted_departure;
 mod order_noun;
 mod outward_look;
+pub(crate) mod partitive;
 mod payment_potential;
 pub(crate) use payment_potential::{FareRoles, fare_roles_for_sentence};
 mod place_goal_glossary;
@@ -283,6 +284,17 @@ pub(crate) fn translate_ja_sentence<'source>(
         }
         class_period::normalize(&mut atoms, doc, chars, lock_table);
         course_duration::normalize(&mut atoms, doc, chars, lock_table);
+        if direct_quote.is_none() && written_form_continuation.is_none() {
+            partitive::restore(
+                &mut atoms,
+                sentence_idx,
+                chars,
+                doc,
+                sent_tokens,
+                lock_table,
+            );
+            partitive::normalize(&mut atoms);
+        }
         outward_look::restore_case(&mut atoms, chars, sent_span, doc, lock_table);
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
@@ -18280,9 +18292,10 @@ fn merge_adnominal_bunsetsus(
 
                     // Pure `N の` modifier (e.g. `美咲の`, `机の`, `3冊の`, `今回の`).
                     let supplied_genitive = target == TargetVariant::ZhHant
-                        && b.atoms
-                            .first_mut()
-                            .is_some_and(|noun| written_opening::localize(noun, &mod_b.atoms, ctx));
+                        && b.atoms.first_mut().is_some_and(|noun| {
+                            partitive::supplies_genitive(noun, &mod_b.atoms)
+                                || written_opening::localize(noun, &mod_b.atoms, ctx)
+                        });
                     mod_b.atoms.pop();
                     let omit_de = supplied_genitive
                         || starts_with_num_counter(&mod_b)

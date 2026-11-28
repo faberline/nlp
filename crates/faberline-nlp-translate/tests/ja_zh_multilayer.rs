@@ -2262,6 +2262,66 @@ fn assert_nominal_request_hit(
 }
 
 #[test]
+fn partitive_respects_the_supplied_noun_attachment() {
+    let source = "ケーキの半分を食べました。";
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let empty = TranslationGlossary::new();
+    let mut analysis = analyze_document(source, &doc_options_for_translate(&options, &empty));
+    let kind = GlossaryKind::Object;
+    let glossary = nominal_request_glossary(kind, "の半", "的半量");
+    let translate = |doc: &Document, glossary: &TranslationGlossary| {
+        translate_document(
+            source,
+            doc,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            glossary,
+            None,
+        )
+        .unwrap()
+    };
+    assert_eq!(translate(&analysis, &empty).target_text, "吃了蛋糕的一半。");
+    let locked = translate(&analysis, &glossary);
+    assert_nominal_request_hit(source, &locked, kind, "の半", "的半量");
+    assert_eq!(locked.target_text, "吃了蛋糕的半量。");
+
+    let mut protected = analysis.clone();
+    let portion = Span {
+        start_char: 4,
+        end_char: 6,
+    };
+    assert_eq!(slice_chars(source, portion), "半分");
+    protected
+        .segmentation
+        .opaque
+        .push(faberline_nlp::doc::Opaque {
+            kind: faberline_nlp::doc::OpaqueKind::Code,
+            span: portion,
+        });
+    let preserved = translate(&protected, &glossary);
+    let [literal] = preserved.opaque_spans.as_slice() else {
+        panic!("expected the original protected portion");
+    };
+    assert_eq!(literal.source_span, portion);
+    assert_eq!(
+        slice_chars(&preserved.target_text, literal.target_span.unwrap()),
+        "半分"
+    );
+    assert!(preserved.glossary_hits.is_empty());
+
+    let modifier = analysis
+        .syntax
+        .iter_mut()
+        .find(|arc| arc.deprel == "nmod" && slice_chars(source, arc.span) == "ケーキ")
+        .unwrap();
+    modifier.head = None;
+    assert_ne!(translate(&analysis, &empty).target_text, "吃了蛋糕的一半。");
+    let detached = translate(&analysis, &glossary);
+    assert_nominal_request_hit(source, &detached, kind, "の半", "的半量");
+}
+
+#[test]
 fn written_opening_uses_the_original_genitive_and_preserves_caller_terms() {
     let source = "本の始めは大切です。";
     let options = TranslateOptions::new(TargetVariant::ZhHant);

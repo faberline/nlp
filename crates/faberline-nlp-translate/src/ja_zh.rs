@@ -34,6 +34,7 @@ mod nominal_possession;
 mod nominal_receiving_glossary;
 mod omitted_departure;
 mod order_noun;
+mod ordinary_quote;
 mod outward_look;
 pub(crate) mod partitive;
 mod payment_potential;
@@ -343,15 +344,20 @@ pub(crate) fn translate_ja_sentence<'source>(
         && predicate_terms.is_none()
         && let [(clause, source_span)] = doc_clauses.as_slice()
         && *source_span == sent_span
-        && let Some(text) = lesson_start::render_locked(
-            chars,
-            sentence_idx,
-            doc,
-            sent_tokens,
-            &atoms,
-            lock_table,
-            unhinted_source,
+        && let Some(text) = crate::quote_source::explicit_request::render(
+            chars, sent_span, lock_table,
         )
+        .or_else(|| {
+            lesson_start::render_locked(
+                chars,
+                sentence_idx,
+                doc,
+                sent_tokens,
+                &atoms,
+                lock_table,
+                unhinted_source,
+            )
+        })
     {
         let target_span = Span {
             start_char: 0,
@@ -427,6 +433,22 @@ pub(crate) fn translate_ja_sentence<'source>(
             None,
         )
     };
+    if target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && report.is_none()
+        && continuation.is_none()
+        && predicate_terms.is_none()
+        && let Some(rendered) = ordinary_quote::reading_for_meaning(
+            &segments,
+            doc,
+            sentence_idx,
+            chars,
+            lock_table,
+            &doc_clauses,
+        )
+    {
+        return rendered;
+    }
     if target == TargetVariant::ZhHant
         && direct_quote.is_none()
         && report.is_none()
@@ -622,6 +644,11 @@ pub(crate) fn translate_ja_sentence<'source>(
                 }
                 let quote_start = out.len();
                 emitted_pre_quote_verb = false;
+                let moved_plain_report = segments.get(seg_idx + 1).is_some_and(|post| {
+                    matches!(post, Segment::Clause { span, .. } if Some(*span) == moved_report)
+                        && next_post_quote
+                            .is_some_and(|(_, kind)| kind == PostQuoteKind::QuotePlainSay)
+                });
                 if let Some((is_kagon, post_kind)) = next_post_quote {
                     if is_kagon {
                         out.push('說');
@@ -633,7 +660,9 @@ pub(crate) fn translate_ja_sentence<'source>(
                             "明明說著"
                         });
                         emitted_pre_quote_verb = true;
-                    } else if post_kind == PostQuoteKind::QuotePlainSay && sentence_has_overt_topic
+                    } else if post_kind == PostQuoteKind::QuotePlainSay
+                        && sentence_has_overt_topic
+                        && !moved_plain_report
                     {
                         out.push('說');
                         emitted_pre_quote_verb = true;
@@ -700,6 +729,13 @@ pub(crate) fn translate_ja_sentence<'source>(
                             )
                             .0
                         });
+                        if target == TargetVariant::ZhHant
+                            && moved_plain_report
+                            && inner_segs.len() == 1
+                            && ordinary_quote::future_confirmation(catoms)
+                        {
+                            out.push('會');
+                        }
                         out.push_str(&rendered);
                         if let Some(p) = trailing_punct
                             && !(matches!(p.as_str(), "、" | "," | "，")
@@ -5868,6 +5904,9 @@ fn local_direct_quote(
     ) {
         return Some((prefix, *span, quote_index));
     }
+    if let Some(ordinary) = ordinary_quote::reported_speech(segments, doc, locks) {
+        return Some(ordinary);
+    }
     let (after, verb) = direct_quote_report_parts(report)?;
     let mut roles = DirectQuoteRoles::default();
     for before in &segments[..quote_index] {
@@ -5912,7 +5951,14 @@ fn render_direct_quote_person(
             .filter(|token| token.span == atom.span)
             .and_then(|token| token.sem_class);
         class.map_or_else(
-            || is_person_like_atom(atom),
+            || {
+                is_person_like_atom(atom)
+                    || (atom.upos == Some(Upos::Noun)
+                        && matches!(
+                            atom.surface.as_str(),
+                            "店員" | "職員" | "係員" | "客" | "来客" | "顧客"
+                        ))
+            },
             |kind| kind == SemanticClass::Person,
         )
     };

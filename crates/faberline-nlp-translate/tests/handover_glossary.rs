@@ -81,6 +81,14 @@ fn complete_subject_replacement_does_not_repeat_its_relative_clause() {
 }
 
 #[test]
+fn partial_subject_replacement_keeps_its_uncovered_argument_in_place() {
+    check_glossary(
+        &[(GlossaryKind::Actor, "担当する先生", "任課老師")],
+        "任課老師授業，下課後往佐藤遞給了資料。",
+    );
+}
+
+#[test]
 fn handover_keeps_caller_source_boundaries() {
     let options = TranslateOptions::new(TargetVariant::ZhHant);
     let empty = TranslationGlossary::new();

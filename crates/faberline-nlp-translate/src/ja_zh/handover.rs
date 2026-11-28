@@ -208,6 +208,20 @@ pub(super) fn handover_render_locks(
                 return None;
             }
         }
+        // Replacing a relative predicate must not strand one of its arguments.
+        // A modifier attached directly to the argument head can stay outside
+        // its lock (e.g. a teaching relative before a locked 先生).
+        let covered = first..=last;
+        if source.syntax.iter().any(|node| {
+            node.sentence == sentence
+                && node.deprel != "punct"
+                && !covered.contains(&node.token)
+                && node
+                    .head
+                    .is_some_and(|parent| parent != head.token && covered.contains(&parent))
+        }) {
+            return None;
+        }
         lock.source_span.end_char = head.span.end_char;
         if head.deprel == "nsubj"
             && let Some(pause) = teacher_pause

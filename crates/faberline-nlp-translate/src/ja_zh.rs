@@ -7671,6 +7671,12 @@ fn translate_clause_atoms(
         departure.expose_source_case(&mut merged_atoms);
     }
     if target == TargetVariant::ZhHant {
+        finite_adjective::bind_locked_colour_subject(
+            &mut merged_atoms,
+            doc,
+            sentence_idx,
+            ctx.source_chars,
+        );
         bind_tidied_tabletops(&mut merged_atoms);
         localize_sufficiency(&mut merged_atoms);
         honorific::bind_voice_manners(&mut merged_atoms);
@@ -13606,6 +13612,7 @@ fn translate_clause_bunsetsus(
         && let Some(state) = finite_adjective::render(
             source,
             &predicates,
+            doc,
             ctx,
             &mut adverbs,
             &mut temporal_others,

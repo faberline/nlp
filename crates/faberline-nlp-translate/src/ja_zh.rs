@@ -22502,6 +22502,14 @@ mod clock_rule_tests {
         let glossary = TranslationGlossary::new();
         for (jp, expected) in [
             (
+                "会議は五月二日零時に終わります。",
+                "會議在五月二日零點結束。",
+            ),
+            (
+                "会議は五月一日二十四時に終わります。",
+                "會議在五月一日二十四點結束。",
+            ),
+            (
                 "六月七日の午後三時までに、駅で切符を買います。",
                 "最晚在六月七日下午三點在車站買車票。",
             ),
@@ -22571,6 +22579,45 @@ mod clock_rule_tests {
                 expected,
                 "{jp}"
             );
+        }
+    }
+
+    #[test]
+    fn glossary_clock_and_calendar_day_stay_together_after_splitting_ni() {
+        for (source, term, expected) in [
+            (
+                "会議は五月二日零時に終わります。",
+                "零時",
+                "會議在五月二日指定鐘點結束。",
+            ),
+            (
+                "会議は五月一日二十四時に終わります。",
+                "二十四時",
+                "會議在五月一日指定鐘點結束。",
+            ),
+        ] {
+            let glossary = TranslationGlossary {
+                domain_terms: vec![GlossaryEntry {
+                    canonical: term.to_owned(),
+                    surfaces: vec![term.to_owned()],
+                    targets: [(TargetVariant::ZhHant, "指定鐘點".to_owned())].into(),
+                    ..GlossaryEntry::default()
+                }],
+                ..TranslationGlossary::new()
+            };
+            let translated = public_translate(source, &glossary);
+            assert_eq!(translated.target_text, expected);
+            let [hit] = translated.glossary_hits.as_slice() else {
+                panic!("expected one matched clock term");
+            };
+            let text_at = |text: &str, span: Span| {
+                text.chars()
+                    .skip(span.start_char)
+                    .take(span.end_char - span.start_char)
+                    .collect::<String>()
+            };
+            assert_eq!(text_at(source, hit.source_span), term);
+            assert_eq!(text_at(expected, hit.target_span), "指定鐘點");
         }
     }
 

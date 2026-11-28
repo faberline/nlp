@@ -13,6 +13,7 @@ mod cohesion;
 mod fall;
 mod friction;
 mod lament;
+mod wear;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Aspect {
@@ -881,12 +882,13 @@ fn render_proven(
     locked_destination: Option<(Span, &str)>,
 ) -> Option<(String, Vec<ClauseAlignment>)> {
     let finite = core_non_punct(atoms);
-    let has_sense_verb = |atom: &Atom| {
+    let has_sense_verb = |index: usize, atom: &Atom| {
         atom.upos == Some(Upos::Verb)
             && (cohesion::is_predicate(atom)
                 || fall::is_predicate(atom)
                 || friction::is_predicate(atom)
                 || lament::is_predicate(atom)
+                || wear::is_predicate(&finite[..index], atom)
                 || matches!(
                     atom.lemma.as_deref(),
                     Some("突っ込む" | "吹く" | "通う" | "めくる" | "通す" | "寄こす")
@@ -895,7 +897,7 @@ fn render_proven(
     let mut predicates = finite
         .iter()
         .enumerate()
-        .filter(|(_, atom)| has_sense_verb(atom));
+        .filter(|(index, atom)| has_sense_verb(*index, atom));
     let (index, verb) = predicates.next()?;
     let span = doc.segmentation.sentences.get(sentence)?.span;
     if predicates.next().is_some()
@@ -942,6 +944,8 @@ fn render_proven(
         friction::render(&finite[..index], verb, aspect)?
     } else if lament::is_predicate(verb) {
         lament::render(&finite[..index], verb, aspect)?
+    } else if wear::is_predicate(&finite[..index], verb) {
+        wear::render(&finite[..index], verb, aspect)?
     } else {
         let frame = read_frame(&finite[..index], verb)?;
         render_frame(lemma, frame, aspect, locked_destination)?

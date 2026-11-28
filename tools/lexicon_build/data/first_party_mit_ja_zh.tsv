@@ -1020,7 +1020,7 @@
 狭める	VERB	縮小	750	ichidan
 狭まる	VERB	變窄	750	godan_ra
 延びる	VERB	延長	750	ichidan
-延ばす	VERB	延期	750	godan_sa
+延ばす	VERB	延長	750	godan_sa
 太る	VERB	變胖	750	godan_ra
 老ける	VERB	顯老	750	ichidan
 若返る	VERB	返老還童	750	godan_ra
@@ -1315,7 +1315,7 @@
 恐れる	VERB	害怕	750	ichidan
 覚える	VERB	記得	750	ichidan
 思い当たる	VERB	突然想到	750	godan_ra
-思い込む	VERB	認定	750	godan_ma
+思い込む	VERB	深信	750	godan_ma
 思い直す	VERB	回心轉意	750	godan_sa
 重んじる	VERB	重視	750	ichidan
 下りる	VERB	下去	750	ichidan
@@ -1373,7 +1373,7 @@
 退治する	VERB	消滅	750	sahen
 代表する	VERB	代表	750	sahen
 対立する	VERB	對立	750	sahen
-倒れる	VERB	倒塌	750	ichidan
+倒れる	VERB	倒下	750	ichidan
 倒す	VERB	打倒	750	godan_sa
 高まる	VERB	高漲	750	godan_ra
 高める	VERB	提高	750	ichidan
@@ -1529,11 +1529,11 @@
 無くなる	VERB	不見	750	godan_ra
 亡くなる	VERB	過世	750	godan_ra
 殴る	VERB	毆	750	godan_ra
-嘆く	VERB	嘆息	750	godan_ga
+嘆く	VERB	哀嘆	750	godan_ga
 投げる	VERB	投擲	750	ichidan
 和む	VERB	緩和	750	godan_ma
 為す	VERB	做	750	godan_sa
-撫でる	VERB	撫	750	ichidan
+撫でる	VERB	撫摸	750	ichidan
 懐く	VERB	親近	750	godan_ka
 怠ける	VERB	偷懶	750	ichidan
 舐める	VERB	舔	750	ichidan
@@ -1649,7 +1649,7 @@
 増やす	VERB	增添	750	godan_sa
 深まる	VERB	加深	750	godan_ra
 深める	VERB	深化	750	ichidan
-吹く	VERB	吹風	750	godan_ka
+吹く	VERB	吹	750	godan_ka
 噴く	VERB	噴出	750	godan_ka
 拭く	VERB	擦拭	750	godan_ka
 含む	VERB	包含	750	godan_ma
@@ -1764,7 +1764,7 @@
 設ける	VERB	設立	750	ichidan
 燃える	VERB	起火	750	ichidan
 燃やす	VERB	點燃	750	godan_sa
-用いる	VERB	採用	750	ichidan
+用いる	VERB	使用	750	ichidan
 持つ	VERB	擁有	750	godan_ta
 持てる	VERB	受歡迎	750	ichidan
 もてる	VERB	受歡迎	750	ichidan
@@ -1815,7 +1815,7 @@
 要約する	VERB	摘要	750	sahen
 預金する	VERB	存款	750	sahen
 横切る	VERB	橫越	750	godan_ra
-寄こす	VERB	寄來	750	godan_sa
+寄こす	VERB	送來	750	godan_sa
 予習する	VERB	預習	750	sahen
 寄せる	VERB	移近	750	ichidan
 装う	VERB	假裝	750	godan_wa
@@ -1854,8 +1854,8 @@
 溢れる	VERB	滿溢	750	ichidan
 余る	VERB	剩餘	750	godan_ra
 余す	VERB	留下	750	godan_sa
-現す	VERB	表現	750	godan_sa
-現れる	VERB	露面	750	ichidan
+現す	VERB	顯露	750	godan_sa
+現れる	VERB	出現	750	ichidan
 歩み寄る	VERB	妥協	750	godan_ra
 有る	VERB	存在	750	godan_ra
 合わせる	VERB	對齊	750	ichidan
@@ -1915,7 +1915,7 @@
 訪れる	VERB	造訪	750	ichidan
 踊る	VERB	舞動	750	godan_ra
 驚く	VERB	驚奇	750	godan_ka
-溺れる	VERB	沉溺	750	ichidan
+溺れる	VERB	溺水	750	ichidan
 思い出す	VERB	回想起來	750	godan_sa
 思いつく	VERB	想出	750	godan_ka
 思いやる	VERB	關懷	750	godan_ra
@@ -1929,7 +1929,7 @@
 買う	VERB	購買	750	godan_wa
 返す	VERB	還給	750	godan_sa
 返る	VERB	回來	750	godan_ra
-帰る	VERB	回家	750	godan_ra
+帰る	VERB	回去	750	godan_ra
 帰す	VERB	放回	750	godan_sa
 抱える	VERB	抱	750	ichidan
 掛かる	VERB	花費	750	godan_ra
@@ -1956,7 +1956,7 @@
 被る	VERB	承受	750	godan_ra
 構う	VERB	照顧	750	godan_wa
 噛む	VERB	咀嚼	750	godan_ma
-通う	VERB	上學	750	godan_wa
+通う	VERB	定期往返	750	godan_wa
 枯れる	VERB	乾枯	750	ichidan
 借りる	VERB	借用	750	ichidan
 乾く	VERB	變乾	750	godan_ka
@@ -2132,7 +2132,7 @@
 散歩する	VERB	逛逛	750	sahen
 支援する	VERB	支援	750	sahen
 刺激する	VERB	刺激	750	sahen
-試験する	VERB	考試	750	sahen
+試験する	VERB	測試	750	sahen
 支持する	VERB	支持	750	sahen
 指示する	VERB	指示	750	sahen
 持続する	VERB	持續	750	sahen
@@ -2147,7 +2147,7 @@
 支払する	VERB	付款	750	sahen
 自慢する	VERB	炫耀	750	sahen
 借金する	VERB	借錢	750	sahen
-集中する	VERB	專注	750	sahen
+集中する	VERB	集中	750	sahen
 就職する	VERB	找工作	750	sahen
 修正する	VERB	更正	750	sahen
 修繕する	VERB	修繕	750	sahen
@@ -2167,7 +2167,7 @@
 食事する	VERB	吃飯	750	sahen
 処理する	VERB	處理	750	sahen
 所有する	VERB	擁有	750	sahen
-進行する	VERB	推進	750	sahen
+進行する	VERB	進行	750	sahen
 進学する	VERB	升學	750	sahen
 診察する	VERB	診治	750	sahen
 心配する	VERB	掛念	750	sahen
@@ -2353,7 +2353,7 @@
 収まる	VERB	平息	750	godan_ra
 納まる	VERB	裝入	750	godan_ra
 修める	VERB	修習	750	ichidan
-治まる	VERB	平定	750	godan_ra
+治まる	VERB	平息	750	godan_ra
 治める	VERB	統治	750	ichidan
 襲う	VERB	襲擊	750	godan_wa
 劣る	VERB	不如	750	godan_ra
@@ -2503,7 +2503,7 @@
 悔しがる	VERB	懊惱	750	godan_ra
 けなす	VERB	貶低	750	godan_sa
 こじ開ける	VERB	撬開	750	ichidan
-ごまかす	VERB	敷衍	750	godan_sa
+ごまかす	VERB	蒙混	750	godan_sa
 咲き誇る	VERB	盛開	750	godan_ra
 差し伸べる	VERB	伸出援手	750	ichidan
 さする	VERB	撫摸	750	godan_ra

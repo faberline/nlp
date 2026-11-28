@@ -3476,7 +3476,7 @@
 ごてる	ja	1439	VERB	VERB	-	-	infl=ichidan
 ごとし	ja	871	AUX	AUX	-	-	-
 ごねる	ja	1439	VERB	VERB	-	-	infl=ichidan
-ごまかす	ja	1449	VERB	VERB	-	敷衍	infl=godan_sa;src=first_party_mit
+ごまかす	ja	1449	VERB	VERB	-	蒙混	infl=godan_sa;src=first_party_mit
 ごまかせる	ja	1439	VERB	VERB	-	-	infl=ichidan
 ごみごみ	ja	588	ADV	ADV	-	-	-
 ごめん	ja	907	INTJ	INTJ	-	-	-
@@ -36829,7 +36829,7 @@
 倒せる	ja	1162	VERB	VERB	-	-	infl=ichidan
 倒る	ja	1202	VERB	VERB	-	-	infl=ichidan
 倒れこむ	ja	1162	VERB	VERB	-	倒下	infl=godan_ma;src=first_party_mit
-倒れる	ja	1094	VERB	VERB	-	倒塌	infl=ichidan;src=first_party_mit
+倒れる	ja	1094	VERB	VERB	-	倒下	infl=ichidan;src=first_party_mit
 倒れ込む	ja	1162	VERB	VERB	-	倒下	infl=godan_ma;src=first_party_mit
 倒伏	ja	763	-	NOUN|VERB	-	倒伏	-
 倒壊	ja	748	-	NOUN|VERB	-	-	-
@@ -41565,7 +41565,7 @@
 吹き飛ぶ	ja	1162	VERB	VERB	-	-	infl=godan_ba
 吹き鳴す	ja	1162	VERB	VERB	-	-	infl=godan_sa
 吹き鳴らす	ja	1162	VERB	VERB	-	-	infl=godan_sa
-吹く	ja	1145	VERB	VERB	-	吹風	infl=godan_ka;src=first_party_mit
+吹く	ja	1145	VERB	VERB	-	吹	infl=godan_ka;src=first_party_mit
 吹ける	ja	1151	VERB	VERB	-	-	infl=ichidan
 吹こぼれる	ja	1162	VERB	VERB	-	-	infl=ichidan
 吹すさぶ	ja	1162	VERB	VERB	-	-	infl=godan_ba
@@ -42154,7 +42154,7 @@
 嘆き明かす	ja	1162	VERB	VERB	-	-	infl=godan_sa
 嘆き明す	ja	1162	VERB	VERB	-	-	infl=godan_sa
 嘆き暮す	ja	1162	VERB	VERB	-	-	infl=godan_sa
-嘆く	ja	1161	VERB	VERB	-	嘆息	infl=godan_ka;src=first_party_mit
+嘆く	ja	1161	VERB	VERB	-	哀嘆	infl=godan_ka;src=first_party_mit
 嘆わしい	ja	755	ADJ	ADJ	-	-	infl=adj_i
 嘆息	ja	763	-	NOUN|VERB	-	嘆息	-
 嘆明かす	ja	1162	VERB	VERB	-	-	infl=godan_sa
@@ -44508,7 +44508,7 @@
 寄あつまる	ja	1162	VERB	VERB	-	-	infl=godan_ra
 寄える	ja	1162	VERB	VERB	-	-	infl=ichidan
 寄かかる	ja	1162	VERB	VERB	-	-	infl=godan_ra
-寄こす	ja	1162	VERB	VERB	-	寄來	infl=godan_sa;src=first_party_mit
+寄こす	ja	1162	VERB	VERB	-	送來	infl=godan_sa;src=first_party_mit
 寄すがる	ja	1162	VERB	VERB	-	-	infl=godan_ra
 寄せかける	ja	1162	VERB	VERB	-	-	infl=ichidan
 寄せつける	ja	1155	VERB	VERB	-	-	infl=ichidan
@@ -46210,7 +46210,7 @@
 延々	ja	812	-	ADJ|NOUN	-	-	-
 延いては	ja	856	ADV	ADV	-	-	-
 延す	ja	1162	VERB	VERB	-	延長	infl=godan_sa;src=first_party_mit
-延ばす	ja	1162	VERB	VERB	-	延期	infl=godan_sa;src=first_party_mit
+延ばす	ja	1162	VERB	VERB	-	延長	infl=godan_sa;src=first_party_mit
 延ばせる	ja	1162	VERB	VERB	-	-	infl=ichidan
 延ぱつ	ja	763	-	NOUN|VERB	-	-	-
 延びのび	ja	857	ADV	ADV	-	-	-
@@ -47881,7 +47881,7 @@
 思い起こせる	ja	1162	VERB	VERB	-	-	infl=ichidan
 思い起す	ja	1161	VERB	VERB	-	-	infl=godan_sa
 思い起せる	ja	1162	VERB	VERB	-	-	infl=ichidan
-思い込む	ja	1156	VERB	VERB	-	認定	infl=godan_ma;src=first_party_mit
+思い込む	ja	1156	VERB	VERB	-	深信	infl=godan_ma;src=first_party_mit
 思い返す	ja	1162	VERB	VERB	-	-	infl=godan_sa
 思い通り	ja	587	ADV	ADV	-	-	-
 思い過ごす	ja	1162	VERB	VERB	-	-	infl=godan_sa
@@ -54847,7 +54847,7 @@
 治	ja	1041	-	NOUN|VERB	-	-	-
 治す	ja	1154	VERB	VERB	-	醫治	infl=godan_sa;src=first_party_mit
 治せる	ja	1162	VERB	VERB	-	能治癒	infl=ichidan;src=first_party_mit
-治まる	ja	1162	VERB	VERB	-	平定	infl=godan_ra;src=first_party_mit
+治まる	ja	1162	VERB	VERB	-	平息	infl=godan_ra;src=first_party_mit
 治める	ja	1162	VERB	VERB	-	統治	infl=ichidan;src=first_party_mit
 治ゆ	ja	763	-	NOUN|VERB	-	-	-
 治る	ja	1164	VERB	VERB	-	康復	infl=godan_ra;src=first_party_mit
@@ -55807,7 +55807,7 @@
 溺す	ja	1162	VERB	VERB	-	-	infl=godan_sa
 溺らす	ja	1162	VERB	VERB	-	-	infl=godan_sa
 溺る	ja	1162	VERB	VERB	-	-	infl=ichidan
-溺れる	ja	1162	VERB	VERB	-	沉溺	infl=ichidan;src=first_party_mit
+溺れる	ja	1162	VERB	VERB	-	溺水	infl=ichidan;src=first_party_mit
 溺れ死	ja	763	-	NOUN|VERB	-	-	-
 溺愛	ja	763	-	NOUN|VERB	-	溺愛	-
 溺死	ja	763	-	NOUN|VERB	-	溺死	-
@@ -57271,7 +57271,7 @@
 珪酸	ja	1022	NOUN	NOUN	-	-	-
 班	ja	1140	NOUN	NOUN	-	-	-
 班長	ja	1023	NOUN	NOUN	-	班長	-
-現す	ja	1162	VERB	VERB	-	表現	infl=godan_sa;src=first_party_mit
+現す	ja	1162	VERB	VERB	-	顯露	infl=godan_sa;src=first_party_mit
 現せる	ja	1162	VERB	VERB	-	-	infl=ichidan
 現そう	ja	765	-	NOUN|VERB	-	-	-
 現に	ja	774	ADV	ADV	-	實際上	src=first_party_mit
@@ -57527,7 +57527,7 @@
 甥	ja	1135	NOUN	NOUN	-	兄弟姊妹的兒子	src=first_party_mit
 甦る	ja	1159	VERB	VERB	-	-	infl=godan_ra
 甦生	ja	763	-	NOUN|VERB	-	-	-
-用いる	ja	1160	VERB	VERB	-	採用	infl=ichidan;src=first_party_mit
+用いる	ja	1160	VERB	VERB	-	使用	infl=ichidan;src=first_party_mit
 用じん	ja	759	-	NOUN|VERB	-	小心	src=first_party_mit
 用だつ	ja	1162	VERB	VERB	-	-	infl=godan_ta
 用る	ja	1221	VERB	VERB	-	-	infl=ichidan

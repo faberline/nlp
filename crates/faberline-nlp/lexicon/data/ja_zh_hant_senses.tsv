@@ -23,7 +23,7 @@
 めくる	VERB	-	turn-page	翻頁	翻動書本的紙頁	first_party_mit
 めくる	VERB	-	uncover	掀開	揭起上層的覆蓋物，露出底下	first_party_mit
 参る	VERB	-	adversity	受不了	遇到難以應付的情形而感到困擾或吃不消	first_party_mit
-参る	VERB	-	humbled-come	過來	對聽者客氣地說自己會到對方所在的一方	first_party_mit
+参る	VERB	-	humbled-come	到您那邊	對聽者客氣地說自己會到聽者所在的地方	first_party_mit
 参る	VERB	-	humbled-go	前往	客氣或自謙地說自己要到某個目的地	first_party_mit
 参る	VERB	-	surrender	認輸	表示自己無法再與對方抗衡	first_party_mit
 参る	VERB	-	worship	參拜	前往神佛或祖先所在之處祭拜	first_party_mit
@@ -31,7 +31,7 @@
 取れる	VERB	-	interpret	可理解為	某段話可以被聽成其中一種意思	first_party_mit
 取れる	VERB	-	obtain	拿得到	在指定地點或條件下可以取得物品或文件	first_party_mit
 取れる	VERB	-	relief	消退	疲勞、疼痛等不舒服的狀態減輕或消失	first_party_mit
-口ずさむ	VERB	-	hum	哼唱	輕聲哼出熟悉的曲調，未必唱出完整歌詞	first_party_mit
+口ずさむ	VERB	-	hum	哼唱	輕聲哼出曲調，未必唱出完整歌詞	first_party_mit
 吹く	VERB	-	air	吹氣	用口或氣流對物體吹氣	first_party_mit
 吹く	VERB	-	boast	吹牛	誇大談論自己的本事或經歷	first_party_mit
 吹く	VERB	-	instrument	吹奏	用氣息演奏樂器	first_party_mit

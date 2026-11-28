@@ -62,3 +62,6 @@
 #
 # Hiragana tobacco noun for segmentation
 たばこ	ja	508	NOUN	NOUN	-	菸	src=first_party_mit
+#
+# Hiragana apple noun (cost follows the existing リンゴ noun).
+りんご	ja	541	NOUN	NOUN	-	蘋果	src=first_party_mit

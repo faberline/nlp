@@ -61372,7 +61372,7 @@
 纏	ja	1044	NOUN	NOUN	-	-	-
 纏う	ja	1162	VERB	VERB	-	纏繞	infl=godan_wa;src=first_party_mit
 纏える	ja	1162	VERB	VERB	-	-	infl=ichidan
-纏まる	ja	1161	VERB	VERB	-	彙整	infl=godan_ra;src=first_party_mit
+纏まる	ja	1161	VERB	VERB	-	成形	infl=godan_ra;src=first_party_mit
 纏める	ja	1161	VERB	VERB	-	整理	infl=ichidan;src=first_party_mit
 纏め上げる	ja	1162	VERB	VERB	-	-	infl=ichidan
 纏り付く	ja	1162	VERB	VERB	-	-	infl=godan_ka

@@ -485,6 +485,17 @@ pub(crate) fn translate_ja_sentence<'source>(
         && predicate_terms.is_none()
         && let Some(rendered) = verb_sense::render(&atoms, doc, chars, sentence_idx, &doc_clauses)
             .or_else(|| {
+                verb_sense::render_locked_toreru(
+                    chars,
+                    doc,
+                    sentence_idx,
+                    sent_span,
+                    &doc_clauses,
+                    lock_table,
+                    unhinted_source,
+                )
+            })
+            .or_else(|| {
                 verb_sense::render_locked_destination(
                     chars,
                     doc,

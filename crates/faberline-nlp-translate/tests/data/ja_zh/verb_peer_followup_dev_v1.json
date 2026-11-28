@@ -1,0 +1,1037 @@
+{
+  "title": "Supplemental Japanese verb peer follow-up public development bank",
+  "schema": "faberline.nlp.ja_zh.verb_peer_followup_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source": "https://github.com/faberline/nlp/issues/584",
+  "visibility": "development-visible",
+  "source_main": "74aea8cee439342bd82a37c356860e0203a5786a",
+  "source_tree": "a2d3cd47a442a2522d04f9fbd51d18737f849bf9",
+  "sample_reference": {
+    "sha256": "921e8d1c1a244e552258c4ef3eb8794a8a6b4b42ec8db4d6fd74e400316059ee",
+    "role": "Pinned fixed sample key/gloss reference used to select these follow-up vocabulary groups; sample rows are not reproduced here."
+  },
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "sentence_provenance": "All Japanese sentences were written for this draft. No dictionary examples, corpora, or external sentence text were copied.",
+    "reference_provenance": "Taiwan Traditional Chinese references were written independently for this draft and remain provisional pending review.",
+    "external_gloss_source": "None used."
+  },
+  "purpose": "Provide public development context contrasts for eight fixed peer keys and explicit negative controls for related but distinct verb constructions. These rows are follow-up coverage, not a verdict on the fixed sample.",
+  "level_note": "Approximate sentence difficulty only. This is not a JLPT exam or certification. Some vocabulary may be above N5.",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "review_and_adoption": {
+    "process": "Independent language review and adoption must be recorded in a separate data-only PR before any rule uses these rows for acceptance.",
+    "author_does_not_accept_own_work": true,
+    "human_review_claim": false,
+    "scope_limit": "These rows sample only the listed contextual distinctions and controls. They do not decide the fixed 100-row sample or define every sense of these verbs."
+  },
+  "items": [
+    {
+      "id": "VP-N5-01",
+      "lemma": "帰る",
+      "sense": "return_to_nonhome",
+      "level_approx": "N5",
+      "jp": "私は図書館から学校へ帰った。",
+      "zh_hant": "我從圖書館回到學校。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "から marks the starting point and 学校へ names a non-home return destination.",
+        "The Japanese source explicitly supports the return to nonhome reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state why the speaker returns or how they travel."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "帰る",
+        "contrast_ids": [
+          "VP-N5-02",
+          "VP-N5-03"
+        ],
+        "source_cue": "から marks the starting point and 学校へ names a non-home return destination.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks return to nonhome for 帰る."
+        ],
+        "limits": [
+          "The source does not state why the speaker returns or how they travel."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-02",
+      "lemma": "帰る",
+      "sense": "return_home",
+      "level_approx": "N5",
+      "jp": "彼女は仕事のあと家に帰った。",
+      "zh_hant": "她下班後回家了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "家に explicitly names home as the destination, and 仕事のあと places the return after work.",
+        "The Japanese source explicitly supports the return home reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state how she travels or what she does at home."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "帰る",
+        "contrast_ids": [
+          "VP-N5-01",
+          "VP-N5-03"
+        ],
+        "source_cue": "家に explicitly names home as the destination, and 仕事のあと places the return after work.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks return home for 帰る."
+        ],
+        "limits": [
+          "The source does not state how she travels or what she does at home."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-03",
+      "lemma": "帰る",
+      "sense": "return_unspecified_destination",
+      "level_approx": "N5",
+      "jp": "子どもは夕方に帰った。",
+      "zh_hant": "孩子傍晚回去了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "帰った states a return, while no destination is named.",
+        "The Japanese source explicitly supports the return unspecified destination reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify the destination or say that it is home."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "帰る",
+        "contrast_ids": [
+          "VP-N5-01",
+          "VP-N5-02"
+        ],
+        "source_cue": "帰った states a return, while no destination is named.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks return unspecified destination for 帰る."
+        ],
+        "limits": [
+          "The source does not identify the destination or say that it is home."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-04",
+      "lemma": "試験する",
+      "sense": "test_physical_performance",
+      "level_approx": "N5",
+      "jp": "技術者は新しい部品の強さを試験した。",
+      "zh_hant": "技術人員測試了新零件的強度。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The direct object 強さ is a part’s physical strength, so the actor tests a physical property.",
+        "The Japanese source explicitly supports the test physical performance reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the test method or whether the part passes."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "試験する",
+        "contrast_ids": [
+          "VP-N5-05",
+          "VP-N5-06"
+        ],
+        "source_cue": "The direct object 強さ is a part’s physical strength, so the actor tests a physical property.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks test physical performance for 試験する."
+        ],
+        "limits": [
+          "The source does not state the test method or whether the part passes."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-05",
+      "lemma": "試験する",
+      "sense": "examiner_tests_ability",
+      "level_approx": "N5",
+      "jp": "先生は受験者の計算力を試験した。",
+      "zh_hant": "老師測試了考生的計算能力。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "先生 is the tester, and 計算力 is the ability being tested.",
+        "The Japanese source explicitly supports the examiner tests ability reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the score or whether the person passes."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "試験する",
+        "contrast_ids": [
+          "VP-N5-04",
+          "VP-N5-06"
+        ],
+        "source_cue": "先生 is the tester, and 計算力 is the ability being tested.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks examiner tests ability for 試験する."
+        ],
+        "limits": [
+          "The source does not state the score or whether the person passes."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-06",
+      "lemma": "試験を受ける",
+      "sense": "exam_taker_negative_control",
+      "level_approx": "N5",
+      "jp": "私は昨夜、数学の試験を受けた。",
+      "zh_hant": "我昨晚參加了數學考試。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The subject takes an exam; 受ける marks the exam-taker rather than someone testing an object or ability.",
+        "The Japanese source explicitly supports the exam taker negative control reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the result or the exam’s difficulty."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "試験する",
+        "contrast_ids": [
+          "VP-N5-04",
+          "VP-N5-05"
+        ],
+        "source_cue": "The subject takes an exam; 受ける marks the exam-taker rather than someone testing an object or ability.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks exam taker negative control for 試験する."
+        ],
+        "limits": [
+          "The source does not state the result or the exam’s difficulty."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-07",
+      "lemma": "嘆く",
+      "sense": "grieve_over_loss",
+      "level_approx": "N5",
+      "jp": "彼女は大切な古い写真をなくしたことを嘆いた。",
+      "zh_hant": "她為遺失珍貴的舊照片感到難過。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "なくしたこと is the loss that she laments.",
+        "The Japanese source explicitly supports the grieve over loss reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state that she cries, sighs aloud, or says anything."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "嘆く",
+        "contrast_ids": [
+          "VP-N5-08",
+          "VP-N5-09"
+        ],
+        "source_cue": "なくしたこと is the loss that she laments.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks grieve over loss for 嘆く."
+        ],
+        "limits": [
+          "The source does not state that she cries, sighs aloud, or says anything."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-08",
+      "lemma": "嘆く",
+      "sense": "lament_unwelcome_situation",
+      "level_approx": "N5",
+      "jp": "彼は公園の木が次々切られていくことを嘆いた。",
+      "zh_hant": "他對公園的樹木一棵棵被砍掉感到憂心。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The clause about trees being cut down is the situation he laments.",
+        "The Japanese source explicitly supports the lament unwelcome situation reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not specify anger, a spoken complaint, or a physical display of emotion."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "嘆く",
+        "contrast_ids": [
+          "VP-N5-07",
+          "VP-N5-09"
+        ],
+        "source_cue": "The clause about trees being cut down is the situation he laments.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks lament unwelcome situation for 嘆く."
+        ],
+        "limits": [
+          "The source does not specify anger, a spoken complaint, or a physical display of emotion."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-09",
+      "lemma": "嘆く",
+      "sense": "regret_without_display",
+      "level_approx": "N5",
+      "jp": "彼女は予定が変わったことを嘆いた。",
+      "zh_hant": "她對行程變動感到遺憾。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "予定が変わったこと is the stated cause of her lament; the sentence names no vocal or bodily expression.",
+        "The Japanese source explicitly supports the regret without display reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not specify a particular emotion beyond lamenting the change."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "嘆く",
+        "contrast_ids": [
+          "VP-N5-07",
+          "VP-N5-08"
+        ],
+        "source_cue": "予定が変わったこと is the stated cause of her lament; the sentence names no vocal or bodily expression.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks regret without display for 嘆く."
+        ],
+        "limits": [
+          "The source does not specify a particular emotion beyond lamenting the change."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-10",
+      "lemma": "現れる",
+      "sense": "person_appears",
+      "level_approx": "N5",
+      "jp": "友だちは待ち合わせ場所に現れた。",
+      "zh_hant": "朋友出現在約好的地點。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "友だち is a person who appears at the stated meeting place.",
+        "The Japanese source explicitly supports the person appears reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether the person is early, late, or expected by others."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "現れる",
+        "contrast_ids": [
+          "VP-N5-11",
+          "VP-N5-12"
+        ],
+        "source_cue": "友だち is a person who appears at the stated meeting place.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks person appears for 現れる."
+        ],
+        "limits": [
+          "The source does not state whether the person is early, late, or expected by others."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-11",
+      "lemma": "現れる",
+      "sense": "natural_phenomenon_appears",
+      "level_approx": "N5",
+      "jp": "雨が止んだあと、空に月が現れた。",
+      "zh_hant": "雨停後，月亮出現在天空。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "月 is a non-person object that becomes visible in the sky after the rain stops.",
+        "The Japanese source explicitly supports the natural phenomenon appears reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the weather after the moon appears."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "現れる",
+        "contrast_ids": [
+          "VP-N5-10",
+          "VP-N5-12"
+        ],
+        "source_cue": "月 is a non-person object that becomes visible in the sky after the rain stops.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks natural phenomenon appears for 現れる."
+        ],
+        "limits": [
+          "The source does not state the weather after the moon appears."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-12",
+      "lemma": "現れる",
+      "sense": "trait_manifests",
+      "level_approx": "N5",
+      "jp": "彼女の几帳面さはノートの字にも現れている。",
+      "zh_hant": "她一絲不苟的個性，從筆記字跡也看得出來。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "几帳面さ is a personal trait, and 字にも identifies handwriting as where it is visible.",
+        "The Japanese source explicitly supports the trait manifests reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state why she writes this way or whether all her work is neat."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "現れる",
+        "contrast_ids": [
+          "VP-N5-10",
+          "VP-N5-11"
+        ],
+        "source_cue": "几帳面さ is a personal trait, and 字にも identifies handwriting as where it is visible.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks trait manifests for 現れる."
+        ],
+        "limits": [
+          "The source does not state why she writes this way or whether all her work is neat."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-13",
+      "lemma": "纏まる",
+      "sense": "parts_form_whole",
+      "level_approx": "N5",
+      "jp": "ばらばらだった部品が一つの形にまとまった。",
+      "zh_hant": "原本零散的零件組合成一個整體。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "部品が is the subject that comes together; まとまった describes the resulting whole.",
+        "The Japanese source explicitly supports the parts form whole reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state who arranged the parts or what the shape is for."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "纏まる",
+        "contrast_ids": [
+          "VP-N5-14",
+          "VP-N5-15"
+        ],
+        "source_cue": "部品が is the subject that comes together; まとまった describes the resulting whole.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks parts form whole for 纏まる."
+        ],
+        "limits": [
+          "The source does not state who arranged the parts or what the shape is for."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-14",
+      "lemma": "纏まる",
+      "sense": "discussion_reaches_agreement",
+      "level_approx": "N5",
+      "jp": "会場の使い方は、今日の話し合いでまとまった。",
+      "zh_hant": "場地使用方式在今天的討論中定案了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "まとまった describes the use plan reaching a decision through the discussion.",
+        "The Japanese source explicitly supports the discussion reaches agreement reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state who attended or whether everyone was equally satisfied."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "纏まる",
+        "contrast_ids": [
+          "VP-N5-13",
+          "VP-N5-15"
+        ],
+        "source_cue": "まとまった describes the use plan reaching a decision through the discussion.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks discussion reaches agreement for 纏まる."
+        ],
+        "limits": [
+          "The source does not state who attended or whether everyone was equally satisfied."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-15",
+      "lemma": "まとめる",
+      "sense": "transitive_organizing_negative_control",
+      "level_approx": "N5",
+      "jp": "姉は旅行の日程を表にまとめた。",
+      "zh_hant": "姐姐把旅行行程整理成表格。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "姉 is the agent and 日程を is the object she organizes; this is transitive まとめる, not intransitive まとまる.",
+        "The Japanese source explicitly supports the transitive organizing negative control reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether the schedule is final or who will use the table."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "纏まる",
+        "contrast_ids": [
+          "VP-N5-13",
+          "VP-N5-14"
+        ],
+        "source_cue": "姉 is the agent and 日程を is the object she organizes; this is transitive まとめる, not intransitive まとまる.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks transitive organizing negative control for 纏まる."
+        ],
+        "limits": [
+          "The source does not state whether the schedule is final or who will use the table."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-16",
+      "lemma": "沈む",
+      "sense": "physical_object_sinks",
+      "level_approx": "N5",
+      "jp": "小さな石が水の中に沈んだ。",
+      "zh_hant": "小石沉入水中。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "石が is the object moving below the water surface.",
+        "The Japanese source explicitly supports the physical object sinks reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the water’s depth or where the stone lands."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "沈む",
+        "contrast_ids": [
+          "VP-N5-17",
+          "VP-N5-18"
+        ],
+        "source_cue": "石が is the object moving below the water surface.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks physical object sinks for 沈む."
+        ],
+        "limits": [
+          "The source does not state the water’s depth or where the stone lands."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-17",
+      "lemma": "沈む",
+      "sense": "sun_sets",
+      "level_approx": "N5",
+      "jp": "夕日が海の向こうに沈んだ。",
+      "zh_hant": "夕陽沉到海平面下。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "夕日が identifies the sun, and 沈んだ states its descent below the horizon.",
+        "The Japanese source explicitly supports the sun sets reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the exact time or weather."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "沈む",
+        "contrast_ids": [
+          "VP-N5-16",
+          "VP-N5-18"
+        ],
+        "source_cue": "夕日が identifies the sun, and 沈んだ states its descent below the horizon.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks sun sets for 沈む."
+        ],
+        "limits": [
+          "The source does not state the exact time or weather."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-18",
+      "lemma": "沈む",
+      "sense": "mood_becomes_low",
+      "level_approx": "N5",
+      "jp": "失敗のあと、彼女の気分が沈んだ。",
+      "zh_hant": "失敗後，她的心情變得低落。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "気分が is an emotional state that becomes low after the stated failure.",
+        "The Japanese source explicitly supports the mood becomes low reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state how long the mood lasts or how she shows it."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "沈む",
+        "contrast_ids": [
+          "VP-N5-16",
+          "VP-N5-17"
+        ],
+        "source_cue": "気分が is an emotional state that becomes low after the stated failure.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks mood becomes low for 沈む."
+        ],
+        "limits": [
+          "The source does not state how long the mood lasts or how she shows it."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-19",
+      "lemma": "倒れる",
+      "sense": "object_topples",
+      "level_approx": "N5",
+      "jp": "強い風で店の看板が倒れた。",
+      "zh_hant": "店家的招牌被強風吹倒了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "店の看板 is the object that falls over; the wind is the stated cause.",
+        "The Japanese source explicitly supports the object topples reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether the sign is damaged."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "倒れる",
+        "contrast_ids": [
+          "VP-N5-20",
+          "VP-N5-21"
+        ],
+        "source_cue": "店の看板 is the object that falls over; the wind is the stated cause.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks object topples for 倒れる."
+        ],
+        "limits": [
+          "The source does not state whether the sign is damaged."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-20",
+      "lemma": "倒れる",
+      "sense": "person_falls",
+      "level_approx": "N5",
+      "jp": "彼は駅の階段で足を滑らせて倒れた。",
+      "zh_hant": "他在車站樓梯上滑倒了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "足を滑らせて gives the cause, and 彼 is the person who falls.",
+        "The Japanese source explicitly supports the person falls reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether he is injured or loses consciousness."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "倒れる",
+        "contrast_ids": [
+          "VP-N5-19",
+          "VP-N5-21"
+        ],
+        "source_cue": "足を滑らせて gives the cause, and 彼 is the person who falls.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks person falls for 倒れる."
+        ],
+        "limits": [
+          "The source does not state whether he is injured or loses consciousness."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-21",
+      "lemma": "倒れる",
+      "sense": "organization_fails",
+      "level_approx": "N5",
+      "jp": "長い不況のあと、その会社は資金が続かず倒れた。",
+      "zh_hant": "長期不景氣後，那家公司資金難以為繼而倒閉。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "会社 is the subject that fails, and 資金が続かず states the financial pressure.",
+        "The Japanese source explicitly supports the organization fails reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state any legal insolvency or bankruptcy procedure."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "倒れる",
+        "contrast_ids": [
+          "VP-N5-19",
+          "VP-N5-20"
+        ],
+        "source_cue": "会社 is the subject that fails, and 資金が続かず states the financial pressure.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks organization fails for 倒れる."
+        ],
+        "limits": [
+          "The source does not state any legal insolvency or bankruptcy procedure."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-22",
+      "lemma": "進行する",
+      "sense": "event_is_underway",
+      "level_approx": "N5",
+      "jp": "会議は今も進行している。",
+      "zh_hant": "會議目前仍在進行。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "会議 is the event in progress, and 今も marks that it continues now.",
+        "The Japanese source explicitly supports the event is underway reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify the chair or say how the meeting proceeds."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "進行する",
+        "contrast_ids": [
+          "VP-N5-23",
+          "VP-N5-24"
+        ],
+        "source_cue": "会議 is the event in progress, and 今も marks that it continues now.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks event is underway for 進行する."
+        ],
+        "limits": [
+          "The source does not identify the chair or say how the meeting proceeds."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-23",
+      "lemma": "進行する",
+      "sense": "illness_condition_worsens",
+      "level_approx": "N5",
+      "jp": "患者の病状は少しずつ進行している。",
+      "zh_hant": "病人的病情正逐漸加重。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "病状 names the patient’s illness condition, and 少しずつ進行している states that it is gradually worsening.",
+        "The Japanese source explicitly supports the illness-worsening sense of 進行する."
+      ],
+      "semantic_unknowns": [
+        "The source does not state a cause, treatment, or outcome."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "進行する",
+        "contrast_ids": [
+          "VP-N5-22",
+          "VP-N5-24"
+        ],
+        "source_cue": "病状 names the patient’s illness condition, and 少しずつ進行している states that it is gradually worsening.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks gradual worsening of an illness for 進行する."
+        ],
+        "limits": [
+          "The source does not state a cause, treatment, or outcome."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VP-N5-24",
+      "lemma": "進行する",
+      "sense": "person_leads_event",
+      "level_approx": "N5",
+      "jp": "司会者は質問を出しながら、会議を進行した。",
+      "zh_hant": "主持人一邊提問，一邊帶領會議進行。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "司会者 is the agent and 会議を is the event being led; the sentence explicitly states the chair’s role.",
+        "The Japanese source explicitly supports the person leads event reading."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether the meeting reaches a decision."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "進行する",
+        "contrast_ids": [
+          "VP-N5-22",
+          "VP-N5-23"
+        ],
+        "source_cue": "司会者 is the agent and 会議を is the event being led; the sentence explicitly states the chair’s role.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row checks person leads event for 進行する."
+        ],
+        "limits": [
+          "The source does not state whether the meeting reaches a decision."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    }
+  ]
+}

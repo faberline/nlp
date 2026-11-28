@@ -3601,3 +3601,111 @@ fn quoted_japanese_requests_keep_the_source_text_and_question_open() {
         assert_eq!(translated.target_text, expected, "{source}");
     }
 }
+
+#[test]
+fn teaching_relative_keeps_the_observer_and_the_named_object_separate() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("data/ja_zh/quoted_reading_dev_v1.json")).unwrap();
+    let source = fixture["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "quoted-reading-06")
+        .unwrap()["jp"]
+        .as_str()
+        .unwrap();
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let empty = TranslationGlossary::new();
+    let expected = "我看見在小學教書的山田老師了。";
+    let mut analysis = analyze_document(source, &doc_options_for_translate(&options, &empty));
+    let translate_supplied = |text: &str, document: &Document| {
+        translate_document(
+            text,
+            document,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            &empty,
+            None,
+        )
+        .unwrap()
+    };
+    assert_eq!(translate_supplied(source, &analysis).target_text, expected);
+
+    let alternate = source
+        .replacen("小学校", "中学校", 1)
+        .replacen("山田", "田中", 1);
+    let doc = analyze_and_translate(&alternate, &options, &empty, None, Backend::Onnx).unwrap();
+    assert_eq!(doc.target_text, "我看見在國中教書的田中老師了。");
+
+    let school = nominal_request_glossary(GlossaryKind::Object, "小学校", "國小");
+    let doc = analyze_and_translate(source, &options, &school, None, Backend::Onnx).unwrap();
+    assert_nominal_request_hit(source, &doc, GlossaryKind::Object, "小学校", "國小");
+    assert_eq!(doc.target_text, "我看見在國小教書的山田老師了。");
+
+    let teacher = nominal_request_glossary(GlossaryKind::DomainTerm, "先生", "教師");
+    let doc = analyze_and_translate(source, &options, &teacher, None, Backend::Onnx).unwrap();
+    assert_nominal_request_hit(source, &doc, GlossaryKind::DomainTerm, "先生", "教師");
+    assert_eq!(doc.target_text, "我看見在小學擔任教師的山田了。");
+
+    for (name, label) in [("山田", "張老師"), ("山田さん", "張代表")] {
+        let mut glossary = TranslationGlossary::new();
+        glossary.actors.push(GlossaryEntry {
+            canonical: name.to_owned(),
+            surfaces: vec![name.to_owned()],
+            targets: BTreeMap::from([(TargetVariant::ZhHant, label.to_owned())]),
+            ..GlossaryEntry::default()
+        });
+        let doc = analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_nominal_request_hit(source, &doc, GlossaryKind::Actor, name, label);
+        assert_eq!(doc.target_text, format!("我看見在小學教書的{label}了。"));
+    }
+
+    let mut opaque = analysis.clone();
+    opaque.segmentation.opaque.push(faberline_nlp::doc::Opaque {
+        kind: faberline_nlp::doc::OpaqueKind::Code,
+        span: Span {
+            start_char: 2,
+            end_char: 5,
+        },
+    });
+    let written = translate_supplied(source, &opaque);
+    assert_ne!(written.target_text, expected);
+    let [protected] = written.opaque_spans.as_slice() else {
+        panic!("expected the caller-supplied opaque range");
+    };
+    assert_eq!(
+        slice_chars(&written.target_text, protected.target_span.unwrap()),
+        "小学校"
+    );
+
+    let subordinate_source = source.replacen("私は", "私が", 1);
+    let mut subordinate = analyze_document(
+        &subordinate_source,
+        &doc_options_for_translate(&options, &empty),
+    );
+    let work = subordinate
+        .syntax
+        .iter()
+        .find(|arc| arc.deprel == "advcl" && slice_chars(&subordinate_source, arc.span) == "し")
+        .unwrap()
+        .token;
+    let observer = subordinate
+        .syntax
+        .iter_mut()
+        .find(|arc| arc.deprel == "nsubj" && slice_chars(&subordinate_source, arc.span) == "私")
+        .unwrap();
+    observer.head = Some(work);
+    assert_ne!(
+        translate_supplied(&subordinate_source, &subordinate).target_text,
+        expected
+    );
+
+    let state = analysis
+        .syntax
+        .iter_mut()
+        .find(|entry| entry.deprel == "acl" && slice_chars(source, entry.span) == "いる")
+        .unwrap();
+    state.head = None;
+    assert_ne!(translate_supplied(source, &analysis).target_text, expected);
+}

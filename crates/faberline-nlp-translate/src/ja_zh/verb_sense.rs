@@ -7,6 +7,7 @@ use super::{
 };
 use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
 
+mod cohesion;
 mod fall;
 mod lament;
 
@@ -751,7 +752,8 @@ pub(super) fn render(
     let finite = core_non_punct(atoms);
     let has_sense_verb = |atom: &Atom| {
         atom.upos == Some(Upos::Verb)
-            && (fall::is_predicate(atom)
+            && (cohesion::is_predicate(atom)
+                || fall::is_predicate(atom)
                 || lament::is_predicate(atom)
                 || matches!(
                     atom.lemma.as_deref(),
@@ -797,7 +799,9 @@ pub(super) fn render(
     };
     let aspect = aspect(verb, &finite[index + 1..])?;
     let lemma = verb.lemma.as_deref()?;
-    let RenderedFrame { mut text, cut } = if fall::is_predicate(verb) {
+    let RenderedFrame { mut text, cut } = if cohesion::is_predicate(verb) {
+        cohesion::render(&finite[..index], verb, aspect)?
+    } else if fall::is_predicate(verb) {
         fall::render(&finite[..index], verb, aspect)?
     } else if lament::is_predicate(verb) {
         lament::render(&finite[..index], verb, aspect)?

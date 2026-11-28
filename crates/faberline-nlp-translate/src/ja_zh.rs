@@ -32,6 +32,7 @@ mod meeting_voice;
 pub(crate) mod naide_locks;
 mod nominal_possession;
 mod nominal_receiving_glossary;
+mod ohanashi;
 mod omitted_departure;
 mod order_noun;
 mod ordinary_quote;
@@ -294,6 +295,12 @@ pub(crate) fn translate_ja_sentence<'source>(
                 )
             });
     let mut atoms = normalized_sentence_atoms(sentence_idx, chars, doc, sent_tokens, lock_table);
+    if target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && written_form_continuation.is_none()
+    {
+        ohanashi::normalize(&mut atoms);
+    }
     if let Some((_, _, locks)) = handover.as_ref() {
         locks.apply(&mut atoms);
     }
@@ -366,6 +373,10 @@ pub(crate) fn translate_ja_sentence<'source>(
         application_form::normalize(&mut atoms, chars, doc);
         reception::normalize(&mut atoms);
         common_noun_sense::bind(&mut atoms, doc, chars);
+        if direct_quote.is_none() && written_form_continuation.is_none() {
+            ohanashi::bind(&mut atoms, doc, sentence_idx, chars, lock_table);
+            ohanashi::join_light_verb(&mut atoms);
+        }
         dates.normalize(&mut atoms, sentence_idx, chars, doc, lock_table);
         calendar::bind_day_arguments(&mut atoms, doc, || {
             direct_quote.is_some()
@@ -27706,6 +27717,15 @@ fn lookup_curated_phrase(s: &str) -> Option<&'static str> {
 }
 
 fn translate_single_ja_term(surface: &str, lemma: Option<&str>, upos: Option<Upos>) -> String {
+    if lemma == Some(ohanashi::CONVERSE) {
+        return "聊".to_owned();
+    }
+    if lemma == Some(ohanashi::LATER) {
+        return "晚點".to_owned();
+    }
+    if let Some(reading) = ohanashi::render(surface, lemma) {
+        return reading.to_owned();
+    }
     if let Some(reading) = common_noun_sense::render(surface, lemma) {
         return reading.to_owned();
     }

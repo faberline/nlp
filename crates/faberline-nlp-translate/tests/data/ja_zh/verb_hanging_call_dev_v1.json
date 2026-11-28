@@ -1,0 +1,312 @@
+{
+  "title": "Japanese hanging, wearing, telephone, and time-use verb contrasts",
+  "schema": "faberline.nlp.ja_zh.verb_hanging_call_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "visibility": "development-visible",
+  "source_main": "f6443db0dcfd8dfdc582d9b693618fd9315ba17a",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "sentence_provenance": "All six Japanese sentences were written for this draft. No dictionary examples, corpora, or external sentence text were copied.",
+    "reference_provenance": "First-party Taiwan Traditional Chinese references for the original examples, with independent language review.",
+    "external_gloss_source": "None used."
+  },
+  "purpose": "Draft a narrow development-only contrast for common physical hanging, wearing glasses, telephone-call, and time-spent uses of 掛ける, with distinct 賭ける and 駆ける controls.",
+  "review_and_adoption": {
+    "process": "Independent language review and adoption must be recorded in a separate data-only PR before any rule uses these rows for acceptance.",
+    "author_does_not_accept_own_work": true,
+    "human_review_claim": false,
+    "scope_limit": "The six original rows cover these four specific uses and two distinct-verb controls. They do not score the fixed sample."
+  },
+  "items": [
+    {
+      "id": "KAKERU-DEV-01",
+      "lemma": "掛ける",
+      "sense": "physical_hanging",
+      "level_approx": "N5 approx",
+      "jp": "作業員は濡れた上着を物干し竿に掛けた。",
+      "zh_hant": "工作人員把濕外套掛在曬衣桿上。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "作業員 is the agent; 濡れた上着を is the item moved; 物干し竿に is the support where it is hung.",
+        "掛けた is transitive 掛ける with a physical hanging sense."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whose coat it is or whether it later dries."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "掛ける",
+        "contrast_ids": [
+          "KAKERU-DEV-02",
+          "KAKERU-DEV-03",
+          "KAKERU-DEV-04",
+          "KAKERU-DEV-05",
+          "KAKERU-DEV-06"
+        ],
+        "source_cue": "作業員 is the agent; 濡れた上着を is the item moved; 物干し竿に is the support where it is hung.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples physical_hanging for 掛ける."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 掛ける."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "KAKERU-DEV-02",
+      "lemma": "掛ける",
+      "sense": "put_on_glasses",
+      "level_approx": "N5 approx",
+      "jp": "読書を始める前に、彼女は眼鏡を掛けた。",
+      "zh_hant": "她開始閱讀前戴上眼鏡。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "彼女 is the agent and 眼鏡 is the item put on; this is the wearing-glasses use of 掛ける.",
+        "The source states the timing but does not say whether she needs the glasses for vision or protection."
+      ],
+      "semantic_unknowns": [
+        "The source does not state what she reads or where she is."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "掛ける",
+        "contrast_ids": [
+          "KAKERU-DEV-01",
+          "KAKERU-DEV-03",
+          "KAKERU-DEV-04",
+          "KAKERU-DEV-05",
+          "KAKERU-DEV-06"
+        ],
+        "source_cue": "彼女 is the agent and 眼鏡 is the item put on; this is the wearing-glasses use of 掛ける.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples put_on_glasses for 掛ける."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 掛ける."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "KAKERU-DEV-03",
+      "lemma": "掛ける",
+      "sense": "make_telephone_call",
+      "level_approx": "N5 approx",
+      "jp": "担当者は受付に電話を掛けた。",
+      "zh_hant": "負責人打電話給櫃台。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "担当者 is the caller; 受付に marks the call destination; 電話を掛けた means placing a call.",
+        "This is the telephone sense, not physically hanging a telephone."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether the call connected or what was discussed."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "掛ける",
+        "contrast_ids": [
+          "KAKERU-DEV-01",
+          "KAKERU-DEV-02",
+          "KAKERU-DEV-04",
+          "KAKERU-DEV-05",
+          "KAKERU-DEV-06"
+        ],
+        "source_cue": "担当者 is the caller; 受付に marks the call destination; 電話を掛けた means placing a call.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples make_telephone_call for 掛ける."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 掛ける."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "KAKERU-DEV-04",
+      "lemma": "掛ける",
+      "sense": "spend_time_on_task",
+      "level_approx": "N4 approx",
+      "jp": "担当者は機械の点検に二時間かけた。",
+      "zh_hant": "負責人花了兩小時檢查機器。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "担当者 is the person who spent the time; 二時間 is the duration; 機械の点検に is the task."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether the inspection found a problem."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "掛ける",
+        "contrast_ids": [
+          "KAKERU-DEV-01",
+          "KAKERU-DEV-02",
+          "KAKERU-DEV-03",
+          "KAKERU-DEV-05",
+          "KAKERU-DEV-06"
+        ],
+        "source_cue": "担当者 is the person who spent the time; 二時間 is the duration; 機械の点検に is the task.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples spend_time_on_task for 掛ける."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 掛ける."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "KAKERU-DEV-05",
+      "lemma": "賭ける",
+      "sense": "wager_control",
+      "level_approx": "N3 approx",
+      "jp": "チームは決勝戦の勝利に全てを賭けた。",
+      "zh_hant": "隊伍把一切都押在決賽勝利上。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "チーム is the agent; 全てを is what is staked; 決勝戦の勝利に is the outcome wagered on.",
+        "賭ける is a distinct transitive lemma and must not be treated as 掛ける."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the result of the final or what 全て includes."
+      ],
+      "control": {
+        "kind": "distinct_lemma_negative_control",
+        "group_key": "掛ける",
+        "contrast_ids": [
+          "KAKERU-DEV-01",
+          "KAKERU-DEV-02",
+          "KAKERU-DEV-03",
+          "KAKERU-DEV-04",
+          "KAKERU-DEV-06"
+        ],
+        "source_cue": "チーム is the agent; 全てを is what is staked; 決勝戦の勝利に is the outcome wagered on.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples wager_control for 賭ける."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 掛ける."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "KAKERU-DEV-06",
+      "lemma": "駆ける",
+      "sense": "run_to_endpoint_control",
+      "level_approx": "N3 approx",
+      "jp": "選手はゴールまで駆けた。",
+      "zh_hant": "選手跑到終點。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "選手 is the moving participant and ゴールまで marks the endpoint.",
+        "駆けた is the distinct intransitive lemma 駆ける, not transitive 掛ける."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the distance, speed, or race result."
+      ],
+      "control": {
+        "kind": "distinct_lemma_negative_control",
+        "group_key": "掛ける",
+        "contrast_ids": [
+          "KAKERU-DEV-01",
+          "KAKERU-DEV-02",
+          "KAKERU-DEV-03",
+          "KAKERU-DEV-04",
+          "KAKERU-DEV-05"
+        ],
+        "source_cue": "選手 is the moving participant and ゴールまで marks the endpoint.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples intransitive 駆ける with an explicit endpoint."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 掛ける."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    }
+  ],
+  "source": "https://github.com/faberline/nlp/issues/584",
+  "source_tree": "7c074290ad76eb227705150157a610c1c85259c5",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "level_note": "Approximate sentence difficulty only. These examples do not establish JLPT coverage."
+}

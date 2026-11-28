@@ -1,0 +1,264 @@
+{
+  "title": "Japanese humble motion and figurative verb public development contrasts",
+  "schema": "faberline.nlp.ja_zh.verb_humble_motion_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "visibility": "development-visible",
+  "source_main": "90591258505c6eb7ac70da62135a4a3494f72d8c",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "sentence_provenance": "All five Japanese sentences were written for this draft. No dictionary examples, corpora, or external sentence text were copied.",
+    "reference_provenance": "First-party Taiwan Traditional Chinese references for the original examples, with independent language review.",
+    "external_gloss_source": "Kotobank, Digital Daijisen entry for 参る; used only to check sense coverage, not to copy wording or examples."
+  },
+  "purpose": "Contrast humble movement to a stated place and to the listener side, ordinary polite 行く and 来る controls, and the figurative overwhelmed sense of 参る.",
+  "review_and_adoption": {
+    "process": "Independent language review and adoption must be recorded in a separate data-only PR before any rule uses these rows for acceptance.",
+    "author_does_not_accept_own_work": true,
+    "human_review_claim": false,
+    "scope_limit": "The five original rows cover specific humble motion and figurative readings, with ordinary movement controls. They do not score the fixed sample."
+  },
+  "items": [
+    {
+      "id": "MAIRU-DEV-01",
+      "lemma": "参る",
+      "sense": "humble_go_to_stated_destination",
+      "level_approx": "N3 approx",
+      "jp": "担当者は明日、別館の会議室へ参ります。",
+      "zh_hant": "負責人明天會前往另一棟的會議室。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "担当者 is the subject; 別館の会議室へ marks a destination, and the listener’s location is unspecified.",
+        "参ります uses polite humble 参る. The source does not identify how the person in charge relates to the speaker."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify the person in charge or state why they will go."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "参る",
+        "contrast_ids": [
+          "MAIRU-DEV-02",
+          "MAIRU-DEV-03",
+          "MAIRU-DEV-04",
+          "MAIRU-DEV-05"
+        ],
+        "source_cue": "担当者 is the subject; 別館の会議室へ marks a destination, and the listener’s location is unspecified.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples humble movement toward a stated place."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 参る."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "MAIRU-DEV-02",
+      "lemma": "参る",
+      "sense": "humble_movement_to_listener_side",
+      "level_approx": "N3 approx",
+      "jp": "明日の午後、そちらへ参ります。",
+      "zh_hant": "明天下午會到你那邊。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "そちらへ marks the listener-side destination; the source leaves the subject implicit.",
+        "The reference preserves the direction without identifying the traveler."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the traveler’s starting point or purpose."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "参る",
+        "contrast_ids": [
+          "MAIRU-DEV-01",
+          "MAIRU-DEV-03",
+          "MAIRU-DEV-04",
+          "MAIRU-DEV-05"
+        ],
+        "source_cue": "そちらへ marks the listener-side destination; the source leaves the subject implicit.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples humble motion toward the listener side."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 参る."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "MAIRU-DEV-03",
+      "lemma": "行く",
+      "sense": "ordinary_go_control",
+      "level_approx": "N5 approx",
+      "jp": "担当者は明日、別館の会議室へ行きます。",
+      "zh_hant": "負責人明天會去另一棟的會議室。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "行きます is ordinary polite 行く, contrasting with humble 参ります in MAIRU-DEV-01.",
+        "The subject and destination match MAIRU-DEV-01."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify the person in charge or state why they will go."
+      ],
+      "control": {
+        "kind": "ordinary_polite_verb_control",
+        "group_key": "参る",
+        "contrast_ids": [
+          "MAIRU-DEV-01",
+          "MAIRU-DEV-02",
+          "MAIRU-DEV-04",
+          "MAIRU-DEV-05"
+        ],
+        "source_cue": "行きます is ordinary polite 行く, contrasting with humble 参ります in MAIRU-DEV-01.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row is an ordinary polite control for go_control."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 参る."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "MAIRU-DEV-04",
+      "lemma": "来る",
+      "sense": "ordinary_come_control",
+      "level_approx": "N5 approx",
+      "jp": "明日の午後、こちらへ来ます。",
+      "zh_hant": "明天下午會來這邊。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "来ます is ordinary polite 来る; こちらへ marks the speaker-side destination, and the subject is omitted.",
+        "This contrasts direction with MAIRU-DEV-02, whose destination is on the listener side."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the traveler or the purpose."
+      ],
+      "control": {
+        "kind": "ordinary_polite_verb_control",
+        "group_key": "参る",
+        "contrast_ids": [
+          "MAIRU-DEV-01",
+          "MAIRU-DEV-02",
+          "MAIRU-DEV-03",
+          "MAIRU-DEV-05"
+        ],
+        "source_cue": "来ます is ordinary polite 来る; こちらへ marks the speaker-side destination, and the subject is omitted.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This ordinary polite control changes the direction as well as the verb."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 参る."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "MAIRU-DEV-05",
+      "lemma": "参る",
+      "sense": "figurative_be_overwhelmed",
+      "level_approx": "N3 approx",
+      "jp": "何度説明しても同じ質問が続き、参りました。",
+      "zh_hant": "解釋好幾次後還是一直被問同樣的問題，真讓人沒轍。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "参りました is a figurative expression of being at a loss or overwhelmed, not physical movement.",
+        "The preceding clause gives the situation; the Chinese reference does not identify who asked the questions."
+      ],
+      "semantic_unknowns": [
+        "The source does not state who asked the questions or what response followed."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "参る",
+        "contrast_ids": [
+          "MAIRU-DEV-01",
+          "MAIRU-DEV-02",
+          "MAIRU-DEV-03",
+          "MAIRU-DEV-04"
+        ],
+        "source_cue": "参りました is a figurative expression of being at a loss or overwhelmed, not physical movement.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples figurative_be_overwhelmed for 参る."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of 参る."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    }
+  ],
+  "source": "https://github.com/faberline/nlp/issues/584",
+  "source_tree": "0f16483de9f6a478b8b80d739a14e4537f56e04c",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "level_note": "Approximate sentence difficulty only. These examples do not establish JLPT coverage."
+}

@@ -96,7 +96,7 @@ pub(super) fn render(atoms: &[Atom], verb: &Atom, aspect: Aspect) -> Option<Rend
 #[cfg(test)]
 mod tests {
     use super::super::super::build_sentence_atoms;
-    use super::super::render;
+    use super::super::wear;
     use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
     use faberline_nlp::doc::{analyze_document, model::Backend};
     use serde_json::Value;
@@ -159,11 +159,16 @@ mod tests {
     }
 
     #[test]
+    fn transitive_rubbing_keeps_the_actor_tool_and_object() {
+        assert_segments(&[(4, &["我用布擦了鏡子。"])]);
+    }
+
+    #[test]
     fn contact_does_not_replace_wear_or_transitive_rubbing() {
         let options = TranslateOptions::new(TargetVariant::ZhHant);
         let glossary = TranslationGlossary::new();
         let case_bank = cases_from_bank();
-        for source in &case_bank[2..] {
+        for (index, source) in case_bank.iter().enumerate().skip(2) {
             let chars: Vec<_> = source.chars().collect();
             let doc = analyze_document(
                 source,
@@ -176,17 +181,13 @@ mod tests {
                 &doc.tokens.iter().collect::<Vec<_>>(),
                 &crate::lock::SpanLockTable::new(),
             );
-            let clauses: Vec<_> = doc
-                .segmentation
-                .clauses
-                .iter()
-                .enumerate()
-                .map(|(i, clause)| (i, clause.span))
-                .collect();
             assert!(!atoms.iter().any(super::is_predicate), "{source}");
-            if source == &case_bank[4] {
+            if index == 4 {
                 assert!(
-                    render(&atoms, &doc, &chars, 0, &clauses).is_none(),
+                    !atoms
+                        .iter()
+                        .enumerate()
+                        .any(|(before, atom)| { wear::is_predicate(&atoms[..before], atom) }),
                     "{source}"
                 );
             }

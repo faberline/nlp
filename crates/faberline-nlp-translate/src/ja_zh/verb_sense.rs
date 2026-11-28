@@ -377,6 +377,7 @@ enum Sense {
     Wind,
     Breath,
     Instrument,
+    Wipe,
     Frequent,
     TurnPage,
     TurnOver,
@@ -456,6 +457,17 @@ fn choose(lemma: &str, frame: &Frame<'_>) -> Option<Sense> {
             ),
             None,
         ) => Sense::Instrument,
+        ("擦る", Some(_), None)
+            if frame.subject.is_some_and(Nominal::person)
+                && frame
+                    .object
+                    .is_some_and(|noun| noun.head().upos == Some(Upos::Noun))
+                && frame.setting.is_some_and(|noun| {
+                    noun.head().deprel == "obl" && matches!(noun.key().as_str(), "布" | "タオル")
+                }) =>
+        {
+            Sense::Wipe
+        }
         ("通う", None, Some(goal)) if goal.place() => Sense::Frequent,
         ("めくる", Some("ページ" | "頁" | "紙"), None) => Sense::TurnPage,
         ("めくる", Some("カード" | "トランプ" | "札"), None) => Sense::TurnOver,
@@ -571,7 +583,7 @@ fn render_frame(
     }
     if frame.direction.is_some() && !matches!(sense, Sense::Breath)
         || frame.source.is_some() && !matches!(sense, Sense::PassGate)
-        || frame.setting.is_some() && !matches!(sense, Sense::Mail | Sense::Deliver)
+        || frame.setting.is_some() && !matches!(sense, Sense::Mail | Sense::Deliver | Sense::Wipe)
         || frame.topic.is_some() && !matches!(sense, Sense::Maintain)
     {
         return None;
@@ -628,6 +640,11 @@ fn render_frame(
             format!("{toward}{progressing}吹{past}氣")
         }
         Sense::Instrument => format!("{progressing}吹{past}{}", object()?),
+        Sense::Wipe => format!(
+            "{progressing}用{}擦{past}{}",
+            frame.setting?.text(),
+            object()?
+        ),
         Sense::Frequent => {
             let repeated = if is_repeated { "" } else { "定期" };
             if let Some(pause) = frame.pause {
@@ -889,6 +906,7 @@ fn render_proven(
                 || friction::is_predicate(atom)
                 || lament::is_predicate(atom)
                 || wear::is_predicate(&finite[..index], atom)
+                || (atom.deprel == "root" && atom.lemma.as_deref() == Some("擦る"))
                 || matches!(
                     atom.lemma.as_deref(),
                     Some("突っ込む" | "吹く" | "通う" | "めくる" | "通す" | "寄こす")

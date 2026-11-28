@@ -283,6 +283,7 @@ fn translate_document_inner(
     let mut out_unknown: Vec<TranslateUnknown> = Vec::new();
     let mut consumed_direct_reports = HashMap::new();
     let source_without_glossary = builtin_cpu_analysis.then(OnceCell::new);
+    let partitive_source = builtin_cpu_analysis.then(OnceCell::new);
     let mut dates = ja_zh::DateContext::default();
     let mut honorifics = ja_zh::HonorificContext::default();
 
@@ -395,6 +396,7 @@ fn translate_document_inner(
                     direct_quote_placements.get(&si),
                     &written_quotes,
                     source_without_glossary.as_ref(),
+                    partitive_source.as_ref(),
                     &mut dates,
                     &mut honorifics,
                 );
@@ -788,6 +790,7 @@ fn translate_single_sentence(
     direct_quote: Option<&ja_zh::DirectQuotePlacement>,
     written_quotes_by_sentence: &[Vec<quote_source::WrittenForm>],
     source_without_glossary: Option<&OnceCell<Option<Document>>>,
+    partitive_source: Option<&OnceCell<Option<Document>>>,
     dates: &mut ja_zh::DateContext,
     honorifics: &mut ja_zh::HonorificContext,
 ) -> SentenceOutcome {
@@ -959,6 +962,56 @@ fn translate_single_sentence(
             && doc.options.cpu_syntax
             && direct_quote.is_none()
             && written_quotes.is_empty();
+        let partitive_view = partitive_source
+            .filter(|_| can_repair && ja_zh::partitive::may_repair(sent_span, chars, &lock_table))
+            .and_then(|cached| {
+                cached
+                    .get_or_init(|| {
+                        let mut source_options = doc.options.clone();
+                        // Remove only hints that split 半分 or absorb its particle.
+                        source_options
+                            .lexicon
+                            .retain(|term| ja_zh::partitive::retain_other_terms(term));
+                        if source_options.lexicon == doc.options.lexicon {
+                            return None;
+                        }
+                        let text: String = chars.iter().collect();
+                        let source = analyze_document(&text, &source_options);
+                        (source.segmentation == doc.segmentation).then_some(source)
+                    })
+                    .as_ref()
+            })
+            .and_then(|source| {
+                let first = source
+                    .tokens
+                    .partition_point(|token| token.sentence < sentence_idx);
+                let last = source
+                    .tokens
+                    .partition_point(|token| token.sentence <= sentence_idx);
+                let tokens = source.tokens[first..last].iter().collect::<Vec<_>>();
+                let original = ja_zh::partitive::source_proof_spans(
+                    sentence_idx,
+                    chars,
+                    doc,
+                    sent_tokens,
+                    &lock_table,
+                );
+                let repaired = ja_zh::partitive::source_proof_spans(
+                    sentence_idx,
+                    chars,
+                    source,
+                    &tokens,
+                    &lock_table,
+                );
+                (repaired.len() > original.len()
+                    && original.iter().all(|span| repaired.contains(span)))
+                .then_some((source, tokens))
+            });
+        let (doc, sent_tokens) = partitive_view
+            .as_ref()
+            .map_or((doc, sent_tokens), |(source, tokens)| {
+                (*source, tokens.as_slice())
+            });
         let restore_topics = can_repair
             && ja_zh::polarity_contrast::may_restore_topics(&raw_sent, chars, &lock_table);
         let restore_omission =

@@ -65,3 +65,6 @@
 #
 # Hiragana apple noun (cost follows the existing リンゴ noun).
 りんご	ja	541	NOUN	NOUN	-	蘋果	src=first_party_mit
+#
+# Polite noun for segmentation (cost follows the existing 話 entry).
+お話	ja	964	NOUN	NOUN	-	話	src=first_party_mit

@@ -618,7 +618,18 @@ fn render_frame(lemma: &str, frame: Frame<'_>, aspect: Aspect) -> Option<Rendere
                 }
                 cut = Some((pause, subject.chars().count() + timing.chars().count()));
             }
-            format!("{repeated}去{goal}{past}", goal = goal()?)
+            let destination = frame.goal?.0;
+            if aspect == Aspect::Continuing
+                && !is_repeated
+                && matches!(
+                    destination.key().as_str(),
+                    "学校" | "小学校" | "中学校" | "高校" | "高等学校" | "大学"
+                )
+            {
+                format!("在{}上學", destination.text())
+            } else {
+                format!("{repeated}去{goal}{past}", goal = destination.text())
+            }
         }
         Sense::TurnPage => {
             let noun = frame.object?;
@@ -735,6 +746,22 @@ fn aspect(verb: &Atom, tail: &[Atom]) -> Option<Aspect> {
                 && is_te_form_link(verb, te, state)
                 && linked(te, verb, "mark")
                 && linked(verb, state, "advcl") =>
+        {
+            Some(Aspect::Continuing)
+        }
+        [te, state, polite]
+            if verb.lemma.as_deref() == Some("通う")
+                && state.surface == "い"
+                && state.lemma.as_deref() == Some("いる")
+                && state.upos == Some(Upos::Verb)
+                && state.deprel == "root"
+                && polite.surface == "ます"
+                && polite.upos == Some(Upos::Aux)
+                && is_te_form_link(verb, te, state)
+                && adjacent(state, polite)
+                && linked(te, verb, "mark")
+                && linked(verb, state, "advcl")
+                && linked(polite, state, "aux") =>
         {
             Some(Aspect::Continuing)
         }
@@ -966,5 +993,48 @@ mod tests {
                 "{source}"
             );
         }
+    }
+
+    #[test]
+    fn frequent_school_attendance_uses_the_governed_destination() {
+        let source = "学校に通っています。";
+        let chars = source.chars().collect::<Vec<_>>();
+        let glossary = TranslationGlossary::new();
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let doc_options = crate::doc_options_for_translate(&options, &glossary);
+        let mut doc = analyze_document(source, &doc_options);
+        let clauses = doc
+            .segmentation
+            .clauses
+            .iter()
+            .enumerate()
+            .map(|(i, clause)| (i, clause.span))
+            .collect::<Vec<_>>();
+        let sentence = |doc: &Document| {
+            build_sentence_atoms(
+                0,
+                &chars,
+                doc,
+                &doc.tokens.iter().collect::<Vec<_>>(),
+                &crate::lock::SpanLockTable::new(),
+            )
+        };
+        let mut atoms = sentence(&doc);
+        let (target, alignments) = render(&atoms, &doc, &chars, 0, &clauses).unwrap();
+        assert_eq!(target, "在學校上學。");
+        assert_eq!(alignments.len(), 1);
+        assert_eq!(alignments[0].source_span, clauses[0].1);
+        assert_eq!(alignments[0].target_span.end_char, target.chars().count());
+
+        let destination = atoms
+            .iter_mut()
+            .find(|atom| atom.surface == "学校")
+            .unwrap();
+        destination.is_locked = true;
+        assert!(render(&atoms, &doc, &chars, 0, &clauses).is_none());
+
+        let polite = atoms.iter().find(|atom| atom.surface == "ます").unwrap();
+        doc.syntax[polite.doc_tok_idx.unwrap()].head = None;
+        assert!(render(&sentence(&doc), &doc, &chars, 0, &clauses).is_none());
     }
 }

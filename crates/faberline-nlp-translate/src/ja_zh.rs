@@ -23672,6 +23672,14 @@ mod clock_rule_tests {
 }
 
 #[cfg(test)]
+fn singing_test_gloss() -> &'static str {
+    match faberline_nlp::lexicon::ja::lookup_ja_gloss("歌う", Some(Upos::Verb)) {
+        Some(gloss @ ("哼唱" | "唱")) => gloss,
+        gloss => panic!("unexpected Japanese singing gloss: {gloss:?}"),
+    }
+}
+
+#[cfg(test)]
 mod motion_endpoint_tests {
     use super::{
         Atom, Bunsetsu, BunsetsuRole, CLOCK_ATOM, OPAQUE_PERIOD_CLOCK, is_plain_clock_ni,
@@ -24662,6 +24670,7 @@ mod motion_endpoint_tests {
 
     #[test]
     fn proposals_distinguish_indefinite_arguments_from_open_questions() {
+        let singing = super::singing_test_gloss();
         for (source, expected) in [
             ("誰かと一緒に歌いましょう。", "和某個人一起哼唱吧。"),
             ("誰かと一緒に歩きましょうか。", "和某個人一起走，好嗎？"),
@@ -24674,7 +24683,11 @@ mod motion_endpoint_tests {
             ("どこで会いましょうか。", "在哪裡見面好呢？"),
             ("誰かが手伝いましょう。", "某個人協助吧。"),
         ] {
-            assert_eq!(translate(source), expected, "{source}");
+            assert_eq!(
+                translate(source),
+                expected.replace("哼唱", singing),
+                "{source}"
+            );
         }
     }
 
@@ -24750,6 +24763,10 @@ mod motion_endpoint_tests {
 
     #[test]
     fn joint_activities_preserve_the_offer_and_its_arguments() {
+        let singing = match super::singing_test_gloss() {
+            "哼唱" => "唱歌",
+            gloss => gloss,
+        };
         for (source, expected) in [
             ("一緒に走りませんか。", "要不要一起跑步？"),
             ("一緒にお茶を飲みませんか。", "要不要一起喝茶？"),
@@ -24796,7 +24813,11 @@ mod motion_endpoint_tests {
             ("二人で歌いませんか。", "要不要兩人一起唱歌？"),
             ("三人で歌いませんか。", "要不要三人一起唱歌？"),
         ] {
-            assert_eq!(translate(source), expected, "{source}");
+            assert_eq!(
+                translate(source),
+                expected.replace("唱歌", singing),
+                "{source}"
+            );
         }
     }
 
@@ -24844,6 +24865,7 @@ mod motion_endpoint_tests {
 
     #[test]
     fn reported_subjects_and_other_speech_acts_keep_their_scope() {
+        let singing = super::singing_test_gloss();
         assert_eq!(translate("この犬は泳ぎませんか。"), "這隻狗不游泳嗎？");
         assert_eq!(
             translate("このバスは空港へ行きませんか。"),
@@ -24882,7 +24904,7 @@ mod motion_endpoint_tests {
         );
         assert_eq!(
             translate("先生は誰かと一緒に歌いませんか。"),
-            "老師不和某個人一起哼唱嗎？"
+            format!("老師不和某個人一起{singing}嗎？")
         );
         assert_eq!(translate("一緒に誰かが来ませんか。"), "某個人不一起來嗎？");
         assert!(!translate("一緒に何か起きませんか。").contains("點什麼"));
@@ -24894,7 +24916,7 @@ mod motion_endpoint_tests {
         assert_eq!(translate("一緒に飲めませんか。"), "不能一起喝嗎？");
         assert_eq!(
             translate("先生は一緒に歌いませんか。"),
-            "老師不一起哼唱嗎？"
+            format!("老師不一起{singing}嗎？")
         );
         for source in [
             "この犬は一緒に走りませんか。",

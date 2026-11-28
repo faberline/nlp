@@ -275,6 +275,7 @@ mod tests {
         doc_options_for_translate, translate_document,
     };
 
+    use super::super::singing_test_gloss;
     use super::Span;
 
     fn entry(source: &str, target: &str) -> GlossaryEntry {
@@ -296,6 +297,7 @@ mod tests {
     #[test]
     fn polite_group_composes_with_an_actor_lock_and_a_verb_stem_lock() {
         let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let singing = singing_test_gloss();
         for (source, punctuation) in [
             ("みんなで歌います。", "。"),
             ("みんなで歌いますか。", "嗎？"),
@@ -305,7 +307,7 @@ mod tests {
                 (Some("みんな"), "全組同學"),
                 (Some("みんなで"), "全組同學"),
             ] {
-                for (stem, action) in [(None, "哼唱"), (Some("歌い"), "合唱歌曲")] {
+                for (stem, action) in [(None, singing), (Some("歌い"), "合唱歌曲")] {
                     let mut glossary = TranslationGlossary::new();
                     if let Some(actor) = actor {
                         glossary.actors.push(entry(actor, label));
@@ -448,7 +450,10 @@ mod tests {
             Backend::Onnx,
         )
         .unwrap();
-        assert_eq!(result.target_text, "現場集合哼唱嗎？");
+        assert_eq!(
+            result.target_text,
+            format!("現場集合{}嗎？", singing_test_gloss())
+        );
         assert_eq!(result.glossary_hits.len(), 1);
     }
 }

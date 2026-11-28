@@ -1,0 +1,857 @@
+{
+  "title": "Supplemental Japanese verb sense sample development bank",
+  "schema": "faberline.nlp.ja_zh.verb_sense_sample_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source": "https://github.com/faberline/nlp/issues/584",
+  "visibility": "development-visible",
+  "source_main": "487c8e88807d137a43fb9c84a3952c77c7450f7e",
+  "source_tree": "6cd2f5aaed683e089f9cdb71033f95b3896b3827",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "sentence_provenance": "All Japanese sentences were written for this draft. No dictionary examples, corpus rows, or external sentence text were copied.",
+    "reference_provenance": "Taiwan Traditional Chinese references were drafted independently for this development bank; they are provisional pending review.",
+    "external_gloss_source": "None used."
+  },
+  "purpose": "Provide public development contrasts for six fixed Japanese verbs and distinguish common senses by explicit subjects, objects, destinations, and recurrence cues.",
+  "level_note": "Approximate sentence difficulty only. This is not an exam or JLPT certification. Some target verbs may be above beginner vocabulary level.",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "review_and_adoption": {
+    "process": "Independent language review and adoption must be recorded in a separate data-only PR before any rule uses these rows for acceptance.",
+    "author_does_not_accept_own_work": true,
+    "human_review_claim": false,
+    "scope_limit": "These rows sample only the listed sense contrasts. They do not define all uses of the six verbs."
+  },
+  "items": [
+    {
+      "id": "VS-N5-01",
+      "lemma": "突っ込む",
+      "sense": "verbal_retort",
+      "level_approx": "N5",
+      "jp": "彼は友だちの冗談にすぐ突っ込んだ。",
+      "zh_hant": "他立刻吐槽朋友的玩笑。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The friend’s joke and quick reply frame a spoken response; humorous or comedic intent is contextual support, not a required fact.",
+        "The main verb uses the verbal retort sense of 突っ込む."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether the friend laughs or how the joke is received."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-02",
+          "VS-N5-03"
+        ],
+        "source_cue": "The friend’s joke and quick reply frame a spoken response; humorous or comedic intent is contextual support, not a required fact.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests verbal retort for 突っ込む."
+        ],
+        "limits": [
+          "The source does not state whether the friend laughs or how the joke is received."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-02",
+      "lemma": "突っ込む",
+      "sense": "rush_into_space",
+      "level_approx": "N5",
+      "jp": "彼は暗い部屋へ突っ込んだ。",
+      "zh_hant": "他衝進黑暗的房間。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The person is the moving subject, and the room is the destination.",
+        "The main verb uses the rush into space sense of 突っ込む."
+      ],
+      "semantic_unknowns": [
+        "The source does not state why he entered or what happened inside."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-01",
+          "VS-N5-03"
+        ],
+        "source_cue": "The person is the moving subject, and the room is the destination.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests rush into space for 突っ込む."
+        ],
+        "limits": [
+          "The source does not state why he entered or what happened inside."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-03",
+      "lemma": "突っ込む",
+      "sense": "put_object_into_container",
+      "level_approx": "N5",
+      "jp": "私は財布をかばんに突っ込んだ。",
+      "zh_hant": "我把錢包塞進包包裡。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The wallet is the moved object, and the bag is its destination.",
+        "The main verb uses the put object into container sense of 突っ込む."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether the bag is full or whether the wallet is later removed."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-01",
+          "VS-N5-02"
+        ],
+        "source_cue": "The wallet is the moved object, and the bag is its destination.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests put object into container for 突っ込む."
+        ],
+        "limits": [
+          "The source does not state whether the bag is full or whether the wallet is later removed."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-04",
+      "lemma": "吹く",
+      "sense": "weather_wind",
+      "level_approx": "N5",
+      "jp": "午後から強い風が吹いている。",
+      "zh_hant": "從下午開始就一直刮著強風。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Strong wind is the weather subject; the ongoing form marks the wind as continuing from the afternoon.",
+        "The main verb uses the weather wind sense of 吹く."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the wind direction or its effects."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-05",
+          "VS-N5-06"
+        ],
+        "source_cue": "Strong wind is the weather subject; the ongoing form marks the wind as continuing from the afternoon.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests weather wind for 吹く."
+        ],
+        "limits": [
+          "The source does not state the wind direction or its effects."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-05",
+      "lemma": "吹く",
+      "sense": "blow_breath_on_object",
+      "level_approx": "N5",
+      "jp": "彼は風車に向かって、息を吹いた。",
+      "zh_hant": "他朝著風車吹氣。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "息 is the explicit object of 吹く, and the windmill is the stated target.",
+        "The main verb uses the blow breath on object sense of 吹く."
+      ],
+      "semantic_unknowns": [
+        "The source does not state whether the windmill turns or why he blows."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-04",
+          "VS-N5-06"
+        ],
+        "source_cue": "息 is the explicit object of 吹く, and the windmill is the stated target.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests blow breath on object for 吹く."
+        ],
+        "limits": [
+          "The source does not state whether the windmill turns or why he blows."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-06",
+      "lemma": "吹く",
+      "sense": "play_wind_instrument",
+      "level_approx": "N5",
+      "jp": "父は毎晩フルートを吹いている。",
+      "zh_hant": "爸爸每晚都吹長笛。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The flute is the object of a recurring action; 毎晩 marks the repeated timing.",
+        "The main verb uses the play wind instrument sense of 吹く."
+      ],
+      "semantic_unknowns": [
+        "The source does not state what tune is played or how well it is played."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-04",
+          "VS-N5-05"
+        ],
+        "source_cue": "The flute is the object of a recurring action; 毎晩 marks the repeated timing.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests play wind instrument for 吹く."
+        ],
+        "limits": [
+          "The source does not state what tune is played or how well it is played."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-07",
+      "lemma": "通う",
+      "sense": "attend_school_regularly",
+      "level_approx": "N5",
+      "jp": "私は毎朝学校に通っている。",
+      "zh_hant": "我每天早上都去上學。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "School is the recurring destination; 毎朝 marks regular attendance.",
+        "The main verb uses the attend school regularly sense of 通う."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the school name or the speaker’s age."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-08",
+          "VS-N5-09"
+        ],
+        "source_cue": "School is the recurring destination; 毎朝 marks regular attendance.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests attend school regularly for 通う."
+        ],
+        "limits": [
+          "The source does not state the school name or the speaker’s age."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-08",
+      "lemma": "通う",
+      "sense": "recurring_hospital_visits",
+      "level_approx": "N5",
+      "jp": "私は毎週、病院に通っている。",
+      "zh_hant": "我每週都去醫院。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The hospital is a recurring destination; 毎週 rules out a single visit.",
+        "The main verb uses the recurring hospital visits sense of 通う."
+      ],
+      "semantic_unknowns": [
+        "The source does not state why the speaker visits the hospital or what happens there."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-07",
+          "VS-N5-09"
+        ],
+        "source_cue": "The hospital is a recurring destination; 毎週 rules out a single visit.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests recurring hospital visits for 通う."
+        ],
+        "limits": [
+          "The source does not state why the speaker visits the hospital or what happens there."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-09",
+      "lemma": "通う",
+      "sense": "commute_to_workplace",
+      "level_approx": "N5",
+      "jp": "兄は平日に会社へ通っている。",
+      "zh_hant": "哥哥平日都會去公司。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The company is the recurring weekday destination.",
+        "The main verb uses the commute to workplace sense of 通う."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the brother’s job or the travel method."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-07",
+          "VS-N5-08"
+        ],
+        "source_cue": "The company is the recurring weekday destination.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests commute to workplace for 通う."
+        ],
+        "limits": [
+          "The source does not state the brother’s job or the travel method."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-10",
+      "lemma": "めくる",
+      "sense": "turn_page",
+      "level_approx": "N5",
+      "jp": "私は本のページをめくった。",
+      "zh_hant": "我翻了書頁。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "A page in a book is the object; this is the page-turning sense.",
+        "The main verb uses the turn page sense of めくる."
+      ],
+      "semantic_unknowns": [
+        "The source does not specify a page count or which page."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-11",
+          "VS-N5-12",
+          "VS-N5-13"
+        ],
+        "source_cue": "A page in a book is the object; this is the page-turning sense.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests turn page for めくる."
+        ],
+        "limits": [
+          "The source does not specify a page count or which page."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-11",
+      "lemma": "めくる",
+      "sense": "turn_card_over",
+      "level_approx": "N5",
+      "jp": "彼女はカードをめくった。",
+      "zh_hant": "她把卡片翻了過來。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The card is turned to its other side.",
+        "The main verb uses the turn card over sense of めくる."
+      ],
+      "semantic_unknowns": [
+        "The source does not state what is printed on the card or why it is turned."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-10",
+          "VS-N5-12",
+          "VS-N5-13"
+        ],
+        "source_cue": "The card is turned to its other side.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests turn card over for めくる."
+        ],
+        "limits": [
+          "The source does not state what is printed on the card or why it is turned."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-12",
+      "lemma": "めくる",
+      "sense": "lift_blanket",
+      "level_approx": "N5",
+      "jp": "私は毛布をめくった。",
+      "zh_hant": "我掀開毛毯。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The blanket is lifted or folded back, rather than a page being turned.",
+        "The main verb uses the lift blanket sense of めくる."
+      ],
+      "semantic_unknowns": [
+        "The source does not state who or what is under the blanket."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-10",
+          "VS-N5-11",
+          "VS-N5-13"
+        ],
+        "source_cue": "The blanket is lifted or folded back, rather than a page being turned.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests lift blanket for めくる."
+        ],
+        "limits": [
+          "The source does not state who or what is under the blanket."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-13",
+      "lemma": "めくる",
+      "sense": "peel_sticker_edge",
+      "level_approx": "N5",
+      "jp": "彼はシールの端をめくった。",
+      "zh_hant": "他掀起貼紙的邊緣。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The edge of a sticker is lifted; the object is a removable layer.",
+        "The main verb uses the peel sticker edge sense of めくる."
+      ],
+      "semantic_unknowns": [
+        "The source does not state that the sticker is fully removed."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-10",
+          "VS-N5-11",
+          "VS-N5-12"
+        ],
+        "source_cue": "The edge of a sticker is lifted; the object is a removable layer.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests peel sticker edge for めくる."
+        ],
+        "limits": [
+          "The source does not state that the sticker is fully removed."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-14",
+      "lemma": "通す",
+      "sense": "let_person_pass",
+      "level_approx": "N5",
+      "jp": "警備員は客を門から通した。",
+      "zh_hant": "警衛讓客人從大門通過。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The guard allows a person to pass through a gate.",
+        "The main verb uses the let person pass sense of 通す."
+      ],
+      "semantic_unknowns": [
+        "The source does not state where the visitor goes after the gate."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-15",
+          "VS-N5-16",
+          "VS-N5-17"
+        ],
+        "source_cue": "The guard allows a person to pass through a gate.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests let person pass for 通す."
+        ],
+        "limits": [
+          "The source does not state where the visitor goes after the gate."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-15",
+      "lemma": "通す",
+      "sense": "pass_object_through",
+      "level_approx": "N5",
+      "jp": "私は針穴に糸を通した。",
+      "zh_hant": "我把線穿過針孔。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "Thread is the moved object, and the needle hole is its path.",
+        "The main verb uses the pass object through sense of 通す."
+      ],
+      "semantic_unknowns": [
+        "The source does not state what is sewn afterward."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-14",
+          "VS-N5-16",
+          "VS-N5-17"
+        ],
+        "source_cue": "Thread is the moved object, and the needle hole is its path.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests pass object through for 通す."
+        ],
+        "limits": [
+          "The source does not state what is sewn afterward."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-16",
+      "lemma": "通す",
+      "sense": "usher_visitor_into_room",
+      "level_approx": "N5",
+      "jp": "私は友だちを部屋に通した。",
+      "zh_hant": "我把朋友請進房間。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The friend is guided across the threshold into a room.",
+        "The main verb uses the usher visitor into room sense of 通す."
+      ],
+      "semantic_unknowns": [
+        "The source does not state what the friend does in the room."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-14",
+          "VS-N5-15",
+          "VS-N5-17"
+        ],
+        "source_cue": "The friend is guided across the threshold into a room.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests usher visitor into room for 通す."
+        ],
+        "limits": [
+          "The source does not state what the friend does in the room."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-17",
+      "lemma": "通す",
+      "sense": "maintain_silence_until_end",
+      "level_approx": "N5",
+      "jp": "彼はそのことについて最後まで無言を通した。",
+      "zh_hant": "他對那件事始終保持沉默。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "無言を通す is the main verb phrase; 最後まで marks maintaining silence on the stated matter through the end.",
+        "The main verb uses the maintain silence until end sense of 通す."
+      ],
+      "semantic_unknowns": [
+        "The source does not state why he is silent or what he thinks."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-14",
+          "VS-N5-15",
+          "VS-N5-16"
+        ],
+        "source_cue": "無言を通す is the main verb phrase; 最後まで marks maintaining silence on the stated matter through the end.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests maintain silence until end for 通す."
+        ],
+        "limits": [
+          "The source does not state why he is silent or what he thinks."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-18",
+      "lemma": "寄こす",
+      "sense": "send_letter_to_speaker",
+      "level_approx": "N5",
+      "jp": "母は郵便で私に手紙を寄こした。",
+      "zh_hant": "媽媽把信郵寄到我這裡。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "郵便 explicitly establishes postal delivery, and 私に identifies the speaker as recipient.",
+        "The main verb uses the send letter to speaker sense of 寄こす."
+      ],
+      "semantic_unknowns": [
+        "The source does not state how long delivery takes or what the letter says."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-19",
+          "VS-N5-20"
+        ],
+        "source_cue": "郵便 explicitly establishes postal delivery, and 私に identifies the speaker as recipient.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests send letter to speaker for 寄こす."
+        ],
+        "limits": [
+          "The source does not state how long delivery takes or what the letter says."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-19",
+      "lemma": "寄こす",
+      "sense": "object_transfer_to_speaker_at_place",
+      "level_approx": "N5",
+      "jp": "友だちはその場で私に鍵を寄こした。",
+      "zh_hant": "朋友當場把鑰匙交給我。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "その場で locates the transfer at that scene, and 私に names the speaker as recipient; it does not specify how the key is transferred or whether an intermediary is involved.",
+        "The main verb uses the object transfer to the speaker at that place sense of 寄こす."
+      ],
+      "semantic_unknowns": [
+        "The source does not state why the key is transferred, how it is transferred, whether an intermediary is involved, or whether it is returned."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-18",
+          "VS-N5-20"
+        ],
+        "source_cue": "その場で locates the transfer at that scene, and 私に names the speaker as recipient; it does not specify how the key is transferred or whether an intermediary is involved.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests object transfer to the speaker at that place for 寄こす."
+        ],
+        "limits": [
+          "The source does not state why the key is transferred, how it is transferred, whether an intermediary is involved, or whether it is returned."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "VS-N5-20",
+      "lemma": "寄こす",
+      "sense": "send_person_toward_speaker",
+      "level_approx": "N5",
+      "jp": "先生は私のところへ係の人を寄こした。",
+      "zh_hant": "老師派工作人員到我這裡。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "A person is sent toward the speaker’s location; the object sent is a person, not a letter or item.",
+        "The main verb uses the send person toward speaker sense of 寄こす."
+      ],
+      "semantic_unknowns": [
+        "The source does not state what the staff member does after arriving."
+      ],
+      "control": {
+        "kind": "same_lemma_sense_contrast",
+        "contrast_ids": [
+          "VS-N5-18",
+          "VS-N5-19"
+        ],
+        "source_cue": "A person is sent toward the speaker’s location; the object sent is a person, not a letter or item.",
+        "stable": [
+          "Each row is an original, standalone sentence with one primary event."
+        ],
+        "changed": [
+          "This row tests send person toward speaker for 寄こす."
+        ],
+        "limits": [
+          "The source does not state what the staff member does after arriving."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    }
+  ]
+}

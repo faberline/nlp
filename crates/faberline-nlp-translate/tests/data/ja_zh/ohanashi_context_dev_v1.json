@@ -1,0 +1,176 @@
+{
+  "schema": "faberline.nlp.ja_zh.ohanashi_context_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "visibility": "development-visible",
+  "review_status": "pending_independent_adoption",
+  "source": "https://github.com/faberline/nlp/issues/610",
+  "source_main": "eeb595cb4d36197d8d9d53cd2d2af3a37678daad",
+  "source_tree": "77bea79120065e3694c75eaa3724762a3dfbf5a3",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "author": "Luna",
+    "source_url": "https://github.com/faberline/nlp/issues/610"
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "ohanashi-context-01-conversation",
+      "jp": "相談のあと、司会者は仕事の予定を説明しました。私は司会者のお話を聞きました。",
+      "zh_hant": "商量之後，主持人說明了工作安排。我聽了主持人的說明。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "把前句作為交談脈絡，將後句的司会者のお話譯為主持人的說明。",
+        "保留我聽取內容的意思，不把這段交談改成故事。",
+        "保留主持人是說明工作安排的人。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明工作安排的具體內容。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-context-02-story",
+      "jp": "図書館のおはなし会で、司会者は月のうさぎの絵本を子どもたちに読みました。私は司会者のお話を聞きました。",
+      "zh_hant": "在圖書館的說故事活動中，主持人把月兔繪本讀給孩子們聽。我聽了主持人講的故事。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "把圖書館的說故事活動、月兔繪本和讀給孩子聽的脈絡連到司会者のお話，譯為故事。",
+        "保留主持人在圖書館把月兔繪本讀給孩子們聽的脈絡。",
+        "本列與交談列中的「司会者のお話を聞きました」句子相同；只依前文脈絡選擇故事義。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明孩子們的年齡或人數。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-context-03-insufficient-context",
+      "jp": "私は司会者のお話を聞きました。",
+      "zh_hant": "我聽了主持人講的內容。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "在沒有上下文時保留我聽取主持人所說內容，不替 お話 選定特定義項。"
+      ],
+      "semantic_unknowns": [
+        "沒有脈絡可判斷 お話 指主持人的交談內容、說明或故事。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-context-04-plain-hanashi",
+      "jp": "駅で友だちと話をしました。",
+      "zh_hant": "在車站和朋友聊了天。",
+      "allowed_variants": ["在車站和朋友交談了。"],
+      "semantic_checks": [
+        "將普通名詞 話 配合「和朋友」及「しました」譯成交談，不增添敬語或故事義。",
+        "保留交談發生在車站。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代朋友的姓名或性別。",
+        "原文未交代交談內容。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-context-05-plain-hanasu",
+      "jp": "先生は学生にゆっくり話しました。",
+      "zh_hant": "老師慢慢地對學生說話。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "保留先生是說話者、學生是對象，並保留ゆっくり的慢慢說。",
+        "把動詞 話しました 按明確的說話角色譯出，不增添故事內容。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明老師說了什麼。",
+        "原文未交代老師或學生的性別與姓名。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-context-06-reciprocal-conversation",
+      "jp": "夕食のあと、母と私は明日の予定についてお話をしました。",
+      "zh_hant": "晚餐後，媽媽和我聊了明天的安排。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "保留晚餐後媽媽和我一起談話的互動，以及話題是明天的安排。",
+        "翻譯 お話をしました 為實際交談，不加入原文沒有的故事義。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代明天安排的細節。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-context-07-topic-insufficient",
+      "jp": "そのお話は、あとで聞きます。",
+      "zh_hant": "那段內容，我晚點聽。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "保留說話者打算稍後聽取那段內容，不將 そのお話 武斷限定為故事或談話。",
+        "以中性的「那段內容」承接 お話。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有提供 そのお話 的先行內容，無法判斷它指交談、說明或故事。",
+        "原文未指出說話者稍後會向誰聽取。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    }
+  ],
+  "control_groups": {
+    "same_surface_conversation_vs_story": [
+      "ohanashi-context-01-conversation",
+      "ohanashi-context-02-story"
+    ],
+    "insufficient_context": [
+      "ohanashi-context-03-insufficient-context",
+      "ohanashi-context-07-topic-insufficient"
+    ],
+    "plain_hanashi": ["ohanashi-context-04-plain-hanashi"],
+    "plain_hanasu": ["ohanashi-context-05-plain-hanasu"],
+    "reciprocal_conversation": ["ohanashi-context-06-reciprocal-conversation"]
+  }
+}

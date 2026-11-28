@@ -1,0 +1,229 @@
+{
+  "schema": "faberline.nlp.ja_zh.ohanashi_opening_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "visibility": "development-visible",
+  "review_status": "pending_independent_adoption",
+  "source": "https://github.com/faberline/nlp/issues/614",
+  "source_main": "7b01f379ff842da80832c81b7b175facdc76dec6",
+  "source_tree": "1914c29ebbdb7222899184a8b9137fc8e91069bf",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "author": "Luna",
+    "source_url": "https://github.com/faberline/nlp/issues/614"
+  },
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "ohanashi-opening-01-forward-story",
+      "jp": "動物のお話です。\n「こはる」は、この子ぎつねの名前です。\nこはるは、ここにいます。\n今読んでいる絵本は、この動物の物語です。",
+      "zh_hant": "這是一個動物故事。\n「こはる」是這隻小狐狸的名字。\nこはる在這裡。\n現在正在讀的繪本，是這隻動物的故事。",
+      "allowed_variants": [],
+      "sense": "story",
+      "goal_sentence_index": 0,
+      "cue_scope": "next_same_paragraph",
+      "cue_sentence_index": 3,
+      "semantic_checks": [
+        "後文明確說正在讀的繪本就是這隻動物的故事，因此將開頭的 動物のお話 譯為動物故事。",
+        "保留こはる是這隻小狐狸的名字，以及牠在這裡。",
+        "譯出最後正在閱讀的繪本是這隻動物的故事，不添加故事情節。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明小狐狸在什麼地方。",
+        "原文未交代故事繪本的其他情節。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-opening-02-forward-explanation",
+      "jp": "動物のお話です。\n「こはる」は、この子ぎつねの名前です。\nこはるは、ここにいます。\nこのお話では、この写真を使って動物の名前を説明します。",
+      "zh_hant": "這是關於動物的說明。\n「こはる」是這隻小狐狸的名字。\nこはる在這裡。\n在這段介紹中，會用這張照片說明動物的名字。",
+      "allowed_variants": [],
+      "sense": "explanation",
+      "goal_sentence_index": 0,
+      "cue_scope": "next_same_paragraph",
+      "cue_sentence_index": 3,
+      "semantic_checks": [
+        "後文明確說會在這段介紹中用照片說明動物的名字，因此將開頭的 動物のお話 譯為動物相關的說明。",
+        "保留こはる是這隻小狐狸的名字，以及牠在這裡。",
+        "保留會使用這張照片說明動物名字，不補上名字的由來或其他說話內容。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明照片中是否只有這隻小狐狸。",
+        "原文未說明名字的由來。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-opening-03-forward-neutral",
+      "jp": "動物のお話です。\n「こはる」は、この子ぎつねの名前です。\nこはるは、ここにいます。",
+      "zh_hant": "這是關於動物的內容。\n「こはる」是這隻小狐狸的名字。\nこはる在這裡。",
+      "allowed_variants": [],
+      "sense": "underspecified",
+      "goal_sentence_index": 0,
+      "cue_scope": "none",
+      "cue_sentence_index": null,
+      "semantic_checks": [
+        "沒有明確故事或說明線索時，保留開頭是關於動物的內容，不指定唯一義項。",
+        "保留こはる是這隻小狐狸的名字，以及牠在這裡。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代 動物のお話 是動物故事還是關於動物的說明。",
+        "原文未說明小狐狸在什麼地方。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-opening-04-standalone",
+      "jp": "動物のお話です。",
+      "zh_hant": "這是關於動物的內容。",
+      "allowed_variants": [],
+      "sense": "underspecified",
+      "goal_sentence_index": 0,
+      "cue_scope": "none",
+      "cue_sentence_index": null,
+      "semantic_checks": [
+        "單獨出現時以中性中文保留動物主題，不指定故事或說明。"
+      ],
+      "semantic_unknowns": [
+        "沒有上下文可判斷這是動物故事、交談或說明。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-opening-05-separate-paragraph",
+      "jp": "午前中は、電車のしくみを紹介する絵本を読みました。\n\n動物のお話です。\n「こはる」は、この子ぎつねの名前です。\nこはるは、ここにいます。",
+      "zh_hant": "上午讀了一本介紹電車構造的繪本。\n\n這是關於動物的內容。\n「こはる」是這隻小狐狸的名字。\nこはる在這裡。",
+      "allowed_variants": [],
+      "sense": "underspecified",
+      "goal_sentence_index": 1,
+      "cue_scope": "unrelated_paragraph",
+      "cue_sentence_index": 0,
+      "semantic_checks": [
+        "第一段明確談上午讀的電車構造繪本，第二段另起動物主題；保留兩段各自的內容。",
+        "保留第二段的動物主題、名字說明和小狐狸在這裡，不指定 お話 的故事或說明義。"
+      ],
+      "semantic_unknowns": [
+        "原文沒有說明上午讀的電車繪本與第二段動物內容是否出自同一本書。",
+        "第二段的 動物のお話 是故事還是關於動物的說明，仍不確定。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-opening-06-previous-story-cue",
+      "jp": "図書館のおはなし会で、司会者は月のうさぎの絵本を子どもたちに読みました。動物のお話です。",
+      "zh_hant": "在圖書館的說故事活動中，主持人把月兔繪本讀給孩子們聽。這是一個動物故事。",
+      "allowed_variants": [],
+      "sense": "story",
+      "goal_sentence_index": 1,
+      "cue_scope": "previous_same_paragraph",
+      "cue_sentence_index": 0,
+      "semantic_checks": [
+        "同一段前句說主持人把月兔繪本讀給孩子們聽，這個明確脈絡支持將 動物のお話 譯為故事。",
+        "保留圖書館、主持人、孩子們和月兔繪本，不添加故事情節。"
+      ],
+      "semantic_unknowns": [
+        "原文未交代主持人或孩子們的性別。",
+        "原文未說明故事的其他情節。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-opening-07-previous-explanation-cue",
+      "jp": "飼育員は写真を見せながら、この動物の名前を説明しました。動物のお話です。",
+      "zh_hant": "動物照護員一邊展示照片，一邊說明了這隻動物的名字。這是關於動物的說明。",
+      "allowed_variants": [],
+      "sense": "explanation",
+      "goal_sentence_index": 1,
+      "cue_scope": "previous_same_paragraph",
+      "cue_sentence_index": 0,
+      "semantic_checks": [
+        "同一段前句說照護員用照片說明了這隻動物的名字，支持將 動物のお話 譯為動物相關的說明。",
+        "保留照護員展示照片並說明了這隻動物的名字，不增添名字、照片或動物的其他資訊。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明這隻動物的種類或名字。",
+        "原文未交代照片中是否只有這隻動物。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    },
+    {
+      "id": "ohanashi-opening-08-different-topic-story",
+      "jp": "星のお話です。これは、北極星を目指す旅人の物語です。",
+      "zh_hant": "這是一個關於星星的故事，內容是旅人朝著北極星前進。",
+      "allowed_variants": [],
+      "sense": "story",
+      "goal_sentence_index": 0,
+      "cue_scope": "next_same_paragraph",
+      "cue_sentence_index": 1,
+      "semantic_checks": [
+        "後句明確稱它為旅人的物語，因此將 星のお話 譯為星星的故事。",
+        "保留旅人朝北極星前進，不增加旅人的姓名或目的。"
+      ],
+      "semantic_unknowns": [
+        "原文未說明旅人的身分或旅程結果。"
+      ],
+      "provenance": {"origin": "first_party_original", "license": "MIT", "author": "Luna"},
+      "level_approx": "N5",
+      "visibility": "development-visible",
+      "heldout": false
+    }
+  ],
+  "control_groups": {
+    "forward_alias_presence_triplet": [
+      "ohanashi-opening-01-forward-story",
+      "ohanashi-opening-02-forward-explanation",
+      "ohanashi-opening-03-forward-neutral"
+    ],
+    "standalone": ["ohanashi-opening-04-standalone"],
+    "separate_paragraph": ["ohanashi-opening-05-separate-paragraph"],
+    "previous_cue_pair": [
+      "ohanashi-opening-06-previous-story-cue",
+      "ohanashi-opening-07-previous-explanation-cue"
+    ],
+    "different_topic": ["ohanashi-opening-08-different-topic-story"]
+  }
+}

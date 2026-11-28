@@ -6,7 +6,7 @@ use super::{
     render_temporal_made_atom, return_endpoint, translate_single_ja_term,
 };
 use crate::GlossaryKind;
-use crate::lock::{LockOrigin, SpanLockTable};
+use crate::lock::{LockOrigin, LockedSpan, SpanLockTable};
 use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
 
 mod cohesion;
@@ -824,7 +824,80 @@ pub(super) fn render(
     sentence: usize,
     doc_clauses: &[(usize, Span)],
 ) -> Option<(String, Vec<ClauseAlignment>)> {
-    render_proven(atoms, doc, source, sentence, doc_clauses, None)
+    render_proven(atoms, doc, source, sentence, doc_clauses, None, &[])
+}
+
+fn unlocked_sentence_atoms(
+    doc: &Document,
+    source: &[char],
+    sentence: usize,
+    sentence_span: Span,
+) -> Option<Vec<Atom>> {
+    if doc.segmentation.sentences.get(sentence)?.span != sentence_span {
+        return None;
+    }
+    let from = doc
+        .tokens
+        .partition_point(|token| token.sentence < sentence);
+    let to = doc
+        .tokens
+        .partition_point(|token| token.sentence <= sentence);
+    let tokens: Vec<_> = doc.tokens[from..to].iter().collect();
+    Some(super::build_sentence_atoms(
+        sentence,
+        source,
+        doc,
+        &tokens,
+        &SpanLockTable::new(),
+    ))
+}
+
+pub(super) fn render_locked_toreru<'doc>(
+    source: &[char],
+    analysis: &Document,
+    sentence: usize,
+    sentence_span: Span,
+    doc_clauses: &[(usize, Span)],
+    locks: &SpanLockTable,
+    unhinted: &dyn Fn() -> Option<&'doc Document>,
+) -> Option<(String, Vec<ClauseAlignment>)> {
+    if locks.is_empty()
+        || !source
+            .get(sentence_span.start_char..sentence_span.end_char)?
+            .windows(2)
+            .any(|pair| matches!(pair, ['と' | '取' | '採' | '撮', 'れ']))
+    {
+        return None;
+    }
+    let terms: Vec<_> = locks
+        .locks
+        .iter()
+        .filter(|lock| {
+            lock.source_span.start_char < sentence_span.end_char
+                && sentence_span.start_char < lock.source_span.end_char
+        })
+        .collect();
+    if terms.is_empty()
+        || terms.iter().any(|lock| {
+            !lock.mandatory
+                || lock.source_span.start_char < sentence_span.start_char
+                || lock.source_span.end_char > sentence_span.end_char
+                || !matches!(
+                    lock.origin,
+                    LockOrigin::Glossary {
+                        kind: GlossaryKind::Object | GlossaryKind::Place | GlossaryKind::DomainTerm,
+                        ..
+                    }
+                )
+        })
+    {
+        return None;
+    }
+    let render = |doc: &Document| {
+        let atoms = unlocked_sentence_atoms(doc, source, sentence, sentence_span)?;
+        render_proven(&atoms, doc, source, sentence, doc_clauses, None, &terms)
+    };
+    render(analysis).or_else(|| render(unhinted()?))
 }
 
 pub(super) fn render_locked_destination<'doc>(
@@ -870,18 +943,7 @@ pub(super) fn render_locked_destination<'doc>(
         return None;
     }
     let render = |doc: &Document| {
-        if doc.segmentation.sentences.get(sentence)?.span != sentence_span {
-            return None;
-        }
-        let from = doc
-            .tokens
-            .partition_point(|token| token.sentence < sentence);
-        let to = doc
-            .tokens
-            .partition_point(|token| token.sentence <= sentence);
-        let tokens: Vec<_> = doc.tokens[from..to].iter().collect();
-        let atoms =
-            super::build_sentence_atoms(sentence, source, doc, &tokens, &SpanLockTable::new());
+        let atoms = unlocked_sentence_atoms(doc, source, sentence, sentence_span)?;
         render_proven(
             &atoms,
             doc,
@@ -889,6 +951,7 @@ pub(super) fn render_locked_destination<'doc>(
             sentence,
             doc_clauses,
             Some((destination.source_span, destination.placeholder.as_str())),
+            &[],
         )
     };
     render(analysis).or_else(|| render(unhinted()?))
@@ -901,6 +964,7 @@ fn render_proven(
     sentence: usize,
     doc_clauses: &[(usize, Span)],
     locked_destination: Option<(Span, &str)>,
+    toreru_terms: &[&LockedSpan],
 ) -> Option<(String, Vec<ClauseAlignment>)> {
     let finite = core_non_punct(atoms);
     let has_sense_verb = |index: usize, atom: &Atom| {
@@ -920,8 +984,14 @@ fn render_proven(
                 ))
     };
     let mut predicates = finite.iter().enumerate().filter_map(|(index, atom)| {
-        let frame = toreru::render(&finite[..index], atom, &finite[index + 1..]);
-        (frame.is_some() || has_sense_verb(index, atom)).then_some((index, atom, frame))
+        let frame = toreru::render(&finite[..index], atom, &finite[index + 1..], toreru_terms)
+            .filter(|frame| {
+                toreru_terms
+                    .iter()
+                    .all(|lock| frame.text.matches(lock.placeholder.as_str()).count() == 1)
+            });
+        (frame.is_some() || toreru_terms.is_empty() && has_sense_verb(index, atom))
+            .then_some((index, atom, frame))
     });
     let (index, verb, toreru_frame) = predicates.next()?;
     let span = doc.segmentation.sentences.get(sentence)?.span;

@@ -1,6 +1,32 @@
 //! Distinguish a detached part, an available item, a harvest, and a photograph.
 
 use super::{Atom, RenderedFrame, Upos, adjacent, dasu_case_link, linked, read_nominal};
+use crate::lock::LockedSpan;
+
+#[derive(Clone, Copy)]
+struct Terms<'a>(&'a [&'a LockedSpan]);
+
+impl<'a> Terms<'a> {
+    fn locked(self, first: &Atom, last: &Atom) -> Option<&'a str> {
+        self.0.iter().find_map(|lock| {
+            (lock.source_span.start_char == first.span.start_char
+                && lock.source_span.end_char == last.span.end_char)
+                .then_some(lock.placeholder.as_str())
+        })
+    }
+
+    fn word(self, atom: &Atom, default: &'a str) -> &'a str {
+        self.locked(atom, atom).unwrap_or(default)
+    }
+
+    fn phrase(self, atoms: &[Atom], default: &'a str) -> &'a str {
+        atoms
+            .first()
+            .zip(atoms.last())
+            .and_then(|(first, last)| self.locked(first, last))
+            .unwrap_or(default)
+    }
+}
 
 fn auxiliary(aux: &Atom, verb: &Atom, surface: &str) -> bool {
     aux.surface == surface && aux.upos == Some(Upos::Aux) && linked(aux, verb, "aux")
@@ -55,7 +81,7 @@ fn noun_spelling(words: &[Atom]) -> String {
     words.iter().map(|word| word.surface.as_str()).collect()
 }
 
-fn detachment(prefix: &[Atom], verb: &Atom) -> Option<String> {
+fn detachment(prefix: &[Atom], verb: &Atom, terms: Terms<'_>) -> Option<String> {
     let [garment, origin, part, ga] = prefix else {
         return None;
     };
@@ -72,11 +98,13 @@ fn detachment(prefix: &[Atom], verb: &Atom) -> Option<String> {
         "シャツ" => "襯衫",
         _ => return None,
     };
+    let garment_text = terms.word(garment, garment_text);
+    let part_text = terms.word(part, "鈕扣");
     if noun_case(garment, origin, "の") && linked(garment, part, "nmod") {
-        return Some(format!("{garment_text}的鈕扣掉了"));
+        return Some(format!("{garment_text}的{part_text}掉了"));
     }
     if noun_case(garment, origin, "から") && linked(garment, verb, "obl") {
-        return Some(format!("鈕扣從{garment_text}上掉下來了"));
+        return Some(format!("{part_text}從{garment_text}上掉下來了"));
     }
     None
 }
@@ -85,7 +113,7 @@ fn service_desk(noun: &Atom) -> bool {
     noun.upos == Some(Upos::Noun) && matches!(noun.surface.as_str(), "受付" | "窓口")
 }
 
-fn unavailable_ticket(prefix: &[Atom], verb: &Atom) -> Option<String> {
+fn unavailable_ticket(prefix: &[Atom], verb: &Atom, terms: Terms<'_>) -> Option<String> {
     let [desk, de, wa, ticket @ .., ga] = prefix else {
         return None;
     };
@@ -95,10 +123,14 @@ fn unavailable_ticket(prefix: &[Atom], verb: &Atom) -> Option<String> {
         && noun_case(head, ga, "が")
         && linked(head, verb, "nsubj")
         && noun_spelling(ticket) == "整理券")
-        .then(|| "沒能在服務櫃檯拿到號碼牌".to_owned())
+        .then(|| {
+            let desk = terms.word(desk, "服務櫃檯");
+            let ticket = terms.phrase(ticket, "號碼牌");
+            format!("沒能在{desk}拿到{ticket}")
+        })
 }
 
-fn available_document(prefix: &[Atom], verb: &Atom) -> Option<String> {
+fn available_document(prefix: &[Atom], verb: &Atom, terms: Terms<'_>) -> Option<String> {
     let [necessary, na, document @ .., wa, desk, de] = prefix else {
         return None;
     };
@@ -117,7 +149,20 @@ fn available_document(prefix: &[Atom], verb: &Atom) -> Option<String> {
         && linked(na, necessary, "discourse")
         && adjacent(necessary, na)
         && adjacent(na, document.first()?))
-    .then(|| "必要的證明文件可以在服務櫃檯取得".to_owned())
+    .then(|| {
+        let document = terms.locked(necessary, head).map_or_else(
+            || {
+                format!(
+                    "{}的{}",
+                    terms.word(necessary, "必要"),
+                    terms.phrase(document, "證明文件")
+                )
+            },
+            str::to_owned,
+        );
+        let desk = terms.word(desk, "服務櫃檯");
+        format!("{document}可以在{desk}取得")
+    })
 }
 
 fn crop_name(crop: &Atom, ga: &Atom, verb: &Atom) -> Option<&'static str> {
@@ -132,7 +177,7 @@ fn crop_name(crop: &Atom, ga: &Atom, verb: &Atom) -> Option<&'static str> {
     }
 }
 
-fn good_harvest(prefix: &[Atom], verb: &Atom) -> Option<String> {
+fn good_harvest(prefix: &[Atom], verb: &Atom, terms: Terms<'_>) -> Option<String> {
     let [year, wa, field, de, crop, ga, well] = prefix else {
         return None;
     };
@@ -150,13 +195,13 @@ fn good_harvest(prefix: &[Atom], verb: &Atom) -> Option<String> {
         && well.upos == Some(Upos::Adv)
         && linked(well, verb, "advmod"))
     .then_some(())?;
-    Some(format!(
-        "{year_text}田裡收成了不少{}",
-        crop_name(crop, ga, verb)?
-    ))
+    let year = terms.word(year, year_text);
+    let field = terms.word(field, "田");
+    let crop = terms.word(crop, crop_name(crop, ga, verb)?);
+    Some(format!("{year}{field}裡收成了不少{crop}"))
 }
 
-fn seasonal_harvest(prefix: &[Atom], verb: &Atom) -> Option<String> {
+fn seasonal_harvest(prefix: &[Atom], verb: &Atom, terms: Terms<'_>) -> Option<String> {
     let [det, field, de, wa, season, ni, crop, ga] = prefix else {
         return None;
     };
@@ -167,7 +212,7 @@ fn seasonal_harvest(prefix: &[Atom], verb: &Atom) -> Option<String> {
     {
         return None;
     }
-    let season = match season.surface.as_str() {
+    let season_text = match season.surface.as_str() {
         "春" => "春天",
         "夏" => "夏天",
         "秋" => "秋天",
@@ -175,11 +220,24 @@ fn seasonal_harvest(prefix: &[Atom], verb: &Atom) -> Option<String> {
         _ => return None,
     };
     let pointing = demonstrative(det, field)?;
-    let crop = crop_name(crop, ga, verb)?;
-    Some(format!("{pointing}塊田{season}採得到{crop}"))
+    let field = terms.locked(det, field).map_or_else(
+        || format!("{pointing}塊{}", terms.word(field, "田")),
+        str::to_owned,
+    );
+    let crop = terms.word(crop, crop_name(crop, ga, verb)?);
+    let season = terms.word(season, season_text);
+    Some(format!("{field}{season}採得到{crop}"))
 }
 
-fn group_photo(prefix: &[Atom], verb: &Atom) -> Option<String> {
+fn camera_name(det: &Atom, camera: &Atom, terms: Terms<'_>) -> Option<String> {
+    let pointing = demonstrative(det, camera)?;
+    Some(terms.locked(det, camera).map_or_else(
+        || format!("{pointing}台{}", terms.word(camera, "相機")),
+        str::to_owned,
+    ))
+}
+
+fn group_photo(prefix: &[Atom], verb: &Atom, terms: Terms<'_>) -> Option<String> {
     let [det, camera, de, wa, photo @ .., mo] = prefix else {
         return None;
     };
@@ -192,10 +250,12 @@ fn group_photo(prefix: &[Atom], verb: &Atom) -> Option<String> {
     {
         return None;
     }
-    Some(format!("{}台相機也能拍團體照", demonstrative(det, camera)?))
+    let camera = camera_name(det, camera, terms)?;
+    let photo = terms.phrase(photo, "團體照");
+    Some(format!("{camera}也能拍{photo}"))
 }
 
-fn low_light_photo(prefix: &[Atom], quality: &Atom) -> Option<RenderedFrame> {
+fn low_light_photo(prefix: &[Atom], quality: &Atom, terms: Terms<'_>) -> Option<RenderedFrame> {
     let [det, camera, nara, pause, dark, place, demo] = prefix else {
         return None;
     };
@@ -224,20 +284,38 @@ fn low_light_photo(prefix: &[Atom], quality: &Atom) -> Option<RenderedFrame> {
     {
         return None;
     }
-    let camera = format!("用{}台相機，", demonstrative(det, camera)?);
+    let camera = format!("用{}，", camera_name(det, camera, terms)?);
+    let location = match (
+        terms.locked(dark, place),
+        terms.locked(dark, dark),
+        terms.locked(place, place),
+    ) {
+        (Some(place), _, _) => place.to_owned(),
+        (None, None, None) => "暗處".to_owned(),
+        (None, dark, place) => {
+            format!("{}的{}", dark.unwrap_or("昏暗"), place.unwrap_or("地方"))
+        }
+    };
+    let quality = terms.word(quality, "漂亮");
     let cut = Some((pause.span, camera.chars().count()));
     Some(RenderedFrame {
-        text: format!("{camera}即使在暗處也能拍得漂亮"),
+        text: format!("{camera}即使在{location}也能拍得{quality}"),
         cut,
     })
 }
 
-pub(super) fn render(prefix: &[Atom], verb: &Atom, tail: &[Atom]) -> Option<RenderedFrame> {
+pub(super) fn render(
+    prefix: &[Atom],
+    verb: &Atom,
+    tail: &[Atom],
+    locks: &[&LockedSpan],
+) -> Option<RenderedFrame> {
     if verb.deprel != "root" {
         return None;
     }
+    let terms = Terms(locks);
     if split_photography(verb, tail) {
-        return low_light_photo(prefix, verb);
+        return low_light_photo(prefix, verb, terms);
     }
     if verb.upos != Some(Upos::Verb) {
         return None;
@@ -246,12 +324,12 @@ pub(super) fn render(prefix: &[Atom], verb: &Atom, tail: &[Atom]) -> Option<Rend
         ("とれ", Some("とる" | "とれる"), [past])
             if auxiliary(past, verb, "た") && adjacent(verb, past) =>
         {
-            detachment(prefix, verb).or_else(|| good_harvest(prefix, verb))?
+            detachment(prefix, verb, terms).or_else(|| good_harvest(prefix, verb, terms))?
         }
         ("取れ", Some("取る" | "取れる"), [past])
             if auxiliary(past, verb, "た") && adjacent(verb, past) =>
         {
-            detachment(prefix, verb)?
+            detachment(prefix, verb, terms)?
         }
         ("とれ", Some("とる" | "とれる"), [negative, past])
             if auxiliary(negative, verb, "なかっ")
@@ -260,15 +338,15 @@ pub(super) fn render(prefix: &[Atom], verb: &Atom, tail: &[Atom]) -> Option<Rend
                 && adjacent(verb, negative)
                 && adjacent(negative, past) =>
         {
-            unavailable_ticket(prefix, verb)?
+            unavailable_ticket(prefix, verb, terms)?
         }
         ("取れ", Some("取る" | "取れる"), [polite])
             if auxiliary(polite, verb, "ます") && adjacent(verb, polite) =>
         {
-            available_document(prefix, verb)?
+            available_document(prefix, verb, terms)?
         }
-        ("採れる", None | Some("採れる"), []) => seasonal_harvest(prefix, verb)?,
-        ("撮れる", None | Some("撮れる"), []) => group_photo(prefix, verb)?,
+        ("採れる", None | Some("採れる"), []) => seasonal_harvest(prefix, verb, terms)?,
+        ("撮れる", None | Some("撮れる"), []) => group_photo(prefix, verb, terms)?,
         _ => return None,
     };
     Some(RenderedFrame { text, cut: None })
@@ -278,7 +356,7 @@ pub(super) fn render(prefix: &[Atom], verb: &Atom, tail: &[Atom]) -> Option<Rend
 mod tests {
     use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
     use faberline_nlp::doc::model::Backend;
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     #[test]
     fn toreru_preserves_roles_result_and_capability_for_adopted_readings() {
@@ -330,6 +408,74 @@ mod tests {
                 assert_eq!(
                     (clause.target_span.start_char, clause.target_span.end_char),
                     (0, expected.chars().count())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn toreru_keeps_source_roles_and_clause_spans_with_caller_terms() {
+        let bank: Value = serde_json::from_str(include_str!(
+            "../../../tests/data/ja_zh/verb_toreru_readings_dev_v1.json"
+        ))
+        .unwrap();
+        let rows = bank["items"].as_array().unwrap();
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let glossary: TranslationGlossary = serde_json::from_value(json!({
+            "objects": [
+                {"canonical": "整理券", "surfaces": ["整理券"], "targets": {"zh-Hant": "特製票券"}},
+                {"canonical": "カメラ", "surfaces": ["カメラ"], "targets": {"zh-Hant": "拍攝器材"}}
+            ],
+            "places": [
+                {"canonical": "暗い場所", "surfaces": ["暗い場所"], "targets": {"zh-Hant": "低光區"}}
+            ]
+        }))
+        .unwrap();
+        let cases = [
+            (
+                "TORERU-DEV-02",
+                "沒能在服務櫃檯拿到特製票券。",
+                &[("整理券", "特製票券")][..],
+            ),
+            (
+                "TORERU-DEV-04",
+                "用這台拍攝器材，即使在低光區也能拍得漂亮。",
+                &[("カメラ", "拍攝器材"), ("暗い場所", "低光區")][..],
+            ),
+        ];
+        for (id, expected, terms) in cases {
+            let row = rows.iter().find(|row| row["id"] == id).unwrap();
+            let source = row["jp"].as_str().unwrap();
+            let result =
+                analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+            assert_eq!(result.target_text, expected, "{id}");
+            assert_eq!(result.glossary_hits.len(), terms.len(), "{id}");
+            for (term, replacement) in terms {
+                let hit = result
+                    .glossary_hits
+                    .iter()
+                    .find(|hit| hit.canonical == *term)
+                    .unwrap();
+                let slice = |text: &str, span: crate::Span| {
+                    text.chars()
+                        .skip(span.start_char)
+                        .take(span.end_char - span.start_char)
+                        .collect::<String>()
+                };
+                assert_eq!(slice(source, hit.source_span), *term);
+                assert_eq!(slice(expected, hit.target_span), *replacement);
+            }
+            if id == "TORERU-DEV-04" {
+                let [camera, quality] = &result.clause_alignments[..] else {
+                    panic!("expected two clauses for {id}");
+                };
+                assert_eq!(
+                    (camera.target_span.start_char, camera.target_span.end_char),
+                    (0, 8)
+                );
+                assert_eq!(
+                    (quality.target_span.start_char, quality.target_span.end_char),
+                    (8, expected.chars().count())
                 );
             }
         }

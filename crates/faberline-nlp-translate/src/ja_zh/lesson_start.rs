@@ -91,7 +91,7 @@ fn subject(
     let masked_end = masked.partition_point(|atom| atom.span.end_char <= noun.span.end_char);
     let role_atoms = &masked[..masked_end];
     let groups = group_into_bunsetsus(role_atoms, doc, sentence);
-    let merged = merge_adnominal_bunsetsus(groups, role_atoms, doc, TargetVariant::ZhHant);
+    let merged = merge_adnominal_bunsetsus(groups, role_atoms, doc, TargetVariant::ZhHant, None);
     let [phrase] = merged.as_slice() else {
         return None;
     };

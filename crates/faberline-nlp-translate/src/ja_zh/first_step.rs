@@ -88,9 +88,9 @@ pub(crate) fn restore(
     doc: &Document,
     tokens: &[&Token],
     chars: &[char],
-    mut render_locks: SpanLockTable,
-    mut terms: Option<PredicateTerms>,
-) -> Option<(SpanLockTable, Option<PredicateTerms>)> {
+    render_locks: &mut SpanLockTable,
+    terms: &mut Option<PredicateTerms>,
+) -> Option<()> {
     let span = doc.segmentation.sentences.get(sentence)?.span;
     if doc
         .segmentation
@@ -142,10 +142,10 @@ pub(crate) fn restore(
         let lock = render_locks.locks.remove(lock_index);
         let mut predicate = PredicateTerms::default();
         predicate.add(verb.span, &lock, Coverage::Stem);
-        terms = Some(predicate);
+        *terms = Some(predicate);
         adjusted_verb = true;
     }
-    (adjusted_first || adjusted_verb).then_some((render_locks, terms))
+    (adjusted_first || adjusted_verb).then_some(())
 }
 
 #[cfg(test)]

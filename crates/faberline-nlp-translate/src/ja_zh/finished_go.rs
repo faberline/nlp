@@ -779,6 +779,7 @@ mod tests {
             &body,
             &doc,
             TargetVariant::ZhHant,
+            None,
         );
         let goal = resolve(&groups, &body, &doc, &source, None).map(|result| {
             assert_eq!(doc.tokens[result.predicate].lemma.as_deref(), Some("行く"));

@@ -971,6 +971,8 @@ fn translate_single_sentence(
             can_repair && ja_zh::polite_joint::may_restore(&raw_sent, chars, &lock_table);
         let restore_first_step =
             can_repair && ja_zh::first_step::may_restore(&raw_sent, &lock_table);
+        let restore_opening =
+            can_repair && ja_zh::written_opening::may_restore(&raw_sent, chars, &lock_table);
         // Only built-in CPU entry points can identify hints added by the glossary.
         // Keep external analysis as supplied and preserve sentence boundaries.
         let unhinted_source = || {
@@ -990,6 +992,7 @@ fn translate_single_sentence(
             || restore_companions
             || restore_joint
             || restore_first_step
+            || restore_opening
         {
             let repair = |source: &Document, tokens: &[&Token]| {
                 if restore_omission
@@ -1062,27 +1065,47 @@ fn translate_single_sentence(
                     source.tokens[first..last].iter().collect::<Vec<_>>(),
                 ))
             };
-            let step = |source: &Document, tokens: &[&Token], retain_prior_repair: bool| {
+            let repair_arguments = |source: &Document,
+                                    tokens: &[&Token],
+                                    retain_prior_repair: bool| {
                 let prior = repair(source, tokens);
                 if retain_prior_repair && prior.is_none() {
                     return None;
                 }
-                let (locks, terms) = prior.unwrap_or_else(|| (lock_table.clone(), None));
-                ja_zh::first_step::restore(sentence_idx, source, tokens, chars, locks, terms)
+                let (mut locks, mut terms) = prior.unwrap_or_else(|| (lock_table.clone(), None));
+                let opening = restore_opening
+                    && ja_zh::written_opening::restore(
+                        sentence_idx,
+                        source,
+                        tokens,
+                        chars,
+                        &mut locks,
+                    );
+                let first_step = restore_first_step
+                    && ja_zh::first_step::restore(
+                        sentence_idx,
+                        source,
+                        tokens,
+                        chars,
+                        &mut locks,
+                        &mut terms,
+                    )
+                    .is_some();
+                (opening || first_step).then_some((locks, terms))
             };
-            let first_step = restore_first_step
+            let repaired_arguments = (restore_first_step || restore_opening)
                 .then(|| {
-                    step(doc, sent_tokens, false)
+                    repair_arguments(doc, sent_tokens, false)
                         .map(|(locks, terms)| (doc, sent_tokens.to_vec(), locks, terms))
                         .or_else(|| {
                             let (source, tokens) = unhinted_tokens()?;
                             let retain_prior_repair = repair(doc, sent_tokens).is_some();
-                            step(source, &tokens, retain_prior_repair)
+                            repair_arguments(source, &tokens, retain_prior_repair)
                                 .map(|(locks, terms)| (source, tokens, locks, terms))
                         })
                 })
                 .flatten();
-            first_step.or_else(|| {
+            repaired_arguments.or_else(|| {
                 repair(doc, sent_tokens)
                     .map(|(locks, terms)| (doc, sent_tokens.to_vec(), locks, terms))
                     .or_else(|| {

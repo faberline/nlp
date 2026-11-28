@@ -13,6 +13,7 @@ mod cohesion;
 mod connection;
 mod fall;
 mod friction;
+mod hanging_call;
 mod humble_motion;
 mod lament;
 mod wear;
@@ -906,6 +907,7 @@ fn render_proven(
             && (cohesion::is_predicate(atom)
                 || fall::is_predicate(atom)
                 || friction::is_predicate(atom)
+                || hanging_call::is_predicate(atom)
                 || humble_motion::is_predicate(atom)
                 || connection::is_predicate(atom, &finite[index + 1..])
                 || lament::is_predicate(atom)
@@ -969,6 +971,8 @@ fn render_proven(
             fall::render(prefix, verb, aspect)?
         } else if friction::is_predicate(verb) {
             friction::render(prefix, verb, aspect)?
+        } else if hanging_call::is_predicate(verb) {
+            hanging_call::render(prefix, verb, aspect)?
         } else if humble_motion::is_predicate(verb) {
             humble_motion::render(prefix, verb, aspect)?
         } else if lament::is_predicate(verb) {

@@ -2,6 +2,8 @@
 
 use faberline_nlp::doc::{EntityKind, Token};
 
+pub(super) mod coordination;
+
 use crate::lock::{LockOrigin, SpanLockTable};
 use crate::schema::GlossaryKind;
 

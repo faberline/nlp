@@ -31,7 +31,13 @@
 ケーブル	NOUN	-	cable-car	纜車	用於搭乘或行駛語境的索道車輛簡稱	first_party_mit
 ケーブル	NOUN	-	wire-rope	鋼索	用於承重、固定或拖拉的金屬纜索	first_party_mit
 スタンプ	NOUN	-	chat-sticker	貼圖	在即時通訊中傳送以表達情緒或問候的圖像	first_party_mit
+スタンプ	NOUN	-	postage-stamp	郵票	貼在郵件上，表示寄件人已付郵資的小票	first_party_mit
+スタンプ	NOUN	-	postmark	郵戳	郵局打在信件或郵票上，記錄處理日期或註銷郵票的印記	first_party_mit
 スタンプ	NOUN	-	seal	印章	用來在紙張或卡片上按壓出圖案或文字的工具	first_party_mit
+センター	NOUN	-	basketball-center	中鋒	在籃球中多在籃下活動的場上位置或該位置的球員	first_party_mit
+センター	NOUN	-	center	中心	位置的正中央，或集中提供某類服務與設施的地方	first_party_mit
+センター	NOUN	-	center-field	中外野	棒球場外野的中央區域	first_party_mit
+センター	NOUN	-	center-fielder	中外野手	負責守備棒球場外野中央區域的球員	first_party_mit
 ソース	NOUN	-	information-source	資訊來源	消息、引文或資料最初來自的人、文件或機構	first_party_mit
 ソース	NOUN	-	sauce	醬汁	調味時拌入、淋在食材上或供沾取的醬料	first_party_mit
 ソース	NOUN	-	source-code	原始碼	用程式語言寫成，可供人閱讀和修改的程式內容	first_party_mit
@@ -61,6 +67,7 @@
 マスク	NOUN	-	protective-mask	防護面罩	運動或作業時用來保護臉部的護具	first_party_mit
 メニュー	NOUN	-	food-menu	菜單	列出餐點、飲料或一餐菜色的清單	first_party_mit
 メニュー	NOUN	-	interface-menu	選單	電腦或裝置介面列出的操作項目	first_party_mit
+メニュー	NOUN	-	planned-items	預定項目	事前訂下的活動內容，例如一堂訓練課的項目與順序	first_party_mit
 ラジオ	NOUN	-	broadcast	廣播	電台播送新聞、音樂或其他聲音節目	first_party_mit
 ラジオ	NOUN	-	receiver	收音機	接收電台訊號並播放聲音的裝置	first_party_mit
 参る	VERB	-	adversity	受不了	遇到難以應付的情形而感到困擾或吃不消	first_party_mit

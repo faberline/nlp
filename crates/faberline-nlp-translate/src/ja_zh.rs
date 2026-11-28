@@ -484,6 +484,17 @@ pub(crate) fn translate_ja_sentence<'source>(
         && written_form_continuation.is_none()
         && predicate_terms.is_none()
         && let Some(rendered) = verb_sense::render(&atoms, doc, chars, sentence_idx, &doc_clauses)
+            .or_else(|| {
+                verb_sense::render_locked_school(
+                    chars,
+                    doc,
+                    sentence_idx,
+                    sent_span,
+                    &doc_clauses,
+                    lock_table,
+                    unhinted_source,
+                )
+            })
     {
         return rendered;
     }

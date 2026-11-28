@@ -549,7 +549,6 @@ fn render_frame(
         let destination = frame.goal?.0;
         if !matches!(sense, Sense::Frequent)
             || aspect != Aspect::Continuing
-            || is_repeated
             || !school(destination)
             || destination.0.first()?.span.start_char != span.start_char
             || destination.head().span.end_char != span.end_char
@@ -645,10 +644,10 @@ fn render_frame(
                 cut = Some((pause, subject.chars().count() + timing.chars().count()));
             }
             let destination = frame.goal?.0;
-            if aspect == Aspect::Continuing && !is_repeated && school(destination) {
-                let school_name =
-                    locked_school.map_or_else(|| destination.text(), |(_, text)| text.to_owned());
+            if let Some((_, school_name)) = locked_school {
                 format!("在{school_name}上學")
+            } else if aspect == Aspect::Continuing && !is_repeated && school(destination) {
+                format!("在{}上學", destination.text())
             } else {
                 format!("{repeated}去{goal}{past}", goal = destination.text())
             }
@@ -1194,7 +1193,31 @@ mod tests {
         assert_eq!(provided.target_text, result.target_text);
         assert_eq!(provided.glossary_hits[0].target_span, hit.target_span);
 
-        let row = &public_bank()[7];
+        let bank = public_bank();
+        let recurring_school = &bank[6];
+        assert_eq!(recurring_school["id"], "VS-N5-07");
+        assert_eq!(recurring_school["heldout"], false);
+        let recurring = analyze_and_translate(
+            recurring_school["jp"].as_str().unwrap(),
+            &options,
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(recurring.target_text, "我每天早上都在指定學校上學。");
+        let [hit] = recurring.glossary_hits.as_slice() else {
+            panic!("the designated school name must be used once");
+        };
+        let target: Vec<_> = recurring.target_text.chars().collect();
+        assert_eq!(
+            target[hit.target_span.start_char..hit.target_span.end_char]
+                .iter()
+                .collect::<String>(),
+            "指定學校"
+        );
+
+        let row = &bank[7];
         let source = row["jp"].as_str().unwrap();
         glossary.places.push(place("病院", "指定醫院"));
         let result =

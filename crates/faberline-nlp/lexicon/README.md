@@ -34,6 +34,7 @@ The build emits a separate read-only table. Use `lexicon::ja::lookup_ja_zh_hant_
 
 ```sh
 nlp doc --ja-zh-senses 通す VERB
+nlp doc --ja-zh-senses ポスト NOUN
 ```
 
 This command returns `nlp.ja-zh-hant-senses.v1` JSON on stdout and does not read stdin. An absent key returns an empty `senses` array and a null `legacy_default`. A present key can also have a null default when the older dictionary has no exact headword, as with `試験する`.

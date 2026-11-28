@@ -749,7 +749,7 @@ pub fn lookup_ja_zh_hant_senses(lemma: &str, upos: Upos) -> &'static [JaZhHantSe
 
 #[cfg(test)]
 mod sense_lookup_tests {
-    use super::{Upos, lookup_ja_zh_hant_senses};
+    use super::{Upos, lookup_ja_gloss, lookup_ja_zh_hant_senses};
 
     #[test]
     fn lookup_returns_distinct_senses_only_for_an_exact_key() {
@@ -775,6 +775,47 @@ mod sense_lookup_tests {
         assert!(!ids("取れる").contains(&"ability"));
         assert!(ids("撮れる").contains(&"ability"));
         assert!(ids("試験する").contains(&"test-property"));
+    }
+
+    #[test]
+    fn lookup_exposes_noun_senses_and_preserves_the_single_default() {
+        for (headword, default, senses) in [
+            (
+                "ソフト",
+                "軟體",
+                &[
+                    ("soft-serve", "霜淇淋"),
+                    ("softball", "壘球"),
+                    ("software", "軟體"),
+                ][..],
+            ),
+            (
+                "アルバム",
+                "相簿",
+                &[("music-album", "音樂專輯"), ("photo-album", "相簿")][..],
+            ),
+            (
+                "ポスト",
+                "郵筒",
+                &[
+                    ("goalpost", "球門柱"),
+                    ("home-mailbox", "信箱"),
+                    ("mailbox", "郵筒"),
+                    ("position", "職位"),
+                    ("social-post", "貼文"),
+                ][..],
+            ),
+        ] {
+            assert_eq!(lookup_ja_gloss(headword, Some(Upos::Noun)), Some(default));
+            assert!(lookup_ja_zh_hant_senses(headword, Upos::Verb).is_empty());
+            assert!(
+                lookup_ja_zh_hant_senses(headword, Upos::Noun)
+                    .iter()
+                    .map(|sense| (sense.id, sense.gloss))
+                    .eq(senses.iter().copied()),
+                "{headword}"
+            );
+        }
     }
 }
 

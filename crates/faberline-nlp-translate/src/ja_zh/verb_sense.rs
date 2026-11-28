@@ -11,6 +11,7 @@ use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
 
 mod cohesion;
 mod fall;
+mod friction;
 mod lament;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -737,6 +738,7 @@ fn aspect(verb: &Atom, tail: &[Atom]) -> Option<Aspect> {
         [] if verb.deprel == "root" && verb.lemma.as_deref() == Some(verb.surface.as_str()) => {
             Some(Aspect::Plain)
         }
+        [ending] if friction::is_split_plain(verb, ending) => Some(Aspect::Plain),
         [polite]
             if verb.deprel == "root"
                 && polite.surface == "ます"
@@ -883,6 +885,7 @@ fn render_proven(
         atom.upos == Some(Upos::Verb)
             && (cohesion::is_predicate(atom)
                 || fall::is_predicate(atom)
+                || friction::is_predicate(atom)
                 || lament::is_predicate(atom)
                 || matches!(
                     atom.lemma.as_deref(),
@@ -935,6 +938,8 @@ fn render_proven(
         cohesion::render(&finite[..index], verb, aspect)?
     } else if fall::is_predicate(verb) {
         fall::render(&finite[..index], verb, aspect)?
+    } else if friction::is_predicate(verb) {
+        friction::render(&finite[..index], verb, aspect)?
     } else if lament::is_predicate(verb) {
         lament::render(&finite[..index], verb, aspect)?
     } else {

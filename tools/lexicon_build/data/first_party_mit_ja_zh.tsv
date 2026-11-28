@@ -1882,7 +1882,7 @@
 動く	VERB	動	750	godan_ka
 失う	VERB	喪失	750	godan_wa
 薄める	VERB	沖淡	750	ichidan
-歌う	VERB	哼唱	750	godan_wa
+歌う	VERB	唱	750	godan_wa
 打ち合わせる	VERB	開會討論	750	ichidan
 打ち消す	VERB	抹消	750	godan_sa
 打つ	VERB	敲擊	750	godan_ta
@@ -2462,7 +2462,7 @@
 澄む	VERB	澄澈	750	godan_ma
 擦る	VERB	磨擦	750	godan_ra
 刷る	VERB	印製	750	godan_ra
-擦れる	VERB	擦傷	750	ichidan
+擦れる	VERB	摩擦	750	ichidan
 すれ違う	VERB	錯過	750	godan_wa
 急かす	VERB	催促	750	godan_sa
 急く	VERB	焦急	750	godan_ka

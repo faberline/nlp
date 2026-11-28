@@ -51103,7 +51103,7 @@
 擦り込める	ja	1162	VERB	VERB	-	能擦入	infl=ichidan;src=first_party_mit
 擦る	ja	450	VERB	VERB	-	摩擦	infl=godan_ra
 擦れあう	ja	1162	VERB	VERB	-	-	infl=godan_wa
-擦れる	ja	1162	VERB	VERB	-	擦傷	infl=ichidan;src=first_party_mit
+擦れる	ja	1162	VERB	VERB	-	摩擦	infl=ichidan;src=first_party_mit
 擦れ合う	ja	1162	VERB	VERB	-	-	infl=godan_wa
 擦れ違う	ja	1161	VERB	VERB	-	-	infl=godan_wa
 擦付ける	ja	1162	VERB	VERB	-	-	infl=ichidan
@@ -54038,7 +54038,7 @@
 歌	ja	965	NOUN	NOUN	-	-	-
 歌いまくる	ja	1160	VERB	VERB	-	-	infl=godan_ra
 歌い上げる	ja	1156	VERB	VERB	-	-	infl=ichidan
-歌う	ja	1156	VERB	VERB	-	哼唱	infl=godan_wa;src=first_party_mit
+歌う	ja	1156	VERB	VERB	-	唱	infl=godan_wa;src=first_party_mit
 歌える	ja	1160	VERB	VERB	-	-	infl=ichidan
 歌わす	ja	1161	VERB	VERB	-	-	infl=godan_sa
 歌人	ja	1010	NOUN	NOUN	-	-	-

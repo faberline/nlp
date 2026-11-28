@@ -3,15 +3,15 @@
 #[path = "src/lexicon/format.rs"]
 mod format;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use format::{
-    BUCKET_COUNT, HEADER_SIZE, KoBatchimCond, KoMorphKind, MAGIC, NONE_U8, NONE_U32, SemCode,
-    VERSION, VariantCode, bucket_index, upos_str_to_code,
+    BUCKET_COUNT, HEADER_SIZE, KoBatchimCond, KoMorphKind, LangGroup, MAGIC, NONE_U8, NONE_U32,
+    SemCode, VERSION, VariantCode, bucket_index, upos_str_to_code,
 };
 
 const MAIN_TSVS: &[&str] = &[
@@ -23,6 +23,7 @@ const MAIN_TSVS: &[&str] = &[
 ];
 const JA_INFLECT_TSV: &str = "lexicon/data/ja_inflect.tsv";
 const KO_MORPH_TSV: &str = "lexicon/data/ko_morph.tsv";
+const JA_ZH_SENSES_TSV: &str = "lexicon/data/ja_zh_hant_senses.tsv";
 
 #[derive(Clone)]
 struct RawEntry {
@@ -482,6 +483,106 @@ fn write_group(out: &mut Vec<u8>, entries: &mut [RawEntry], pool: &mut StringPoo
     }
 }
 
+fn compile_ja_zh_senses(path: &Path, output: &Path, entries: &[RawEntry], allow_missing: bool) {
+    let mut writer = BufWriter::new(File::create(output).unwrap());
+    writeln!(writer, "static JA_ZH_HANT_SENSES: &[JaSenseGroup] = &[").unwrap();
+    if allow_missing && (!path.exists() || entries.is_empty()) {
+        writeln!(writer, "];").unwrap();
+        writer.flush().unwrap();
+        return;
+    }
+
+    let source = fs::read_to_string(path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+    let mut base_word_masks = HashMap::<&str, u32>::new();
+    for entry in entries.iter().filter(|entry| entry.lemma.is_none()) {
+        let mask = base_word_masks.entry(&entry.surface).or_default();
+        *mask |= entry.upos_mask;
+        if entry.decided_upos != NONE_U8 {
+            *mask |= 1 << entry.decided_upos;
+        }
+    }
+    let mut groups = BTreeMap::<(&str, u8), BTreeMap<&str, [&str; 3]>>::new();
+    for (offset, line) in source.lines().enumerate() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let location = || format!("{}:{}", path.display(), offset + 1);
+        let columns: Vec<_> = line.split('\t').collect();
+        let [lemma, tag, anchor, id, gloss, usage, origin] = columns[..] else {
+            panic!("{}: expected seven tab-separated columns", location());
+        };
+        assert!(
+            columns.iter().all(|value| {
+                !value.is_empty() && value.trim() == *value && !value.chars().any(char::is_control)
+            }) && !lemma.chars().any(char::is_whitespace),
+            "{}: empty field, control character, or unexpected whitespace",
+            location()
+        );
+        let upos =
+            upos_str_to_code(tag).unwrap_or_else(|| panic!("{}: unknown UPOS {tag:?}", location()));
+        let dictionary_word = match anchor {
+            "-" => lemma,
+            stem if tag == "VERB" && lemma.strip_suffix("する") == Some(stem) => stem,
+            _ => panic!(
+                "{}: a separate anchor must be the verb's する stem",
+                location()
+            ),
+        };
+        assert!(
+            base_word_masks
+                .get(dictionary_word)
+                .is_some_and(|mask| (mask & (1 << upos)) != 0),
+            "{}: no Japanese dictionary entry for {dictionary_word:?} with UPOS {tag}",
+            location()
+        );
+        assert!(
+            id.split('-').all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+            }),
+            "{}: invalid sense ID {id:?}",
+            location()
+        );
+        assert_eq!(
+            origin,
+            "first_party_mit",
+            "{}: invalid sense source",
+            location()
+        );
+        assert!(
+            groups
+                .entry((lemma, upos))
+                .or_default()
+                .insert(id, [gloss, usage, origin])
+                .is_none(),
+            "{}: duplicate sense ID {id:?} for {lemma:?} {tag}",
+            location()
+        );
+    }
+    assert!(!groups.is_empty(), "{}: no Japanese senses", path.display());
+
+    for ((lemma, upos), senses) in groups {
+        writeln!(
+            writer,
+            "    JaSenseGroup {{ lemma: {lemma:?}, upos: {upos}, senses: &["
+        )
+        .unwrap();
+        for (id, [gloss, usage, origin]) in senses {
+            writeln!(
+                writer,
+                "        JaZhHantSense {{ id: {id:?}, gloss: {gloss:?}, usage: {usage:?}, source: {origin:?} }},"
+            )
+            .unwrap();
+        }
+        writeln!(writer, "    ] }},").unwrap();
+    }
+    writeln!(writer, "];").unwrap();
+    writer.flush().unwrap();
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/lexicon/format.rs");
@@ -491,6 +592,7 @@ fn main() {
     }
     println!("cargo:rerun-if-changed={JA_INFLECT_TSV}");
     println!("cargo:rerun-if-changed={KO_MORPH_TSV}");
+    println!("cargo:rerun-if-changed={JA_ZH_SENSES_TSV}");
 
     let allow_missing = env::var("LEXICON_ALLOW_MISSING").as_deref() == Ok("1");
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -509,6 +611,12 @@ fn main() {
             &mut infl_interner,
         );
     }
+    compile_ja_zh_senses(
+        &manifest_dir.join(JA_ZH_SENSES_TSV),
+        &out_dir.join("ja_zh_hant_senses.rs"),
+        &groups[LangGroup::Ja as usize],
+        allow_missing,
+    );
     let ja_inflect = load_ja_inflect(
         &manifest_dir.join(JA_INFLECT_TSV),
         allow_missing,

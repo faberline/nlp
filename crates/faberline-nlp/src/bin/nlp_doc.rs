@@ -1,6 +1,7 @@
-use clap::{Parser, ValueEnum};
+use clap::{ArgAction, CommandFactory, Parser, ValueEnum, error::ErrorKind};
 use faberline_nlp::doc::model::Backend;
-use faberline_nlp::doc::{Options, analyze_document, analyze_document_with_model};
+use faberline_nlp::doc::{Options, Upos, analyze_document, analyze_document_with_model};
+use faberline_nlp::lexicon::ja::{lookup_ja_gloss, lookup_ja_zh_hant_senses};
 use std::io::{self, Read};
 use std::path::PathBuf;
 
@@ -32,6 +33,14 @@ fn default_backend() -> Backend {
 #[derive(Debug, Parser)]
 #[command(name = "nlp_doc", about = "Analyze UTF-8 text into nlp.doc.v1 JSON")]
 struct Args {
+    /// Query first-party Japanese senses in Taiwan Traditional Chinese without reading stdin.
+    #[arg(long, num_args = 2, value_names = ["HEADWORD", "UPOS"], action = ArgAction::Set,
+        conflicts_with_all = [
+            "models", "backend", "names", "lexicon", "mask_editorial", "normalize_traditional",
+            "morphology", "first_party_dict", "legacy_jieba", "all_layers",
+        ])]
+    ja_zh_senses: Vec<String>,
+
     /// Directory containing manifest.json and model subdirectories for Layer 4+.
     #[arg(long, value_name = "DIR")]
     models: Option<PathBuf>,
@@ -76,6 +85,30 @@ struct Args {
 
 pub fn dispatch(argv: Vec<std::ffi::OsString>) {
     let args = Args::parse_from(argv);
+    if let [lemma, tag] = args.ja_zh_senses.as_slice() {
+        let Ok(upos) = serde_json::from_value::<Upos>(serde_json::json!(tag)) else {
+            Args::command()
+                .error(ErrorKind::InvalidValue, format!("unknown UPOS {tag:?}"))
+                .exit();
+        };
+        let senses = lookup_ja_zh_hant_senses(lemma, upos);
+        let legacy_default = if senses.is_empty() {
+            None
+        } else {
+            lookup_ja_gloss(lemma, Some(upos))
+        };
+        println!(
+            "{}",
+            serde_json::json!({
+                "schema": "nlp.ja-zh-hant-senses.v1",
+                "headword": lemma,
+                "upos": upos,
+                "legacy_default": legacy_default,
+                "senses": senses,
+            })
+        );
+        return;
+    }
     let mut text = String::new();
     if let Err(err) = io::stdin().read_to_string(&mut text) {
         eprintln!("nlp_doc: {err}");

@@ -101,7 +101,7 @@ mod tests {
     use faberline_nlp::doc::{analyze_document, model::Backend};
     use serde_json::Value;
 
-    fn cases() -> Vec<String> {
+    fn cases_from_bank() -> Vec<String> {
         let bank: Value = serde_json::from_str(include_str!(
             "../../../tests/data/ja_zh/verb_friction_dev_v1.json"
         ))
@@ -119,15 +119,12 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn contact_keeps_both_participants_and_the_leading_condition() {
-        let cases = cases();
+    fn assert_segments(cases: &[(usize, &[&str])]) {
+        let source_cases = cases_from_bank();
         let options = TranslateOptions::new(TargetVariant::ZhHant);
         let glossary = TranslationGlossary::new();
-        for (source, segments) in [
-            (&cases[0], &["走路時，", "袖子會擦到書桌。"][..]),
-            (&cases[1], &["這條繩子會擦到箱子的角。"][..]),
-        ] {
+        for &(index, segments) in cases {
+            let source = &source_cases[index];
             let result =
                 analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
             assert_eq!(result.target_text, segments.concat());
@@ -145,10 +142,28 @@ mod tests {
     }
 
     #[test]
-    fn contact_does_not_replace_wear_results_or_related_verbs() {
+    fn contact_keeps_both_participants_and_the_leading_condition() {
+        assert_segments(&[
+            (0, &["走路時，", "袖子會擦到書桌。"]),
+            (1, &["這條繩子會擦到箱子的角。"]),
+        ]);
+    }
+
+    #[test]
+    fn wear_keeps_the_result_subject_and_optional_rubbing_event() {
+        assert_segments(&[
+            (2, &["反覆摩擦後，", "鞋跟磨破了。"]),
+            (3, &["繩子摩擦後，", "表層纖維鬆脫了。"]),
+            (5, &["舊袋子的底部磨破了。"]),
+        ]);
+    }
+
+    #[test]
+    fn contact_does_not_replace_wear_or_transitive_rubbing() {
         let options = TranslateOptions::new(TargetVariant::ZhHant);
         let glossary = TranslationGlossary::new();
-        for source in &cases()[2..] {
+        let case_bank = cases_from_bank();
+        for source in &case_bank[2..] {
             let chars: Vec<_> = source.chars().collect();
             let doc = analyze_document(
                 source,
@@ -168,10 +183,13 @@ mod tests {
                 .enumerate()
                 .map(|(i, clause)| (i, clause.span))
                 .collect();
-            assert!(
-                render(&atoms, &doc, &chars, 0, &clauses).is_none(),
-                "{source}"
-            );
+            assert!(!atoms.iter().any(super::is_predicate), "{source}");
+            if source == &case_bank[4] {
+                assert!(
+                    render(&atoms, &doc, &chars, 0, &clauses).is_none(),
+                    "{source}"
+                );
+            }
         }
     }
 }

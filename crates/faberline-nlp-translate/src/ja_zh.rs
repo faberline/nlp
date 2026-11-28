@@ -47,6 +47,7 @@ mod reception;
 mod recipient_scope;
 mod return_endpoint;
 mod te_help_glossary;
+mod teaching_relative;
 mod trip_after_meal;
 pub(crate) mod written_opening;
 
@@ -261,6 +262,22 @@ pub(crate) fn translate_ja_sentence<'source>(
             fare_boundaries::render(&atoms, doc, sentence_idx, chars, lock_table)
     {
         return boundary;
+    }
+
+    if target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && written_form_continuation.is_none()
+        && predicate_terms.is_none()
+        && let Some(translation) = teaching_relative::render(
+            chars,
+            sentence_idx,
+            doc,
+            sent_tokens,
+            lock_table,
+            unhinted_source,
+        )
+    {
+        return translation;
     }
 
     let mut atoms = honorifics.resolve(atoms, chars, doc, sentence_idx, lock_table);

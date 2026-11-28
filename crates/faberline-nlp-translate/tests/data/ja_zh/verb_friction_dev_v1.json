@@ -1,0 +1,307 @@
+{
+  "title": "Japanese friction verb public development contrasts",
+  "schema": "faberline.nlp.ja_zh.verb_friction_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source": "https://github.com/faberline/nlp/issues/584",
+  "visibility": "development-visible",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "sentence_provenance": "Sentences written for this draft, without copying external examples or user text.",
+    "reference_provenance": "First-party Taiwan Traditional Chinese references for these original sentences.",
+    "external_gloss_source": "None used."
+  },
+  "purpose": "Contrast contact without assumed damage, explicit wear or fray, and nearby different verb shapes.",
+  "review_and_adoption": {
+    "process": "Independent language review and adoption must be recorded in a separate data-only PR before any rule uses these rows for acceptance.",
+    "author_does_not_accept_own_work": true,
+    "human_review_claim": false,
+    "scope_limit": "The six rows cover contact, explicit wear and related verbs for development. They do not score the fixed sample."
+  },
+  "items": [
+    {
+      "id": "SR-DEV-01",
+      "lemma": "擦れる",
+      "sense": "contact",
+      "level_approx": "unspecified",
+      "jp": "歩くと、袖が机に擦れる。",
+      "zh_hant": "走路時，袖子會擦到桌子。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "袖が is the thing making contact; 机に marks the contacted surface."
+      ],
+      "semantic_unknowns": [
+        "The source does not establish damage, duration, or who walks."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "擦れる",
+        "contrast_ids": [
+          "SR-DEV-02",
+          "SR-DEV-03",
+          "SR-DEV-04",
+          "SR-DEV-05",
+          "SR-DEV-06"
+        ],
+        "source_cue": "袖が is the thing making contact; 机に marks the contacted surface.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "袖が is the thing making contact; 机に marks the contacted surface."
+        ],
+        "limits": [
+          "The source does not establish damage, duration, or who walks."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "SR-DEV-02",
+      "lemma": "擦れる",
+      "sense": "contact",
+      "level_approx": "unspecified",
+      "jp": "この紐は箱の角に擦れます。",
+      "zh_hant": "這條繩子會和箱角摩擦。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "紐は identifies the cord; 箱の角に marks the contact point."
+      ],
+      "semantic_unknowns": [
+        "The source does not say that the cord is damaged or who moves it."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "擦れる",
+        "contrast_ids": [
+          "SR-DEV-01",
+          "SR-DEV-03",
+          "SR-DEV-04",
+          "SR-DEV-05",
+          "SR-DEV-06"
+        ],
+        "source_cue": "紐は identifies the cord; 箱の角に marks the contact point.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "紐は identifies the cord; 箱の角に marks the contact point."
+        ],
+        "limits": [
+          "The source does not say that the cord is damaged or who moves it."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "SR-DEV-03",
+      "lemma": "擦れる",
+      "sense": "wear",
+      "level_approx": "unspecified",
+      "jp": "何度も擦れて、靴のかかとがすり切れた。",
+      "zh_hant": "反覆摩擦後，鞋跟磨破了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "擦れて states repeated rubbing; すり切れた separately states resulting wear."
+      ],
+      "semantic_unknowns": [
+        "The source does not specify the surface or identify the wearer."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "擦れる",
+        "contrast_ids": [
+          "SR-DEV-01",
+          "SR-DEV-02",
+          "SR-DEV-04",
+          "SR-DEV-05",
+          "SR-DEV-06"
+        ],
+        "source_cue": "擦れて states repeated rubbing; すり切れた separately states resulting wear.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "擦れて states repeated rubbing; すり切れた separately states resulting wear."
+        ],
+        "limits": [
+          "The source does not specify the surface or identify the wearer."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "SR-DEV-04",
+      "lemma": "擦れる",
+      "sense": "fray",
+      "level_approx": "unspecified",
+      "jp": "ロープが擦れて、表面の糸がほつれた。",
+      "zh_hant": "繩子摩擦後，表層纖維鬆脫了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "ロープ is subject of rubbing; the separate clause states the surface threads frayed."
+      ],
+      "semantic_unknowns": [
+        "The source does not say what contacted the rope or who caused it."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "擦れる",
+        "contrast_ids": [
+          "SR-DEV-01",
+          "SR-DEV-02",
+          "SR-DEV-03",
+          "SR-DEV-05",
+          "SR-DEV-06"
+        ],
+        "source_cue": "ロープ is subject of rubbing; the separate clause states the surface threads frayed.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "ロープ is subject of rubbing; the separate clause states the surface threads frayed."
+        ],
+        "limits": [
+          "The source does not say what contacted the rope or who caused it."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "SR-DEV-05",
+      "lemma": "擦る",
+      "sense": "transitive_control",
+      "level_approx": "unspecified",
+      "jp": "私は布で鏡を擦った。",
+      "zh_hant": "我用布擦了鏡子。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "私は is the explicit actor, 布で gives the tool, and 鏡を is the object of transitive 擦る."
+      ],
+      "semantic_unknowns": [
+        "The source does not say why the mirror was rubbed or whether it was damaged."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "擦れる",
+        "contrast_ids": [
+          "SR-DEV-01",
+          "SR-DEV-02",
+          "SR-DEV-03",
+          "SR-DEV-04",
+          "SR-DEV-06"
+        ],
+        "source_cue": "私は is the explicit actor, 布で gives the tool, and 鏡を is the object of transitive 擦る.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "私は is the explicit actor, 布で gives the tool, and 鏡を is the object of transitive 擦る."
+        ],
+        "limits": [
+          "The source does not say why the mirror was rubbed or whether it was damaged."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "SR-DEV-06",
+      "lemma": "擦り切れる",
+      "sense": "wear_control",
+      "level_approx": "unspecified",
+      "jp": "古い袋の底が擦り切れた。",
+      "zh_hant": "舊袋子的底部磨破了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "袋の底が is the subject and 擦り切れた explicitly states a worn-through result."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the contacting surface or the responsible person."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "擦れる",
+        "contrast_ids": [
+          "SR-DEV-01",
+          "SR-DEV-02",
+          "SR-DEV-03",
+          "SR-DEV-04",
+          "SR-DEV-05"
+        ],
+        "source_cue": "袋の底が is the subject and 擦り切れた explicitly states a worn-through result.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "袋の底が is the subject and 擦り切れた explicitly states a worn-through result."
+        ],
+        "limits": [
+          "The source does not state the contacting surface or the responsible person."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    }
+  ],
+  "source_main": "29fc938b20e2b73f2e820e8324b7d25ee2381276",
+  "source_tree": "66f06d84d6985f4dafac107f8b5811d1f78915bb",
+  "level_note": "Approximate sentence difficulty only. These examples do not establish a JLPT level.",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  }
+}

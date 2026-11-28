@@ -16,6 +16,7 @@ mod friction;
 mod hanging_call;
 mod humble_motion;
 mod lament;
+mod toreru;
 mod wear;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -918,11 +919,11 @@ fn render_proven(
                     Some("突っ込む" | "吹く" | "通う" | "めくる" | "通す" | "寄こす")
                 ))
     };
-    let mut predicates = finite
-        .iter()
-        .enumerate()
-        .filter(|(index, atom)| has_sense_verb(*index, atom));
-    let (index, verb) = predicates.next()?;
+    let mut predicates = finite.iter().enumerate().filter_map(|(index, atom)| {
+        let frame = toreru::render(&finite[..index], atom, &finite[index + 1..]);
+        (frame.is_some() || has_sense_verb(index, atom)).then_some((index, atom, frame))
+    });
+    let (index, verb, toreru_frame) = predicates.next()?;
     let span = doc.segmentation.sentences.get(sentence)?.span;
     if predicates.next().is_some()
         || atoms.first()?.span.start_char != span.start_char
@@ -957,13 +958,15 @@ fn render_proven(
     };
     let tail = &finite[index + 1..];
     let prefix = &finite[..index];
-    let lemma = verb.lemma.as_deref()?;
-    if locked_destination.is_some() && lemma != "通う" {
+    if locked_destination.is_some() && verb.lemma.as_deref() != Some("通う") {
         return None;
     }
-    let RenderedFrame { mut text, cut } = if connection::is_predicate(verb, tail) {
+    let RenderedFrame { mut text, cut } = if let Some(frame) = toreru_frame {
+        frame
+    } else if connection::is_predicate(verb, tail) {
         connection::render(prefix, verb, tail)?
     } else {
+        let lemma = verb.lemma.as_deref()?;
         let aspect = aspect(verb, tail)?;
         if cohesion::is_predicate(verb) {
             cohesion::render(prefix, verb, aspect)?

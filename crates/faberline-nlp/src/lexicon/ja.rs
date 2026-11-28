@@ -719,6 +719,65 @@ pub fn lookup_ja_gloss(surface: &str, upos: Option<Upos>) -> Option<&'static str
         .and_then(|e| db.str_at(e.extra_off))
 }
 
+/// One first-party Taiwan Traditional Chinese sense of a Japanese headword.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct JaZhHantSense {
+    pub id: &'static str,
+    pub gloss: &'static str,
+    pub usage: &'static str,
+    pub source: &'static str,
+}
+
+struct JaSenseGroup {
+    lemma: &'static str,
+    upos: u8,
+    senses: &'static [JaZhHantSense],
+}
+
+include!(concat!(env!("OUT_DIR"), "/ja_zh_hant_senses.rs"));
+
+/// Return the senses for an exact dictionary headword and UPOS.
+///
+/// The result is sorted by sense ID. An unknown key has no senses. This
+/// lookup does not select a sense or change the default from `lookup_ja_gloss`.
+pub fn lookup_ja_zh_hant_senses(lemma: &str, upos: Upos) -> &'static [JaZhHantSense] {
+    let key = (lemma, upos as u8);
+    JA_ZH_HANT_SENSES
+        .binary_search_by(|group| (group.lemma, group.upos).cmp(&key))
+        .map_or(&[], |index| JA_ZH_HANT_SENSES[index].senses)
+}
+
+#[cfg(test)]
+mod sense_lookup_tests {
+    use super::{Upos, lookup_ja_zh_hant_senses};
+
+    #[test]
+    fn lookup_returns_distinct_senses_only_for_an_exact_key() {
+        let senses = lookup_ja_zh_hant_senses("通す", Upos::Verb);
+        for id in ["guide-through", "admit", "sustain"] {
+            assert!(senses.iter().any(|sense| sense.id == id), "{id}");
+        }
+        assert!(senses.windows(2).all(|pair| pair[0].id < pair[1].id));
+        assert!(lookup_ja_zh_hant_senses("通す", Upos::Noun).is_empty());
+        assert!(lookup_ja_zh_hant_senses("通した", Upos::Verb).is_empty());
+    }
+
+    #[test]
+    fn lookup_keeps_written_readings_and_derived_headwords_separate() {
+        let ids = |lemma| {
+            lookup_ja_zh_hant_senses(lemma, Upos::Verb)
+                .iter()
+                .map(|sense| sense.id)
+                .collect::<Vec<_>>()
+        };
+        assert!(ids("取れる").contains(&"detach"));
+        assert!(ids("取れる").contains(&"obtain"));
+        assert!(!ids("取れる").contains(&"ability"));
+        assert!(ids("撮れる").contains(&"ability"));
+        assert!(ids("試験する").contains(&"test-property"));
+    }
+}
+
 /// Segment a Japanese character slice using Viterbi minimum-cost DP over `ja.tsv`
 /// and `ja_inflect.tsv`, emitting UD-aligned tokens (splitting conjugated verbs/adjectives
 /// into stem + auxiliary morphemes).

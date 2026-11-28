@@ -10,6 +10,7 @@ Permissively licensed, compile-time compiled multilingual lexicon covering 4 lan
   - `en.tsv` (8-column): English (`en-US`, `en-GB`, `en`) base lemmas, irregular forms, US↔GB counterparts, and semantic classes.
   - `ja.tsv` (8-column): Japanese (`ja`) dictionary base forms, function words, proper nouns, inflection paradigms, and semantic classes.
   - `ja_inflect.tsv` (6-column): Japanese conjugation rules (`godan_*`, `ichidan`, `sahen`, `kahen`, `adj_i`) with UD-aligned morpheme splits.
+  - `ja_zh_hant_senses.tsv` (7-column): First-party Taiwan Traditional Chinese senses keyed by Japanese headword and UPOS.
   - `ko.tsv` (8-column): Korean (`ko`) stems, function words, and pre-analyzed irregular inflections.
   - `ko_morph.tsv` (6-column): Korean Josa, Copula, XSV/XSA, and Eomi suffix rules with batchim conditions and exact character-span decompositions.
 - `LICENSES/` — Upstream permissive license texts (`MIT`, `Apache-2.0`, `BSD-3-Clause`, `Unicode-3.0`, `WordNet`, `SCOWL`). No `CC BY-SA`, `CC BY-NC`, `CC BY-ND`, or `GPL` sources are used.
@@ -22,3 +23,17 @@ Permissively licensed, compile-time compiled multilingual lexicon covering 4 lan
 
 - **Format (`FNLPLX01`)**: 80-byte header + per-language 4096-bucket sorted key index + 20-byte packed entries + `ja_inflect` / `ko_morph` tables + deduplicated UTF-8 string pool.
 - **Never-Guess Rule**: If multiple entries for the same `(lang_group, surface)` have differing `upos_mask`s or `upos_mask` has more than 1 bit set, `decided_upos` is `None`.
+
+## Japanese to Taiwan Traditional Chinese senses
+
+Each row in `ja_zh_hant_senses.tsv` declares a headword, UD part of speech, dictionary anchor, stable sense ID, gloss, usage note, and source. A dash means the headword itself is the anchor. A verb ending in `する` can name its base stem when the dictionary stores the stem instead of the full verb. The build checks the anchor's part of speech and rejects duplicate sense IDs for the same headword and part of speech.
+
+The labels and usage notes are original MIT material. They use Taiwan Traditional Chinese. External dictionaries can help establish the boundaries of a Japanese sense. The source table stores no copied definitions or examples.
+
+The build emits a separate read-only table. Use `lexicon::ja::lookup_ja_zh_hant_senses` to retrieve all records for an exact headword and part of speech. The existing `lookup_ja_gloss` call still returns its single default. Sentence translation and tokenization still use their existing rules.
+
+```sh
+nlp doc --ja-zh-senses 通す VERB
+```
+
+This command returns `nlp.ja-zh-hant-senses.v1` JSON on stdout and does not read stdin. An absent key returns an empty `senses` array and a null `legacy_default`. A present key can also have a null default when the older dictionary has no exact headword, as with `試験する`.

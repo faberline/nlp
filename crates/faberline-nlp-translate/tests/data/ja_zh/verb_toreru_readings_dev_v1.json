@@ -1,0 +1,417 @@
+{
+  "title": "Japanese kana とれる and spelling contrasts",
+  "schema": "faberline.nlp.ja_zh.verb_toreru_readings_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "visibility": "development-visible",
+  "source_main": "6e30718db179c0e835871b08f71f64ae401386bb",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "sentence_provenance": "All eight Japanese sentences were written for this draft. No dictionary examples, corpora, or external sentence text were copied.",
+    "reference_provenance": "First-party Taiwan Traditional Chinese references for the original examples, with independent language review.",
+    "external_gloss_source": "None used."
+  },
+  "purpose": "Compare four contextual uses of kana-written とれる and explicit 取れる, 採れる, and 撮れる controls.",
+  "review_and_adoption": {
+    "process": "Independent language review and adoption must be recorded in a separate data-only PR before any rule uses these rows for acceptance.",
+    "author_does_not_accept_own_work": true,
+    "human_review_claim": false,
+    "scope_limit": "The eight original rows distinguish detachment, obtaining, harvest and photography, with explicit spelling controls. The two 取れる controls keep different contextual senses of the same written form. They do not score the fixed sample."
+  },
+  "items": [
+    {
+      "id": "TORERU-DEV-01",
+      "lemma": "とれる",
+      "sense": "detachment_actual_kana",
+      "level_approx": "N5 approx",
+      "jp": "コートのボタンがとれた。",
+      "zh_hant": "外套的鈕扣掉了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "コートのボタン is what became detached; とれた describes an actual detachment, marked by past た.",
+        "The source does not name a person who caused the button to come off."
+      ],
+      "semantic_unknowns": [
+        "The source does not say whether the button can be repaired."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "とれる",
+        "contrast_ids": [
+          "TORERU-DEV-02",
+          "TORERU-DEV-03",
+          "TORERU-DEV-04",
+          "TORERU-DEV-05",
+          "TORERU-DEV-06",
+          "TORERU-DEV-07",
+          "TORERU-DEV-08"
+        ],
+        "source_cue": "コートのボタン is what became detached; とれた describes an actual detachment, marked by past た.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples detachment_actual_kana."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of とれる."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TORERU-DEV-02",
+      "lemma": "とれる",
+      "sense": "obtaining_failed_kana",
+      "level_approx": "N4 approx",
+      "jp": "受付では整理券がとれなかった。",
+      "zh_hant": "沒能在服務櫃檯拿到號碼牌。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "整理券 is the item that could not be obtained at the受付; the negative past marks failure, not a successful acquisition.",
+        "The sentence does not name the person who tried to obtain the ticket."
+      ],
+      "semantic_unknowns": [
+        "The source does not say why the ticket could not be obtained or whether any tickets remained."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "とれる",
+        "contrast_ids": [
+          "TORERU-DEV-01",
+          "TORERU-DEV-03",
+          "TORERU-DEV-04",
+          "TORERU-DEV-05",
+          "TORERU-DEV-06",
+          "TORERU-DEV-07",
+          "TORERU-DEV-08"
+        ],
+        "source_cue": "整理券 is the item that could not be obtained at the受付; the negative past marks failure, not a successful acquisition.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples obtaining_failed_kana."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of とれる."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TORERU-DEV-03",
+      "lemma": "とれる",
+      "sense": "harvest_actual_kana",
+      "level_approx": "N4 approx",
+      "jp": "今年は畑で桃がよくとれた。",
+      "zh_hant": "今年田裡收成了不少桃子。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "桃 is the crop yielded by the field; よく and past た describe a good actual harvest this year.",
+        "This is crop yield/harvest, not an item coming loose from a surface."
+      ],
+      "semantic_unknowns": [
+        "The source does not give the harvest amount or identify who harvested the peaches."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "とれる",
+        "contrast_ids": [
+          "TORERU-DEV-01",
+          "TORERU-DEV-02",
+          "TORERU-DEV-04",
+          "TORERU-DEV-05",
+          "TORERU-DEV-06",
+          "TORERU-DEV-07",
+          "TORERU-DEV-08"
+        ],
+        "source_cue": "桃 is the crop yielded by the field; よく and past た describe a good actual harvest this year.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples harvest_actual_kana."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of とれる."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TORERU-DEV-04",
+      "lemma": "とれる",
+      "sense": "photography_ability_kana",
+      "level_approx": "N4 approx",
+      "jp": "このカメラなら、暗い場所でもきれいにとれる。",
+      "zh_hant": "用這台相機，即使在暗處也能拍得漂亮。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "このカメラ is the stated means; なら and でも describe ability under the dark-place condition, not a completed photograph.",
+        "きれいにとれる is the photography sense of 撮れる; the sentence does not state what is photographed."
+      ],
+      "semantic_unknowns": [
+        "The source does not identify the subject of the photograph."
+      ],
+      "control": {
+        "kind": "verb_peer_sense_followup",
+        "group_key": "とれる",
+        "contrast_ids": [
+          "TORERU-DEV-01",
+          "TORERU-DEV-02",
+          "TORERU-DEV-03",
+          "TORERU-DEV-05",
+          "TORERU-DEV-06",
+          "TORERU-DEV-07",
+          "TORERU-DEV-08"
+        ],
+        "source_cue": "このカメラ is the stated means; なら and でも describe ability under the dark-place condition, not a completed photograph.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples photography_ability_kana."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of とれる."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TORERU-DEV-05",
+      "lemma": "取れる",
+      "sense": "detachment_explicit_取れる",
+      "level_approx": "N5 approx",
+      "jp": "コートからボタンが取れた。",
+      "zh_hant": "鈕扣從外套上掉下來了。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "ボタン is the item detached; コートから marks the point it came off.",
+        "The explicit 取れる spelling is a spelling control for the detachment sense in TORERU-DEV-01."
+      ],
+      "semantic_unknowns": [
+        "The source does not name a person who caused the button to come off."
+      ],
+      "control": {
+        "kind": "distinct_spelling_control",
+        "group_key": "とれる",
+        "contrast_ids": [
+          "TORERU-DEV-01",
+          "TORERU-DEV-02",
+          "TORERU-DEV-03",
+          "TORERU-DEV-04",
+          "TORERU-DEV-06",
+          "TORERU-DEV-07",
+          "TORERU-DEV-08"
+        ],
+        "source_cue": "ボタン is the item detached; コートから marks the point it came off.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples detachment_explicit_取れる."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of とれる."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TORERU-DEV-06",
+      "lemma": "取れる",
+      "sense": "obtaining_ability_explicit_取れる",
+      "level_approx": "N4 approx",
+      "jp": "必要な証明書は窓口で取れます。",
+      "zh_hant": "必要的證明文件可以在服務櫃檯取得。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "必要な証明書 is the document that can be obtained; 窓口で gives the place of acquisition.",
+        "取れます expresses available ability or possibility, not a completed acquisition."
+      ],
+      "semantic_unknowns": [
+        "The source does not state who will obtain the document or which specific certificate it is."
+      ],
+      "control": {
+        "kind": "distinct_spelling_control",
+        "group_key": "とれる",
+        "contrast_ids": [
+          "TORERU-DEV-01",
+          "TORERU-DEV-02",
+          "TORERU-DEV-03",
+          "TORERU-DEV-04",
+          "TORERU-DEV-05",
+          "TORERU-DEV-07",
+          "TORERU-DEV-08"
+        ],
+        "source_cue": "必要な証明書 is the document that can be obtained; 窓口で gives the place of acquisition.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples obtaining_ability_explicit_取れる."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of とれる."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TORERU-DEV-07",
+      "lemma": "採れる",
+      "sense": "harvest_explicit_採れる",
+      "level_approx": "N4 approx",
+      "jp": "この畑では夏にトマトが採れる。",
+      "zh_hant": "這塊田夏天採得到番茄。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "トマト is the crop available from this field in summer; 採れる is the explicit harvest spelling.",
+        "This is a crop-yield statement, not an actual completed harvest by a named person."
+      ],
+      "semantic_unknowns": [
+        "The source does not state the quantity or who harvests the tomatoes."
+      ],
+      "control": {
+        "kind": "distinct_spelling_control",
+        "group_key": "とれる",
+        "contrast_ids": [
+          "TORERU-DEV-01",
+          "TORERU-DEV-02",
+          "TORERU-DEV-03",
+          "TORERU-DEV-04",
+          "TORERU-DEV-05",
+          "TORERU-DEV-06",
+          "TORERU-DEV-08"
+        ],
+        "source_cue": "トマト is the crop available from this field in summer; 採れる is the explicit harvest spelling.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples harvest_explicit_採れる."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of とれる."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "TORERU-DEV-08",
+      "lemma": "撮れる",
+      "sense": "photography_explicit_撮れる",
+      "level_approx": "N4 approx",
+      "jp": "このカメラでは集合写真も撮れる。",
+      "zh_hant": "這台相機也能拍團體照。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "このカメラ is the stated means and 集合写真 is what can be photographed; も adds this capability.",
+        "撮れる is the explicit photography spelling and states capability, not a completed photograph."
+      ],
+      "semantic_unknowns": [
+        "The source does not state who takes the group photograph or when."
+      ],
+      "control": {
+        "kind": "distinct_spelling_control",
+        "group_key": "とれる",
+        "contrast_ids": [
+          "TORERU-DEV-01",
+          "TORERU-DEV-02",
+          "TORERU-DEV-03",
+          "TORERU-DEV-04",
+          "TORERU-DEV-05",
+          "TORERU-DEV-06",
+          "TORERU-DEV-07"
+        ],
+        "source_cue": "このカメラ is the stated means and 集合写真 is what can be photographed; も adds this capability.",
+        "stable": [
+          "The Japanese and Taiwan Traditional Chinese sentences are original first-party development material."
+        ],
+        "changed": [
+          "This row samples photography_explicit_撮れる."
+        ],
+        "limits": [
+          "This row samples only its stated contrast and does not define every use of とれる."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex",
+        "license": "MIT"
+      }
+    }
+  ],
+  "source": "https://github.com/faberline/nlp/issues/584",
+  "source_tree": "f01e6424f02ced83a47a11636db53d881cd8e475",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "level_note": "Approximate sentence difficulty only. These examples do not establish JLPT coverage."
+}

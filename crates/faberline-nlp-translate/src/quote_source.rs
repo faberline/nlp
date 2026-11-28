@@ -1,6 +1,8 @@
 use faberline_nlp::Span;
 use faberline_nlp::doc::{Document, SyntaxToken, Token, Upos};
 
+pub(crate) mod explicit_request;
+
 const FORM_NAMES: &[&str] = &[
     "文字数",
     "字数",
@@ -264,6 +266,7 @@ fn protect_sibling_forms(
                 .any(|label| strip_suffix(before, label).is_some());
         }
         let measures_form = measures_written_form(after);
+        let explicit_request = explicit_request::protects(after);
         let before_joined = &chars[scope.start_char..quotes[first_for_comparison].start_char - 1];
         let before_list = &chars[scope.start_char..quotes[first_in_list].start_char - 1];
         let list_count = index - first_in_list + 1;
@@ -328,6 +331,15 @@ fn protect_sibling_forms(
         if match_form == FormMatch::TranslatedForm {
             // The explicit target overrides local 字 or を一文字ずつ labels.
             continue;
+        }
+        if explicit_request {
+            // The final quoted operand carries the explicit action for its
+            // adjacent list. A sentence or another predicate breaks the list.
+            protected.extend(
+                quotes[first_in_list..=index]
+                    .iter()
+                    .map(|&form| protection_span(form, nested)),
+            );
         }
         let translation = source_translation_predicate(chars, scope, *quote, syntax);
         if measures_form

@@ -3535,3 +3535,69 @@ fn graded_register_casual_keigo_and_n1_editorial_with_holdouts() {
         }
     }
 }
+
+#[test]
+fn quoted_japanese_requests_keep_the_source_text_and_question_open() {
+    let public: serde_json::Value =
+        serde_json::from_str(include_str!("data/ja_zh/quoted_reading_dev_v1.json")).unwrap();
+    let cases = public["items"].as_array().unwrap();
+    let options = TranslateOptions::new(TargetVariant::ZhHant);
+    let mut glossary = TranslationGlossary::new();
+    glossary.domain_terms.push(GlossaryEntry {
+        canonical: "予約".to_owned(),
+        surfaces: vec!["予約".to_owned()],
+        targets: BTreeMap::from([(TargetVariant::ZhHant, "訂位".to_owned())]),
+        ..GlossaryEntry::default()
+    });
+
+    for number in [1, 2, 3, 7, 8] {
+        let row = &cases[number - 1];
+        let source = row["jp"].as_str().unwrap();
+        let expected = row["zh_hant"].as_str().unwrap();
+        let translated =
+            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(source, &translated);
+        assert_eq!(translated.target_text, expected, "{source}");
+        assert!(translated.glossary_hits.is_empty(), "{source}");
+    }
+
+    let reading = cases[6]["jp"].as_str().unwrap();
+    let ordinary = cases[3]["jp"].as_str().unwrap();
+    for join in ["と", "、"] {
+        let coordinated = format!("{ordinary}「予約を確認します」{join}{reading}");
+        let translated =
+            analyze_and_translate(&coordinated, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(&coordinated, &translated);
+        assert!(translated.target_text.contains("「予約を確認します」"));
+        assert!(translated.target_text.contains("「山田」"));
+        let [hit] = translated.glossary_hits.as_slice() else {
+            panic!("only the independent ordinary quotation should match the glossary");
+        };
+        assert!(hit.source_span.end_char <= ordinary.chars().count());
+        assert_eq!(
+            slice_chars(&translated.target_text, hit.target_span),
+            "訂位"
+        );
+    }
+
+    for number in [4, 5] {
+        let source = cases[number - 1]["jp"].as_str().unwrap();
+        let translated =
+            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert_valid_ja_zh_doc(source, &translated);
+        let [hit] = translated.glossary_hits.as_slice() else {
+            panic!("expected one normal translation hit for {source}");
+        };
+        assert_eq!(slice_chars(source, hit.source_span), "予約");
+        assert_eq!(
+            slice_chars(&translated.target_text, hit.target_span),
+            "訂位"
+        );
+        let expected = if number == 4 {
+            "店員對客人說：「會確認訂位。」"
+        } else {
+            "我讀了「會確認訂位」這句話，明白了它的意思。"
+        };
+        assert_eq!(translated.target_text, expected, "{source}");
+    }
+}

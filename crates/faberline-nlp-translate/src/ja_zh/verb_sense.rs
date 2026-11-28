@@ -8,6 +8,7 @@ use super::{
 use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
 
 mod fall;
+mod lament;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Aspect {
@@ -751,6 +752,7 @@ pub(super) fn render(
     let has_sense_verb = |atom: &Atom| {
         atom.upos == Some(Upos::Verb)
             && (fall::is_predicate(atom)
+                || lament::is_predicate(atom)
                 || matches!(
                     atom.lemma.as_deref(),
                     Some("突っ込む" | "吹く" | "通う" | "めくる" | "通す" | "寄こす")
@@ -797,6 +799,8 @@ pub(super) fn render(
     let lemma = verb.lemma.as_deref()?;
     let RenderedFrame { mut text, cut } = if fall::is_predicate(verb) {
         fall::render(&finite[..index], verb, aspect)?
+    } else if lament::is_predicate(verb) {
+        lament::render(&finite[..index], verb, aspect)?
     } else {
         let frame = read_frame(&finite[..index], verb)?;
         render_frame(lemma, frame, aspect)?

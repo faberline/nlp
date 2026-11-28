@@ -460,20 +460,20 @@ pub(crate) fn translate_ja_sentence<'source>(
         && predicate_terms.is_none()
         && let [(clause, source_span)] = doc_clauses.as_slice()
         && *source_span == sent_span
-        && let Some(text) = crate::quote_source::explicit_request::render(
-            chars, sent_span, lock_table,
-        )
-        .or_else(|| {
-            lesson_start::render_locked(
-                chars,
-                sentence_idx,
-                doc,
-                sent_tokens,
-                &atoms,
-                lock_table,
-                unhinted_source,
-            )
-        })
+        && let Some(text) =
+            crate::quote_source::explicit_request::render(chars, sent_span, lock_table)
+                .or_else(|| {
+                    lesson_start::render_locked(
+                        chars,
+                        sentence_idx,
+                        doc,
+                        sent_tokens,
+                        &atoms,
+                        lock_table,
+                        unhinted_source,
+                    )
+                })
+                .or_else(|| ohanashi::render_opening(&atoms, doc, sentence_idx, chars, lock_table))
     {
         let target_span = Span {
             start_char: 0,

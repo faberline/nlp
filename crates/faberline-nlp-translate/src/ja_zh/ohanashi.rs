@@ -1,5 +1,7 @@
 //! Contextual readings for nominal お話.
-use super::{Atom, Document, SpanLockTable, Upos, normalized_sentence_atoms};
+use super::{
+    Atom, Document, SpanLockTable, Upos, normalized_sentence_atoms, translate_single_ja_term,
+};
 
 const PREFIX: &str = "__ja_ohanashi:";
 pub(super) const CONVERSE: &str = "__ja_ohanashi_converse";
@@ -69,6 +71,226 @@ fn protected(atoms: &[Atom]) -> bool {
 
 fn like(a: &Atom, words: &[&str]) -> bool {
     words.contains(&a.surface.as_str()) || a.lemma.as_deref().is_some_and(|l| words.contains(&l))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    Story,
+    Explanation,
+}
+
+fn belongs_to(atom: &Atom, head: &Atom) -> bool {
+    head.doc_tok_idx.is_some() && atom.head == head.doc_tok_idx
+}
+
+fn copula(atom: &Atom, head: &Atom) -> bool {
+    atom.upos == Some(Upos::Aux)
+        && matches!(atom.surface.as_str(), "です" | "だ")
+        && belongs_to(atom, head)
+}
+
+fn opening_topic(atoms: &[Atom]) -> Option<&[Atom]> {
+    let [topic @ .., modifier, noun, ending, punctuation] = atoms else {
+        return None;
+    };
+    let head = topic.last()?;
+    (noun.surface == "お話"
+        && noun.upos == Some(Upos::Noun)
+        && noun.deprel == "root"
+        && modifier.surface == "の"
+        && modifier.deprel == "case"
+        && belongs_to(modifier, head)
+        && head.deprel == "nmod"
+        && belongs_to(head, noun)
+        && topic
+            .iter()
+            .all(|token| matches!(token.upos, Some(Upos::Noun | Upos::Propn)))
+        && topic
+            .windows(2)
+            .all(|pair| pair[0].deprel == "compound" && belongs_to(&pair[0], &pair[1]))
+        && copula(ending, noun)
+        && matches!(punctuation.surface.as_str(), "。" | "！" | "!"))
+    .then_some(topic)
+}
+
+fn positive_root(atoms: &[Atom]) -> Option<&Atom> {
+    let root = atoms.iter().find(|atom| atom.deprel == "root")?;
+    (!protected(atoms)
+        && !atoms.iter().any(|atom| {
+            matches!(atom.surface.as_str(), "？" | "?" | "別" | "別の" | "別な")
+                || (belongs_to(atom, root)
+                    && atom.upos == Some(Upos::Aux)
+                    && like(atom, &["ない", "ぬ", "ず", "ません", "ん"]))
+        }))
+    .then_some(root)
+}
+
+fn same_topic(words: &[Atom], topic: &[Atom]) -> bool {
+    words.iter().zip(topic).all(|(a, b)| a.surface == b.surface)
+}
+
+fn topic_link<'a>(atoms: &'a [Atom], topic: &[Atom], object: &Atom) -> Option<&'a Atom> {
+    atoms.windows(topic.len() + 1).find_map(|candidate| {
+        let (modifier, words) = candidate.split_last()?;
+        let head = words.last()?;
+        (modifier.surface == "の"
+            && modifier.deprel == "case"
+            && belongs_to(modifier, head)
+            && head.deprel == "nmod"
+            && belongs_to(head, object)
+            && same_topic(words, topic))
+        .then_some(head)
+    })
+}
+
+fn linked_object(
+    atoms: &[Atom],
+    topic: &[Atom],
+    root: &Atom,
+    accept: impl Fn(&Atom) -> bool,
+) -> bool {
+    atoms.iter().any(|object| {
+        object.deprel == "obj"
+            && belongs_to(object, root)
+            && accept(object)
+            && topic_link(atoms, topic, object).is_some()
+    })
+}
+
+fn prior_opening_cue(atoms: &[Atom], topic: &[Atom]) -> Option<Reading> {
+    let root = positive_root(atoms)?;
+    if like(root, &["説明", "説明する", "説明し"]) && linked_object(atoms, topic, root, |_| true)
+    {
+        Some(Reading::Explanation)
+    } else if like(root, &["読む", "読み", "読み聞かせる", "読み聞かせ"])
+        && linked_object(atoms, topic, root, |atom| {
+            like(atom, &["絵本", "物語", "童話"])
+        })
+    {
+        Some(Reading::Story)
+    } else {
+        None
+    }
+}
+
+fn following_opening_cue(atoms: &[Atom], topic: &[Atom], adjacent: bool) -> Option<Reading> {
+    let root = positive_root(atoms)?;
+    // The demonstrative needs a topic match as well as an adjacent sentence.
+    // Otherwise it could introduce a different subject.
+    let this_subject = adjacent
+        && matches!(atoms, [this, marker, ..]
+        if this.surface == "これ" && marker.surface == "は" && belongs_to(marker, this));
+    let refers_back = this_subject
+        && atoms
+            .windows(topic.len())
+            .any(|words| same_topic(words, topic));
+    let story_about_this_topic = topic_link(atoms, topic, root).is_some_and(|head| {
+        atoms
+            .iter()
+            .any(|atom| atom.surface == "この" && belongs_to(atom, head))
+            && atoms
+                .iter()
+                .filter(|atom| atom.deprel == "nsubj" && belongs_to(atom, root))
+                .all(|atom| like(atom, &["絵本", "本", "読み物"]))
+    });
+    if like(root, &["物語", "童話"])
+        && atoms.iter().any(|atom| copula(atom, root))
+        && (refers_back || story_about_this_topic)
+    {
+        return Some(Reading::Story);
+    }
+    let this_talk = match atoms {
+        [this, noun, from, marker, ..] if noun.surface == "お話" => {
+            this.surface == "この"
+                && from.surface == "で"
+                && marker.surface == "は"
+                && belongs_to(this, noun)
+                && belongs_to(from, noun)
+                && belongs_to(marker, noun)
+        }
+        [this, prefix, noun, from, marker, ..] => {
+            this.surface == "この"
+                && prefix.surface == "お"
+                && noun.surface == "話"
+                && prefix.span.end_char == noun.span.start_char
+                && from.surface == "で"
+                && marker.surface == "は"
+                && belongs_to(this, noun)
+                && belongs_to(from, noun)
+                && belongs_to(marker, noun)
+        }
+        _ => false,
+    };
+    (this_talk
+        && like(root, &["説明", "説明する", "説明し"])
+        && linked_object(atoms, topic, root, |_| true))
+    .then_some(Reading::Explanation)
+}
+
+pub(super) fn render_opening(
+    atoms: &[Atom],
+    doc: &Document,
+    sentence: usize,
+    chars: &[char],
+    locks: &SpanLockTable,
+) -> Option<String> {
+    let topic = opening_topic(atoms)?;
+    if protected(atoms) {
+        return None;
+    }
+    let sentences = &doc.segmentation.sentences;
+    let sentence_atoms = |index: usize| {
+        let start = doc.tokens.partition_point(|token| token.sentence < index);
+        let end = doc.tokens.partition_point(|token| token.sentence <= index);
+        let tokens: Vec<_> = doc.tokens[start..end].iter().collect();
+        normalized_sentence_atoms(index, chars, doc, &tokens, locks)
+    };
+    let continuous = |before: usize, after: usize| {
+        sentences.get(after).is_some_and(|next| {
+            let prior = &sentences[before];
+            if prior.paragraph == next.paragraph {
+                return true;
+            }
+            // Japanese sentence-final punctuation also splits wrapped lines
+            // into analysis paragraphs. A lone, unindented LF or CRLF is
+            // still a continuation for explicitly linked discourse.
+            let gap = &chars[prior.span.end_char..next.span.start_char];
+            let gap = gap.strip_prefix(&['\r']).unwrap_or(gap);
+            gap == ['\n']
+        })
+    };
+    let mut reading = sentence
+        .checked_sub(1)
+        .filter(|&index| continuous(index, sentence))
+        .and_then(|index| prior_opening_cue(&sentence_atoms(index), topic));
+    for next in (sentence + 1..=sentence + 3).take_while(|&index| continuous(index - 1, index)) {
+        let mut context = sentence_atoms(next);
+        normalize(&mut context);
+        if opening_topic(&context).is_some() {
+            break;
+        }
+        if let Some(cue) = following_opening_cue(&context, topic, next == sentence + 1) {
+            if reading.is_some_and(|previous| previous != cue) {
+                reading = None;
+                break;
+            }
+            reading = Some(cue);
+        }
+    }
+    let target: String = topic
+        .iter()
+        .map(|atom| translate_single_ja_term(&atom.surface, atom.lemma.as_deref(), atom.upos))
+        .collect();
+    let punctuation = if atoms.last()?.surface == "。" {
+        "。"
+    } else {
+        "！"
+    };
+    Some(match reading {
+        Some(Reading::Story) => format!("這是一則關於{target}的故事{punctuation}"),
+        Some(Reading::Explanation) => format!("這是關於{target}的說明{punctuation}"),
+        None => format!("這是關於{target}的內容{punctuation}"),
+    })
 }
 
 fn nominal_before(atoms: &[Atom], particle: usize) -> Option<String> {
@@ -297,7 +519,56 @@ pub(super) fn join_light_verb(atoms: &mut Vec<Atom>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use faberline_nlp::Span;
+    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use faberline_nlp::{Span, doc::model::Backend};
+
+    #[test]
+    fn a_story_cue_must_refer_to_the_opening_in_the_same_paragraph() {
+        let mut options = TranslateOptions::new(TargetVariant::ZhHant);
+        options.source_hint = Some(TargetVariant::Ja);
+        for (source, sentence, expected) in [
+            (
+                "山のお話です。これは、山へ向かう人の物語です。",
+                0,
+                "這是一則關於山的故事。",
+            ),
+            (
+                "山のお話です。\nこれは、山へ向かう人の物語です。",
+                0,
+                "這是一則關於山的故事。",
+            ),
+            (
+                "山のお話です。\n\nこれは、山へ向かう人の物語です。",
+                0,
+                "這是關於山的內容。",
+            ),
+            (
+                "山のお話です。\n これは、山へ向かう人の物語です。",
+                0,
+                "這是關於山的內容。",
+            ),
+            (
+                "山のお話です。これは、電車の物語です。",
+                0,
+                "這是關於山的內容。",
+            ),
+            (
+                "機械の名前を説明しました。機械のお話です。これは、機械の物語です。",
+                1,
+                "這是關於機械的內容。",
+            ),
+        ] {
+            let output = analyze_and_translate(
+                source,
+                &options,
+                &TranslationGlossary::new(),
+                None,
+                Backend::Onnx,
+            )
+            .unwrap();
+            assert_eq!(output.sentences[sentence].target_text, expected, "{source}");
+        }
+    }
 
     fn atom(
         surface: &str,

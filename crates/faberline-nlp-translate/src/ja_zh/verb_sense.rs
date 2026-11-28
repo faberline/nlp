@@ -5,6 +5,8 @@ use super::{
     is_demonstrative_person_noun, is_kana, is_te_form_link, localize_punct,
     render_temporal_made_atom, return_endpoint, translate_single_ja_term,
 };
+use crate::GlossaryKind;
+use crate::lock::{LockOrigin, SpanLockTable};
 use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
 
 mod cohesion;
@@ -523,7 +525,19 @@ struct RenderedFrame {
     cut: Option<(Span, usize)>,
 }
 
-fn render_frame(lemma: &str, frame: Frame<'_>, aspect: Aspect) -> Option<RenderedFrame> {
+fn school(noun: Nominal<'_>) -> bool {
+    matches!(
+        noun.key().as_str(),
+        "学校" | "小学校" | "中学校" | "高校" | "高等学校" | "大学"
+    )
+}
+
+fn render_frame(
+    lemma: &str,
+    frame: Frame<'_>,
+    aspect: Aspect,
+    locked_school: Option<(Span, &str)>,
+) -> Option<RenderedFrame> {
     let sense = choose(lemma, &frame)?;
     let subject = frame.subject.map(Nominal::text).unwrap_or_default();
     let object = || frame.object.map(Nominal::text);
@@ -531,6 +545,18 @@ fn render_frame(lemma: &str, frame: Frame<'_>, aspect: Aspect) -> Option<Rendere
     let past = if aspect == Aspect::Past { "了" } else { "" };
     let mut timing = String::new();
     let is_repeated = matches!(frame.time, Some((TimeKind::Repeated, _, _)));
+    if let Some((span, _)) = locked_school {
+        let destination = frame.goal?.0;
+        if !matches!(sense, Sense::Frequent)
+            || aspect != Aspect::Continuing
+            || is_repeated
+            || !school(destination)
+            || destination.0.first()?.span.start_char != span.start_char
+            || destination.head().span.end_char != span.end_char
+        {
+            return None;
+        }
+    }
     if let Some((kind, time, _)) = &frame.time {
         timing = match kind {
             TimeKind::Repeated | TimeKind::At => time.clone(),
@@ -619,14 +645,10 @@ fn render_frame(lemma: &str, frame: Frame<'_>, aspect: Aspect) -> Option<Rendere
                 cut = Some((pause, subject.chars().count() + timing.chars().count()));
             }
             let destination = frame.goal?.0;
-            if aspect == Aspect::Continuing
-                && !is_repeated
-                && matches!(
-                    destination.key().as_str(),
-                    "学校" | "小学校" | "中学校" | "高校" | "高等学校" | "大学"
-                )
-            {
-                format!("在{}上學", destination.text())
+            if aspect == Aspect::Continuing && !is_repeated && school(destination) {
+                let school_name =
+                    locked_school.map_or_else(|| destination.text(), |(_, text)| text.to_owned());
+                format!("在{school_name}上學")
             } else {
                 format!("{repeated}去{goal}{past}", goal = destination.text())
             }
@@ -776,6 +798,78 @@ pub(super) fn render(
     sentence: usize,
     doc_clauses: &[(usize, Span)],
 ) -> Option<(String, Vec<ClauseAlignment>)> {
+    render_proven(atoms, doc, source, sentence, doc_clauses, None)
+}
+
+pub(super) fn render_locked_school<'doc>(
+    source: &[char],
+    analysis: &Document,
+    sentence: usize,
+    sentence_span: Span,
+    doc_clauses: &[(usize, Span)],
+    locks: &SpanLockTable,
+    unhinted: &dyn Fn() -> Option<&'doc Document>,
+) -> Option<(String, Vec<ClauseAlignment>)> {
+    let [(_, clause_span)] = doc_clauses else {
+        return None;
+    };
+    if *clause_span != sentence_span {
+        return None;
+    }
+    let mut in_sentence = locks.locks.iter().filter(|lock| {
+        lock.source_span.start_char < sentence_span.end_char
+            && sentence_span.start_char < lock.source_span.end_char
+    });
+    let destination = in_sentence.next()?;
+    if in_sentence.next().is_some()
+        || !destination.mandatory
+        || !source
+            .get(destination.source_span.start_char..destination.source_span.end_char)?
+            .iter()
+            .any(|ch| matches!(ch, '校' | '学'))
+        || !matches!(
+            destination.origin,
+            LockOrigin::Glossary {
+                kind: GlossaryKind::Place,
+                ..
+            }
+        )
+    {
+        return None;
+    }
+    let render = |doc: &Document| {
+        if doc.segmentation.sentences.get(sentence)?.span != sentence_span {
+            return None;
+        }
+        let from = doc
+            .tokens
+            .partition_point(|token| token.sentence < sentence);
+        let to = doc
+            .tokens
+            .partition_point(|token| token.sentence <= sentence);
+        let tokens: Vec<_> = doc.tokens[from..to].iter().collect();
+        let atoms =
+            super::build_sentence_atoms(sentence, source, doc, &tokens, &SpanLockTable::new());
+        render_proven(
+            &atoms,
+            doc,
+            source,
+            sentence,
+            doc_clauses,
+            Some((destination.source_span, destination.placeholder.as_str())),
+        )
+    };
+    render(analysis).or_else(|| render(unhinted()?))
+}
+
+fn render_proven(
+    atoms: &[Atom],
+    doc: &Document,
+    source: &[char],
+    sentence: usize,
+    doc_clauses: &[(usize, Span)],
+    locked_school: Option<(Span, &str)>,
+) -> Option<(String, Vec<ClauseAlignment>)> {
     let finite = core_non_punct(atoms);
     let has_sense_verb = |atom: &Atom| {
         atom.upos == Some(Upos::Verb)
@@ -826,6 +920,9 @@ pub(super) fn render(
     };
     let aspect = aspect(verb, &finite[index + 1..])?;
     let lemma = verb.lemma.as_deref()?;
+    if locked_school.is_some() && lemma != "通う" {
+        return None;
+    }
     let RenderedFrame { mut text, cut } = if cohesion::is_predicate(verb) {
         cohesion::render(&finite[..index], verb, aspect)?
     } else if fall::is_predicate(verb) {
@@ -834,7 +931,7 @@ pub(super) fn render(
         lament::render(&finite[..index], verb, aspect)?
     } else {
         let frame = read_frame(&finite[..index], verb)?;
-        render_frame(lemma, frame, aspect)?
+        render_frame(lemma, frame, aspect, locked_school)?
     };
     if text.chars().any(is_kana) {
         return None;
@@ -870,7 +967,9 @@ pub(super) fn render(
 #[cfg(test)]
 mod tests {
     use super::{super::build_sentence_atoms, *};
-    use crate::{TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate};
+    use crate::{
+        GlossaryEntry, TargetVariant, TranslateOptions, TranslationGlossary, analyze_and_translate,
+    };
     use faberline_nlp::doc::{analyze_document, model::Backend};
     use serde_json::Value;
 
@@ -1036,5 +1135,72 @@ mod tests {
         let polite = atoms.iter().find(|atom| atom.surface == "ます").unwrap();
         doc.syntax[polite.doc_tok_idx.unwrap()].head = None;
         assert!(render(&sentence(&doc), &doc, &chars, 0, &clauses).is_none());
+    }
+
+    #[test]
+    fn reserved_school_name_keeps_the_attendance_sense_and_glossary_span() {
+        let options = TranslateOptions::new(TargetVariant::ZhHant);
+        let mut glossary = TranslationGlossary::new();
+        let place = |source: &str, target: &str| GlossaryEntry {
+            canonical: source.into(),
+            surfaces: vec![source.into()],
+            targets: [(TargetVariant::ZhHant, target.into())].into(),
+            ..GlossaryEntry::default()
+        };
+        glossary.places.push(place("学校", "指定學校"));
+        let result = analyze_and_translate(
+            "学校に通っています。",
+            &options,
+            &glossary,
+            None,
+            Backend::Onnx,
+        )
+        .unwrap();
+        assert_eq!(result.target_text, "在指定學校上學。");
+        assert_eq!(result.glossary_hits.len(), 1);
+        let hit = &result.glossary_hits[0];
+        assert_eq!(
+            hit.source_span,
+            Span {
+                start_char: 0,
+                end_char: 2
+            }
+        );
+        assert_eq!(
+            hit.target_span,
+            Span {
+                start_char: 1,
+                end_char: 5
+            }
+        );
+        assert_eq!(result.clause_alignments.len(), 1);
+        assert_eq!(result.clause_alignments[0].target_span.end_char, 8);
+
+        let source = "学校に通っています。";
+        let original = analyze_document(
+            source,
+            &crate::doc_options_for_translate(&options, &TranslationGlossary::new()),
+        );
+        let provided = crate::translate_document(
+            source,
+            &original,
+            #[cfg(feature = "narrative")]
+            None,
+            &options,
+            &glossary,
+            None,
+        )
+        .unwrap();
+        assert_eq!(provided.target_text, result.target_text);
+        assert_eq!(provided.glossary_hits[0].target_span, hit.target_span);
+
+        let row = &public_bank()[7];
+        let source = row["jp"].as_str().unwrap();
+        glossary.places.push(place("病院", "指定醫院"));
+        let result =
+            analyze_and_translate(source, &options, &glossary, None, Backend::Onnx).unwrap();
+        assert!(result.target_text.contains("指定醫院"));
+        assert_ne!(result.target_text, "在指定醫院上學。");
+        assert_eq!(result.glossary_hits.len(), 1);
     }
 }

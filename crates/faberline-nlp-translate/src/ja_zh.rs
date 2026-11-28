@@ -49,6 +49,7 @@ mod return_endpoint;
 mod te_help_glossary;
 mod teaching_relative;
 mod trip_after_meal;
+mod verb_sense;
 pub(crate) mod written_opening;
 
 #[cfg(test)]
@@ -476,6 +477,15 @@ pub(crate) fn translate_ja_sentence<'source>(
                 target_span,
             }],
         );
+    }
+
+    if target == TargetVariant::ZhHant
+        && direct_quote.is_none()
+        && written_form_continuation.is_none()
+        && predicate_terms.is_none()
+        && let Some(rendered) = verb_sense::render(&atoms, doc, chars, sentence_idx, &doc_clauses)
+    {
+        return rendered;
     }
 
     // A written form can cross an analysis sentence boundary. Emit the

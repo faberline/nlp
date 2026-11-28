@@ -1,0 +1,126 @@
+{
+  "title": "Supplemental ja-to-zh-Hant singing and humming QA bank",
+  "schema": "faberline.nlp.ja_zh.singing_humming_dev.v1",
+  "version": 1,
+  "status": "development-visible",
+  "source": "https://github.com/faberline/nlp/issues/554",
+  "visibility": "development-visible",
+  "source_main": "29065d5b85c9a1a4a1ccd10a6d8b303d6b8c6f81",
+  "source_tree": "e4c83179bed226d5a318c2c409867f13dde35ab4",
+  "provenance": {
+    "origin": "first_party_original",
+    "license": "MIT",
+    "sentence_provenance": "Original Japanese sentences written for this draft. No exam, textbook, game, or other external sentence text was copied.",
+    "reference_provenance": "Provisional Taiwan Traditional Chinese references drafted by the first-party data author. They are not model gold.",
+    "external_gloss_source": "None used."
+  },
+  "purpose": "Provide one matched public development contrast for the general singing sense of 歌う and the humming sense of 口ずさむ.",
+  "level_note": "Approximate sentence difficulty only. These are not JLPT questions or JLPT certification. The contrast verb 口ずさむ may be above the simple sentence level.",
+  "fixture": {
+    "translate_options": {
+      "target": "zh-Hant",
+      "source_hint": null,
+      "mask_editorial": false,
+      "omit_masked_editorial": false,
+      "localize_quotes": true,
+      "localize_entities": false,
+      "cjk_latin_spacing": false,
+      "beam_size": 1,
+      "model_id": "doc-translate-v1"
+    },
+    "glossary": {
+      "schema": "nlp.translate.glossary.v1",
+      "actors": [],
+      "places": [],
+      "objects": [],
+      "domain_terms": []
+    },
+    "models_directory": null,
+    "backend": "Onnx"
+  },
+  "items": [
+    {
+      "id": "SH-N5-01",
+      "level_approx": "N5",
+      "jp": "放課後、私は歌を歌いました。",
+      "zh_hant": "放學後，我唱了歌。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The speaker sings after class.",
+        "The predicate uses the general singing sense of 歌う, not specifically humming.",
+        "The sentence is a polite past statement."
+      ],
+      "semantic_unknowns": [
+        "The source does not provide lyrics or mention accompaniment.",
+        "This context does not define every use of 歌う."
+      ],
+      "control": {
+        "kind": "general_singing_humming_matched_pair",
+        "contrast_ids": [
+          "SH-N5-02"
+        ],
+        "stable": [
+          "The pair keeps the speaker, after-class setting, song object, and polite past statement constant."
+        ],
+        "changed": [
+          "This row uses 歌う in its general singing sense."
+        ],
+        "limits": [
+          "The pair does not specify lyrics, accompaniment, or performance style."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    },
+    {
+      "id": "SH-N5-02",
+      "level_approx": "N5",
+      "jp": "放課後、私は歌を口ずさみました。",
+      "zh_hant": "放學後，我哼了歌。",
+      "allowed_variants": [],
+      "semantic_checks": [
+        "The speaker hums after class.",
+        "The predicate uses 口ずさむ; retain the humming sense instead of collapsing it to generic singing.",
+        "The sentence is a polite past statement."
+      ],
+      "semantic_unknowns": [
+        "The source does not provide lyrics or mention accompaniment.",
+        "The source does not specify volume, lip position, or whether lyrics were vocalized.",
+        "This context does not define every use of 口ずさむ."
+      ],
+      "control": {
+        "kind": "general_singing_humming_matched_pair",
+        "contrast_ids": [
+          "SH-N5-01"
+        ],
+        "stable": [
+          "The pair keeps the speaker, after-class setting, song object, and polite past statement constant."
+        ],
+        "changed": [
+          "This row uses 口ずさむ in a humming context."
+        ],
+        "limits": [
+          "The pair does not specify lyrics, accompaniment, or performance style."
+        ]
+      },
+      "visibility": "development-visible",
+      "heldout": false,
+      "provenance": {
+        "origin": "first_party_original",
+        "author": "Codex (Luna)",
+        "license": "MIT"
+      }
+    }
+  ],
+  "review_and_adoption": {
+    "process": "Independent language review and adoption must be recorded in a separate data-only PR before any rule uses these rows for acceptance.",
+    "author_does_not_accept_own_work": true,
+    "human_review_claim": false,
+    "scope_limit": "This matched pair checks one shared context. It does not cover every sense or context of either verb."
+  }
+}

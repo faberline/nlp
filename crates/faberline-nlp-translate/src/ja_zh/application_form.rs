@@ -1,6 +1,11 @@
 //! Select the use of a written application and the sense of 出す from its
 //! own object, destination and source. Preserve the ordinary predicate path.
-use super::{Atom, Document, Upos, dasu_case_link, direct_quote_time, is_clock_atom};
+use super::{
+    Atom, Document, LOCKED_OBJECT_ATOM, Span, Upos, dasu_case_link, direct_quote_time,
+    is_clock_atom,
+};
+
+const FORM_NOUNS: [&str; 3] = ["申込書", "申込み書", "申し込み書"];
 
 pub(super) const SUBMIT: &str = "__ja_submit_application";
 pub(super) const CAN_SUBMIT: &str = "__ja_can_submit_application";
@@ -10,6 +15,7 @@ pub(super) const TIME_QUESTION: &str = "__ja_application_time_question";
 pub(super) const CONTRAST: &str = "__ja_application_contrast";
 pub(super) const LOCKED_ADJUNCT: &str = "__ja_application_locked_adjunct";
 pub(super) const EXTRACTION_MANNER: &str = "__ja_application_extraction_manner";
+pub(super) const RESTORED_OBJECT_CASE: &str = "__ja_application_object_case";
 const PRESENT_RECIPIENT: &str = "__ja_located_application_recipient";
 pub(super) const PURPOSE: &str = "__ja_application_purpose";
 pub(super) const RENT: &str = "__ja_rent_home";
@@ -29,7 +35,7 @@ fn form_start(atoms: &[Atom], end: usize, chars: &[char]) -> Option<usize> {
         return None;
     }
     let raw = spelling(form, chars);
-    if matches!(raw.as_str(), "申込書" | "申込み書" | "申し込み書") {
+    if FORM_NOUNS.contains(&raw.as_str()) {
         return Some(end);
     }
     if raw != "書" || end == 0 {
@@ -106,15 +112,145 @@ fn named_purpose(label: &str, subject: bool) -> Option<&'static str> {
 // The glossary can make a protected qualified noun one source token.
 // Its visible case and source spelling identify the filing argument.
 fn covered_purpose(form: &Atom, chars: &[char]) -> bool {
-    if !form.is_locked {
-        return false;
-    }
-    let raw = spelling(form, chars);
-    ["申込書", "申込み書", "申し込み書"]
+    form.is_locked && qualified_form(&spelling(form, chars))
+}
+
+fn qualified_form(raw: &str) -> bool {
+    FORM_NOUNS
         .iter()
         .find_map(|ending| raw.strip_suffix(ending))
         .and_then(|name| named_purpose(name.strip_suffix('の').unwrap_or(name), false))
         .is_some()
+}
+
+// A glossary hint can merge the noun and を into a token tagged as a verb.
+// Use the ordinary source parse to recover the case and its attachments.
+// Restore the case only in the render atoms. The glossary lock still owns
+// its full source span, including the case, and the whole target replacement.
+pub(super) fn restore_form_objects(atoms: &mut Vec<Atom>, chars: &[char], sentence: Span) {
+    let candidates: Vec<_> = atoms
+        .iter()
+        .enumerate()
+        .filter_map(|(i, atom)| {
+            if !atom.is_locked || atom.lemma.as_deref() != Some(LOCKED_OBJECT_ATOM) {
+                return None;
+            }
+            let raw = spelling(atom, chars);
+            let noun = raw.strip_suffix('を')?;
+            let qualified = qualified_form(noun);
+            (qualified || FORM_NOUNS.contains(&noun)).then_some((i, qualified))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+
+    let source = &chars[sentence.start_char..sentence.end_char];
+    let text: String = source.iter().collect();
+    let parsed = faberline_nlp::doc::analyze_document(
+        &text,
+        &faberline_nlp::doc::Options {
+            normalize_traditional: true,
+            enrich_morphology: true,
+            cpu_syntax: true,
+            ..Default::default()
+        },
+    );
+    if parsed.segmentation.sentences.len() != 1 {
+        return;
+    }
+    let tokens: Vec<_> = parsed.tokens.iter().collect();
+    let original = super::build_sentence_atoms(
+        0,
+        source,
+        &parsed,
+        &tokens,
+        &super::SpanLockTable::default(),
+    );
+    let absolute = |span: Span| Span {
+        start_char: sentence.start_char + span.start_char,
+        end_char: sentence.start_char + span.end_char,
+    };
+    for (i, qualified) in candidates.into_iter().rev() {
+        let span = atoms[i].span;
+        let Some((object, case)) = original.windows(2).enumerate().find_map(|(end, pair)| {
+            let [form, wo] = pair else { return None };
+            if absolute(wo.span).end_char != span.end_char
+                || wo.surface != "を"
+                || form.deprel != "obj"
+                || !dasu_case_link(form, wo)
+            {
+                return None;
+            }
+            let noun = form_start(&original, end, source)?;
+            let first = absolute(original[noun].span).start_char;
+            if qualified {
+                let (owner, _) = purpose(&original, noun, form, source)?;
+                if !(span.start_char <= absolute(original[owner].span).start_char
+                    && original
+                        .iter()
+                        .any(|a| absolute(a.span).start_char == span.start_char))
+                {
+                    return None;
+                }
+            } else if first != span.start_char {
+                return None;
+            }
+            Some((form, wo))
+        }) else {
+            continue;
+        };
+        let Some(action) = original.iter().find(|a| {
+            a.doc_tok_idx.is_some()
+                && a.doc_tok_idx == object.head
+                && filing_reading(a, &original).is_some()
+        }) else {
+            continue;
+        };
+        let Some(verb) = atoms
+            .iter()
+            .find(|a| a.span == absolute(action.span) && filing_reading(a, atoms).is_some())
+            .and_then(|a| a.doc_tok_idx)
+        else {
+            continue;
+        };
+        let Some(object_id) = atoms[i].doc_tok_idx else {
+            continue;
+        };
+
+        atoms[i].deprel = "obj".to_owned();
+        atoms[i].head = Some(verb);
+        atoms[i].span.end_char = absolute(case.span).start_char;
+        let mut case = case.clone();
+        case.span = absolute(case.span);
+        case.doc_tok_idx = None;
+        case.head = Some(object_id);
+        case.lemma = Some(RESTORED_OBJECT_CASE.to_owned());
+        atoms.insert(i + 1, case);
+
+        // A collapsed form can also attract the action's date or other arguments.
+        for argument in &original {
+            let head = if argument.head == action.doc_tok_idx
+                && matches!(argument.deprel.as_str(), "nsubj" | "obl" | "iobj")
+            {
+                verb
+            } else if argument.head == object.doc_tok_idx
+                && matches!(argument.deprel.as_str(), "compound" | "nmod")
+                && absolute(argument.span).end_char <= span.start_char
+            {
+                object_id
+            } else {
+                continue;
+            };
+            if let Some(atom) = atoms
+                .iter_mut()
+                .find(|a| !a.is_locked && a.span == absolute(argument.span))
+            {
+                atom.head = Some(head);
+                atom.deprel.clone_from(&argument.deprel);
+            }
+        }
+    }
 }
 
 fn writable_surface(atoms: &[Atom], end: usize) -> bool {

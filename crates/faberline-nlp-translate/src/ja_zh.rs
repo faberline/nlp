@@ -362,6 +362,7 @@ pub(crate) fn translate_ja_sentence<'source>(
         outward_look::restore_case(&mut atoms, chars, sent_span, doc, lock_table);
         normalize_drawer_extraction(&mut atoms, doc);
         join_sequential_connector(&mut atoms);
+        application_form::restore_form_objects(&mut atoms, chars, sent_span);
         daytime::bind_form_time(&mut atoms, chars, doc);
         application_form::normalize(&mut atoms, chars, doc);
         reception::normalize(&mut atoms);
@@ -19126,7 +19127,12 @@ fn classify_bunsetsu(atoms: Vec<Atom>, doc: &Document, sentence_idx: usize) -> B
 
     // Check Layer 5 `doc.frames` for ARG0 / ARG1 / ARGM hints on `head_doc_idx`.
     let mut frame_role: Option<FrameRole> = None;
-    if let Some(hidx) = head_doc_idx {
+    // The original frame can treat an application form locked with を as a verb.
+    if let Some(hidx) = head_doc_idx
+        && !atoms
+            .last()
+            .is_some_and(|a| a.lemma.as_deref() == Some(application_form::RESTORED_OBJECT_CASE))
+    {
         for fr in &doc.frames {
             if fr.sentence == sentence_idx {
                 if fr.predicate == hidx {

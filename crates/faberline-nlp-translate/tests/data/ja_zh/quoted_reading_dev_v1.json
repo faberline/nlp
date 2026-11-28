@@ -37,15 +37,15 @@
   "items": [
     {
       "id": "quoted-reading-01",
-      "jp": "「山田」をそのまま読んでください。",
-      "zh_hant": "請照原樣讀出「山田」。",
+      "jp": "「予約を確認します」を声に出してそのまま読んでください。",
+      "zh_hant": "請照原樣把「予約を確認します」念出來。",
       "allowed_variants": [],
       "semantic_checks": [
-        "Preserve the quoted written payload 山田 and its quotation marks.",
-        "Translate the request as reading aloud verbatim."
+        "Preserve the quoted written Japanese payload 予約を確認します and its quotation marks exactly.",
+        "Translate the request as reading the quoted text aloud without adding a volume requirement."
       ],
       "semantic_unknowns": [
-        "No audio or pronunciation is supplied."
+        "No audio or pronunciation of the quoted phrase is supplied."
       ],
       "provenance": {
         "origin": "first_party_original",
@@ -100,15 +100,15 @@
     },
     {
       "id": "quoted-reading-04",
-      "jp": "「山田」と言ってください。",
-      "zh_hant": "請說「山田」。",
+      "jp": "店員は客に「予約を確認します」と言いました。",
+      "zh_hant": "店員對客人說「會確認預約」。",
       "allowed_variants": [],
       "semantic_checks": [
-        "Translate ordinary direct speech as a request to say the quoted name.",
-        "Keep the name text unchanged."
+        "Translate the reported speech as the clerk telling the customer 會確認預約.",
+        "Preserve that this is a reported statement, not a request for the reader to speak."
       ],
       "semantic_unknowns": [
-        "The speaker's voice or volume is not specified."
+        "The source does not identify which reservation the clerk will check."
       ],
       "provenance": {
         "origin": "first_party_original",
@@ -121,15 +121,15 @@
     },
     {
       "id": "quoted-reading-05",
-      "jp": "「山田」を読みました。",
-      "zh_hant": "我讀了「山田」。",
+      "jp": "私は「予約を確認します」という文を読んで、意味が分かりました。",
+      "zh_hant": "我讀了「會確認預約」這句話，明白了它的意思。",
       "allowed_variants": [],
       "semantic_checks": [
-        "Translate the completed ordinary reading event.",
-        "Keep the quoted written name unchanged."
+        "Translate the quoted sentence naturally as 會確認預約.",
+        "Preserve the explicit subject 私は and the result that the speaker understood the meaning."
       ],
       "semantic_unknowns": [
-        "The text containing the name is not identified."
+        "The sentence gives no further context about the reservation."
       ],
       "provenance": {
         "origin": "first_party_original",
@@ -142,17 +142,18 @@
     },
     {
       "id": "quoted-reading-06",
-      "jp": "山田さんを見ました。",
-      "zh_hant": "我看見山田先生了。",
+      "jp": "私は山田先生を見ました。",
+      "zh_hant": "我看見山田老師了。",
       "allowed_variants": [
-        "我看到山田先生了。"
+        "我看到山田老師了。"
       ],
       "semantic_checks": [
-        "Translate 山田さん as a person outside quotation marks.",
-        "Do not preserve it as a quoted text operand."
+        "Translate 山田先生 as a person addressed by the neutral Taiwan Mandarin term 老師, outside quotation marks.",
+        "Translate the explicit subject 私は as 我.",
+        "Do not preserve the person as a quoted text operand."
       ],
       "semantic_unknowns": [
-        "The person's gender is not specified; 先生 is a polite address here."
+        "The source does not state the teacher’s gender."
       ],
       "provenance": {
         "origin": "first_party_original",
@@ -167,12 +168,10 @@
       "id": "quoted-reading-07",
       "jp": "「山田」を声に出して読んでください。",
       "zh_hant": "請把「山田」念出來。",
-      "allowed_variants": [
-        "請大聲讀出「山田」。"
-      ],
+      "allowed_variants": [],
       "semantic_checks": [
         "Preserve the quoted written payload 山田 and its punctuation.",
-        "Translate the request as reading the text aloud."
+        "Translate the request as reading the quoted text aloud without adding a volume requirement."
       ],
       "semantic_unknowns": [
         "No pronunciation is provided."
@@ -188,15 +187,15 @@
     },
     {
       "id": "quoted-reading-08",
-      "jp": "「山田」と書いてください。",
-      "zh_hant": "請寫「山田」。",
+      "jp": "この紙の「山田」をそのまま書き写してください。",
+      "zh_hant": "請照這張紙，把「山田」原樣抄寫下來。",
       "allowed_variants": [],
       "semantic_checks": [
-        "Translate the request to write the quoted name.",
-        "Keep the written name unchanged."
+        "Preserve the quoted written payload 山田 and its punctuation.",
+        "Translate the request as copying the quoted text from this paper."
       ],
       "semantic_unknowns": [
-        "The request does not say whether to copy a source or write from memory."
+        "The source does not specify what else is on the paper."
       ],
       "provenance": {
         "origin": "first_party_original",

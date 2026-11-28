@@ -118,7 +118,7 @@ fn separate_handovers_and_a_distinct_action_keep_two_clause_spans() {
         (
             "T02",
             "店員把紙袋交給客人田中，",
-            "也把箱交給另一位客人佐藤。",
+            "也把箱子交給另一位客人佐藤。",
         ),
         ("T03", "老師把地圖交給學生葵，", "但葵問了路。"),
     ] {

@@ -5,7 +5,9 @@ use super::{
     TargetVariant, Token, Upos, classroom_role, dasu_case_link, human_recipient,
     purpose_stem_lemma, render_bunsetsu_np, travel_past, written_head,
 };
-use crate::ja_zh::{apply_phrase_matches, build_sentence_atoms, normalize_ja_atoms};
+use crate::ja_zh::{
+    apply_phrase_matches, build_sentence_atoms, normalize_ja_atoms, standalone_noun,
+};
 use crate::schema::ClauseAlignment;
 
 #[derive(Clone, Copy)]
@@ -202,7 +204,7 @@ fn render_argument(argument: Argument<'_>, rendered: &[Atom]) -> Option<String> 
     let text = if argument.kind == GlossaryKind::Actor {
         person_text(words)
     } else {
-        nominal_text(words)
+        standalone_noun(&nominal_text(words)).to_owned()
     };
     (!text.is_empty()).then_some(text)
 }

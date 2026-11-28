@@ -26765,6 +26765,13 @@ fn demonstrative_classifier(
     }
 }
 
+fn standalone_noun(word: &str) -> &str {
+    match word {
+        "箱" => "箱子",
+        _ => word,
+    }
+}
+
 fn render_bunsetsu_np(b: &Bunsetsu, target: TargetVariant) -> String {
     let mut out = String::new();
     let mut i = 0usize;
@@ -26830,7 +26837,7 @@ fn render_bunsetsu_np(b: &Bunsetsu, target: TargetVariant) -> String {
             }
             let word = translate_single_ja_term(&noun.surface, noun.lemma.as_deref(), noun.upos);
             out.push_str(demonstrative_classifier(&word, noun, Some(target)));
-            out.push_str(if word == "箱" { "箱子" } else { &word });
+            out.push_str(standalone_noun(&word));
             i += 2;
             continue;
         }

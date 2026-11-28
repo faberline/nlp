@@ -7,6 +7,8 @@ use super::{
 };
 use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
 
+mod fall;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Aspect {
     Plain,
@@ -748,10 +750,11 @@ pub(super) fn render(
     let finite = core_non_punct(atoms);
     let has_sense_verb = |atom: &Atom| {
         atom.upos == Some(Upos::Verb)
-            && matches!(
-                atom.lemma.as_deref(),
-                Some("突っ込む" | "吹く" | "通う" | "めくる" | "通す" | "寄こす")
-            )
+            && (fall::is_predicate(atom)
+                || matches!(
+                    atom.lemma.as_deref(),
+                    Some("突っ込む" | "吹く" | "通う" | "めくる" | "通す" | "寄こす")
+                ))
     };
     let mut predicates = finite
         .iter()
@@ -791,8 +794,13 @@ pub(super) fn render(
         _ => return None,
     };
     let aspect = aspect(verb, &finite[index + 1..])?;
-    let frame = read_frame(&finite[..index], verb)?;
-    let RenderedFrame { mut text, cut } = render_frame(verb.lemma.as_deref()?, frame, aspect)?;
+    let lemma = verb.lemma.as_deref()?;
+    let RenderedFrame { mut text, cut } = if fall::is_predicate(verb) {
+        fall::render(&finite[..index], verb, aspect)?
+    } else {
+        let frame = read_frame(&finite[..index], verb)?;
+        render_frame(lemma, frame, aspect)?
+    };
     if text.chars().any(is_kana) {
         return None;
     }

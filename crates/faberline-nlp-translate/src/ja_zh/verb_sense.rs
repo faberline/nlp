@@ -10,6 +10,7 @@ use crate::lock::{LockOrigin, SpanLockTable};
 use faberline_nlp::lexicon::{SemanticClass, lookup_ja};
 
 mod cohesion;
+mod connection;
 mod fall;
 mod friction;
 mod lament;
@@ -904,6 +905,7 @@ fn render_proven(
             && (cohesion::is_predicate(atom)
                 || fall::is_predicate(atom)
                 || friction::is_predicate(atom)
+                || connection::is_predicate(atom, &finite[index + 1..])
                 || lament::is_predicate(atom)
                 || wear::is_predicate(&finite[..index], atom)
                 || (atom.deprel == "root" && atom.lemma.as_deref() == Some("擦る"))
@@ -949,24 +951,29 @@ fn render_proven(
         [punct] if matches!(punct.surface.as_str(), "。" | "！" | "!") => &punct.surface,
         _ => return None,
     };
-    let aspect = aspect(verb, &finite[index + 1..])?;
+    let tail = &finite[index + 1..];
+    let prefix = &finite[..index];
     let lemma = verb.lemma.as_deref()?;
     if locked_destination.is_some() && lemma != "通う" {
         return None;
     }
-    let RenderedFrame { mut text, cut } = if cohesion::is_predicate(verb) {
-        cohesion::render(&finite[..index], verb, aspect)?
-    } else if fall::is_predicate(verb) {
-        fall::render(&finite[..index], verb, aspect)?
-    } else if friction::is_predicate(verb) {
-        friction::render(&finite[..index], verb, aspect)?
-    } else if lament::is_predicate(verb) {
-        lament::render(&finite[..index], verb, aspect)?
-    } else if wear::is_predicate(&finite[..index], verb) {
-        wear::render(&finite[..index], verb, aspect)?
+    let RenderedFrame { mut text, cut } = if connection::is_predicate(verb, tail) {
+        connection::render(prefix, verb, tail)?
     } else {
-        let frame = read_frame(&finite[..index], verb)?;
-        render_frame(lemma, frame, aspect, locked_destination)?
+        let aspect = aspect(verb, tail)?;
+        if cohesion::is_predicate(verb) {
+            cohesion::render(prefix, verb, aspect)?
+        } else if fall::is_predicate(verb) {
+            fall::render(prefix, verb, aspect)?
+        } else if friction::is_predicate(verb) {
+            friction::render(prefix, verb, aspect)?
+        } else if lament::is_predicate(verb) {
+            lament::render(prefix, verb, aspect)?
+        } else if wear::is_predicate(prefix, verb) {
+            wear::render(prefix, verb, aspect)?
+        } else {
+            render_frame(lemma, read_frame(prefix, verb)?, aspect, locked_destination)?
+        }
     };
     if text.chars().any(is_kana) {
         return None;
